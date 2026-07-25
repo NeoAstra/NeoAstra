@@ -46,6 +46,7 @@ struct windows_view {
     EventRegistrationToken history_changed{};
     EventRegistrationToken message_received{};
     EventRegistrationToken permission_requested{};
+    EventRegistrationToken new_window_requested{};
     bool events_registered{};
 };
 
@@ -135,6 +136,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_HistoryChanged(state->history_changed);
     state->core->remove_WebMessageReceived(state->message_received);
     state->core->remove_PermissionRequested(state->permission_requested);
+    state->core->remove_NewWindowRequested(state->new_window_requested);
     state->events_registered = false;
 }
 
@@ -160,6 +162,24 @@ struct permission_decision_context {
     ComPtr<ICoreWebView2PermissionRequestedEventArgs> args;
     ComPtr<ICoreWebView2Deferral> deferral;
 };
+
+struct new_window_decision_context {
+    ComPtr<ICoreWebView2NewWindowRequestedEventArgs> args;
+    ComPtr<ICoreWebView2Deferral> deferral;
+    ComPtr<ICoreWebView2> core;
+    std::wstring uri;
+};
+
+void new_window_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<new_window_decision_context> context(static_cast<new_window_decision_context*>(pointer));
+    context->args->put_Handled(TRUE);
+    if (response->action == NEO_WEBVIEW_DECISION_ALLOW) {
+        context->core->Navigate(context->uri.c_str());
+    } else if (response->action == NEO_WEBVIEW_DECISION_OPEN_EXTERNAL) {
+        ShellExecuteW(nullptr, L"open", context->uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    context->deferral->Complete();
+}
 
 void permission_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
     std::unique_ptr<permission_decision_context> context(static_cast<permission_decision_context*>(pointer));
@@ -312,6 +332,48 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 return S_OK;
             }
         }).Get(), &state->permission_requested);
+    if (FAILED(result)) return result;
+
+    result = state->core->add_NewWindowRequested(
+        Callback<ICoreWebView2NewWindowRequestedEventHandler>([view, state](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+            LPWSTR raw_uri{};
+            LPWSTR raw_name{};
+            BOOL user_initiated{};
+            ComPtr<ICoreWebView2Deferral> deferral;
+            auto result = args->get_Uri(&raw_uri);
+            if (SUCCEEDED(result)) result = args->get_IsUserInitiated(&user_initiated);
+            if (SUCCEEDED(result)) result = args->GetDeferral(&deferral);
+            if (FAILED(result)) { CoTaskMemFree(raw_uri); return result; }
+            try {
+                auto uri = take_string(raw_uri);
+                raw_uri = nullptr;
+                std::string name;
+                ComPtr<ICoreWebView2NewWindowRequestedEventArgs2> args2;
+                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args2))) && SUCCEEDED(args2->get_Name(&raw_name))) {
+                    name = take_string(raw_name);
+                    raw_name = nullptr;
+                }
+                auto context = std::make_unique<new_window_decision_context>();
+                context->args = args;
+                context->deferral = deferral;
+                context->core = state->core;
+                context->uri = widen(uri);
+                auto* decision = new neo_webview_decision;
+                neo_configure_decision(decision, view, NEO_WEBVIEW_DECISION_NEW_WINDOW, NEO_WEBVIEW_DECISION_CANCEL);
+                decision->completion = new_window_decided;
+                decision->completion_context = context.release();
+                neo_emit_view(view, NEO_WEBVIEW_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, user_initiated ? 1 : 0, 0, decision);
+                neo_finish_decision_event(view, decision);
+                decision->release();
+                return S_OK;
+            } catch (...) {
+                CoTaskMemFree(raw_uri);
+                CoTaskMemFree(raw_name);
+                args->put_Handled(TRUE);
+                deferral->Complete();
+                return S_OK;
+            }
+        }).Get(), &state->new_window_requested);
     return result;
 }
 

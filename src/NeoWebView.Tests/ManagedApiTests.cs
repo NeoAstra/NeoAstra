@@ -255,6 +255,16 @@ public sealed class ManagedApiTests
                     var completed = await navigation.Task.WaitAsync(TimeSpan.FromSeconds(10));
                     Assert.IsTrue(completed.IsSuccess);
                     Assert.AreEqual("42", await webView.EvaluateScriptAsync("globalThis.neoWebViewInjected + 2"));
+                    var popup = new TaskCompletionSource<NeoNewWindowRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    webView.NewWindowRequested = request =>
+                    {
+                        popup.TrySetResult(request);
+                        return ValueTask.FromResult(NeoNewWindowDecision.Cancel);
+                    };
+                    await webView.EvaluateScriptAsync("window.open('https://example.test/popup', 'smoke-popup'); true");
+                    var popupRequest = await popup.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.AreEqual(new Uri("https://example.test/popup"), popupRequest.TargetUri);
+                    Assert.AreEqual("smoke-popup", popupRequest.FrameName);
                     var cookie = new NeoCookie("smoke", "value", "example.test")
                     {
                         IsHttpOnly = true,
