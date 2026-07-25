@@ -160,6 +160,24 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void ProcessFailure_DecodesPortableKindFlagsAndRecovery()
+    {
+        var failure = NeoWebView.DecodeProcessFailure(
+            (ulong)NeoProcessFailureKind.BrowserProcessExited | (1UL << 32) | (1UL << 34),
+            -42,
+            "browser");
+        var unknown = NeoWebView.DecodeProcessFailure(999, 0, string.Empty);
+
+        Assert.AreEqual(NeoProcessFailureKind.BrowserProcessExited, failure.Kind);
+        Assert.IsTrue(failure.IsCrash);
+        Assert.AreEqual(NeoProcessRecoveryAction.RestartApplication, failure.RecoveryAction);
+        Assert.AreEqual(-42, failure.NativeCode);
+        Assert.AreEqual("browser", failure.ProcessDescription);
+        Assert.AreEqual(NeoProcessFailureKind.Unknown, unknown.Kind);
+        Assert.IsNull(unknown.ProcessDescription);
+    }
+
+    [TestMethod]
     public void NativeLoader_ReportsActionableFailureOrLoadsCompatibleAbi()
     {
         try

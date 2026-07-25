@@ -47,6 +47,7 @@ struct windows_view {
     EventRegistrationToken message_received{};
     EventRegistrationToken permission_requested{};
     EventRegistrationToken new_window_requested{};
+    EventRegistrationToken process_failed{};
     bool events_registered{};
 };
 
@@ -137,6 +138,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_WebMessageReceived(state->message_received);
     state->core->remove_PermissionRequested(state->permission_requested);
     state->core->remove_NewWindowRequested(state->new_window_requested);
+    state->core->remove_ProcessFailed(state->process_failed);
     state->events_registered = false;
 }
 
@@ -196,6 +198,23 @@ void navigation_decided(void* pointer, const neo_webview_decision_response_t* re
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
     const bool cancel = response->action != NEO_WEBVIEW_DECISION_ALLOW;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
+}
+
+uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
+    uint64_t value = NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW;
+    if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+        value = NEO_WEBVIEW_PROCESS_FAILURE_BROWSER_PROCESS_EXITED | NEO_WEBVIEW_PROCESS_FAILURE_RESTART_APPLICATION;
+    } else if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE) {
+        value = NEO_WEBVIEW_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW;
+    }
+    if (reason == COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED ||
+        reason == COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED ||
+        reason == COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY ||
+        reason == COREWEBVIEW2_PROCESS_FAILED_REASON_ABNORMAL_EXIT ||
+        reason == COREWEBVIEW2_PROCESS_FAILED_REASON_INTEGRITY_FAILURE) {
+        value |= NEO_WEBVIEW_PROCESS_FAILURE_CRASHED;
+    }
+    return value;
 }
 
 HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
@@ -374,6 +393,32 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 return S_OK;
             }
         }).Get(), &state->new_window_requested);
+    if (FAILED(result)) return result;
+
+    result = state->core->add_ProcessFailed(
+        Callback<ICoreWebView2ProcessFailedEventHandler>([view](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {
+            try {
+                COREWEBVIEW2_PROCESS_FAILED_KIND kind{};
+                if (FAILED(args->get_ProcessFailedKind(&kind))) return S_OK;
+                COREWEBVIEW2_PROCESS_FAILED_REASON reason = COREWEBVIEW2_PROCESS_FAILED_REASON_NORMAL_EXIT;
+                int32_t exit_code{};
+                std::string description;
+                ComPtr<ICoreWebView2ProcessFailedEventArgs2> args2;
+                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args2)))) {
+                    LPWSTR raw_description{};
+                    args2->get_Reason(&reason);
+                    args2->get_ExitCode(&exit_code);
+                    args2->get_ProcessDescription(&raw_description);
+                    description = take_string(raw_description);
+                }
+                const auto value = portable_process_failure(kind, reason);
+                neo_emit_view(view, NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED, 0,
+                              description.empty() ? nullptr : &description, nullptr, value, exit_code);
+            } catch (...) {
+                // Never allow allocation or conversion failures to cross the COM callback boundary.
+            }
+            return S_OK;
+        }).Get(), &state->process_failed);
     return result;
 }
 

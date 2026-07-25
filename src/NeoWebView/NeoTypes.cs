@@ -208,6 +208,30 @@ public enum NeoPermissionKind
     PersistentStorage,
 }
 
+/// <summary>Identifies the portable category of a browser process failure.</summary>
+public enum NeoProcessFailureKind
+{
+    /// <summary>The backend could not classify the failure.</summary>
+    Unknown,
+    /// <summary>A web-content or renderer process exited.</summary>
+    WebProcessExited,
+    /// <summary>The browser process exited.</summary>
+    BrowserProcessExited,
+    /// <summary>A web-content process became unresponsive.</summary>
+    ProcessUnresponsive,
+}
+
+/// <summary>Identifies the recommended recovery after a browser process failure.</summary>
+public enum NeoProcessRecoveryAction
+{
+    /// <summary>No portable recovery recommendation is available.</summary>
+    None,
+    /// <summary>Dispose and recreate the affected web view.</summary>
+    RecreateView,
+    /// <summary>Restart the application and its browser environment.</summary>
+    RestartApplication,
+}
+
 /// <summary>Identifies categories of browser data.</summary>
 [Flags]
 public enum NeoBrowsingDataKinds : ulong

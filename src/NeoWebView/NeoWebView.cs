@@ -89,6 +89,9 @@ public sealed class NeoWebView : IAsyncDisposable
     /// <summary>Occurs when web content sends a bridge message.</summary>
     public event EventHandler<NeoWebMessageReceivedEventArgs>? MessageReceived;
 
+    /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
+    public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
+
     /// <summary>Navigates the main frame to an absolute URI.</summary>
     /// <param name="uri">The destination URI.</param>
     /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
@@ -398,7 +401,30 @@ public sealed class NeoWebView : IAsyncDisposable
             case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED:
                 try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(Utf8String.Decode(value.text), uri, (value.value & 1) != 0)); } catch { }
                 break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED:
+                try { ProcessFailed?.Invoke(this, DecodeProcessFailure(value.value, value.native_code, Utf8String.Decode(value.text))); } catch { }
+                break;
         }
+    }
+
+    internal static NeoProcessFailedEventArgs DecodeProcessFailure(ulong value, long nativeCode, string? description)
+    {
+        const ulong kindMask = 0xffff_ffff;
+        const ulong crashed = 1UL << 32;
+        const ulong recreateView = 1UL << 33;
+        const ulong restartApplication = 1UL << 34;
+        var rawKind = (uint)(value & kindMask);
+        var candidate = (NeoProcessFailureKind)rawKind;
+        var kind = Enum.IsDefined(candidate) ? candidate : NeoProcessFailureKind.Unknown;
+        var recovery = (value & restartApplication) != 0
+            ? NeoProcessRecoveryAction.RestartApplication
+            : (value & recreateView) != 0 ? NeoProcessRecoveryAction.RecreateView : NeoProcessRecoveryAction.None;
+        return new NeoProcessFailedEventArgs(
+            kind,
+            (value & crashed) != 0,
+            recovery,
+            nativeCode,
+            string.IsNullOrEmpty(description) ? null : description);
     }
 
     private void HandleNavigationDecision(NativeMethods.neo_webview_event value, Uri? uri)

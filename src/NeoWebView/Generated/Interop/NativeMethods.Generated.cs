@@ -204,6 +204,17 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_PERMISSION_PERSISTENT_STORAGE = unchecked((uint)12),
         }
 
+        public enum neo_webview_process_failure_kind : uint
+        {
+            NEO_WEBVIEW_PROCESS_FAILURE_UNKNOWN = unchecked((uint)0),
+
+            NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED = unchecked((uint)1),
+
+            NEO_WEBVIEW_PROCESS_FAILURE_BROWSER_PROCESS_EXITED = unchecked((uint)2),
+
+            NEO_WEBVIEW_PROCESS_FAILURE_PROCESS_UNRESPONSIVE = unchecked((uint)3),
+        }
+
         public enum neo_webview_event_type : uint
         {
             NEO_WEBVIEW_EVENT_NONE = unchecked((uint)0),
@@ -845,6 +856,13 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_permission_kind (neo_webview_permission_kind_t from) => from.Value;
 
             public static implicit operator neo_webview_permission_kind_t (NativeMethods.neo_webview_permission_kind from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_process_failure_kind_t(NativeMethods.neo_webview_process_failure_kind Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_process_failure_kind (neo_webview_process_failure_kind_t from) => from.Value;
+
+            public static implicit operator neo_webview_process_failure_kind_t (NativeMethods.neo_webview_process_failure_kind from) => new (from);
         }
 
         public readonly partial record struct neo_webview_capability_t(NativeMethods.neo_webview_capability Value)

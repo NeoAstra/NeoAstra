@@ -234,6 +234,41 @@ public sealed class NeoNavigationCompletedEventArgs : EventArgs
     public ulong NavigationId { get; }
 }
 
+/// <summary>Provides data when a browser or web-content process exits or becomes unresponsive.</summary>
+public sealed class NeoProcessFailedEventArgs : EventArgs
+{
+    /// <summary>Initializes process-failure data.</summary>
+    /// <param name="kind">The portable failure category.</param>
+    /// <param name="isCrash">Whether the backend identified an abnormal crash.</param>
+    /// <param name="recoveryAction">The recommended portable recovery action.</param>
+    /// <param name="nativeCode">The backend exit code or termination reason, when available.</param>
+    /// <param name="processDescription">The backend process description, when available.</param>
+    public NeoProcessFailedEventArgs(
+        NeoProcessFailureKind kind,
+        bool isCrash,
+        NeoProcessRecoveryAction recoveryAction,
+        long nativeCode,
+        string? processDescription)
+    {
+        Kind = kind;
+        IsCrash = isCrash;
+        RecoveryAction = recoveryAction;
+        NativeCode = nativeCode;
+        ProcessDescription = processDescription;
+    }
+
+    /// <summary>Gets the portable failure category.</summary>
+    public NeoProcessFailureKind Kind { get; }
+    /// <summary>Gets whether the backend identified an abnormal crash.</summary>
+    public bool IsCrash { get; }
+    /// <summary>Gets the recommended recovery action.</summary>
+    public NeoProcessRecoveryAction RecoveryAction { get; }
+    /// <summary>Gets the backend exit code or termination reason, when available.</summary>
+    public long NativeCode { get; }
+    /// <summary>Gets the backend process description, when available.</summary>
+    public string? ProcessDescription { get; }
+}
+
 /// <summary>Provides a message sent by web content.</summary>
 public sealed class NeoWebMessageReceivedEventArgs : EventArgs
 {

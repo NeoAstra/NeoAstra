@@ -13,6 +13,7 @@ Build native desktop applications with .NET and web technologies using the platf
 - Asynchronous environment, profile, and browser-view creation
 - Profile cookie management and selective browsing-data clearing
 - Navigation state and completion events
+- Browser/web-process termination reporting with portable recovery guidance
 - JavaScript evaluation and persistent document scripts
 - Portable page zoom control
 - JSON web/native messaging

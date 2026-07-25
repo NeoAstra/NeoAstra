@@ -8,6 +8,8 @@
 
 static_assert(std::is_same_v<std::underlying_type_t<neo_webview_result_t>, int32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neo_webview_support_level_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neo_webview_process_failure_kind_t>, uint32_t>);
+static_assert((NEO_WEBVIEW_PROCESS_FAILURE_KIND_MASK & NEO_WEBVIEW_PROCESS_FAILURE_CRASHED) == 0);
 static_assert(sizeof(neo_webview_struct_header_t) == 8);
 static_assert(sizeof(neo_webview_string_view_t) == sizeof(void*) + sizeof(uint64_t));
 static_assert(offsetof(neo_webview_event_header_t, type) == 8);
