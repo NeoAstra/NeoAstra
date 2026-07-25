@@ -318,6 +318,8 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_CAPABILITY_TRANSPARENT_BACKGROUND = unchecked((uint)23),
 
             NEO_WEBVIEW_CAPABILITY_COMPOSITION = unchecked((uint)24),
+
+            NEO_WEBVIEW_CAPABILITY_ZOOM = unchecked((uint)25),
         }
 
         public enum neo_webview_log_level : uint
@@ -1454,6 +1456,14 @@ namespace NeoWebView.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_view_post_message")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neo_webview_result_t neo_webview_view_post_message(NativeMethods.neo_webview_view_t arg0, NativeMethods.neo_webview_string_view_t arg1, uint arg2, NativeMethods.neo_webview_error_t* arg3);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_view_get_zoom_factor")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_view_get_zoom_factor(NativeMethods.neo_webview_view_t arg0, double* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_view_set_zoom_factor")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_view_set_zoom_factor(NativeMethods.neo_webview_view_t arg0, double arg1);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_view_get_native_handle")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

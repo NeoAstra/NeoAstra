@@ -305,4 +305,6 @@ neo_webview_result_t neo_platform_view_evaluate(neo_webview_view_t* view, const 
 neo_webview_result_t neo_platform_view_add_script(neo_webview_view_t* view, const std::string& script, const neo_webview_script_options_t* options, neo_webview_string_callback_t callback, void* context, neo_webview_operation_t* operation, neo_webview_error_t** error) noexcept;
 neo_webview_result_t neo_platform_view_remove_script(neo_webview_view_t* view, const std::string& identifier) noexcept;
 neo_webview_result_t neo_platform_view_post_message(neo_webview_view_t* view, const std::string& message, bool json, neo_webview_error_t** error) noexcept;
+neo_webview_result_t neo_platform_view_get_zoom_factor(const neo_webview_view_t* view, double* factor) noexcept;
+neo_webview_result_t neo_platform_view_set_zoom_factor(neo_webview_view_t* view, double factor) noexcept;
 neo_webview_result_t neo_platform_view_get_handle(neo_webview_view_t* view, neo_webview_native_handle_kind_t kind, neo_webview_native_handle_t* handle) noexcept;

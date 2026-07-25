@@ -46,6 +46,29 @@ public sealed class NeoWebView : IAsyncDisposable
     /// <summary>Gets whether forward history navigation is available.</summary>
     public bool CanGoForward => _canGoForward;
 
+    /// <summary>Gets or sets the page zoom factor, where <c>1.0</c> is 100 percent.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The assigned value is outside the portable range from 0.25 through 5.0.</exception>
+    public unsafe double ZoomFactor
+    {
+        get
+        {
+            ThrowIfDisposed();
+            double factor;
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_get_zoom_factor(NativeHandle, &factor), default, "get zoom factor");
+            return factor;
+        }
+        set
+        {
+            if (!double.IsFinite(value) || value < 0.25 || value > 5d)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "The zoom factor must be from 0.25 through 5.0.");
+            }
+
+            ThrowIfDisposed();
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_set_zoom_factor(NativeHandle, value), default, "set zoom factor");
+        }
+    }
+
     /// <summary>Gets or sets the single asynchronous navigation policy handler.</summary>
     public Func<NeoNavigationRequest, ValueTask<NeoNavigationDecision>>? NavigationRequested { get; set; }
 
@@ -253,6 +276,9 @@ public sealed class NeoWebView : IAsyncDisposable
         ThrowIfDisposed();
         NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_go_forward(NativeHandle), default, "go forward");
     }
+
+    /// <summary>Resets page zoom to 100 percent.</summary>
+    public void ResetZoom() => ZoomFactor = 1d;
 
     /// <summary>Gets a typed borrowed native browser handle.</summary>
     /// <param name="kind">The requested backend handle kind.</param>

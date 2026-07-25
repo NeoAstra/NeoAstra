@@ -212,6 +212,7 @@ public sealed class ManagedApiTests
                     Assert.AreEqual("windows", environment.RuntimeInfo.OperatingSystem);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDocumentStart).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Cookies).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Zoom).SupportLevel);
                     var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
                     window.MaximumClientSize = new NeoSize(1200, 900);
                     window.MinimumClientSize = new NeoSize(320, 200);
@@ -223,6 +224,11 @@ public sealed class ManagedApiTests
                     await using var webView = await environment.CreateWebViewAsync(
                         NeoWebViewHost.FillWindow(window),
                         new NeoWebViewOptions { Profile = profile });
+                    webView.ZoomFactor = 1.25;
+                    Assert.AreEqual(1.25, webView.ZoomFactor, 0.001);
+                    webView.ResetZoom();
+                    Assert.AreEqual(1d, webView.ZoomFactor, 0.001);
+                    Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => webView.ZoomFactor = 0.1);
                     await using var userScript = await webView.AddScriptAsync("globalThis.neoWebViewInjected = 40;");
                     var navigation = new TaskCompletionSource<NeoNavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
                     webView.NavigationCompleted += (_, args) => navigation.TrySetResult(args);

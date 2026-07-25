@@ -1,6 +1,7 @@
 #include "native_internal.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <new>
 #include <stdexcept>
@@ -415,7 +416,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_view_async(
     if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options)))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");
     try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;auto* state=new view_completion{callback,context,op,value,nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(const neo_webview_environment_t* env,neo_webview_capability_t capability,neo_webview_capability_info_t* info){
-    if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_COMPOSITION||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
+    if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_ZOOM||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoWebView backend";
     static const std::string unavailable="Not exposed by the current portable implementation";
     info->support=NEO_WEBVIEW_SUPPORT_NONE;info->capability_version=1;info->flags=0;
@@ -425,6 +426,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
         case NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN:
         case NEO_WEBVIEW_CAPABILITY_COOKIES:
         case NEO_WEBVIEW_CAPABILITY_PROFILE_EPHEMERAL:
+        case NEO_WEBVIEW_CAPABILITY_ZOOM:
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
 #if !defined(_WIN32)
         case NEO_WEBVIEW_CAPABILITY_SCRIPT_DOCUMENT_END:
@@ -462,6 +464,8 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_evaluate_script_async(neo
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_add_script_async(neo_webview_view_t* v,neo_webview_string_view_t script,const neo_webview_script_options_t* options,neo_webview_string_callback_t cb,void* ctx,neo_webview_operation_t** outop,neo_webview_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script)||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->world_name))return neo_fail(e,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid persistent script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEO_WEBVIEW_ERROR_WRONG_THREAD,"script injection must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_add_script(v,neo_string(script),options,cb,ctx,op,e);if(r!=NEO_WEBVIEW_OK)op->release();return r;}catch(...){return neo_fail(e,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid persistent script");}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_remove_script(neo_webview_view_t* v,neo_webview_string_view_t identifier){if(!v||!neo_valid_utf8(identifier))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEO_WEBVIEW_ERROR_WRONG_THREAD;try{return neo_platform_view_remove_script(v,neo_string(identifier));}catch(...){return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_post_message(neo_webview_view_t* v,neo_webview_string_view_t msg,uint32_t json,neo_webview_error_t** e){if(!v||!neo_valid_utf8(msg))return neo_fail(e,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid message");if(!check_ui(v->environment->app))return neo_fail(e,NEO_WEBVIEW_ERROR_WRONG_THREAD,"message posting must run on the UI thread");try{return neo_platform_view_post_message(v,neo_string(msg),json!=0,e);}catch(...){return neo_fail(e,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid message");}}
+neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_get_zoom_factor(const neo_webview_view_t* v,double* factor){if(!v||!factor)return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEO_WEBVIEW_ERROR_WRONG_THREAD;return neo_platform_view_get_zoom_factor(v,factor);}
+neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_set_zoom_factor(neo_webview_view_t* v,double factor){if(!v||!std::isfinite(factor)||factor<0.25||factor>5.0)return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEO_WEBVIEW_ERROR_WRONG_THREAD;return neo_platform_view_set_zoom_factor(v,factor);}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_view_get_native_handle(neo_webview_view_t* v,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* h){if(!v||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;return neo_platform_view_get_handle(v,kind,h);}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_query_extension(const void*,neo_webview_string_view_t name,uint32_t,const void** table){if(table)*table=nullptr;if(!table||!neo_valid_utf8(name))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;return NEO_WEBVIEW_ERROR_NOT_SUPPORTED;}
 

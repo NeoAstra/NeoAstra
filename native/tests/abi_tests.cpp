@@ -54,6 +54,9 @@ int main() {
     neo_webview_window_state_t state{};
     assert(neo_webview_window_get_state(window, &state) == NEO_WEBVIEW_OK);
     assert(state == NEO_WEBVIEW_WINDOW_NORMAL);
+    double zoom{};
+    assert(neo_webview_view_get_zoom_factor(nullptr, &zoom) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(neo_webview_view_set_zoom_factor(nullptr, 1.0) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
     neo_webview_app_quit(app, 7);
     neo_webview_app_release(app);
     neo_webview_window_release(window);

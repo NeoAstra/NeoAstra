@@ -115,6 +115,8 @@ public enum NeoCapability
     TransparentBackground,
     /// <summary>Composition hosting.</summary>
     Composition,
+    /// <summary>Page zoom control.</summary>
+    Zoom,
 }
 
 /// <summary>Identifies a backend-specific borrowed native handle.</summary>
