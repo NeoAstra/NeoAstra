@@ -2,10 +2,14 @@
 
 #include <array>
 #include <atomic>
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <chrono>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 namespace {
 
@@ -15,8 +19,62 @@ struct counted final : neo_ref_counted {
     std::atomic<int>& destroyed;
 };
 
+struct ui_counted final : neo_ui_ref_counted {
+    ui_counted(neo_webview_app_t* app, std::atomic<int>& teardown_count, std::atomic<int>& destructor_count,
+               std::atomic<bool>& teardown_on_ui, std::atomic<bool>& destructor_on_ui,
+               neo_ui_ref_counted* release_during_teardown = nullptr)
+        : neo_ui_ref_counted(app), teardown_count(teardown_count), destructor_count(destructor_count),
+          teardown_on_ui(teardown_on_ui), destructor_on_ui(destructor_on_ui),
+          release_during_teardown(release_during_teardown) { }
+
+    ~ui_counted() override {
+        destroy_ui_once();
+        ++destructor_count;
+        destructor_on_ui.store(destruction_app->ui_thread == std::this_thread::get_id());
+    }
+
+    void destroy_ui() noexcept override {
+        ++teardown_count;
+        teardown_on_ui.store(destruction_app->ui_thread == std::this_thread::get_id());
+        if (release_during_teardown) {
+            std::thread worker([value = release_during_teardown] { assert(value->release()); });
+            worker.join();
+            release_during_teardown = nullptr;
+        }
+    }
+
+    std::atomic<int>& teardown_count;
+    std::atomic<int>& destructor_count;
+    std::atomic<bool>& teardown_on_ui;
+    std::atomic<bool>& destructor_on_ui;
+    neo_ui_ref_counted* release_during_teardown;
+};
+
+static_assert(std::is_base_of_v<neo_ui_ref_counted, neo_webview_environment_t>);
+static_assert(std::is_base_of_v<neo_ui_ref_counted, neo_webview_profile_t>);
+static_assert(std::is_base_of_v<neo_ui_ref_counted, neo_webview_window_t>);
+static_assert(std::is_base_of_v<neo_ui_ref_counted, neo_webview_view_t>);
+
 void NEO_WEBVIEW_CALL increment(void* context) {
     ++*static_cast<std::atomic<int>*>(context);
+}
+
+void NEO_WEBVIEW_CALL quit_app(void* context) {
+    neo_webview_app_quit(static_cast<neo_webview_app_t*>(context), 0);
+}
+
+neo_webview_app_t* create_test_app() {
+    neo_webview_app_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.shutdown_mode = NEO_WEBVIEW_APP_SHUTDOWN_EXPLICIT;
+    const std::string name = "NeoWebView lifetime tests";
+    options.application_name = neo_string_view(name);
+    neo_webview_app_t* app{};
+    neo_webview_error_t* error{};
+    assert(neo_webview_app_create(&options, &app, &error) == NEO_WEBVIEW_OK);
+    assert(app != nullptr && error == nullptr);
+    return app;
 }
 
 struct captured_decision {
@@ -62,6 +120,79 @@ void test_reference_counting_threads() {
     for (auto& thread : threads) thread.join();
     value->release();
     assert(destroyed.load() == 1);
+}
+
+void test_ui_destruction_from_worker() {
+    auto* app = create_test_app();
+    std::atomic<int> teardown_count{};
+    std::atomic<int> destructor_count{};
+    std::atomic<bool> teardown_on_ui{};
+    std::atomic<bool> destructor_on_ui{};
+    auto* value = new ui_counted(app, teardown_count, destructor_count, teardown_on_ui, destructor_on_ui);
+
+    std::thread worker([value] { assert(value->release()); });
+    worker.join();
+    assert(teardown_count.load() == 0);
+    assert(destructor_count.load() == 0);
+
+    assert(neo_webview_app_dispatch(app, quit_app, app) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_run(app) == 0);
+    assert(teardown_count.load() == 1);
+    assert(destructor_count.load() == 1);
+    assert(teardown_on_ui.load());
+    assert(destructor_on_ui.load());
+    neo_webview_app_release(app);
+}
+
+void test_ui_destruction_after_shutdown() {
+    auto* app = create_test_app();
+    std::atomic<int> teardown_count{};
+    std::atomic<int> destructor_count{};
+    std::atomic<bool> teardown_on_ui{};
+    std::atomic<bool> destructor_on_ui{true};
+    auto* value = new ui_counted(app, teardown_count, destructor_count, teardown_on_ui, destructor_on_ui);
+    assert(neo_webview_app_dispatch(app, quit_app, app) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_run(app) == 0);
+    assert(teardown_count.load() == 1);
+    assert(destructor_count.load() == 0);
+
+    std::thread worker([value] { assert(value->release()); });
+    worker.join();
+    assert(teardown_count.load() == 1);
+    assert(destructor_count.load() == 1);
+    assert(teardown_on_ui.load());
+    assert(!destructor_on_ui.load());
+    neo_webview_app_release(app);
+}
+
+void test_worker_release_while_shutdown_is_draining() {
+    auto* app = create_test_app();
+    std::atomic<int> target_teardown_count{};
+    std::atomic<int> target_destructor_count{};
+    std::atomic<bool> target_teardown_on_ui{};
+    std::atomic<bool> target_destructor_on_ui{};
+    auto* target = new ui_counted(app, target_teardown_count, target_destructor_count,
+                                  target_teardown_on_ui, target_destructor_on_ui);
+    std::atomic<int> trigger_teardown_count{};
+    std::atomic<int> trigger_destructor_count{};
+    std::atomic<bool> trigger_teardown_on_ui{};
+    std::atomic<bool> trigger_destructor_on_ui{};
+    auto* trigger = new ui_counted(app, trigger_teardown_count, trigger_destructor_count,
+                                   trigger_teardown_on_ui, trigger_destructor_on_ui, target);
+
+    assert(neo_webview_app_dispatch(app, quit_app, app) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_run(app) == 0);
+    assert(target_teardown_count.load() == 1);
+    assert(target_destructor_count.load() == 1);
+    assert(target_teardown_on_ui.load());
+    assert(target_destructor_on_ui.load());
+    assert(trigger_teardown_count.load() == 1);
+    assert(trigger_teardown_on_ui.load());
+
+    assert(trigger->release());
+    assert(trigger_destructor_count.load() == 1);
+    assert(trigger_destructor_on_ui.load());
+    neo_webview_app_release(app);
 }
 
 void test_operation_terminal_state() {
@@ -165,6 +296,9 @@ void test_structure_versions() {
 int main() {
     test_reference_counting();
     test_reference_counting_threads();
+    test_ui_destruction_from_worker();
+    test_ui_destruction_after_shutdown();
+    test_worker_release_while_shutdown_is_draining();
     test_operation_terminal_state();
     test_decision_state();
     test_decision_timeout();

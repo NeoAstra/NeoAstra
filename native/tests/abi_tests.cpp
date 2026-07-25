@@ -1,5 +1,8 @@
 #include "neowebview.h"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cstddef>
 #include <cstdint>

@@ -6,19 +6,50 @@
 #include <new>
 #include <stdexcept>
 
+namespace {
+
+void drain_ui_destructions(neo_webview_app_t* app) noexcept {
+    for (;;) {
+        neo_ui_ref_counted* pending{};
+        {
+            std::lock_guard lock(app->ui_lifetime_mutex);
+            pending = app->pending_ui_destructions;
+            app->pending_ui_destructions = nullptr;
+        }
+        if (!pending) return;
+        while (pending) {
+            auto* next = pending->pending_ui_next;
+            pending->pending_ui_next = nullptr;
+            delete pending;
+            pending = next;
+        }
+    }
+}
+
+} // namespace
+
 neo_webview_app::~neo_webview_app() {
+    if (ui_thread == std::this_thread::get_id()) neo_complete_ui_shutdown(this);
     events.clear();
     logs.clear();
     neo_platform_shutdown(this);
 }
-neo_webview_environment::~neo_webview_environment() { neo_platform_environment_destroy(this); app->release(); }
-neo_webview_profile::~neo_webview_profile() { neo_platform_profile_destroy(this); environment->release(); }
+neo_webview_environment::~neo_webview_environment() { destroy_ui_once(); }
+void neo_webview_environment::destroy_ui() noexcept { neo_platform_environment_destroy(this); }
+neo_webview_profile::~neo_webview_profile() { destroy_ui_once(); environment->release(); }
+void neo_webview_profile::destroy_ui() noexcept { neo_platform_profile_destroy(this); }
 neo_webview_window::~neo_webview_window() {
-    neo_platform_window_destroy(this);
+    destroy_ui_once();
     if (owner) owner->release();
-    app->release();
 }
+void neo_webview_window::destroy_ui() noexcept { neo_platform_window_destroy(this); }
 neo_webview_view::~neo_webview_view() {
+    destroy_ui_once();
+    if (profile) profile->release();
+    if (window) window->release();
+    environment->release();
+}
+void neo_webview_view::destroy_ui() noexcept {
     for (;;) {
         neo_webview_decision_t* decision{};
         {
@@ -41,9 +72,6 @@ neo_webview_view::~neo_webview_view() {
         auto& views = window->views;
         views.erase(std::remove(views.begin(), views.end(), this), views.end());
     }
-    if (profile) profile->release();
-    if (window) window->release();
-    environment->release();
 }
 
 bool neo_valid_utf8(neo_webview_string_view_t text) noexcept {
@@ -110,6 +138,12 @@ bool valid_decision_action(neo_webview_decision_action_t value) noexcept {
 
 bool check_ui(const neo_webview_app_t* app) noexcept {
     return app && app->ui_thread == std::this_thread::get_id();
+}
+
+bool accepts_ui_objects(const neo_webview_app_t* app) noexcept {
+    if (!app) return false;
+    const auto state = app->state.load(std::memory_order_acquire);
+    return state == neo_app_state::created || state == neo_app_state::running;
 }
 
 void initialize_event(neo_webview_app_t* app, neo_webview_event_t& event, neo_webview_event_type_t type, uint64_t object_id,
@@ -255,6 +289,7 @@ void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint
 
 void neo_drain_dispatch(neo_webview_app_t* app) noexcept {
     if (!app || !check_ui(app)) return;
+    drain_ui_destructions(app);
     for (;;) {
         neo_dispatch_item item{};
         {
@@ -264,10 +299,51 @@ void neo_drain_dispatch(neo_webview_app_t* app) noexcept {
             app->dispatches.pop_front();
         }
         try { item.callback(item.context); } catch (...) { }
+        drain_ui_destructions(app);
     }
+    drain_ui_destructions(app);
     if (app->quit_requested.load(std::memory_order_acquire)) {
-        app->stopping.store(true, std::memory_order_release);
-        app->state.store(neo_app_state::stopping, std::memory_order_release);
+        {
+            std::lock_guard lock(app->dispatch_mutex);
+            app->stopping.store(true, std::memory_order_release);
+            app->state.store(neo_app_state::stopping, std::memory_order_release);
+        }
+        neo_complete_ui_shutdown(app);
+    }
+}
+
+void neo_complete_ui_shutdown(neo_webview_app_t* app) noexcept {
+    if (!app || !check_ui(app)) return;
+    {
+        std::lock_guard lock(app->ui_lifetime_mutex);
+        if (app->ui_shutdown_complete) return;
+        app->ui_shutdown_started = true;
+    }
+    app->events.clear();
+    app->logs.clear();
+
+    for (;;) {
+        drain_ui_destructions(app);
+        neo_ui_ref_counted* candidate{};
+        bool candidate_retained{};
+        {
+            std::lock_guard lock(app->ui_lifetime_mutex);
+            for (auto* value = app->ui_objects; value; value = value->ui_next) {
+                if (!value->ui_destroyed.load(std::memory_order_acquire) &&
+                    (!candidate || value->ui_destruction_phase < candidate->ui_destruction_phase)) {
+                    candidate = value;
+                }
+            }
+            if (candidate) candidate_retained = candidate->retain();
+            if (!candidate && !app->pending_ui_destructions) {
+                app->ui_shutdown_complete = true;
+                return;
+            }
+        }
+        if (candidate) {
+            candidate->destroy_ui_once();
+            if (candidate_retained) candidate->release();
+        }
     }
 }
 
@@ -386,6 +462,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create(const neo_webview_a
         if(options->maximum_pending_dispatches) app->dispatch_limit=options->maximum_pending_dispatches;
         app->logs.set(options->log_callback,options->log_context);
         if(!neo_platform_initialize(app,error)){app->release();return error&&*error?(*error)->code:NEO_WEBVIEW_ERROR_BACKEND_UNAVAILABLE;}
+        app->wake_ui=neo_platform_wake;
         *output=app; return NEO_WEBVIEW_OK;
     } catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}
 }
@@ -396,14 +473,19 @@ int32_t NEO_WEBVIEW_CALL neo_webview_app_run(neo_webview_app_t* app) {
     auto expected=neo_app_state::created;
     if(!app->state.compare_exchange_strong(expected,neo_app_state::running)) return NEO_WEBVIEW_ERROR_INVALID_STATE;
     const auto result=neo_platform_run(app);
-    app->stopped.store(true,std::memory_order_release); app->state.store(neo_app_state::stopped,std::memory_order_release);
+    { std::lock_guard lock(app->dispatch_mutex); app->stopping.store(true,std::memory_order_release); app->state.store(neo_app_state::stopping,std::memory_order_release); }
+    neo_drain_dispatch(app);
+    neo_complete_ui_shutdown(app);
     app->events.clear(); app->logs.clear();
+    neo_platform_shutdown(app);
+    app->stopped.store(true,std::memory_order_release); app->state.store(neo_app_state::stopped,std::memory_order_release);
     return result;
 }
-void NEO_WEBVIEW_CALL neo_webview_app_quit(neo_webview_app_t* app, int32_t code) { if(!app)return; app->exit_code.store(code); app->quit_requested.store(true,std::memory_order_release); neo_platform_quit(app); }
+void NEO_WEBVIEW_CALL neo_webview_app_quit(neo_webview_app_t* app, int32_t code) { if(!app)return; app->exit_code.store(code); app->quit_requested.store(true,std::memory_order_release); neo_platform_wake(app); neo_platform_quit(app); }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_dispatch(neo_webview_app_t* app, neo_webview_dispatch_callback_t callback, void* context) {
     if(!app||!callback)return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
-    { std::lock_guard lock(app->dispatch_mutex); if(app->stopped.load()||app->state.load()==neo_app_state::stopping)return NEO_WEBVIEW_ERROR_DISPOSED; if(app->dispatches.size()>=app->dispatch_limit)return NEO_WEBVIEW_ERROR_INVALID_STATE; app->dispatches.push_back({callback,context}); }
+    try { std::lock_guard lock(app->dispatch_mutex); if(app->stopped.load()||app->state.load()==neo_app_state::stopping)return NEO_WEBVIEW_ERROR_DISPOSED; if(app->dispatches.size()>=app->dispatch_limit)return NEO_WEBVIEW_ERROR_INVALID_STATE; app->dispatches.push_back({callback,context}); }
+    catch (...) { return NEO_WEBVIEW_ERROR_NATIVE_FAILURE; }
     neo_platform_wake(app); return NEO_WEBVIEW_OK;
 }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_set_event_callback(neo_webview_app_t* app, neo_webview_event_callback_t callback, void* context){if(!app)return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;app->events.set(callback,context);return NEO_WEBVIEW_OK;}
@@ -411,6 +493,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create_window(neo_webview_
     if(output)*output=nullptr;
     if(!app||!output||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->title)||options->bounds.width<=0||options->bounds.height<=0||options->minimum_size.width<0||options->minimum_size.height<0||options->maximum_size.width<0||options->maximum_size.height<0||options->state>NEO_WEBVIEW_WINDOW_FULLSCREEN||(options->maximum_size.width>0&&options->minimum_size.width>options->maximum_size.width)||(options->maximum_size.height>0&&options->minimum_size.height>options->maximum_size.height))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid window arguments");
     if(!check_ui(app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"window creation must run on the UI thread");
+    if(!accepts_ui_objects(app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     try{
         auto* window=new neo_webview_window(app);window->id=app->next_id.fetch_add(1);window->title=neo_string(options->title);window->bounds=options->bounds;window->minimum_size=options->minimum_size;window->maximum_size=options->maximum_size;window->state=options->state;
         if(options->owner){window->owner=options->owner;window->owner->retain();}
@@ -442,12 +525,13 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_window_get_native_handle(neo_w
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_async(neo_webview_app_t* app,const neo_webview_environment_options_t* options,neo_webview_environment_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
     if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
     if(!check_ui(app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"environment creation must begin on the UI thread");
+    if(!accepts_ui_objects(app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     try{auto* op=make_operation(outop);auto* value=new neo_webview_environment(app);auto* state=new environment_completion{callback,context,op,value,nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_environment_create_async(value,options,platform_environment_created,state,&start_error))platform_environment_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_profile_async(neo_webview_environment_t* env,const neo_webview_profile_options_t* options,neo_webview_profile_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
-    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->name))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid profile arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"profile creation must begin on the UI thread");
+    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->name))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid profile arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"profile creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     try{auto* op=make_operation(outop);auto* value=new neo_webview_profile(env);value->name=neo_string(options->name);value->ephemeral=options->ephemeral!=0;if(!neo_platform_profile_create(value,error)){value->release();op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}return error&&*error?(*error)->code:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}auto* state=new profile_completion{callback,context,op,value};auto r=schedule(env->app,complete_profile,state,error,"could not schedule profile completion");if(r!=NEO_WEBVIEW_OK){value->release();op->release();delete state;}return r;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_view_async(neo_webview_environment_t* env,const neo_webview_view_options_t* options,neo_webview_view_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
-    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||options->decision_timeout_ms>600000)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");
+    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||options->decision_timeout_ms>600000)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);auto* state=new view_completion{callback,context,op,value,nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(const neo_webview_environment_t* env,neo_webview_capability_t capability,neo_webview_capability_info_t* info){
     if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_ZOOM||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;

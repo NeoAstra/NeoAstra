@@ -10,6 +10,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -91,10 +92,13 @@ struct neo_ref_counted {
         for (;;) {
             if (count == 0) return false;
             if (!references.compare_exchange_weak(count, count - 1, std::memory_order_acq_rel, std::memory_order_acquire)) continue;
-            if (count == 1) delete this;
+            if (count == 1) on_zero_references();
             return true;
         }
     }
+
+protected:
+    virtual void on_zero_references() noexcept { delete this; }
 };
 
 struct neo_webview_error final : neo_ref_counted {
@@ -163,6 +167,8 @@ struct neo_dispatch_item {
 
 enum class neo_app_state : uint32_t { created, running, stopping, stopped };
 
+struct neo_ui_ref_counted;
+
 struct neo_webview_app final : neo_ref_counted {
     bool embedded{};
     std::atomic<bool> quit_requested{false};
@@ -175,6 +181,12 @@ struct neo_webview_app final : neo_ref_counted {
     uint32_t dispatch_limit{65536};
     std::mutex dispatch_mutex;
     std::deque<neo_dispatch_item> dispatches;
+    std::mutex ui_lifetime_mutex;
+    neo_ui_ref_counted* ui_objects{};
+    neo_ui_ref_counted* pending_ui_destructions{};
+    bool ui_shutdown_started{};
+    bool ui_shutdown_complete{};
+    void (*wake_ui)(neo_webview_app_t*) noexcept{};
     neo_callback_slot<neo_webview_event_callback_t> events;
     neo_callback_slot<neo_webview_log_callback_t> logs;
     std::atomic<uint64_t> next_id{1};
@@ -186,23 +198,112 @@ struct neo_webview_app final : neo_ref_counted {
     ~neo_webview_app() override;
 };
 
-struct neo_webview_environment final : neo_ref_counted {
-    neo_webview_app_t* app{};
-    void* platform{};
-    explicit neo_webview_environment(neo_webview_app_t* value) : app(value) { app->retain(); }
-    ~neo_webview_environment() override;
+struct neo_ui_ref_counted : neo_ref_counted {
+    neo_webview_app_t* const destruction_app;
+    const uint32_t ui_destruction_phase;
+    neo_ui_ref_counted* ui_previous{};
+    neo_ui_ref_counted* ui_next{};
+    neo_ui_ref_counted* pending_ui_next{};
+    bool ui_registered{};
+    std::atomic<bool> ui_destroyed{false};
+
+    explicit neo_ui_ref_counted(neo_webview_app_t* app, uint32_t destruction_phase = 0);
+    ~neo_ui_ref_counted() override;
+
+    void destroy_ui_once() noexcept {
+        if (!ui_destroyed.exchange(true, std::memory_order_acq_rel)) destroy_ui();
+    }
+
+    virtual void destroy_ui() noexcept = 0;
+
+protected:
+    void on_zero_references() noexcept override;
 };
 
-struct neo_webview_profile final : neo_ref_counted {
+inline neo_ui_ref_counted::neo_ui_ref_counted(neo_webview_app_t* app, uint32_t destruction_phase)
+    : destruction_app(app), ui_destruction_phase(destruction_phase) {
+    if (!app || !app->retain()) throw std::bad_alloc();
+    try {
+        std::lock_guard lock(app->ui_lifetime_mutex);
+        ui_next = app->ui_objects;
+        if (ui_next) ui_next->ui_previous = this;
+        app->ui_objects = this;
+        ui_registered = true;
+    } catch (...) {
+        app->release();
+        throw;
+    }
+}
+
+inline neo_ui_ref_counted::~neo_ui_ref_counted() {
+    {
+        std::lock_guard lock(destruction_app->ui_lifetime_mutex);
+        if (ui_registered) {
+            if (ui_previous) ui_previous->ui_next = ui_next;
+            else destruction_app->ui_objects = ui_next;
+            if (ui_next) ui_next->ui_previous = ui_previous;
+            ui_registered = false;
+        }
+    }
+    destruction_app->release();
+}
+
+inline void neo_ui_ref_counted::on_zero_references() noexcept {
+    auto* app = destruction_app;
+    if (app->ui_thread == std::this_thread::get_id()) {
+        delete this;
+        return;
+    }
+
+    bool queued{};
+    void (*wake)(neo_webview_app_t*) noexcept{};
+    {
+        std::lock_guard lock(app->ui_lifetime_mutex);
+        if (!app->ui_shutdown_complete) {
+            if (ui_registered) {
+                if (ui_previous) ui_previous->ui_next = ui_next;
+                else app->ui_objects = ui_next;
+                if (ui_next) ui_next->ui_previous = ui_previous;
+                ui_previous = nullptr;
+                ui_next = nullptr;
+                ui_registered = false;
+            }
+            pending_ui_next = app->pending_ui_destructions;
+            app->pending_ui_destructions = this;
+            queued = true;
+            if (!app->ui_shutdown_started) wake = app->wake_ui;
+        } else if (ui_registered) {
+            if (ui_previous) ui_previous->ui_next = ui_next;
+            else app->ui_objects = ui_next;
+            if (ui_next) ui_next->ui_previous = ui_previous;
+            ui_registered = false;
+        }
+    }
+
+    if (queued) {
+        if (wake) wake(app);
+    } else delete this;
+}
+
+struct neo_webview_environment final : neo_ui_ref_counted {
+    neo_webview_app_t* app{};
+    void* platform{};
+    explicit neo_webview_environment(neo_webview_app_t* value) : neo_ui_ref_counted(value, 3), app(value) { }
+    ~neo_webview_environment() override;
+    void destroy_ui() noexcept override;
+};
+
+struct neo_webview_profile final : neo_ui_ref_counted {
     neo_webview_environment_t* environment{};
     bool ephemeral{};
     std::string name;
     void* platform{};
-    explicit neo_webview_profile(neo_webview_environment_t* value) : environment(value) { environment->retain(); }
+    explicit neo_webview_profile(neo_webview_environment_t* value) : neo_ui_ref_counted(value->app, 2), environment(value) { environment->retain(); }
     ~neo_webview_profile() override;
+    void destroy_ui() noexcept override;
 };
 
-struct neo_webview_window final : neo_ref_counted {
+struct neo_webview_window final : neo_ui_ref_counted {
     neo_webview_app_t* app{};
     neo_webview_window_t* owner{};
     uint64_t id{};
@@ -215,11 +316,12 @@ struct neo_webview_window final : neo_ref_counted {
     std::atomic<bool> closed{false};
     std::vector<neo_webview_view_t*> views; // UI-thread-only weak references.
     void* platform{};
-    explicit neo_webview_window(neo_webview_app_t* value) : app(value) { app->retain(); }
+    explicit neo_webview_window(neo_webview_app_t* value) : neo_ui_ref_counted(value, 1), app(value) { }
     ~neo_webview_window() override;
+    void destroy_ui() noexcept override;
 };
 
-struct neo_webview_view final : neo_ref_counted {
+struct neo_webview_view final : neo_ui_ref_counted {
     neo_webview_environment_t* environment{};
     neo_webview_profile_t* profile{};
     neo_webview_window_t* window{};
@@ -234,8 +336,9 @@ struct neo_webview_view final : neo_ref_counted {
     std::string title;
     neo_callback_slot<neo_webview_event_callback_t> events;
     void* platform{};
-    explicit neo_webview_view(neo_webview_environment_t* value) : environment(value) { environment->retain(); }
+    explicit neo_webview_view(neo_webview_environment_t* value) : neo_ui_ref_counted(value->app), environment(value) { environment->retain(); }
     ~neo_webview_view() override;
+    void destroy_ui() noexcept override;
 };
 
 inline void neo_configure_decision(neo_webview_decision_t* decision, const neo_webview_view_t* view,
@@ -334,6 +437,7 @@ void neo_emit_app(neo_webview_app_t* app, neo_webview_event_type_t type, uint64_
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
 void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
 void neo_drain_dispatch(neo_webview_app_t* app) noexcept;
+void neo_complete_ui_shutdown(neo_webview_app_t* app) noexcept;
 void neo_window_closed(neo_webview_window_t* window) noexcept;
 
 bool neo_platform_initialize(neo_webview_app_t* app, neo_webview_error_t** error) noexcept;

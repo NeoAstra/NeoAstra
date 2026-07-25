@@ -753,6 +753,7 @@ bool neo_platform_environment_create_async(neo_webview_environment_t* environmen
             runtime_path.empty() ? nullptr : runtime_path.c_str(), user_data.empty() ? nullptr : user_data.c_str(), environment_options.Get(),
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([environment, callback, context](HRESULT result, ICoreWebView2Environment* created) -> HRESULT {
                 auto* state = static_cast<windows_environment*>(environment->platform);
+                if (!state) { callback(context, make_error(NEO_WEBVIEW_ERROR_DISPOSED, "Application shutdown completed before WebView2 environment creation", E_ABORT)); return S_OK; }
                 if (FAILED(result) || !created) callback(context, make_error(NEO_WEBVIEW_ERROR_RUNTIME_UNAVAILABLE, "WebView2 environment creation failed", result));
                 else { state->value = created; callback(context, nullptr); }
                 return S_OK;
@@ -927,6 +928,7 @@ bool neo_platform_view_create_async(neo_webview_view_t* view,const neo_webview_v
     view->platform = state;
     auto completed = Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>([view, callback, context](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
             auto* state = static_cast<windows_view*>(view->platform);
+            if (!state) { if (controller) controller->Close(); callback(context, make_error(NEO_WEBVIEW_ERROR_DISPOSED, "Application shutdown completed before WebView2 view creation", E_ABORT)); return S_OK; }
             if (FAILED(result) || !controller) { callback(context, make_error(NEO_WEBVIEW_ERROR_NATIVE_FAILURE, "WebView2 controller creation failed", result)); return S_OK; }
             state->controller = controller;
             result = controller->get_CoreWebView2(&state->core);
