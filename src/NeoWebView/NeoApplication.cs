@@ -144,22 +144,18 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <param name="options">Environment options, or <see langword="null"/> for defaults.</param>
     /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
     /// <returns>The created environment.</returns>
-    /// <exception cref="NotSupportedException">Custom schemes were supplied, but the native ABI does not define their descriptor layout.</exception>
+    /// <exception cref="PlatformNotSupportedException">Custom schemes were supplied on a backend that does not implement them.</exception>
     public unsafe ValueTask<NeoEnvironment> CreateEnvironmentAsync(NeoEnvironmentOptions? options = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         options ??= new NeoEnvironmentOptions();
         options.Validate();
-        if (options.CustomSchemes.Count != 0)
-        {
-            throw new NotSupportedException("The current native ABI does not define the custom-scheme descriptor layout.");
-        }
-
         using var userDataRoot = new Utf8String(options.UserDataRoot);
         using var runtimePath = new Utf8String(options.BrowserRuntimePath);
         using var arguments = new Utf8String(options.BrowserArguments);
         using var languages = new Utf8String(string.Join(',', options.PreferredLanguages));
+        using var customSchemes = new CustomSchemeMarshaller(options.CustomSchemes);
         var rawOptions = new NativeMethods.neo_webview_environment_options
         {
             size = (uint)sizeof(NativeMethods.neo_webview_environment_options),
@@ -169,6 +165,9 @@ public sealed class NeoApplication : IAsyncDisposable
             browser_arguments = arguments.View,
             preferred_languages = languages.View,
             private_mode = options.IsPrivate ? 1u : 0u,
+            custom_scheme_count = customSchemes.Count,
+            custom_schemes = customSchemes.Schemes,
+            custom_scheme_stride = customSchemes.Stride,
         };
         var nativeOptions = new NativeMethods.neo_webview_environment_options_t(rawOptions);
         var operation = new NativeOperation<NeoEnvironment>(cancellationToken, this);
@@ -197,6 +196,7 @@ public sealed class NeoApplication : IAsyncDisposable
             return operation.ValueTask;
         }
 
+        _ = customSchemes.TakeRegistrations();
         operation.AttachOperation(nativeOperation.Handle);
         return operation.ValueTask;
     }

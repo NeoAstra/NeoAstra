@@ -32,6 +32,9 @@ typedef struct neo_webview_download neo_webview_download_t;
 typedef struct neo_webview_error neo_webview_error_t;
 typedef struct neo_webview_buffer neo_webview_buffer_t;
 typedef struct neo_webview_stream neo_webview_stream_t;
+typedef struct neo_webview_resource_request neo_webview_resource_request_t;
+typedef struct neo_webview_resource_response neo_webview_resource_response_t;
+typedef struct neo_webview_custom_scheme neo_webview_custom_scheme_t;
 
 typedef struct neo_webview_string_view {
     const uint8_t* data;
@@ -85,6 +88,8 @@ typedef enum neo_webview_event_type : uint32_t {
 } neo_webview_event_type_t;
 typedef enum neo_webview_capability : uint32_t { NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME = 0, NEO_WEBVIEW_CAPABILITY_SCRIPT_DOCUMENT_START, NEO_WEBVIEW_CAPABILITY_SCRIPT_DOCUMENT_END, NEO_WEBVIEW_CAPABILITY_SCRIPT_ISOLATED_WORLD, NEO_WEBVIEW_CAPABILITY_SCRIPT_ALL_FRAMES, NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN, NEO_WEBVIEW_CAPABILITY_MESSAGE_SUBFRAMES, NEO_WEBVIEW_CAPABILITY_PROFILE_NAMED, NEO_WEBVIEW_CAPABILITY_PROFILE_EPHEMERAL, NEO_WEBVIEW_CAPABILITY_COOKIES, NEO_WEBVIEW_CAPABILITY_CLEAR_DATA_BY_TIME, NEO_WEBVIEW_CAPABILITY_DOWNLOADS, NEO_WEBVIEW_CAPABILITY_DOWNLOAD_PAUSE, NEO_WEBVIEW_CAPABILITY_PERMISSIONS, NEO_WEBVIEW_CAPABILITY_PERMISSION_PERSISTENCE, NEO_WEBVIEW_CAPABILITY_NETWORK_OBSERVATION, NEO_WEBVIEW_CAPABILITY_NETWORK_INTERCEPTION, NEO_WEBVIEW_CAPABILITY_PRINT_DIALOG, NEO_WEBVIEW_CAPABILITY_PRINT_PDF, NEO_WEBVIEW_CAPABILITY_CAPTURE_VIEWPORT, NEO_WEBVIEW_CAPABILITY_CAPTURE_FULL_PAGE, NEO_WEBVIEW_CAPABILITY_DEVTOOLS, NEO_WEBVIEW_CAPABILITY_FIND, NEO_WEBVIEW_CAPABILITY_TRANSPARENT_BACKGROUND, NEO_WEBVIEW_CAPABILITY_COMPOSITION, NEO_WEBVIEW_CAPABILITY_ZOOM, NEO_WEBVIEW_CAPABILITY_TRACKED_POPUPS, NEO_WEBVIEW_CAPABILITY_SCRIPT_DIALOGS, NEO_WEBVIEW_CAPABILITY_FILE_CHOOSER, NEO_WEBVIEW_CAPABILITY_HTTP_AUTHENTICATION, NEO_WEBVIEW_CAPABILITY_CLIENT_CERTIFICATES, NEO_WEBVIEW_CAPABILITY_TLS_ERROR_DECISIONS, NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS } neo_webview_capability_t;
 typedef enum neo_webview_log_level : uint32_t { NEO_WEBVIEW_LOG_TRACE = 0, NEO_WEBVIEW_LOG_DEBUG, NEO_WEBVIEW_LOG_INFORMATION, NEO_WEBVIEW_LOG_WARNING, NEO_WEBVIEW_LOG_ERROR, NEO_WEBVIEW_LOG_CRITICAL } neo_webview_log_level_t;
+typedef enum neo_webview_resource_kind : uint32_t { NEO_WEBVIEW_RESOURCE_OTHER = 0, NEO_WEBVIEW_RESOURCE_DOCUMENT, NEO_WEBVIEW_RESOURCE_STYLESHEET, NEO_WEBVIEW_RESOURCE_IMAGE, NEO_WEBVIEW_RESOURCE_MEDIA, NEO_WEBVIEW_RESOURCE_FONT, NEO_WEBVIEW_RESOURCE_SCRIPT, NEO_WEBVIEW_RESOURCE_XML_HTTP_REQUEST, NEO_WEBVIEW_RESOURCE_FETCH, NEO_WEBVIEW_RESOURCE_TEXT_TRACK, NEO_WEBVIEW_RESOURCE_EVENT_SOURCE, NEO_WEBVIEW_RESOURCE_WEBSOCKET, NEO_WEBVIEW_RESOURCE_MANIFEST } neo_webview_resource_kind_t;
+typedef enum neo_webview_resource_body_kind : uint32_t { NEO_WEBVIEW_RESOURCE_BODY_EMPTY = 0, NEO_WEBVIEW_RESOURCE_BODY_BYTES = 1, NEO_WEBVIEW_RESOURCE_BODY_FILE = 2 } neo_webview_resource_body_kind_t;
 
 typedef uint64_t neo_webview_data_kind_t;
 #define NEO_WEBVIEW_DATA_COOKIES (1ull << 0)
@@ -99,6 +104,11 @@ typedef uint64_t neo_webview_data_kind_t;
 #define NEO_WEBVIEW_PROCESS_FAILURE_CRASHED (UINT64_C(1) << 32)
 #define NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW (UINT64_C(1) << 33)
 #define NEO_WEBVIEW_PROCESS_FAILURE_RESTART_APPLICATION (UINT64_C(1) << 34)
+#define NEO_WEBVIEW_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
+#define NEO_WEBVIEW_CUSTOM_SCHEME_SECURE (1u << 1)
+#define NEO_WEBVIEW_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)
+#define NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION (1u << 3)
+#define NEO_WEBVIEW_CUSTOM_SCHEME_SERVICE_WORKERS (1u << 4)
 
 typedef struct neo_webview_native_parent { uint32_t size; uint32_t version; neo_webview_native_parent_kind_t kind; void* handle; } neo_webview_native_parent_t;
 typedef struct neo_webview_native_handle { uint32_t size; uint32_t version; neo_webview_native_handle_kind_t kind; void* value; } neo_webview_native_handle_t;
@@ -111,15 +121,20 @@ typedef void (NEO_WEBVIEW_CALL *neo_webview_event_callback_t)(void* context, con
 typedef void (NEO_WEBVIEW_CALL *neo_webview_log_callback_t)(void* context, neo_webview_log_level_t level, neo_webview_string_view_t category, neo_webview_string_view_t message, uint64_t thread_id, uint64_t timestamp_ns, int64_t native_code, uint64_t object_id);
 
 typedef struct neo_webview_app_options { uint32_t size; uint32_t version; neo_webview_string_view_t application_name; neo_webview_app_shutdown_mode_t shutdown_mode; uint32_t maximum_pending_dispatches; uint32_t reserved; neo_webview_log_callback_t log_callback; void* log_context; } neo_webview_app_options_t;
-typedef struct neo_webview_environment_options { uint32_t size; uint32_t version; neo_webview_string_view_t user_data_root; neo_webview_string_view_t browser_runtime_path; neo_webview_string_view_t browser_arguments; neo_webview_string_view_t preferred_languages; uint32_t private_mode; uint32_t custom_scheme_count; const void* custom_schemes; } neo_webview_environment_options_t;
+typedef struct neo_webview_environment_options { uint32_t size; uint32_t version; neo_webview_string_view_t user_data_root; neo_webview_string_view_t browser_runtime_path; neo_webview_string_view_t browser_arguments; neo_webview_string_view_t preferred_languages; uint32_t private_mode; uint32_t custom_scheme_count; const neo_webview_custom_scheme_t* custom_schemes; uint32_t custom_scheme_stride; uint32_t reserved; } neo_webview_environment_options_t;
 typedef struct neo_webview_profile_options { uint32_t size; uint32_t version; neo_webview_string_view_t name; uint32_t ephemeral; uint32_t reserved; } neo_webview_profile_options_t;
 typedef struct neo_webview_window_options { uint32_t size; uint32_t version; neo_webview_string_view_t title; neo_webview_rect_t bounds; neo_webview_size_t minimum_size; neo_webview_size_t maximum_size; neo_webview_window_t* owner; neo_webview_window_state_t state; uint32_t flags; neo_webview_color_t background_color; } neo_webview_window_options_t;
-typedef struct neo_webview_view_options { uint32_t size; uint32_t version; neo_webview_profile_t* profile; neo_webview_native_parent_t parent; neo_webview_window_t* window; neo_webview_rect_t bounds; uint32_t fill_parent; uint32_t maximum_message_size; uint64_t decision_timeout_ms; neo_webview_decision_t* popup_request; } neo_webview_view_options_t;
+typedef struct neo_webview_view_options { uint32_t size; uint32_t version; neo_webview_profile_t* profile; neo_webview_native_parent_t parent; neo_webview_window_t* window; neo_webview_rect_t bounds; uint32_t fill_parent; uint32_t maximum_message_size; uint64_t decision_timeout_ms; neo_webview_decision_t* popup_request; uint32_t bridge_origin_count; uint32_t reserved; const neo_webview_string_view_t* bridge_origins; } neo_webview_view_options_t;
 typedef struct neo_webview_script_options { uint32_t size; uint32_t version; neo_webview_script_injection_time_t injection_time; uint32_t main_frame_only; uint32_t isolated_world; neo_webview_string_view_t world_name; } neo_webview_script_options_t;
 typedef struct neo_webview_decision_response { uint32_t size; uint32_t version; neo_webview_decision_action_t action; neo_webview_string_view_t text; const neo_webview_string_view_t* paths; uint32_t path_count; uint32_t persist; neo_webview_string_view_t secondary_text; neo_webview_view_t* target_view; uint32_t selected_index; uint32_t reserved; } neo_webview_decision_response_t;
 typedef struct neo_webview_download_info { uint32_t size; uint32_t version; uint64_t id; neo_webview_download_state_t state; uint32_t can_pause; neo_webview_string_view_t source_uri; neo_webview_string_view_t destination_path; uint64_t bytes_received; uint64_t total_bytes; neo_webview_string_view_t failure_reason; } neo_webview_download_info_t;
 typedef struct neo_webview_runtime_info { uint32_t size; uint32_t version; neo_webview_string_view_t backend_name; neo_webview_string_view_t backend_version; neo_webview_string_view_t browser_version; neo_webview_string_view_t operating_system; neo_webview_string_view_t architecture; uint64_t build_features; uint32_t debug_build; uint32_t reserved; } neo_webview_runtime_info_t;
 typedef struct neo_webview_cookie { uint32_t size; uint32_t version; neo_webview_string_view_t name; neo_webview_string_view_t value; neo_webview_string_view_t domain; neo_webview_string_view_t path; int64_t expires_unix_ms; uint32_t flags; uint32_t same_site; } neo_webview_cookie_t;
+struct neo_webview_resource_request { uint32_t size; uint32_t version; neo_webview_string_view_t uri; neo_webview_string_view_t method; neo_webview_string_view_t headers; neo_webview_string_view_t initiating_origin; neo_webview_resource_kind_t resource_kind; uint32_t main_frame; const uint8_t* body; uint64_t body_length; };
+typedef void (NEO_WEBVIEW_CALL *neo_webview_context_release_callback_t)(void* context);
+struct neo_webview_resource_response { uint32_t size; uint32_t version; uint32_t status_code; neo_webview_resource_body_kind_t body_kind; neo_webview_string_view_t reason_phrase; neo_webview_string_view_t headers; neo_webview_string_view_t mime_type; uint64_t content_length; const uint8_t* bytes; uint64_t byte_length; neo_webview_string_view_t file_path; void* release_context; neo_webview_context_release_callback_t release; };
+typedef neo_webview_result_t (NEO_WEBVIEW_CALL *neo_webview_resource_provider_callback_t)(void* context, const neo_webview_resource_request_t* request, neo_webview_resource_response_t* response);
+struct neo_webview_custom_scheme { uint32_t size; uint32_t version; neo_webview_string_view_t name; uint32_t flags; uint32_t allowed_origin_count; const neo_webview_string_view_t* allowed_origins; neo_webview_resource_provider_callback_t resource_provider; void* resource_provider_context; neo_webview_context_release_callback_t release_resource_provider_context; };
 
 typedef void (NEO_WEBVIEW_CALL *neo_webview_environment_created_callback_t)(void*, neo_webview_result_t, neo_webview_environment_t*, const neo_webview_error_t*);
 typedef void (NEO_WEBVIEW_CALL *neo_webview_profile_created_callback_t)(void*, neo_webview_result_t, neo_webview_profile_t*, const neo_webview_error_t*);

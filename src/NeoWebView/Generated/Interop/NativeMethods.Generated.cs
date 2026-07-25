@@ -398,6 +398,44 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_LOG_CRITICAL = unchecked((uint)5),
         }
 
+        public enum neo_webview_resource_kind : uint
+        {
+            NEO_WEBVIEW_RESOURCE_OTHER = unchecked((uint)0),
+
+            NEO_WEBVIEW_RESOURCE_DOCUMENT = unchecked((uint)1),
+
+            NEO_WEBVIEW_RESOURCE_STYLESHEET = unchecked((uint)2),
+
+            NEO_WEBVIEW_RESOURCE_IMAGE = unchecked((uint)3),
+
+            NEO_WEBVIEW_RESOURCE_MEDIA = unchecked((uint)4),
+
+            NEO_WEBVIEW_RESOURCE_FONT = unchecked((uint)5),
+
+            NEO_WEBVIEW_RESOURCE_SCRIPT = unchecked((uint)6),
+
+            NEO_WEBVIEW_RESOURCE_XML_HTTP_REQUEST = unchecked((uint)7),
+
+            NEO_WEBVIEW_RESOURCE_FETCH = unchecked((uint)8),
+
+            NEO_WEBVIEW_RESOURCE_TEXT_TRACK = unchecked((uint)9),
+
+            NEO_WEBVIEW_RESOURCE_EVENT_SOURCE = unchecked((uint)10),
+
+            NEO_WEBVIEW_RESOURCE_WEBSOCKET = unchecked((uint)11),
+
+            NEO_WEBVIEW_RESOURCE_MANIFEST = unchecked((uint)12),
+        }
+
+        public enum neo_webview_resource_body_kind : uint
+        {
+            NEO_WEBVIEW_RESOURCE_BODY_EMPTY = unchecked((uint)0),
+
+            NEO_WEBVIEW_RESOURCE_BODY_BYTES = unchecked((uint)1),
+
+            NEO_WEBVIEW_RESOURCE_BODY_FILE = unchecked((uint)2),
+        }
+
         public readonly partial record struct neo_webview_app_t(nint Handle)
         {
             public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
@@ -453,11 +491,172 @@ namespace NeoWebView.Interop.Generated
             public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
         }
 
+        public partial struct neo_webview_resource_request
+        {
+            public uint size;
+
+            public uint version;
+
+            public NativeMethods.neo_webview_string_view_t uri;
+
+            public NativeMethods.neo_webview_string_view_t method;
+
+            public NativeMethods.neo_webview_string_view_t headers;
+
+            public NativeMethods.neo_webview_string_view_t initiating_origin;
+
+            public NativeMethods.neo_webview_resource_kind_t resource_kind;
+
+            public uint main_frame;
+
+            public byte* body;
+
+            public ulong body_length;
+        }
+
         public partial struct neo_webview_string_view
         {
             public byte* data;
 
             public ulong length;
+        }
+
+        public readonly partial record struct neo_webview_string_view_t(NativeMethods.neo_webview_string_view Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_string_view (neo_webview_string_view_t from) => from.Value;
+
+            public static implicit operator neo_webview_string_view_t (NativeMethods.neo_webview_string_view from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_resource_kind_t(NativeMethods.neo_webview_resource_kind Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_resource_kind (neo_webview_resource_kind_t from) => from.Value;
+
+            public static implicit operator neo_webview_resource_kind_t (NativeMethods.neo_webview_resource_kind from) => new (from);
+        }
+
+        public partial struct neo_webview_resource_response
+        {
+            public uint size;
+
+            public uint version;
+
+            public uint status_code;
+
+            public NativeMethods.neo_webview_resource_body_kind_t body_kind;
+
+            public NativeMethods.neo_webview_string_view_t reason_phrase;
+
+            public NativeMethods.neo_webview_string_view_t headers;
+
+            public NativeMethods.neo_webview_string_view_t mime_type;
+
+            public ulong content_length;
+
+            public byte* bytes;
+
+            public ulong byte_length;
+
+            public NativeMethods.neo_webview_string_view_t file_path;
+
+            public void* release_context;
+
+            public NativeMethods.neo_webview_context_release_callback_t release;
+        }
+
+        public readonly partial record struct neo_webview_resource_body_kind_t(NativeMethods.neo_webview_resource_body_kind Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_resource_body_kind (neo_webview_resource_body_kind_t from) => from.Value;
+
+            public static implicit operator neo_webview_resource_body_kind_t (NativeMethods.neo_webview_resource_body_kind from) => new (from);
+        }
+
+        public readonly partial struct neo_webview_context_release_callback_t : IEquatable<neo_webview_context_release_callback_t>
+        {
+            public neo_webview_context_release_callback_t(delegate*unmanaged[Cdecl]<void*, void> value) => this.Value = value;
+
+            public delegate*unmanaged[Cdecl]<void*, void> Value { get; }
+
+            public override bool Equals(object obj) => obj is neo_webview_context_release_callback_t other && Equals(other);
+
+            public bool Equals(neo_webview_context_release_callback_t other) => Value == other.Value;
+
+            public override int GetHashCode() => ((nint)(void*)Value).GetHashCode();
+
+            public override string ToString() => ((nint)(void*)Value).ToString();
+
+            public static bool operator ==(neo_webview_context_release_callback_t left, neo_webview_context_release_callback_t right) => left.Equals(right);
+
+            public static bool operator !=(neo_webview_context_release_callback_t left, neo_webview_context_release_callback_t right) => !left.Equals(right);
+
+            public static implicit operator delegate*unmanaged[Cdecl]<void*, void> (neo_webview_context_release_callback_t from) => from.Value;
+
+            public static implicit operator neo_webview_context_release_callback_t (delegate*unmanaged[Cdecl]<void*, void> from) => new (from);
+        }
+
+        public partial struct neo_webview_custom_scheme
+        {
+            public uint size;
+
+            public uint version;
+
+            public NativeMethods.neo_webview_string_view_t name;
+
+            public uint flags;
+
+            public uint allowed_origin_count;
+
+            public NativeMethods.neo_webview_string_view_t* allowed_origins;
+
+            public NativeMethods.neo_webview_resource_provider_callback_t resource_provider;
+
+            public void* resource_provider_context;
+
+            public NativeMethods.neo_webview_context_release_callback_t release_resource_provider_context;
+        }
+
+        public readonly partial record struct neo_webview_result_t(NativeMethods.neo_webview_result Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_result (neo_webview_result_t from) => from.Value;
+
+            public static implicit operator neo_webview_result_t (NativeMethods.neo_webview_result from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_resource_request_t(NativeMethods.neo_webview_resource_request Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_resource_request (neo_webview_resource_request_t from) => from.Value;
+
+            public static implicit operator neo_webview_resource_request_t (NativeMethods.neo_webview_resource_request from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_resource_response_t(NativeMethods.neo_webview_resource_response Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_resource_response (neo_webview_resource_response_t from) => from.Value;
+
+            public static implicit operator neo_webview_resource_response_t (NativeMethods.neo_webview_resource_response from) => new (from);
+        }
+
+        public readonly partial struct neo_webview_resource_provider_callback_t : IEquatable<neo_webview_resource_provider_callback_t>
+        {
+            public neo_webview_resource_provider_callback_t(delegate*unmanaged[Cdecl]<void*, NativeMethods.neo_webview_resource_request_t*, NativeMethods.neo_webview_resource_response_t*, NativeMethods.neo_webview_result_t> value) => this.Value = value;
+
+            public delegate*unmanaged[Cdecl]<void*, NativeMethods.neo_webview_resource_request_t*, NativeMethods.neo_webview_resource_response_t*, NativeMethods.neo_webview_result_t> Value { get; }
+
+            public override bool Equals(object obj) => obj is neo_webview_resource_provider_callback_t other && Equals(other);
+
+            public bool Equals(neo_webview_resource_provider_callback_t other) => Value == other.Value;
+
+            public override int GetHashCode() => ((nint)(void*)Value).GetHashCode();
+
+            public override string ToString() => ((nint)(void*)Value).ToString();
+
+            public static bool operator ==(neo_webview_resource_provider_callback_t left, neo_webview_resource_provider_callback_t right) => left.Equals(right);
+
+            public static bool operator !=(neo_webview_resource_provider_callback_t left, neo_webview_resource_provider_callback_t right) => !left.Equals(right);
+
+            public static implicit operator delegate*unmanaged[Cdecl]<void*, NativeMethods.neo_webview_resource_request_t*, NativeMethods.neo_webview_resource_response_t*, NativeMethods.neo_webview_result_t> (neo_webview_resource_provider_callback_t from) => from.Value;
+
+            public static implicit operator neo_webview_resource_provider_callback_t (delegate*unmanaged[Cdecl]<void*, NativeMethods.neo_webview_resource_request_t*, NativeMethods.neo_webview_resource_response_t*, NativeMethods.neo_webview_result_t> from) => new (from);
         }
 
         public partial struct neo_webview_struct_header
@@ -593,13 +792,6 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator neo_webview_event_header_t (NativeMethods.neo_webview_event_header from) => new (from);
         }
 
-        public readonly partial record struct neo_webview_string_view_t(NativeMethods.neo_webview_string_view Value)
-        {
-            public static implicit operator NativeMethods.neo_webview_string_view (neo_webview_string_view_t from) => from.Value;
-
-            public static implicit operator neo_webview_string_view_t (NativeMethods.neo_webview_string_view from) => new (from);
-        }
-
         public readonly partial record struct neo_webview_rect_t(NativeMethods.neo_webview_rect Value)
         {
             public static implicit operator NativeMethods.neo_webview_rect (neo_webview_rect_t from) => from.Value;
@@ -703,7 +895,18 @@ namespace NeoWebView.Interop.Generated
 
             public uint custom_scheme_count;
 
-            public void* custom_schemes;
+            public NativeMethods.neo_webview_custom_scheme_t* custom_schemes;
+
+            public uint custom_scheme_stride;
+
+            public uint reserved;
+        }
+
+        public readonly partial record struct neo_webview_custom_scheme_t(NativeMethods.neo_webview_custom_scheme Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_custom_scheme (neo_webview_custom_scheme_t from) => from.Value;
+
+            public static implicit operator neo_webview_custom_scheme_t (NativeMethods.neo_webview_custom_scheme from) => new (from);
         }
 
         public partial struct neo_webview_profile_options
@@ -784,6 +987,12 @@ namespace NeoWebView.Interop.Generated
             public ulong decision_timeout_ms;
 
             public NativeMethods.neo_webview_decision_t popup_request;
+
+            public uint bridge_origin_count;
+
+            public uint reserved;
+
+            public NativeMethods.neo_webview_string_view_t* bridge_origins;
         }
 
         public readonly partial record struct neo_webview_native_parent_t(NativeMethods.neo_webview_native_parent Value)
@@ -933,13 +1142,6 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_point (neo_webview_point_t from) => from.Value;
 
             public static implicit operator neo_webview_point_t (NativeMethods.neo_webview_point from) => new (from);
-        }
-
-        public readonly partial record struct neo_webview_result_t(NativeMethods.neo_webview_result Value)
-        {
-            public static implicit operator NativeMethods.neo_webview_result (neo_webview_result_t from) => from.Value;
-
-            public static implicit operator neo_webview_result_t (NativeMethods.neo_webview_result from) => new (from);
         }
 
         public readonly partial record struct neo_webview_option_state_t(NativeMethods.neo_webview_option_state Value)

@@ -103,8 +103,14 @@ public sealed class NeoCustomScheme
     /// <summary>Gets or sets whether the scheme serves trusted application content.</summary>
     public bool IsApplicationScheme { get; set; }
 
+    /// <summary>Gets or sets whether service-worker behavior is expected for the scheme.</summary>
+    public bool SupportsServiceWorkers { get; set; }
+
     /// <summary>Gets or sets origins permitted to access the scheme.</summary>
     public IReadOnlyList<string> AllowedOrigins { get; set; } = Array.Empty<string>();
+
+    /// <summary>Gets or sets the provider that resolves resources for this scheme.</summary>
+    public INeoResourceProvider? ResourceProvider { get; set; }
 
     /// <summary>Creates a custom scheme definition.</summary>
     /// <param name="name">A valid URI scheme name.</param>
@@ -122,6 +128,20 @@ public sealed class NeoCustomScheme
     /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid URI scheme name.</exception>
     public static NeoCustomScheme Application(string name) => Create(name).WithApplicationDefaults();
 
+    /// <summary>Creates a secure application scheme backed by a resource provider.</summary>
+    /// <param name="name">A valid URI scheme name.</param>
+    /// <param name="resourceProvider">The provider used to resolve resources.</param>
+    /// <returns>The new application scheme definition.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid URI scheme name.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="resourceProvider"/> is <see langword="null"/>.</exception>
+    public static NeoCustomScheme Application(string name, INeoResourceProvider resourceProvider)
+    {
+        ArgumentNullException.ThrowIfNull(resourceProvider);
+        var scheme = Application(name);
+        scheme.ResourceProvider = resourceProvider;
+        return scheme;
+    }
+
     private NeoCustomScheme WithApplicationDefaults()
     {
         IsApplicationScheme = true;
@@ -133,10 +153,15 @@ public sealed class NeoCustomScheme
     internal void Validate()
     {
         ValidateName(Name);
+        if (ResourceProvider is null)
+        {
+            throw new ArgumentException($"The custom scheme '{Name}' requires a resource provider.", nameof(ResourceProvider));
+        }
         ArgumentNullException.ThrowIfNull(AllowedOrigins);
         foreach (var origin in AllowedOrigins)
         {
-            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) ||
+                !string.Equals(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/'), origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException($"'{origin}' is not an absolute origin.", nameof(AllowedOrigins));
             }
@@ -298,7 +323,8 @@ public sealed class NeoWebViewOptions
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
         foreach (var origin in BridgeOrigins)
         {
-            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host))
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) ||
+                !string.Equals(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/'), origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException($"'{origin}' is not an absolute origin.", nameof(BridgeOrigins));
             }

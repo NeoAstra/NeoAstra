@@ -85,7 +85,7 @@ if(WIN32)
   target_sources(neowebview_native PRIVATE native/src/windows/windows_backend.cpp)
   target_include_directories(neowebview_native PRIVATE "${webview2_sdk_SOURCE_DIR}/build/native/include")
   target_link_libraries(neowebview_native PRIVATE
-    user32 ole32 shell32 shcore
+    user32 ole32 shell32 shcore shlwapi
     "${webview2_sdk_SOURCE_DIR}/build/native/${_neo_webview2_arch}/WebView2LoaderStatic.lib")
 elseif(APPLE)
   enable_language(OBJCXX)

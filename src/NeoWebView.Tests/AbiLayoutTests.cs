@@ -10,9 +10,9 @@ namespace NeoWebView.Tests;
 public sealed class AbiLayoutTests
 {
     [TestMethod]
-    public void GeneratedStructuresMatchNativeAbi16Layout()
+    public void GeneratedStructuresMatchNativeAbi17Layout()
     {
-        Assert.AreEqual(8, IntPtr.Size, "ABI 1.6 is validated for the current 64-bit primary targets.");
+        Assert.AreEqual(8, IntPtr.Size, "ABI 1.7 is validated for the current 64-bit primary targets.");
 
         AssertLayout<NativeMethods.neo_webview_string_view>(16, (nameof(NativeMethods.neo_webview_string_view.length), 8));
         AssertLayout<NativeMethods.neo_webview_struct_header>(8, (nameof(NativeMethods.neo_webview_struct_header.version), 4));
@@ -26,19 +26,22 @@ public sealed class AbiLayoutTests
         AssertLayout<NativeMethods.neo_webview_event>(160, (nameof(NativeMethods.neo_webview_event.download), 152));
         AssertLayout<NativeMethods.neo_webview_capability_info>(40, (nameof(NativeMethods.neo_webview_capability_info.details), 24));
         AssertLayout<NativeMethods.neo_webview_app_options>(56, (nameof(NativeMethods.neo_webview_app_options.log_callback), 40));
-        AssertLayout<NativeMethods.neo_webview_environment_options>(88, (nameof(NativeMethods.neo_webview_environment_options.custom_schemes), 80));
+        AssertLayout<NativeMethods.neo_webview_environment_options>(96, (nameof(NativeMethods.neo_webview_environment_options.custom_scheme_stride), 88));
         AssertLayout<NativeMethods.neo_webview_profile_options>(32, (nameof(NativeMethods.neo_webview_profile_options.ephemeral), 24));
         AssertLayout<NativeMethods.neo_webview_window_options>(80, (nameof(NativeMethods.neo_webview_window_options.background_color), 72));
-        AssertLayout<NativeMethods.neo_webview_view_options>(88, (nameof(NativeMethods.neo_webview_view_options.popup_request), 80));
+        AssertLayout<NativeMethods.neo_webview_view_options>(104, (nameof(NativeMethods.neo_webview_view_options.bridge_origins), 96));
         AssertLayout<NativeMethods.neo_webview_script_options>(40, (nameof(NativeMethods.neo_webview_script_options.world_name), 24));
         AssertLayout<NativeMethods.neo_webview_decision_response>(80, (nameof(NativeMethods.neo_webview_decision_response.target_view), 64));
         AssertLayout<NativeMethods.neo_webview_download_info>(88, (nameof(NativeMethods.neo_webview_download_info.failure_reason), 72));
         AssertLayout<NativeMethods.neo_webview_runtime_info>(104, (nameof(NativeMethods.neo_webview_runtime_info.build_features), 88));
         AssertLayout<NativeMethods.neo_webview_cookie>(88, (nameof(NativeMethods.neo_webview_cookie.expires_unix_ms), 72));
+        AssertLayout<NativeMethods.neo_webview_resource_request>(96, (nameof(NativeMethods.neo_webview_resource_request.body_length), 88));
+        AssertLayout<NativeMethods.neo_webview_resource_response>(120, (nameof(NativeMethods.neo_webview_resource_response.release), 112));
+        AssertLayout<NativeMethods.neo_webview_custom_scheme>(64, (nameof(NativeMethods.neo_webview_custom_scheme.resource_provider), 40));
     }
 
     [TestMethod]
-    public void GeneratedEnumsMatchNativeAbi16ValuesAndStorage()
+    public void GeneratedEnumsMatchNativeAbi17ValuesAndStorage()
     {
         AssertEnum<int, NativeMethods.neo_webview_result>(-14, 0);
         AssertEnum<uint, NativeMethods.neo_webview_support_level>(0, 3);
@@ -57,6 +60,8 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neo_webview_event_type>(0, 33);
         AssertEnum<uint, NativeMethods.neo_webview_capability>(0, 32);
         AssertEnum<uint, NativeMethods.neo_webview_log_level>(0, 5);
+        AssertEnum<uint, NativeMethods.neo_webview_resource_kind>(0, 12);
+        AssertEnum<uint, NativeMethods.neo_webview_resource_body_kind>(0, 2);
     }
 
     [TestMethod]
@@ -74,6 +79,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoProcessFailureKind, NativeMethods.neo_webview_process_failure_kind>();
         AssertEquivalent<NeoCapability, NativeMethods.neo_webview_capability>();
         AssertEquivalent<NeoLogLevel, NativeMethods.neo_webview_log_level>();
+        AssertEquivalent<NeoResourceKind, NativeMethods.neo_webview_resource_kind>();
 
         var nativeHandles = Values<NativeMethods.neo_webview_native_handle_kind>().Skip(1).ToArray();
         CollectionAssert.AreEqual(Values<NeoNativeHandleKind>(), nativeHandles);

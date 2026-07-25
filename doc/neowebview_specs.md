@@ -1521,6 +1521,8 @@ Responses MUST support:
 
 The file-path response SHOULD be optimized to avoid copying file contents through managed memory.
 
+For the Phase 1 Windows slice, WebView2 asks for the response during its resource-request callback, so a byte/file resource provider is synchronous. The file response is consumed as a native stream and MUST NOT be copied through managed memory. The later streaming-body contract remains asynchronous because reads and cancellation are genuinely callback-based operations.
+
 ## 20.5 Streaming
 
 A stream interface MUST support asynchronous reads and cancellation.
@@ -1552,6 +1554,8 @@ The default directory asset provider MUST:
 * Generate correct MIME types.
 * Support cache headers.
 * Support range requests where practical.
+
+The default provider MUST NOT follow symbolic links, junctions or other reparse points. Its portable baseline serves `GET` and `HEAD`; unsupported methods return `405`, missing resources return `404`, and malformed or encoded traversal returns `400`.
 
 ---
 

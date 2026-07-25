@@ -40,8 +40,10 @@ public sealed class ManagedApiTests
     [TestMethod]
     public void EnvironmentOptions_RejectDuplicateSchemesAndInvalidOrigins()
     {
-        var first = NeoCustomScheme.Application("app");
+        var provider = new NullResourceProvider();
+        var first = NeoCustomScheme.Application("app", provider);
         var second = NeoCustomScheme.Create("APP");
+        second.ResourceProvider = provider;
         var options = new NeoEnvironmentOptions { CustomSchemes = [first, second] };
 
         Assert.ThrowsExactly<ArgumentException>(options.Validate);
@@ -49,6 +51,41 @@ public sealed class ManagedApiTests
         first.AllowedOrigins = ["not an origin"];
         options.CustomSchemes = [first];
         Assert.ThrowsExactly<ArgumentException>(options.Validate);
+    }
+
+    [TestMethod]
+    public void DirectoryResourceProvider_ServesAssetsAndRejectsTraversal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"neowebview-assets-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "index.html"), "<h1>local</h1>");
+            var provider = new NeoDirectoryResourceProvider(root);
+            var request = new NeoResourceRequest(new Uri("app://neowebview/index.html"), "GET",
+                new Dictionary<string, string>(), null, NeoResourceKind.Document, true, default);
+
+            var response = provider.GetResponse(request);
+            Assert.IsNotNull(response);
+            Assert.AreEqual(Path.Combine(root, "index.html"), response.FilePath);
+            Assert.AreEqual("text/html; charset=utf-8", response.MimeType);
+            Assert.AreEqual(new FileInfo(response.FilePath!).Length, response.ContentLength);
+            Assert.AreEqual("nosniff", response.Headers["X-Content-Type-Options"]);
+
+            var head = provider.GetResponse(request with { Method = "HEAD" });
+            Assert.IsNotNull(head);
+            Assert.IsNull(head.FilePath);
+            Assert.AreEqual(response.ContentLength, head.ContentLength);
+
+            var traversal = provider.GetResponse(request with { Uri = new Uri("app://neowebview/%252e%252e/secret.txt") });
+            Assert.IsNotNull(traversal);
+            Assert.AreEqual(400, traversal.StatusCode);
+            Assert.IsNull(provider.GetResponse(request with { Uri = new Uri("app://neowebview/missing.txt") }));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [TestMethod]
@@ -379,8 +416,13 @@ public sealed class ManagedApiTests
                 },
                 async application =>
                 {
-                    await using var environment = await application.CreateEnvironmentAsync();
+                    var resources = new SmokeResourceProvider();
+                    await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
+                    {
+                        CustomSchemes = [NeoCustomScheme.Application("app", resources)],
+                    });
                     Assert.AreEqual("windows", environment.RuntimeInfo.OperatingSystem);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.CustomScheme).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDocumentStart).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Cookies).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Permissions).SupportLevel);
@@ -412,10 +454,15 @@ public sealed class ManagedApiTests
                     Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => webView.ZoomFactor = 0.1);
                     await using var userScript = await webView.AddScriptAsync("globalThis.neoWebViewInjected = 40;");
                     var navigation = new TaskCompletionSource<NeoNavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var message = new TaskCompletionSource<NeoWebMessageReceivedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
                     webView.NavigationCompleted += (_, args) => navigation.TrySetResult(args);
-                    await webView.LoadHtmlAsync("<!doctype html><title>smoke</title><p>NeoWebView</p>");
+                    webView.MessageReceived += (_, args) => message.TrySetResult(args);
+                    await webView.NavigateAsync(new Uri("app://neowebview/index.html"));
                     var completed = await navigation.Task.WaitAsync(TimeSpan.FromSeconds(10));
                     Assert.IsTrue(completed.IsSuccess);
+                    Assert.IsGreaterThanOrEqualTo(1, resources.RequestCount);
+                    var received = await message.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    StringAssert.Contains(received.Json, "custom-scheme-ready");
                     Assert.AreEqual("42", await webView.EvaluateScriptAsync("globalThis.neoWebViewInjected + 2"));
                     var popup = new TaskCompletionSource<NeoNewWindowRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
                     webView.NewWindowRequested = request =>
@@ -512,4 +559,24 @@ public sealed class ManagedApiTests
 
     [DllImport("user32.dll")]
     private static extern nint DispatchMessageW(in NativeMessage message);
+
+    private sealed class NullResourceProvider : INeoResourceProvider
+    {
+        public NeoResourceResponse? GetResponse(NeoResourceRequest request) => null;
+    }
+
+    private sealed class SmokeResourceProvider : INeoResourceProvider
+    {
+        private int _requestCount;
+
+        internal int RequestCount => Volatile.Read(ref _requestCount);
+
+        public NeoResourceResponse? GetResponse(NeoResourceRequest request)
+        {
+            Interlocked.Increment(ref _requestCount);
+            if (!request.Uri.AbsolutePath.Equals("/index.html", StringComparison.Ordinal)) return null;
+            const string html = "<!doctype html><title>smoke</title><script>chrome.webview.postMessage({message:'custom-scheme-ready'})</script>";
+            return NeoResourceResponse.FromBytes(Encoding.UTF8.GetBytes(html), "text/html; charset=utf-8");
+        }
+    }
 }

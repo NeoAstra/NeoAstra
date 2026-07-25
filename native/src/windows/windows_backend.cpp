@@ -5,11 +5,13 @@
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -46,6 +48,7 @@ struct windows_view {
     EventRegistrationToken title_changed{};
     EventRegistrationToken history_changed{};
     EventRegistrationToken message_received{};
+    EventRegistrationToken web_resource_requested{};
     EventRegistrationToken permission_requested{};
     EventRegistrationToken new_window_requested{};
     EventRegistrationToken process_failed{};
@@ -88,6 +91,126 @@ std::string take_string(LPWSTR value) {
     const auto result = narrow(value);
     CoTaskMemFree(value);
     return result;
+}
+
+neo_webview_resource_kind_t portable_resource_kind(COREWEBVIEW2_WEB_RESOURCE_CONTEXT kind) noexcept {
+    switch (kind) {
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT: return NEO_WEBVIEW_RESOURCE_DOCUMENT;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_STYLESHEET: return NEO_WEBVIEW_RESOURCE_STYLESHEET;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE: return NEO_WEBVIEW_RESOURCE_IMAGE;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA: return NEO_WEBVIEW_RESOURCE_MEDIA;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT: return NEO_WEBVIEW_RESOURCE_FONT;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT: return NEO_WEBVIEW_RESOURCE_SCRIPT;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST: return NEO_WEBVIEW_RESOURCE_XML_HTTP_REQUEST;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH: return NEO_WEBVIEW_RESOURCE_FETCH;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_TEXT_TRACK: return NEO_WEBVIEW_RESOURCE_TEXT_TRACK;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_EVENT_SOURCE: return NEO_WEBVIEW_RESOURCE_EVENT_SOURCE;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_WEBSOCKET: return NEO_WEBVIEW_RESOURCE_WEBSOCKET;
+        case COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MANIFEST: return NEO_WEBVIEW_RESOURCE_MANIFEST;
+        default: return NEO_WEBVIEW_RESOURCE_OTHER;
+    }
+}
+
+std::string request_headers(ICoreWebView2WebResourceRequest* request) {
+    ComPtr<ICoreWebView2HttpRequestHeaders> collection;
+    ComPtr<ICoreWebView2HttpHeadersCollectionIterator> iterator;
+    if (FAILED(request->get_Headers(&collection)) || !collection || FAILED(collection->GetIterator(&iterator)) || !iterator) return {};
+    std::string result;
+    BOOL current{};
+    if (FAILED(iterator->get_HasCurrentHeader(&current))) return {};
+    while (current) {
+        LPWSTR name{}, value{};
+        if (FAILED(iterator->GetCurrentHeader(&name, &value))) { CoTaskMemFree(name); CoTaskMemFree(value); break; }
+        result += take_string(name);
+        result += ": ";
+        result += take_string(value);
+        result += "\r\n";
+        if (FAILED(iterator->MoveNext(&current))) break;
+    }
+    return result;
+}
+
+const neo_custom_scheme_registration* find_scheme(const neo_webview_environment_t* environment, std::string_view uri) noexcept {
+    const auto colon = uri.find(':');
+    if (colon == std::string_view::npos) return nullptr;
+    std::string name(uri.substr(0, colon));
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    const auto found = std::find_if(environment->custom_schemes.begin(), environment->custom_schemes.end(),
+        [&name](const auto& scheme) { return scheme.name == name; });
+    return found == environment->custom_schemes.end() ? nullptr : &*found;
+}
+
+const wchar_t* default_reason(uint32_t status) noexcept {
+    switch (status) {
+        case 200: return L"OK";
+        case 204: return L"No Content";
+        case 400: return L"Bad Request";
+        case 403: return L"Forbidden";
+        case 404: return L"Not Found";
+        case 405: return L"Method Not Allowed";
+        case 500: return L"Internal Server Error";
+        default: return L"Response";
+    }
+}
+
+bool contains_header(std::string_view headers, std::string_view name) noexcept {
+    for (size_t position = 0; position < headers.size();) {
+        const auto end = headers.find('\n', position);
+        auto line = headers.substr(position, end == std::string_view::npos ? headers.size() - position : end - position);
+        while (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        const auto colon = line.find(':');
+        if (colon != std::string_view::npos && colon == name.size()) {
+            bool match = true;
+            for (size_t index = 0; index < name.size(); ++index) {
+                if (std::tolower(static_cast<unsigned char>(line[index])) != std::tolower(static_cast<unsigned char>(name[index]))) { match = false; break; }
+            }
+            if (match) return true;
+        }
+        if (end == std::string_view::npos) break;
+        position = end + 1;
+    }
+    return false;
+}
+
+HRESULT create_resource_response(neo_webview_view_t* view, const neo_webview_resource_response_t& response,
+                                 ICoreWebView2WebResourceResponse** output) noexcept {
+    try {
+        if (response.size < sizeof(response) || response.version != 1 || response.status_code < 100 || response.status_code > 599 || response.body_kind > NEO_WEBVIEW_RESOURCE_BODY_FILE ||
+            !neo_valid_utf8(response.reason_phrase) || !neo_valid_utf8(response.headers) || !neo_valid_utf8(response.mime_type) ||
+            !neo_valid_utf8(response.file_path) || (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.byte_length && !response.bytes) ||
+            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_EMPTY && (response.bytes || response.byte_length || response.file_path.length)) ||
+            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.file_path.length) ||
+            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_FILE && (response.bytes || response.byte_length || !response.file_path.length)) ||
+            ((response.release_context != nullptr) != (response.release != nullptr))) return E_INVALIDARG;
+        ComPtr<IStream> content;
+        HRESULT result = S_OK;
+        if (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES) {
+            if (response.byte_length > ULONG_MAX) return E_INVALIDARG;
+            result = CreateStreamOnHGlobal(nullptr, TRUE, &content);
+            if (SUCCEEDED(result) && response.byte_length) {
+                ULONG written{};
+                result = content->Write(response.bytes, static_cast<ULONG>(response.byte_length), &written);
+                if (SUCCEEDED(result) && written != response.byte_length) result = E_FAIL;
+                LARGE_INTEGER start{};
+                if (SUCCEEDED(result)) result = content->Seek(start, STREAM_SEEK_SET, nullptr);
+            }
+        } else if (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_FILE) {
+            result = SHCreateStreamOnFileEx(widen(neo_string(response.file_path)).c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
+                                            FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &content);
+        }
+        if (FAILED(result)) return result;
+        auto headers = neo_string(response.headers);
+        const auto mime = neo_string(response.mime_type);
+        if (!mime.empty() && !contains_header(headers, "content-type")) headers += "Content-Type: " + mime + "\r\n";
+        if (response.body_kind != NEO_WEBVIEW_RESOURCE_BODY_EMPTY && !contains_header(headers, "content-length")) {
+            headers += "Content-Length: " + std::to_string(response.content_length) + "\r\n";
+        }
+        const auto reason = response.reason_phrase.length ? widen(neo_string(response.reason_phrase)) : std::wstring(default_reason(response.status_code));
+        const auto native_headers = widen(headers);
+        auto* environment = static_cast<windows_environment*>(view->environment->platform);
+        if (!environment || !environment->value) return E_ABORT;
+        return environment->value->CreateWebResourceResponse(content.Get(), static_cast<int>(response.status_code), reason.c_str(), native_headers.c_str(), output);
+    } catch (...) { return E_FAIL; }
 }
 
 void append_json_string(std::string& output, const std::string& value) {
@@ -149,6 +272,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_DocumentTitleChanged(state->title_changed);
     state->core->remove_HistoryChanged(state->history_changed);
     state->core->remove_WebMessageReceived(state->message_received);
+    state->core->remove_WebResourceRequested(state->web_resource_requested);
     state->core->remove_PermissionRequested(state->permission_requested);
     state->core->remove_NewWindowRequested(state->new_window_requested);
     state->core->remove_ProcessFailed(state->process_failed);
@@ -427,6 +551,72 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
         }).Get(), &state->history_changed);
     if (FAILED(result)) return result;
 
+    for (const auto& scheme : view->environment->custom_schemes) {
+        const auto filter = widen(scheme.name + ":*");
+        result = state->core->AddWebResourceRequestedFilter(filter.c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        if (FAILED(result)) return result;
+    }
+    result = state->core->add_WebResourceRequested(
+        Callback<ICoreWebView2WebResourceRequestedEventHandler>([view](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+            ComPtr<ICoreWebView2WebResourceRequest> native_request;
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT native_kind{};
+            LPWSTR raw_uri{}, raw_method{};
+            auto result = args->get_Request(&native_request);
+            if (SUCCEEDED(result)) result = args->get_ResourceContext(&native_kind);
+            if (SUCCEEDED(result)) result = native_request->get_Uri(&raw_uri);
+            if (SUCCEEDED(result)) result = native_request->get_Method(&raw_method);
+            if (FAILED(result)) { CoTaskMemFree(raw_uri); CoTaskMemFree(raw_method); return S_OK; }
+            try {
+                const auto uri = take_string(raw_uri);
+                raw_uri = nullptr;
+                const auto method = take_string(raw_method);
+                raw_method = nullptr;
+                const auto* scheme = find_scheme(view->environment, uri);
+                if (!scheme || !scheme->provider) return S_OK;
+                const auto headers = request_headers(native_request.Get());
+                neo_webview_resource_request_t request{};
+                request.size = sizeof(request);
+                request.version = 1;
+                request.uri = neo_string_view(uri);
+                request.method = neo_string_view(method);
+                request.headers = neo_string_view(headers);
+                request.resource_kind = portable_resource_kind(native_kind);
+                request.main_frame = native_kind == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT ? 1u : 0u;
+                neo_webview_resource_response_t response{};
+                response.size = sizeof(response);
+                response.version = 1;
+                neo_webview_result_t provider_result = NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+                try { provider_result = scheme->provider(scheme->provider_context, &request, &response); }
+                catch (...) { provider_result = NEO_WEBVIEW_ERROR_NATIVE_FAILURE; }
+                if (provider_result != NEO_WEBVIEW_OK) {
+                    neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "resource", "Custom-scheme resource provider failed", provider_result);
+                    if (response.release && response.release_context) {
+                        try { response.release(response.release_context); } catch (...) { }
+                    }
+                    response = {};
+                    response.size = sizeof(response);
+                    response.version = 1;
+                    response.status_code = 500;
+                }
+                ComPtr<ICoreWebView2WebResourceResponse> native_response;
+                result = create_resource_response(view, response, &native_response);
+                if (response.release && response.release_context) {
+                    try { response.release(response.release_context); } catch (...) { }
+                }
+                if (FAILED(result) || !native_response) {
+                    neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "resource", "Could not create a custom-scheme response", result);
+                    return S_OK;
+                }
+                args->put_Response(native_response.Get());
+            } catch (...) {
+                CoTaskMemFree(raw_uri);
+                CoTaskMemFree(raw_method);
+                neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "resource", "Custom-scheme request handling failed");
+            }
+            return S_OK;
+        }).Get(), &state->web_resource_requested);
+    if (FAILED(result)) return result;
+
     result = state->core->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>([view](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             LPWSTR source{};
@@ -440,6 +630,10 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             }
             auto source_utf8 = take_string(source);
             auto message_utf8 = take_string(message);
+            if (!neo_bridge_origin_allowed(view, source_utf8)) {
+                neo_log(view->environment->app, NEO_WEBVIEW_LOG_WARNING, "bridge", "Blocked a web message from an untrusted origin");
+                return S_OK;
+            }
             neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message_utf8, &source_utf8, flags);
             return S_OK;
         }).Get(), &state->message_received);
@@ -920,6 +1114,36 @@ bool neo_platform_environment_create_async(neo_webview_environment_t* environmen
         const auto languages = widen(neo_string(options->preferred_languages));
         if (!arguments.empty()) environment_options->put_AdditionalBrowserArguments(arguments.c_str());
         if (!languages.empty()) environment_options->put_Language(languages.c_str());
+        std::vector<ComPtr<ICoreWebView2CustomSchemeRegistration>> registrations;
+        std::vector<ICoreWebView2CustomSchemeRegistration*> registration_pointers;
+        registrations.reserve(environment->custom_schemes.size());
+        registration_pointers.reserve(environment->custom_schemes.size());
+        for (const auto& scheme : environment->custom_schemes) {
+            if ((scheme.flags & NEO_WEBVIEW_CUSTOM_SCHEME_SERVICE_WORKERS) != 0) {
+                neo_fail(error, NEO_WEBVIEW_ERROR_NOT_SUPPORTED, "WebView2 custom schemes do not support service workers", E_NOTIMPL, "webview2");
+                return false;
+            }
+            auto registration = Make<CoreWebView2CustomSchemeRegistration>(widen(scheme.name).c_str());
+            if (!registration) { neo_fail(error, NEO_WEBVIEW_ERROR_NATIVE_FAILURE, "Could not allocate a WebView2 custom-scheme registration", E_OUTOFMEMORY, "webview2"); return false; }
+            auto configure_result = registration->put_HasAuthorityComponent((scheme.flags & NEO_WEBVIEW_CUSTOM_SCHEME_HAS_AUTHORITY) ? TRUE : FALSE);
+            if (SUCCEEDED(configure_result)) configure_result = registration->put_TreatAsSecure((scheme.flags & NEO_WEBVIEW_CUSTOM_SCHEME_SECURE) ? TRUE : FALSE);
+            if (SUCCEEDED(configure_result) && (scheme.flags & NEO_WEBVIEW_CUSTOM_SCHEME_CORS_ENABLED) != 0 && !scheme.allowed_origins.empty()) {
+                std::vector<std::wstring> origins;
+                std::vector<LPCWSTR> origin_pointers;
+                origins.reserve(scheme.allowed_origins.size());
+                origin_pointers.reserve(scheme.allowed_origins.size());
+                for (const auto& origin : scheme.allowed_origins) origins.push_back(widen(origin));
+                for (const auto& origin : origins) origin_pointers.push_back(origin.c_str());
+                configure_result = registration->SetAllowedOrigins(static_cast<UINT32>(origin_pointers.size()), origin_pointers.data());
+            }
+            if (FAILED(configure_result)) { neo_fail(error, NEO_WEBVIEW_ERROR_NATIVE_FAILURE, "Could not configure a WebView2 custom scheme", configure_result, "webview2"); return false; }
+            registration_pointers.push_back(registration.Get());
+            registrations.push_back(std::move(registration));
+        }
+        if (!registration_pointers.empty()) {
+            const auto configure_result = environment_options->SetCustomSchemeRegistrations(static_cast<UINT32>(registration_pointers.size()), registration_pointers.data());
+            if (FAILED(configure_result)) { neo_fail(error, NEO_WEBVIEW_ERROR_NATIVE_FAILURE, "Could not register WebView2 custom schemes", configure_result, "webview2"); return false; }
+        }
         const auto result = CreateCoreWebView2EnvironmentWithOptions(
             runtime_path.empty() ? nullptr : runtime_path.c_str(), user_data.empty() ? nullptr : user_data.c_str(), environment_options.Get(),
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([environment, callback, context](HRESULT result, ICoreWebView2Environment* created) -> HRESULT {
@@ -1144,7 +1368,7 @@ neo_webview_result_t neo_platform_view_command(neo_webview_view_t* view,uint32_t
 neo_webview_result_t neo_platform_view_evaluate(neo_webview_view_t* view,const std::string& script,neo_webview_string_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(script);const auto result=state->core->ExecuteScript(value.c_str(),Callback<ICoreWebView2ExecuteScriptCompletedHandler>([view,callback,context,operation](HRESULT result,LPCWSTR value)->HRESULT{auto* completion=new script_completion{callback,context,operation,narrow(value),SUCCEEDED(result)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE,nullptr};if(FAILED(result))completion->error=make_error(NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 script evaluation failed",result);if(neo_webview_app_dispatch(view->environment->app,finish_script,completion)!=NEO_WEBVIEW_OK){if(completion->error)completion->error->release();operation->release();delete completion;}return S_OK;}).Get());return SUCCEEDED(result)?NEO_WEBVIEW_OK:neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 script evaluation could not be started",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,ex.what());}}
 neo_webview_result_t neo_platform_view_add_script(neo_webview_view_t* view,const std::string& script,const neo_webview_script_options_t* options,neo_webview_string_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(options->injection_time!=NEO_WEBVIEW_SCRIPT_DOCUMENT_START||options->main_frame_only||options->isolated_world)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"WebView2 supports document-start scripts in the default world for all frames");const auto value=widen(script);const auto result=state->core->AddScriptToExecuteOnDocumentCreated(value.c_str(),Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>([view,callback,context,operation](HRESULT result,LPCWSTR identifier)->HRESULT{auto* completion=new script_completion{callback,context,operation,narrow(identifier),SUCCEEDED(result)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE,nullptr};if(FAILED(result))completion->error=make_error(NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 persistent script registration failed",result);if(neo_webview_app_dispatch(view->environment->app,finish_script,completion)!=NEO_WEBVIEW_OK){if(completion->error)completion->error->release();operation->release();delete completion;}return S_OK;}).Get());return SUCCEEDED(result)?NEO_WEBVIEW_OK:neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 persistent script registration could not be started",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,ex.what());}}
 neo_webview_result_t neo_platform_view_remove_script(neo_webview_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEO_WEBVIEW_ERROR_NOT_INITIALIZED;const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}catch(...){return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;}}
-neo_webview_result_t neo_platform_view_post_message(neo_webview_view_t* view,const std::string& message,bool json,neo_webview_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEO_WEBVIEW_OK:neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,ex.what());}}
+neo_webview_result_t neo_platform_view_post_message(neo_webview_view_t* view,const std::string& message,bool json,neo_webview_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(!neo_bridge_origin_allowed(view,view->source))return neo_fail(error,NEO_WEBVIEW_ERROR_SECURITY,"Web messaging is disabled for the current untrusted origin",0,"bridge");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEO_WEBVIEW_OK:neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,ex.what());}}
 neo_webview_result_t neo_platform_view_get_zoom_factor(const neo_webview_view_t* view,double* factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEO_WEBVIEW_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->get_ZoomFactor(factor))?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}
 neo_webview_result_t neo_platform_view_set_zoom_factor(neo_webview_view_t* view,double factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEO_WEBVIEW_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_ZoomFactor(factor))?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}
 neo_webview_result_t neo_platform_view_get_handle(neo_webview_view_t* view,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* handle) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state)return NEO_WEBVIEW_ERROR_NOT_INITIALIZED;if(kind==NEO_WEBVIEW_NATIVE_HANDLE_WEBVIEW2_CONTROLLER&&state->controller){handle->kind=kind;handle->value=state->controller.Get();return NEO_WEBVIEW_OK;}if(kind==NEO_WEBVIEW_NATIVE_HANDLE_WEBVIEW2_CORE&&state->core){handle->kind=kind;handle->value=state->core.Get();return NEO_WEBVIEW_OK;}return NEO_WEBVIEW_ERROR_NOT_SUPPORTED;}

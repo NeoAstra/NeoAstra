@@ -154,6 +154,33 @@ struct neo_webview_operation final : neo_ref_counted {
     }
 };
 
+struct neo_custom_scheme_registration final {
+    std::string name;
+    uint32_t flags{};
+    std::vector<std::string> allowed_origins;
+    neo_webview_resource_provider_callback_t provider{};
+    void* provider_context{};
+    neo_webview_context_release_callback_t release_provider_context{};
+
+    neo_custom_scheme_registration() = default;
+    neo_custom_scheme_registration(const neo_custom_scheme_registration&) = delete;
+    neo_custom_scheme_registration& operator=(const neo_custom_scheme_registration&) = delete;
+    neo_custom_scheme_registration(neo_custom_scheme_registration&& other) noexcept
+        : name(std::move(other.name)), flags(other.flags), allowed_origins(std::move(other.allowed_origins)),
+          provider(other.provider), provider_context(other.provider_context),
+          release_provider_context(other.release_provider_context) {
+        other.provider = nullptr;
+        other.provider_context = nullptr;
+        other.release_provider_context = nullptr;
+    }
+    neo_custom_scheme_registration& operator=(neo_custom_scheme_registration&&) = delete;
+    ~neo_custom_scheme_registration() {
+        if (release_provider_context && provider_context) {
+            try { release_provider_context(provider_context); } catch (...) { }
+        }
+    }
+};
+
 enum class neo_decision_state : uint32_t { pending, deferred, completed, timed_out, abandoned };
 
 struct neo_webview_decision final : neo_ref_counted {
@@ -317,6 +344,7 @@ inline void neo_ui_ref_counted::on_zero_references() noexcept {
 
 struct neo_webview_environment final : neo_ui_ref_counted {
     neo_webview_app_t* app{};
+    std::vector<neo_custom_scheme_registration> custom_schemes;
     void* platform{};
     explicit neo_webview_environment(neo_webview_app_t* value) : neo_ui_ref_counted(value, 3), app(value) { }
     ~neo_webview_environment() override;
@@ -365,6 +393,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
     bool destroying{};
     std::string source;
     std::string title;
+    std::vector<std::string> bridge_origins;
     neo_callback_slot<neo_webview_event_callback_t> events;
     void* platform{};
     explicit neo_webview_view(neo_webview_environment_t* value) : neo_ui_ref_counted(value->app), environment(value) { environment->retain(); }
@@ -373,6 +402,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
 };
 
 void neo_download_emit(neo_webview_download_t* download, neo_webview_event_type_t type) noexcept;
+bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept;
 
 struct neo_webview_download final : neo_ui_ref_counted {
     neo_webview_view_t* view{};

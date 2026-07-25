@@ -43,6 +43,8 @@ static_assert(std::is_same_v<std::underlying_type_t<neo_webview_process_failure_
 static_assert(std::is_same_v<std::underlying_type_t<neo_webview_event_type_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neo_webview_capability_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neo_webview_log_level_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neo_webview_resource_kind_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neo_webview_resource_body_kind_t>, uint32_t>);
 static_assert(NEO_WEBVIEW_ERROR_SECURITY == -14);
 static_assert(NEO_WEBVIEW_SUPPORT_LIMITED == 3);
 static_assert(NEO_WEBVIEW_APP_SHUTDOWN_ON_MAIN_WINDOW_CLOSED == 2);
@@ -60,7 +62,9 @@ static_assert(NEO_WEBVIEW_EVENT_CLIENT_CERTIFICATE_REQUESTED == 33);
 static_assert(NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS == 32);
 static_assert(NEO_WEBVIEW_LOG_CRITICAL == 5);
 static_assert((NEO_WEBVIEW_PROCESS_FAILURE_KIND_MASK & NEO_WEBVIEW_PROCESS_FAILURE_CRASHED) == 0);
-static_assert(sizeof(void*) == 8, "ABI 1.6 targets the current 64-bit primary platforms");
+static_assert(NEO_WEBVIEW_RESOURCE_MANIFEST == 12);
+static_assert(NEO_WEBVIEW_RESOURCE_BODY_FILE == 2);
+static_assert(sizeof(void*) == 8, "ABI 1.7 targets the current 64-bit primary platforms");
 static_assert(sizeof(neo_webview_struct_header_t) == 8);
 static_assert(sizeof(neo_webview_string_view_t) == 16);
 static_assert(sizeof(neo_webview_point_t) == 8);
@@ -73,15 +77,18 @@ static_assert(sizeof(neo_webview_event_header_t) == 32 && offsetof(neo_webview_e
 static_assert(sizeof(neo_webview_event_t) == 160 && offsetof(neo_webview_event_t, download) == 152);
 static_assert(sizeof(neo_webview_capability_info_t) == 40 && offsetof(neo_webview_capability_info_t, details) == 24);
 static_assert(sizeof(neo_webview_app_options_t) == 56 && offsetof(neo_webview_app_options_t, log_callback) == 40);
-static_assert(sizeof(neo_webview_environment_options_t) == 88 && offsetof(neo_webview_environment_options_t, custom_schemes) == 80);
+static_assert(sizeof(neo_webview_environment_options_t) == 96 && offsetof(neo_webview_environment_options_t, custom_scheme_stride) == 88);
 static_assert(sizeof(neo_webview_profile_options_t) == 32 && offsetof(neo_webview_profile_options_t, ephemeral) == 24);
 static_assert(sizeof(neo_webview_window_options_t) == 80 && offsetof(neo_webview_window_options_t, background_color) == 72);
-static_assert(sizeof(neo_webview_view_options_t) == 88 && offsetof(neo_webview_view_options_t, popup_request) == 80);
+static_assert(sizeof(neo_webview_view_options_t) == 104 && offsetof(neo_webview_view_options_t, bridge_origins) == 96);
 static_assert(sizeof(neo_webview_script_options_t) == 40 && offsetof(neo_webview_script_options_t, world_name) == 24);
 static_assert(sizeof(neo_webview_decision_response_t) == 80 && offsetof(neo_webview_decision_response_t, target_view) == 64);
 static_assert(sizeof(neo_webview_download_info_t) == 88 && offsetof(neo_webview_download_info_t, failure_reason) == 72);
 static_assert(sizeof(neo_webview_runtime_info_t) == 104 && offsetof(neo_webview_runtime_info_t, build_features) == 88);
 static_assert(sizeof(neo_webview_cookie_t) == 88 && offsetof(neo_webview_cookie_t, expires_unix_ms) == 72);
+static_assert(sizeof(neo_webview_resource_request_t) == 96 && offsetof(neo_webview_resource_request_t, body_length) == 88);
+static_assert(sizeof(neo_webview_resource_response_t) == 120 && offsetof(neo_webview_resource_response_t, release) == 112);
+static_assert(sizeof(neo_webview_custom_scheme_t) == 64 && offsetof(neo_webview_custom_scheme_t, resource_provider) == 40);
 
 #define NEO_ASSERT_STANDARD_LAYOUT(type) static_assert(std::is_standard_layout_v<type>)
 NEO_ASSERT_STANDARD_LAYOUT(neo_webview_string_view_t);
@@ -101,6 +108,9 @@ NEO_ASSERT_STANDARD_LAYOUT(neo_webview_decision_response_t);
 NEO_ASSERT_STANDARD_LAYOUT(neo_webview_download_info_t);
 NEO_ASSERT_STANDARD_LAYOUT(neo_webview_runtime_info_t);
 NEO_ASSERT_STANDARD_LAYOUT(neo_webview_cookie_t);
+NEO_ASSERT_STANDARD_LAYOUT(neo_webview_resource_request_t);
+NEO_ASSERT_STANDARD_LAYOUT(neo_webview_resource_response_t);
+NEO_ASSERT_STANDARD_LAYOUT(neo_webview_custom_scheme_t);
 #undef NEO_ASSERT_STANDARD_LAYOUT
 
 int main() {

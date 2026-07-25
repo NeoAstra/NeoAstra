@@ -66,6 +66,20 @@ void NEO_WEBVIEW_CALL increment(void* context) {
 }
 
 void NEO_WEBVIEW_CALL ignore_view(void*, neo_webview_result_t, neo_webview_view_t*, const neo_webview_error_t*) { }
+void NEO_WEBVIEW_CALL ignore_environment(void*, neo_webview_result_t, neo_webview_environment_t*, const neo_webview_error_t*) { }
+
+neo_webview_result_t NEO_WEBVIEW_CALL empty_resource(void*, const neo_webview_resource_request_t*, neo_webview_resource_response_t*) {
+    return NEO_WEBVIEW_OK;
+}
+
+void NEO_WEBVIEW_CALL release_resource_context(void* context) {
+    ++*static_cast<std::atomic<int>*>(context);
+}
+
+void NEO_WEBVIEW_CALL throw_releasing_resource_context(void* context) {
+    ++*static_cast<std::atomic<int>*>(context);
+    throw std::runtime_error("resource release failed");
+}
 
 void NEO_WEBVIEW_CALL quit_app(void* context) {
     neo_webview_app_quit(static_cast<neo_webview_app_t*>(context), 0);
@@ -517,6 +531,104 @@ void test_native_parent_structure() {
     assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
     assert(error != nullptr);
     neo_webview_error_release(error);
+
+    const std::string malformed_origin = "https:";
+    const auto malformed_origin_view = neo_string_view(malformed_origin);
+    options.parent.version = 1;
+    options.bridge_origin_count = 1;
+    options.bridge_origins = &malformed_origin_view;
+    error = nullptr;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+}
+
+void test_custom_scheme_validation_and_trailing_bytes() {
+    auto* app = create_test_app(true);
+    const std::string name = "app";
+    neo_webview_custom_scheme_t scheme{};
+    scheme.size = sizeof(scheme);
+    scheme.version = 1;
+    scheme.name = neo_string_view(name);
+    scheme.flags = NEO_WEBVIEW_CUSTOM_SCHEME_HAS_AUTHORITY | NEO_WEBVIEW_CUSTOM_SCHEME_SECURE;
+    scheme.resource_provider = empty_resource;
+
+    neo_webview_environment_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.custom_scheme_count = 1;
+    options.custom_schemes = &scheme;
+    options.custom_scheme_stride = sizeof(scheme) - 1;
+
+    neo_webview_error_t* error{};
+    assert(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+    options.custom_scheme_stride = sizeof(scheme);
+    error = nullptr;
+    scheme.size = sizeof(scheme) - 1;
+    assert(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+
+    scheme.size = sizeof(scheme);
+    scheme.allowed_origin_count = 1;
+    error = nullptr;
+    assert(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+    scheme.allowed_origin_count = 0;
+
+    struct extended_scheme {
+        neo_webview_custom_scheme_t value{};
+        std::array<uint8_t, 32> trailing{};
+    };
+    std::array<extended_scheme, 2> extended{};
+    const std::string second_name = "assets";
+    extended[0].value = scheme;
+    extended[1].value = scheme;
+    extended[1].value.name = neo_string_view(second_name);
+    for (auto& descriptor : extended) {
+        descriptor.value.size = sizeof(extended_scheme);
+        descriptor.trailing.fill(0xa5);
+    }
+    options.custom_scheme_count = static_cast<uint32_t>(extended.size());
+    options.custom_schemes = &extended[0].value;
+    options.custom_scheme_stride = sizeof(extended_scheme);
+
+    std::atomic<neo_webview_result_t> result{NEO_WEBVIEW_OK};
+    std::thread worker([&] {
+        neo_webview_error_t* worker_error{};
+        result.store(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &worker_error));
+        assert(worker_error != nullptr);
+        neo_webview_error_release(worker_error);
+    });
+    worker.join();
+    assert(result.load() == NEO_WEBVIEW_ERROR_WRONG_THREAD);
+    for (const auto& descriptor : extended) for (const auto byte : descriptor.trailing) assert(byte == 0xa5);
+
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    neo_webview_app_release(app);
+}
+
+void test_custom_scheme_provider_release_once_and_exception_containment() {
+    std::atomic<int> releases{};
+    {
+        neo_custom_scheme_registration registration;
+        registration.provider_context = &releases;
+        registration.release_provider_context = release_resource_context;
+        std::vector<neo_custom_scheme_registration> registrations;
+        registrations.push_back(std::move(registration));
+        assert(releases.load() == 0);
+    }
+    assert(releases.load() == 1);
+
+    {
+        neo_custom_scheme_registration registration;
+        registration.provider_context = &releases;
+        registration.release_provider_context = throw_releasing_resource_context;
+    }
+    assert(releases.load() == 2);
 }
 
 } // namespace
@@ -542,5 +654,7 @@ int main() {
     test_utf8();
     test_structure_versions();
     test_native_parent_structure();
+    test_custom_scheme_validation_and_trailing_bytes();
+    test_custom_scheme_provider_release_once_and_exception_containment();
     return 0;
 }

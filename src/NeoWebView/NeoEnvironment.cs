@@ -79,7 +79,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     /// <param name="options">View options, or <see langword="null"/> for defaults.</param>
     /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
     /// <returns>The created browser view.</returns>
-    /// <exception cref="NotSupportedException">Bridge origins were supplied, but the native ABI does not expose bridge-origin configuration.</exception>
+    /// <exception cref="PlatformNotSupportedException">Explicit bridge origins were supplied on a backend that does not implement them.</exception>
     public ValueTask<NeoWebView> CreateWebViewAsync(NeoWebViewHost host, NeoWebViewOptions? options = null, CancellationToken cancellationToken = default)
         => CreateWebViewCoreAsync(host, options, 0, cancellationToken);
 
@@ -98,11 +98,12 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             throw new ArgumentException("The host window must belong to this environment's application.", nameof(host));
         }
 
-        if (options.BridgeOrigins.Count != 0)
+        if (options.BridgeOrigins.Count != 0 && !OperatingSystem.IsWindows())
         {
-            throw new NotSupportedException("The current native ABI does not expose bridge-origin configuration.");
+            throw new PlatformNotSupportedException("Explicit bridge origins are currently implemented only by the Windows backend.");
         }
 
+        using var bridgeOrigins = new Utf8StringArray(options.BridgeOrigins);
         var parent = new NativeMethods.neo_webview_native_parent
         {
             size = (uint)sizeof(NativeMethods.neo_webview_native_parent),
@@ -138,6 +139,8 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             maximum_message_size = options.MaximumMessageSize,
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
             popup_request = new NativeMethods.neo_webview_decision_t(popupRequest),
+            bridge_origin_count = bridgeOrigins.Count,
+            bridge_origins = bridgeOrigins.Views,
         };
         var nativeOptions = new NativeMethods.neo_webview_view_options_t(raw);
         var operation = new NativeOperation<NeoWebView>(cancellationToken, new ViewCreation(this, host, options));

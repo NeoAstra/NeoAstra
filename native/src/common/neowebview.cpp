@@ -1,12 +1,81 @@
 #include "native_internal.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <new>
 #include <stdexcept>
 
 namespace {
+
+constexpr uint32_t known_custom_scheme_flags = NEO_WEBVIEW_CUSTOM_SCHEME_HAS_AUTHORITY |
+    NEO_WEBVIEW_CUSTOM_SCHEME_SECURE | NEO_WEBVIEW_CUSTOM_SCHEME_CORS_ENABLED |
+    NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION | NEO_WEBVIEW_CUSTOM_SCHEME_SERVICE_WORKERS;
+
+bool valid_scheme_name(std::string_view name) noexcept {
+    if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front()))) return false;
+    for (const auto character : name) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (!std::isalnum(byte) && character != '+' && character != '-' && character != '.') return false;
+    }
+    return true;
+}
+
+bool valid_origin(std::string_view origin) noexcept {
+    while (origin.size() > 1 && origin.back() == '/') origin.remove_suffix(1);
+    const auto separator = origin.find("://");
+    return separator != std::string_view::npos && valid_scheme_name(origin.substr(0, separator)) &&
+        separator + 3 < origin.size() && origin.find_first_of("/?#", separator + 3) == std::string_view::npos;
+}
+
+const neo_webview_custom_scheme_t& custom_scheme_at(const neo_webview_environment_options_t* options, uint32_t index) noexcept {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(options->custom_schemes);
+    return *reinterpret_cast<const neo_webview_custom_scheme_t*>(bytes + static_cast<size_t>(index) * options->custom_scheme_stride);
+}
+
+bool valid_custom_schemes(const neo_webview_environment_options_t* options) noexcept {
+    if (options->custom_scheme_count == 0) return options->custom_schemes == nullptr && options->custom_scheme_stride == 0;
+    if (!options->custom_schemes || reinterpret_cast<uintptr_t>(options->custom_schemes) % alignof(neo_webview_custom_scheme_t) != 0 ||
+        options->custom_scheme_stride < sizeof(neo_webview_custom_scheme_t) ||
+        options->custom_scheme_stride % alignof(neo_webview_custom_scheme_t) != 0 ||
+        options->custom_scheme_count > SIZE_MAX / options->custom_scheme_stride) return false;
+    std::vector<std::string> names;
+    try {
+        names.reserve(options->custom_scheme_count);
+        for (uint32_t index = 0; index < options->custom_scheme_count; ++index) {
+            const auto& scheme = custom_scheme_at(options, index);
+            if (scheme.size < sizeof(scheme) || scheme.size > options->custom_scheme_stride || scheme.version != 1 || !neo_valid_utf8(scheme.name) ||
+                !valid_scheme_name(neo_string(scheme.name)) || !scheme.resource_provider ||
+                (scheme.flags & ~known_custom_scheme_flags) != 0 ||
+                ((scheme.allowed_origin_count != 0) != (scheme.allowed_origins != nullptr))) return false;
+            auto name = neo_string(scheme.name);
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            if (std::find(names.begin(), names.end(), name) != names.end()) return false;
+            names.push_back(std::move(name));
+            for (uint32_t origin = 0; origin < scheme.allowed_origin_count; ++origin) {
+                if (!neo_valid_utf8(scheme.allowed_origins[origin]) || scheme.allowed_origins[origin].length == 0) return false;
+            }
+        }
+        return true;
+    } catch (...) { return false; }
+}
+
+void copy_custom_schemes(neo_webview_environment_t* environment, const neo_webview_environment_options_t* options) {
+    environment->custom_schemes.reserve(options->custom_scheme_count);
+    for (uint32_t index = 0; index < options->custom_scheme_count; ++index) {
+        const auto& source = custom_scheme_at(options, index);
+        neo_custom_scheme_registration target;
+        target.name = neo_string(source.name);
+        std::transform(target.name.begin(), target.name.end(), target.name.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+        target.flags = source.flags;
+        target.provider = source.resource_provider;
+        target.provider_context = source.resource_provider_context;
+        target.allowed_origins.reserve(source.allowed_origin_count);
+        for (uint32_t origin = 0; origin < source.allowed_origin_count; ++origin) target.allowed_origins.push_back(neo_string(source.allowed_origins[origin]));
+        environment->custom_schemes.push_back(std::move(target));
+    }
+}
 
 void drain_ui_destructions(neo_webview_app_t* app) noexcept {
     for (;;) {
@@ -27,6 +96,26 @@ void drain_ui_destructions(neo_webview_app_t* app) noexcept {
 }
 
 } // namespace
+
+bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept {
+    if (!view) return false;
+    const auto colon = uri.find(':');
+    if (colon == std::string_view::npos) return false;
+    std::string scheme(uri.substr(0, colon));
+    std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    for (const auto& registration : view->environment->custom_schemes) {
+        if ((registration.flags & NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION) != 0 && registration.name == scheme) return true;
+    }
+    for (const auto& origin : view->bridge_origins) {
+        auto normalized_origin = std::string_view(origin);
+        while (normalized_origin.size() > 1 && normalized_origin.back() == '/') normalized_origin.remove_suffix(1);
+        const auto prefix_matches = uri.size() >= normalized_origin.size() && std::equal(normalized_origin.begin(), normalized_origin.end(), uri.begin(),
+            [](unsigned char left, unsigned char right) { return std::tolower(left) == std::tolower(right); });
+        if (prefix_matches &&
+            (uri.size() == normalized_origin.size() || uri[normalized_origin.size()] == '/' || uri[normalized_origin.size()] == '?' || uri[normalized_origin.size()] == '#')) return true;
+    }
+    return false;
+}
 
 neo_webview_app::~neo_webview_app() {
     events.clear();
@@ -677,18 +766,39 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_window_close(neo_webview_windo
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_window_get_native_handle(neo_webview_window_t* w,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* h){if(!w||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;return neo_platform_window_get_handle(w,kind,h);}
 
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_async(neo_webview_app_t* app,const neo_webview_environment_options_t* options,neo_webview_environment_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
-    if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
+    if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
     if(!check_ui(app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"environment creation must begin on the UI thread");
     if(!accepts_ui_objects(app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
-    try{auto* op=make_operation(outop);auto* value=new neo_webview_environment(app);auto* state=new environment_completion{callback,context,op,value,nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_environment_create_async(value,options,platform_environment_created,state,&start_error))platform_environment_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
+#if !defined(_WIN32)
+    if(options->custom_scheme_count!=0)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"custom schemes are currently implemented only by the Windows backend");
+#endif
+    neo_webview_operation_t* op{};
+    neo_webview_environment_t* value{};
+    try {
+        op=make_operation(outop);
+        value=new neo_webview_environment(app);
+        copy_custom_schemes(value,options);
+        auto* state=new environment_completion{callback,context,op,value,nullptr};
+        // Provider ownership transfers only once every potentially throwing allocation has succeeded.
+        for(uint32_t index=0;index<options->custom_scheme_count;++index)value->custom_schemes[index].release_provider_context=custom_scheme_at(options,index).release_resource_provider_context;
+        neo_webview_error_t* start_error=nullptr;
+        if(!neo_platform_environment_create_async(value,options,platform_environment_created,state,&start_error))platform_environment_created(state,start_error);
+        return NEO_WEBVIEW_OK;
+    } catch(const std::exception& ex) {
+        if(value)value->release();
+        if(op)op->release();
+        if(outop&&*outop){(*outop)->release();*outop=nullptr;}
+        return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());
+    }
+}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_profile_async(neo_webview_environment_t* env,const neo_webview_profile_options_t* options,neo_webview_profile_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
     if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->name))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid profile arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"profile creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     try{auto* op=make_operation(outop);auto* value=new neo_webview_profile(env);value->name=neo_string(options->name);value->ephemeral=options->ephemeral!=0;if(!neo_platform_profile_create(value,error)){value->release();op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}return error&&*error?(*error)->code:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}auto* state=new profile_completion{callback,context,op,value};auto r=schedule(env->app,complete_profile,state,error,"could not schedule profile completion");if(r!=NEO_WEBVIEW_OK){value->release();op->release();delete state;}return r;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_view_async(neo_webview_environment_t* env,const neo_webview_view_options_t* options,neo_webview_view_created_callback_t callback,void* context,neo_webview_operation_t** outop,neo_webview_error_t** error){
-    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!valid_native_parent(options->parent)||options->decision_timeout_ms>600000)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
+    if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!valid_native_parent(options->parent)||options->decision_timeout_ms>600000||((options->bridge_origin_count!=0)!=(options->bridge_origins!=nullptr)))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");for(uint32_t index=0;index<options->bridge_origin_count;++index)if(!neo_valid_utf8(options->bridge_origins[index])||!valid_origin(neo_string(options->bridge_origins[index])))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid bridge origin");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     if(options->profile&&options->profile->environment!=env)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"view profile belongs to a different environment");
     if(options->popup_request){auto* request=options->popup_request;if(request->kind!=NEO_WEBVIEW_DECISION_NEW_WINDOW||request->owner==nullptr||request->owner->environment!=env||options->profile!=request->owner->profile||request->state.load(std::memory_order_acquire)>neo_decision_state::deferred)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"popup request is no longer valid or opener-compatible");if(request->popup_creation_started.exchange(true,std::memory_order_acq_rel))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"popup target creation has already started");}
-    try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);auto* state=new view_completion{callback,context,op,value,nullptr,options->popup_request!=nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
+    try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion{callback,context,op,value,nullptr,options->popup_request!=nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(const neo_webview_environment_t* env,neo_webview_capability_t capability,neo_webview_capability_info_t* info){
     if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoWebView backend";
@@ -707,6 +817,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
         case NEO_WEBVIEW_CAPABILITY_HTTP_AUTHENTICATION:
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
 #if defined(_WIN32)
+        case NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME:
         case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
         case NEO_WEBVIEW_CAPABILITY_PERMISSION_PERSISTENCE:
         case NEO_WEBVIEW_CAPABILITY_DOWNLOAD_PAUSE:

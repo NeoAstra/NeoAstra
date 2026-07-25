@@ -31,12 +31,22 @@ internal static class Program
                 var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 window.Closed += (_, _) => closed.TrySetResult();
 
-                await using var environment = await app.CreateEnvironmentAsync();
+                var assets = new NeoDirectoryResourceProvider(Path.Combine(AppContext.BaseDirectory, "assets"));
+                await using var environment = await app.CreateEnvironmentAsync(new NeoEnvironmentOptions
+                {
+                    CustomSchemes = [NeoCustomScheme.Application("app", assets)],
+                });
                 await using var webView = await environment.CreateWebViewAsync(NeoWebViewHost.FillWindow(window));
                 webView.NavigationCompleted += (_, navigation) =>
                     Console.WriteLine($"Navigation to {navigation.Uri} succeeded: {navigation.IsSuccess}");
+                webView.MessageReceived += async (_, message) =>
+                {
+                    Console.WriteLine($"JavaScript ({message.SourceOrigin}): {message.Json}");
+                    try { await webView.PostMessageAsync("{\"from\":\"C#\",\"message\":\"Hello from NeoWebView\"}"); }
+                    catch (Exception exception) { Console.Error.WriteLine(exception.Message); }
+                };
 
-                await webView.NavigateAsync(new Uri("https://example.com/"));
+                await webView.NavigateAsync(new Uri("app://neowebview/index.html"));
                 await closed.Task;
             });
     }
