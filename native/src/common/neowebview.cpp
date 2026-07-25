@@ -682,7 +682,13 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create(const neo_webview_a
         return NEO_WEBVIEW_OK;
     } catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}
 }
-neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_attach(const neo_webview_app_options_t* options, neo_webview_app_t** output, neo_webview_error_t** error) { auto result=neo_webview_app_create(options,output,error); if(result==NEO_WEBVIEW_OK)(*output)->embedded=true; return result; }
+neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_attach(const neo_webview_app_options_t* options, neo_webview_app_t** output, neo_webview_error_t** error) {
+    const auto result = neo_webview_app_create(options, output, error);
+    if (result != NEO_WEBVIEW_OK) return result;
+    if (!output || !*output) return neo_fail(error, NEO_WEBVIEW_ERROR_NATIVE_FAILURE, "application creation returned no instance");
+    (*output)->embedded = true;
+    return NEO_WEBVIEW_OK;
+}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_detach(neo_webview_app_t* app, neo_webview_error_t** error) {
     if (error) *error = nullptr;
     if (!app) return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_ARGUMENT, "application is null");

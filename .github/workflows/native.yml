@@ -8,6 +8,31 @@ permissions:
   contents: read
 
 jobs:
+  hardening:
+    name: Native hardening (Linux x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - name: Install Linux analysis dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-tidy libclang-rt-dev ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+      - name: AddressSanitizer and UndefinedBehaviorSanitizer
+        env:
+          # GTK/WebKitGTK process-global allocations are outside NeoWebView ownership;
+          # leak checking needs a separate suppression-reviewed job.
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake --preset linux-x64-asan-ubsan
+          cmake --build --preset linux-x64-asan-ubsan
+          xvfb-run -a ctest --preset linux-x64-asan-ubsan
+      - name: Clang static analyzer
+        run: |
+          cmake --preset linux-x64-analysis
+          cmake --build --preset linux-x64-analysis
+
   build:
     name: Native (${{ matrix.rid }})
     strategy:

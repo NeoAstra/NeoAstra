@@ -3154,6 +3154,25 @@ Deliverables:
 * ABI compatibility tests.
 * Packaging documentation.
 
+The current Phase 5 hardening baseline preserves paired ABI 1.7. Native CTest now separates deterministic
+common tests from contended dispatch/detach and UI-affine final-release stress loops. Managed tests race
+cancellation against native completion and race repeated application disposal against concurrent shutdown.
+`NeoApplication.Shutdown` holds a safe native reference across that race and remains a no-op after disposal.
+
+An independent frozen ABI 1.7 C++ fixture deliberately does not include the current public header. It loads
+the produced shared library directly, resolves the complete ABI 1.7 export floor, validates frozen 64-bit
+layout offsets, invokes core functions through explicit C-calling-convention declarations, and completes an
+attached application detach/release cycle. Normal public-header and generated-managed layout tests remain in
+place, so the fixture supplements rather than duplicates current-header conformance.
+
+Linux x64 CI is configured to compile and execute the native suite with AddressSanitizer and
+UndefinedBehaviorSanitizer, and to compile the native implementation with Clang's static-analyzer checks.
+Sanitizer instrumentation applies to the tests as well as the shared library. LeakSanitizer is disabled until
+GTK/WebKitGTK process-global allocations have reviewed suppressions. These jobs do not establish sanitizer-clean
+status on macOS, do not execute ThreadSanitizer, and are not claimed as having run on a Windows development
+host. Browser/display conformance, broader browser-object stress, benchmarks, security review, macOS sanitizer
+execution, and selected ThreadSanitizer coverage remain Phase 5 work.
+
 ## Phase 6 — v1 release
 
 Requirements:

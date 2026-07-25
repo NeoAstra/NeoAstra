@@ -99,6 +99,10 @@ python eng/build_native.py --rid win-x64 --clean
 
 The managed project directly copies the staged library for the current host RID beside its development output, so local applications and tests use the latest native build without creating or installing a NuGet package. Rerun the helper after native changes. The same command accepts `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`; use `--skip-tests` when cross-compiling a binary that cannot run on the build host.
 
+Native tests include a public-header ABI test, common ownership tests, contended dispatch/UI-object teardown stress tests, and an independent frozen ABI 1.7 consumer. The frozen consumer does not include the current header: it loads the shared library by path, verifies every ABI 1.7 export, calls core entry points through frozen C-layout declarations, and performs an attach/detach ownership cycle. Compatible exports added after ABI 1.7 do not change that export floor.
+
+Linux CI has separate hardening presets for AddressSanitizer plus UndefinedBehaviorSanitizer and for Clang static-analyzer checks. They can be run on a Linux host with the GTK/WebKitGTK development dependencies using `cmake --preset linux-x64-asan-ubsan` or `cmake --preset linux-x64-analysis`; sanitizer execution is not implied by a normal Windows build. CI disables LeakSanitizer until GTK/WebKitGTK process-global allocations have reviewed suppressions. ThreadSanitizer remains a separate opt-in CMake switch and cannot be combined with the address/undefined-behavior sanitizer build.
+
 See [`doc/neowebview_specs.md`](doc/neowebview_specs.md) for the architecture and normative implementation requirements.
 
 ## License

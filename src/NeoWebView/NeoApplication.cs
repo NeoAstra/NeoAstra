@@ -263,6 +263,7 @@ public sealed class NeoApplication : IAsyncDisposable
 
     /// <summary>Requests application shutdown. This method may be called from any thread.</summary>
     /// <param name="exitCode">The process-style exit code returned by <see cref="Run"/>.</param>
+    /// <remarks>Safe to call concurrently with <see cref="DisposeAsync"/>; it is a no-op after disposal starts.</remarks>
     public void Shutdown(int exitCode = 0)
     {
         if (Volatile.Read(ref _disposed) != 0)
@@ -270,8 +271,33 @@ public sealed class NeoApplication : IAsyncDisposable
             return;
         }
 
-        Dispatcher.MarkShutdown();
-        NativeMethods.neo_webview_app_quit(NativeHandle, exitCode);
+        var addedRef = false;
+        try
+        {
+            try
+            {
+                _handle.DangerousAddRef(ref addedRef);
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            Dispatcher.MarkShutdown();
+            NativeMethods.neo_webview_app_quit(new NativeMethods.neo_webview_app_t(_handle.DangerousGetHandle()), exitCode);
+        }
+        finally
+        {
+            if (addedRef)
+            {
+                _handle.DangerousRelease();
+            }
+        }
     }
 
     /// <summary>Detaches the native application on its owning UI thread and releases its native reference.</summary>

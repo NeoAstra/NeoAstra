@@ -244,6 +244,29 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task NativeOperation_CancellationAndCompletionRaceCompletesExactlyOnce()
+    {
+        const int iterations = 500;
+        for (var index = 0; index < iterations; index++)
+        {
+            using var source = new CancellationTokenSource();
+            var operation = new NativeOperation<int>(source.Token);
+            await Task.WhenAll(
+                Task.Run(source.Cancel),
+                Task.Run(() => operation.Complete(index)));
+
+            try
+            {
+                Assert.AreEqual(index, await operation.ValueTask);
+            }
+            catch (TaskCanceledException exception)
+            {
+                Assert.AreEqual(source.Token, exception.CancellationToken);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task DeferredDecision_UsesResultOrSafeDefault()
     {
         var accepted = await NeoWebView.ResolveDecisionAsync(
@@ -367,6 +390,55 @@ public sealed class ManagedApiTests
                 }
 
                 disposal.GetAwaiter().GetResult();
+                Assert.ThrowsExactly<ObjectDisposedException>(() => application.Dispatcher.Post(() => { }));
+                return true;
+            });
+        }
+        catch (NeoWebViewNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+    }
+
+    [TestMethod]
+    public async Task AttachedApplication_ConcurrentShutdownAndDisposalIsIdempotent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView concurrent disposal test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                });
+                using var start = new ManualResetEventSlim();
+                var disposals = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+                {
+                    start.Wait();
+                    await application.DisposeAsync();
+                })).ToArray();
+                var shutdowns = Enumerable.Range(0, 4).Select(index => Task.Run(() =>
+                {
+                    start.Wait();
+                    application.Shutdown(index);
+                })).ToArray();
+                var all = Task.WhenAll(disposals.Concat(shutdowns));
+                start.Set();
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                while (!all.IsCompleted && DateTime.UtcNow < deadline)
+                {
+                    PumpWindowsMessages();
+                    Thread.Sleep(1);
+                }
+
+                Assert.IsTrue(all.IsCompleted, "Concurrent application disposal did not complete while the UI loop was pumped.");
+                all.GetAwaiter().GetResult();
                 Assert.ThrowsExactly<ObjectDisposedException>(() => application.Dispatcher.Post(() => { }));
                 return true;
             });
