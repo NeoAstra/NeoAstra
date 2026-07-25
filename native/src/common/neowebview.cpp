@@ -333,7 +333,9 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_complete(neo_webview_
     auto current=value->state.load(std::memory_order_acquire);
     while(current==neo_decision_state::pending || current==neo_decision_state::deferred) {
         if(value->state.compare_exchange_weak(current,neo_decision_state::completed,std::memory_order_acq_rel,std::memory_order_acquire)) {
-            value->resolve(response->action==NEO_WEBVIEW_DECISION_DEFAULT?value->default_action:response->action);
+            auto effective=*response;
+            if(effective.action==NEO_WEBVIEW_DECISION_DEFAULT)effective.action=value->default_action;
+            value->resolve(effective);
             return NEO_WEBVIEW_OK;
         }
     }
@@ -428,6 +430,14 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
         case NEO_WEBVIEW_CAPABILITY_PROFILE_EPHEMERAL:
         case NEO_WEBVIEW_CAPABILITY_ZOOM:
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
+#if defined(_WIN32)
+        case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
+        case NEO_WEBVIEW_CAPABILITY_PERMISSION_PERSISTENCE:
+            info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
+#else
+        case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
+            info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
+#endif
 #if !defined(_WIN32)
         case NEO_WEBVIEW_CAPABILITY_SCRIPT_DOCUMENT_END:
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;

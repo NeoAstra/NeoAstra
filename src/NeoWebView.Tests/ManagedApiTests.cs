@@ -212,6 +212,8 @@ public sealed class ManagedApiTests
                     Assert.AreEqual("windows", environment.RuntimeInfo.OperatingSystem);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDocumentStart).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Cookies).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Permissions).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.PermissionPersistence).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Zoom).SupportLevel);
                     var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
                     window.MaximumClientSize = new NeoSize(1200, 900);

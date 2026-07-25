@@ -45,6 +45,7 @@ struct windows_view {
     EventRegistrationToken title_changed{};
     EventRegistrationToken history_changed{};
     EventRegistrationToken message_received{};
+    EventRegistrationToken permission_requested{};
     bool events_registered{};
 };
 
@@ -133,6 +134,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_DocumentTitleChanged(state->title_changed);
     state->core->remove_HistoryChanged(state->history_changed);
     state->core->remove_WebMessageReceived(state->message_received);
+    state->core->remove_PermissionRequested(state->permission_requested);
     state->events_registered = false;
 }
 
@@ -140,13 +142,44 @@ struct navigation_decision_context {
     ComPtr<ICoreWebView2NavigationStartingEventArgs> args;
 };
 
-void navigation_decided(void* pointer, neo_webview_decision_action_t action) noexcept {
+neo_webview_permission_kind_t portable_permission(COREWEBVIEW2_PERMISSION_KIND kind) noexcept {
+    switch (kind) {
+        case COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION: return NEO_WEBVIEW_PERMISSION_GEOLOCATION;
+        case COREWEBVIEW2_PERMISSION_KIND_CAMERA: return NEO_WEBVIEW_PERMISSION_CAMERA;
+        case COREWEBVIEW2_PERMISSION_KIND_MICROPHONE: return NEO_WEBVIEW_PERMISSION_MICROPHONE;
+        case COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS: return NEO_WEBVIEW_PERMISSION_NOTIFICATIONS;
+        case COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ: return NEO_WEBVIEW_PERMISSION_CLIPBOARD_READ;
+        case COREWEBVIEW2_PERMISSION_KIND_MIDI_SYSTEM_EXCLUSIVE_MESSAGES: return NEO_WEBVIEW_PERMISSION_MIDI;
+        case COREWEBVIEW2_PERMISSION_KIND_LOCAL_FONTS: return NEO_WEBVIEW_PERMISSION_LOCAL_FONTS;
+        case COREWEBVIEW2_PERMISSION_KIND_FILE_READ_WRITE: return NEO_WEBVIEW_PERMISSION_FILE_SYSTEM;
+        default: return NEO_WEBVIEW_PERMISSION_UNKNOWN;
+    }
+}
+
+struct permission_decision_context {
+    ComPtr<ICoreWebView2PermissionRequestedEventArgs> args;
+    ComPtr<ICoreWebView2Deferral> deferral;
+};
+
+void permission_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<permission_decision_context> context(static_cast<permission_decision_context*>(pointer));
+    const auto state = response->action == NEO_WEBVIEW_DECISION_ALLOW ? COREWEBVIEW2_PERMISSION_STATE_ALLOW
+                     : response->action == NEO_WEBVIEW_DECISION_DEFAULT ? COREWEBVIEW2_PERMISSION_STATE_DEFAULT
+                     : COREWEBVIEW2_PERMISSION_STATE_DENY;
+    ComPtr<ICoreWebView2PermissionRequestedEventArgs3> args3;
+    if (SUCCEEDED(context->args.As(&args3))) args3->put_SavesInProfile(response->persist ? TRUE : FALSE);
+    context->args->put_State(state);
+    context->deferral->Complete();
+}
+
+void navigation_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
-    const bool cancel = action != NEO_WEBVIEW_DECISION_ALLOW;
+    const bool cancel = response->action != NEO_WEBVIEW_DECISION_ALLOW;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
 }
 
 HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
+    state->events_registered = true;
     HRESULT result = state->core->add_NavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
             LPWSTR raw_uri{};
@@ -245,7 +278,48 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message_utf8, &source_utf8, flags);
             return S_OK;
         }).Get(), &state->message_received);
-    if (SUCCEEDED(result)) state->events_registered = true;
+    if (FAILED(result)) return result;
+
+    result = state->core->add_PermissionRequested(
+        Callback<ICoreWebView2PermissionRequestedEventHandler>([view](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
+            LPWSTR raw_uri{};
+            COREWEBVIEW2_PERMISSION_KIND kind{};
+            BOOL user_initiated{};
+            ComPtr<ICoreWebView2Deferral> deferral;
+            auto result = args->get_Uri(&raw_uri);
+            if (SUCCEEDED(result)) result = args->get_PermissionKind(&kind);
+            if (SUCCEEDED(result)) result = args->get_IsUserInitiated(&user_initiated);
+            if (SUCCEEDED(result)) result = args->GetDeferral(&deferral);
+            if (FAILED(result)) return result;
+            try {
+                auto uri = take_string(raw_uri);
+                raw_uri = nullptr;
+                auto context = std::make_unique<permission_decision_context>();
+                context->args = args;
+                context->deferral = deferral;
+                auto* decision = new neo_webview_decision;
+                decision->kind = NEO_WEBVIEW_DECISION_PERMISSION;
+                decision->default_action = NEO_WEBVIEW_DECISION_DENY;
+                decision->completion = permission_decided;
+                decision->completion_context = context.release();
+                neo_emit_view(view, NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED, 0, nullptr, &uri,
+                              portable_permission(kind), user_initiated ? 1 : 0, decision);
+                if (decision->state.load(std::memory_order_acquire) == neo_decision_state::pending) {
+                    neo_webview_decision_response_t response{};
+                    response.size = sizeof(response);
+                    response.version = 1;
+                    response.action = NEO_WEBVIEW_DECISION_DEFAULT;
+                    neo_webview_decision_complete(decision, &response, nullptr);
+                }
+                decision->release();
+                return S_OK;
+            } catch (...) {
+                CoTaskMemFree(raw_uri);
+                args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                deferral->Complete();
+                return S_OK;
+            }
+        }).Get(), &state->permission_requested);
     return result;
 }
 

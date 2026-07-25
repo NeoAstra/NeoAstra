@@ -142,14 +142,22 @@ struct neo_webview_decision final : neo_ref_counted {
     neo_webview_decision_action_t default_action{NEO_WEBVIEW_DECISION_DENY};
     std::atomic<neo_webview_decision_action_t> resolved_action{NEO_WEBVIEW_DECISION_DEFAULT};
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::now() + std::chrono::seconds(30)};
-    void (*completion)(void* context, neo_webview_decision_action_t action) noexcept{};
+    void (*completion)(void* context, const neo_webview_decision_response_t* response) noexcept{};
     void* completion_context{};
 
-    void resolve(neo_webview_decision_action_t action) noexcept {
-        resolved_action.store(action, std::memory_order_release);
-        if (completion) completion(completion_context, action);
+    void resolve(const neo_webview_decision_response_t& response) noexcept {
+        resolved_action.store(response.action, std::memory_order_release);
+        if (completion) completion(completion_context, &response);
         completion = nullptr;
         completion_context = nullptr;
+    }
+
+    void resolve(neo_webview_decision_action_t action) noexcept {
+        neo_webview_decision_response_t response{};
+        response.size = sizeof(response);
+        response.version = 1;
+        response.action = action;
+        resolve(response);
     }
 
     ~neo_webview_decision() override {

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <string>
 #include <thread>
 
 namespace {
@@ -16,6 +17,21 @@ struct counted final : neo_ref_counted {
 
 void NEO_WEBVIEW_CALL increment(void* context) {
     ++*static_cast<std::atomic<int>*>(context);
+}
+
+struct captured_decision {
+    neo_webview_decision_action_t action{};
+    uint32_t persist{};
+    std::string text;
+    std::string path;
+};
+
+void capture_decision(void* context, const neo_webview_decision_response_t* response) noexcept {
+    auto* captured = static_cast<captured_decision*>(context);
+    captured->action = response->action;
+    captured->persist = response->persist;
+    captured->text.assign(reinterpret_cast<const char*>(response->text.data), static_cast<size_t>(response->text.length));
+    if (response->path_count) captured->path.assign(reinterpret_cast<const char*>(response->paths[0].data), static_cast<size_t>(response->paths[0].length));
 }
 
 void test_reference_counting() {
@@ -59,8 +75,11 @@ void test_operation_terminal_state() {
 
 void test_decision_state() {
     neo_webview_decision decision;
+    captured_decision captured;
     decision.kind = NEO_WEBVIEW_DECISION_PERMISSION;
     decision.default_action = NEO_WEBVIEW_DECISION_DENY;
+    decision.completion = capture_decision;
+    decision.completion_context = &captured;
     assert(neo_webview_decision_get_kind(&decision) == NEO_WEBVIEW_DECISION_PERMISSION);
     assert(neo_webview_decision_defer(&decision) == NEO_WEBVIEW_OK);
     assert(neo_webview_decision_defer(&decision) == NEO_WEBVIEW_ERROR_INVALID_STATE);
@@ -68,8 +87,17 @@ void test_decision_state() {
     response.size = sizeof(response);
     response.version = 1;
     response.action = NEO_WEBVIEW_DECISION_ALLOW;
+    const std::string text = "selected";
+    const std::string path = "C:/selected.txt";
+    const neo_webview_string_view_t paths[]{neo_string_view(path)};
+    response.text = neo_string_view(text);
+    response.paths = paths;
+    response.path_count = 1;
+    response.persist = 1;
     assert(neo_webview_decision_complete(&decision, &response, nullptr) == NEO_WEBVIEW_OK);
     assert(decision.resolved_action.load() == NEO_WEBVIEW_DECISION_ALLOW);
+    assert(captured.action == NEO_WEBVIEW_DECISION_ALLOW);
+    assert(captured.persist == 1 && captured.text == text && captured.path == path);
     assert(neo_webview_decision_complete(&decision, &response, nullptr) == NEO_WEBVIEW_ERROR_INVALID_STATE);
 }
 
