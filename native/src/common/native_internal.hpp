@@ -228,6 +228,9 @@ struct neo_webview_window final : neo_ref_counted {
     std::mutex state_mutex;
     std::string title;
     neo_webview_rect_t bounds{};
+    neo_webview_size_t minimum_size{};
+    neo_webview_size_t maximum_size{};
+    neo_webview_window_state_t state{NEO_WEBVIEW_WINDOW_NORMAL};
     std::atomic<bool> closed{false};
     std::vector<neo_webview_view_t*> views; // UI-thread-only weak references.
     void* platform{};
@@ -278,6 +281,8 @@ neo_webview_result_t neo_platform_window_activate(neo_webview_window_t* window) 
 neo_webview_result_t neo_platform_window_close(neo_webview_window_t* window) noexcept;
 neo_webview_result_t neo_platform_window_set_title(neo_webview_window_t* window) noexcept;
 neo_webview_result_t neo_platform_window_set_bounds(neo_webview_window_t* window) noexcept;
+neo_webview_result_t neo_platform_window_set_size_constraints(neo_webview_window_t* window) noexcept;
+neo_webview_result_t neo_platform_window_set_state(neo_webview_window_t* window) noexcept;
 neo_webview_result_t neo_platform_window_get_handle(neo_webview_window_t* window, neo_webview_native_handle_kind_t kind, neo_webview_native_handle_t* handle) noexcept;
 
 using neo_platform_created_callback_t = void (*)(void* context, neo_webview_error_t* error) noexcept;

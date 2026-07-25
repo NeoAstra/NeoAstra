@@ -213,6 +213,12 @@ public sealed class ManagedApiTests
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDocumentStart).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Cookies).SupportLevel);
                     var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                    window.MaximumClientSize = new NeoSize(1200, 900);
+                    window.MinimumClientSize = new NeoSize(320, 200);
+                    Assert.AreEqual(new NeoSize(1200, 900), window.MaximumClientSize);
+                    Assert.AreEqual(new NeoSize(320, 200), window.MinimumClientSize);
+                    window.State = NeoWindowState.Normal;
+                    Assert.AreEqual(NeoWindowState.Normal, window.State);
                     await using var profile = await environment.CreateProfileAsync(new NeoProfileOptions { Name = "smoke-profile", IsEphemeral = true });
                     await using var webView = await environment.CreateWebViewAsync(
                         NeoWebViewHost.FillWindow(window),

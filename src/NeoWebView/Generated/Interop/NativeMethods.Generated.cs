@@ -1319,6 +1319,30 @@ namespace NeoWebView.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neo_webview_result_t neo_webview_window_set_bounds(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_rect_t arg1);
 
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_get_minimum_size")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_get_minimum_size(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_size_t* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_set_minimum_size")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_set_minimum_size(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_size_t arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_get_maximum_size")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_get_maximum_size(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_size_t* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_set_maximum_size")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_set_maximum_size(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_size_t arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_get_state")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_get_state(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_window_state_t* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_set_state")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_window_set_state(NativeMethods.neo_webview_window_t arg0, NativeMethods.neo_webview_window_state_t arg1);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_window_get_title")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neo_webview_string_view_t neo_webview_window_get_title(NativeMethods.neo_webview_window_t arg0);

@@ -9,7 +9,9 @@ Build native desktop applications with .NET and web technologies using the platf
 ## Features
 
 - Native top-level windows or embedding into a borrowed `HWND`, `NSView`, or `GtkWidget`
+- Mutable window bounds, size constraints, and normal/minimized/maximized/fullscreen state
 - Asynchronous environment, profile, and browser-view creation
+- Profile cookie management and selective browsing-data clearing
 - Navigation state and completion events
 - JavaScript evaluation and persistent document scripts
 - JSON web/native messaging

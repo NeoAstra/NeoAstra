@@ -87,12 +87,19 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the managed minimum client-size constraint.</summary>
+    /// <summary>Gets or sets the native minimum client-size constraint.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
-    /// <exception cref="NotSupportedException">An attempt is made to change the constraint after creation.</exception>
+    /// <exception cref="ArgumentException">The minimum exceeds the configured maximum.</exception>
     public NeoSize MinimumClientSize
     {
-        get => _minimumClientSize;
+        get
+        {
+            ThrowIfDisposed();
+            var native = new NativeMethods.neo_webview_size_t(default);
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_get_minimum_size(NativeHandle, &native), default, "get minimum window size");
+            _minimumClientSize = new NeoSize(native.Value.width, native.Value.height);
+            return _minimumClientSize;
+        }
         set
         {
             if (value.Width < 0 || value.Height < 0)
@@ -100,19 +107,25 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(value));
             }
 
-            if (value != _minimumClientSize)
-            {
-                throw new NotSupportedException("The current native ABI does not support changing window size constraints after creation.");
-            }
+            var native = new NativeMethods.neo_webview_size { width = value.Width, height = value.Height };
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_set_minimum_size(NativeHandle, native), default, "set minimum window size");
+            _minimumClientSize = value;
         }
     }
 
-    /// <summary>Gets or sets the managed maximum client-size constraint.</summary>
+    /// <summary>Gets or sets the native maximum client-size constraint. Zero disables a dimension's maximum.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
-    /// <exception cref="NotSupportedException">An attempt is made to change the constraint after creation.</exception>
+    /// <exception cref="ArgumentException">The maximum is less than the configured minimum.</exception>
     public NeoSize MaximumClientSize
     {
-        get => _maximumClientSize;
+        get
+        {
+            ThrowIfDisposed();
+            var native = new NativeMethods.neo_webview_size_t(default);
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_get_maximum_size(NativeHandle, &native), default, "get maximum window size");
+            _maximumClientSize = new NeoSize(native.Value.width, native.Value.height);
+            return _maximumClientSize;
+        }
         set
         {
             if (value.Width < 0 || value.Height < 0)
@@ -120,10 +133,9 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(value));
             }
 
-            if (value != _maximumClientSize)
-            {
-                throw new NotSupportedException("The current native ABI does not support changing window size constraints after creation.");
-            }
+            var native = new NativeMethods.neo_webview_size { width = value.Width, height = value.Height };
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_set_maximum_size(NativeHandle, native), default, "set maximum window size");
+            _maximumClientSize = value;
         }
     }
 
@@ -136,12 +148,18 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
     /// <summary>Gets the current logical-to-physical scale factor.</summary>
     public double ScaleFactor => _scaleFactor;
 
-    /// <summary>Gets or sets the cached window presentation state.</summary>
+    /// <summary>Gets or sets the native window presentation state.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The assigned value is not defined.</exception>
-    /// <exception cref="NotSupportedException">An attempt is made to change state through the current native ABI.</exception>
     public NeoWindowState State
     {
-        get => _state;
+        get
+        {
+            ThrowIfDisposed();
+            NativeMethods.neo_webview_window_state_t native;
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_get_state(NativeHandle, &native), default, "get window state");
+            _state = (NeoWindowState)native.Value;
+            return _state;
+        }
         set
         {
             if (!Enum.IsDefined(value))
@@ -149,10 +167,9 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(value));
             }
 
-            if (value != _state)
-            {
-                throw new NotSupportedException("The current native ABI does not support changing window state directly.");
-            }
+            ThrowIfDisposed();
+            NativeError.ThrowIfFailed(NativeMethods.neo_webview_window_set_state(NativeHandle, (NativeMethods.neo_webview_window_state)value), default, "set window state");
+            _state = value;
         }
     }
 

@@ -33,7 +33,29 @@ int main() {
     neo_webview_app_t* app = nullptr;
     assert(neo_webview_app_create(&options, &app, &error) == NEO_WEBVIEW_OK);
     assert(app != nullptr && error == nullptr);
+
+    neo_webview_window_options_t window_options{};
+    window_options.size = sizeof(window_options);
+    window_options.version = 1;
+    window_options.bounds = {100, 100, 800, 600};
+    window_options.flags = 3;
+    neo_webview_window_t* window = nullptr;
+    assert(neo_webview_app_create_window(app, &window_options, &window, &error) == NEO_WEBVIEW_OK);
+    assert(window != nullptr && error == nullptr);
+    assert(neo_webview_window_set_maximum_size(window, {1200, 900}) == NEO_WEBVIEW_OK);
+    assert(neo_webview_window_set_minimum_size(window, {320, 200}) == NEO_WEBVIEW_OK);
+    neo_webview_size_t size{};
+    assert(neo_webview_window_get_minimum_size(window, &size) == NEO_WEBVIEW_OK);
+    assert(size.width == 320 && size.height == 200);
+    assert(neo_webview_window_get_maximum_size(window, &size) == NEO_WEBVIEW_OK);
+    assert(size.width == 1200 && size.height == 900);
+    assert(neo_webview_window_set_minimum_size(window, {1300, 200}) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(neo_webview_window_set_state(window, NEO_WEBVIEW_WINDOW_NORMAL) == NEO_WEBVIEW_OK);
+    neo_webview_window_state_t state{};
+    assert(neo_webview_window_get_state(window, &state) == NEO_WEBVIEW_OK);
+    assert(state == NEO_WEBVIEW_WINDOW_NORMAL);
     neo_webview_app_quit(app, 7);
     neo_webview_app_release(app);
+    neo_webview_window_release(window);
     return 0;
 }

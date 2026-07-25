@@ -26,7 +26,14 @@ constexpr wchar_t dispatch_class[] = L"NeoWebView.Dispatcher";
 constexpr wchar_t window_class[] = L"NeoWebView.Window";
 
 struct windows_app { HWND dispatcher{}; bool owns_com{}; };
-struct windows_window { HWND hwnd{}; neo_webview_size_t minimum{}; neo_webview_size_t maximum{}; };
+struct windows_window {
+    HWND hwnd{};
+    bool fullscreen{};
+    DWORD restored_style{};
+    WINDOWPLACEMENT restored_placement{};
+    neo_webview_window_state_t reported_state{NEO_WEBVIEW_WINDOW_NORMAL};
+    windows_window() { restored_placement.length = sizeof(restored_placement); }
+};
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
 struct windows_view {
@@ -274,11 +281,19 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             { std::lock_guard lock(window->state_mutex); window->bounds.x = static_cast<int16_t>(LOWORD(lparam)); window->bounds.y = static_cast<int16_t>(HIWORD(lparam)); }
             neo_emit_app(window->app, NEO_WEBVIEW_EVENT_WINDOW_MOVED, window->id);
             break;
-        case WM_SIZE:
-            { std::lock_guard lock(window->state_mutex); window->bounds.width = LOWORD(lparam); window->bounds.height = HIWORD(lparam); }
+        case WM_SIZE: {
+            auto* native = static_cast<windows_window*>(window->platform);
+            const auto state = native && native->fullscreen ? NEO_WEBVIEW_WINDOW_FULLSCREEN
+                             : wparam == SIZE_MINIMIZED ? NEO_WEBVIEW_WINDOW_MINIMIZED
+                             : wparam == SIZE_MAXIMIZED ? NEO_WEBVIEW_WINDOW_MAXIMIZED : NEO_WEBVIEW_WINDOW_NORMAL;
+            const auto state_changed = native && native->reported_state != state;
+            if (native) native->reported_state = state;
+            { std::lock_guard lock(window->state_mutex); window->bounds.width = LOWORD(lparam); window->bounds.height = HIWORD(lparam);window->state=state; }
             for (auto* view : window->views) if (view && view->fill_parent) neo_platform_view_set_bounds(view);
             neo_emit_app(window->app, NEO_WEBVIEW_EVENT_WINDOW_RESIZED, window->id);
+            if (state_changed) neo_emit_app(window->app, NEO_WEBVIEW_EVENT_WINDOW_STATE_CHANGED, window->id, nullptr, nullptr, state);
             break;
+        }
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
@@ -289,12 +304,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             return 0;
         }
         case WM_GETMINMAXINFO: {
-            const auto* state = static_cast<windows_window*>(window->platform);
             auto* constraints = reinterpret_cast<MINMAXINFO*>(lparam);
-            if (state->minimum.width > 0) constraints->ptMinTrackSize.x = state->minimum.width;
-            if (state->minimum.height > 0) constraints->ptMinTrackSize.y = state->minimum.height;
-            if (state->maximum.width > 0) constraints->ptMaxTrackSize.x = state->maximum.width;
-            if (state->maximum.height > 0) constraints->ptMaxTrackSize.y = state->maximum.height;
+            std::lock_guard lock(window->state_mutex);
+            if (window->minimum_size.width > 0) constraints->ptMinTrackSize.x = window->minimum_size.width;
+            if (window->minimum_size.height > 0) constraints->ptMinTrackSize.y = window->minimum_size.height;
+            if (window->maximum_size.width > 0) constraints->ptMaxTrackSize.x = window->maximum_size.width;
+            if (window->maximum_size.height > 0) constraints->ptMaxTrackSize.y = window->maximum_size.height;
             return 0;
         }
         case WM_SETFOCUS: case WM_KILLFOCUS:
@@ -476,7 +491,7 @@ void neo_platform_wake(neo_webview_app_t* app) noexcept { auto* state=static_cas
 
 bool neo_platform_window_create(neo_webview_window_t* window, const neo_webview_window_options_t* options, neo_webview_error_t** error) noexcept {
     try {
-        auto* state=new windows_window; window->platform=state; state->minimum=options->minimum_size; state->maximum=options->maximum_size;
+        auto* state=new windows_window; window->platform=state;
         const auto owner=window->owner?static_cast<windows_window*>(window->owner->platform)->hwnd:nullptr;
         auto style=WS_OVERLAPPEDWINDOW; if((options->flags&1u)==0) style&=~WS_THICKFRAME;
         if ((options->flags & 2u) == 0) style = WS_POPUP;
@@ -484,16 +499,51 @@ bool neo_platform_window_create(neo_webview_window_t* window, const neo_webview_
         DWORD extended=(options->flags&8u)?WS_EX_TOPMOST:0;if((options->flags&16u)==0)extended|=WS_EX_TOOLWINDOW;
         state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,window->bounds.x,window->bounds.y,std::max(window->bounds.width,1),std::max(window->bounds.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
         if(!state->hwnd){const auto code=GetLastError();delete state;window->platform=nullptr;neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"Win32 window creation failed",code,"win32");return false;}
-        if(options->flags&4u){const auto show=options->state==NEO_WEBVIEW_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEO_WEBVIEW_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);}
+        if(options->flags&4u){const auto show=options->state==NEO_WEBVIEW_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEO_WEBVIEW_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEO_WEBVIEW_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEO_WEBVIEW_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
         return true;
     } catch(const std::exception& ex){neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
 void neo_platform_window_destroy(neo_webview_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
-neo_webview_result_t neo_platform_window_show(neo_webview_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEO_WEBVIEW_ERROR_DISPOSED;ShowWindow(s->hwnd,visible?SW_SHOW:SW_HIDE);return NEO_WEBVIEW_OK;}
+neo_webview_result_t neo_platform_window_show(neo_webview_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEO_WEBVIEW_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);return NEO_WEBVIEW_OK;}neo_webview_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEO_WEBVIEW_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEO_WEBVIEW_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);if(desired==NEO_WEBVIEW_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEO_WEBVIEW_OK;}
 neo_webview_result_t neo_platform_window_activate(neo_webview_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetForegroundWindow(s->hwnd)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_INVALID_STATE;}
 neo_webview_result_t neo_platform_window_close(neo_webview_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_DISPOSED;}
 neo_webview_result_t neo_platform_window_set_title(neo_webview_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_DISPOSED;}catch(...){return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;}}
 neo_webview_result_t neo_platform_window_set_bounds(neo_webview_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,w->bounds.width,w->bounds.height,SWP_NOZORDER|SWP_NOACTIVATE)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_DISPOSED;}
+neo_webview_result_t neo_platform_window_set_size_constraints(neo_webview_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEO_WEBVIEW_ERROR_DISPOSED;SetWindowPos(s->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);return NEO_WEBVIEW_OK;}
+neo_webview_result_t neo_platform_window_set_state(neo_webview_window_t* w) noexcept {
+    auto* state = static_cast<windows_window*>(w->platform);
+    if (!state || !state->hwnd) return NEO_WEBVIEW_ERROR_DISPOSED;
+    const auto visible = IsWindowVisible(state->hwnd) != FALSE;
+    if (w->state == NEO_WEBVIEW_WINDOW_FULLSCREEN && !state->fullscreen) {
+        if (!visible) return NEO_WEBVIEW_OK;
+        state->restored_style = static_cast<DWORD>(GetWindowLongW(state->hwnd, GWL_STYLE));
+        state->restored_placement.length = sizeof(WINDOWPLACEMENT);
+        GetWindowPlacement(state->hwnd, &state->restored_placement);
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromWindow(state->hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) return NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+        SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style & ~WS_OVERLAPPEDWINDOW));
+        state->fullscreen = true;
+        if (SetWindowPos(state->hwnd, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+                         monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED)) return NEO_WEBVIEW_OK;
+        SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style));
+        state->fullscreen = false;
+        return NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+    }
+    if (state->fullscreen) {
+        SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style));
+        SetWindowPlacement(state->hwnd, &state->restored_placement);
+        SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        state->fullscreen = false;
+    }
+    if (!visible) return NEO_WEBVIEW_OK;
+    const auto command = w->state == NEO_WEBVIEW_WINDOW_MINIMIZED ? SW_MINIMIZE
+                       : w->state == NEO_WEBVIEW_WINDOW_MAXIMIZED ? SW_MAXIMIZE : SW_RESTORE;
+    ShowWindow(state->hwnd, command);
+    return NEO_WEBVIEW_OK;
+}
 neo_webview_result_t neo_platform_window_get_handle(neo_webview_window_t* w,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* h) noexcept {if(kind!=NEO_WEBVIEW_NATIVE_HANDLE_WIN32_HWND)return NEO_WEBVIEW_ERROR_NOT_SUPPORTED;auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEO_WEBVIEW_ERROR_DISPOSED;h->kind=kind;h->value=s->hwnd;return NEO_WEBVIEW_OK;}
 
 bool neo_platform_environment_create_async(neo_webview_environment_t* environment,const neo_webview_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t** error) noexcept {
