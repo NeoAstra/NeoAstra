@@ -14,6 +14,7 @@ public sealed class NeoWebView : IAsyncDisposable
 {
     private readonly SafeViewHandle _handle;
     private readonly NeoWebViewHost _host;
+    private readonly TimeSpan _decisionTimeout;
     private GCHandle _eventRoot;
     private Uri? _source;
     private string _title = string.Empty;
@@ -27,6 +28,7 @@ public sealed class NeoWebView : IAsyncDisposable
         Environment = environment;
         _handle = handle;
         _host = host;
+        _decisionTimeout = options.DecisionTimeout;
         Profile = options.Profile;
         RegisterEventCallback();
     }
@@ -471,15 +473,7 @@ public sealed class NeoWebView : IAsyncDisposable
 
     private async Task RunDecisionAsync<T>(SafeDecisionHandle decision, Func<ValueTask<T>> handler, Func<T, DecisionResponse> convert, DecisionResponse safeDefault)
     {
-        var response = safeDefault;
-        try
-        {
-            response = convert(await handler());
-        }
-        catch
-        {
-            // Safe defaults are deliberately applied when application policy throws.
-        }
+        var response = await ResolveDecisionAsync(handler, convert, safeDefault, _decisionTimeout).ConfigureAwait(false);
 
         try
         {
@@ -499,6 +493,23 @@ public sealed class NeoWebView : IAsyncDisposable
         finally
         {
             decision.Dispose();
+        }
+    }
+
+    internal static async Task<TResult> ResolveDecisionAsync<T, TResult>(Func<ValueTask<T>> handler, Func<T, TResult> convert, TResult safeDefault, TimeSpan timeout)
+    {
+        try
+        {
+            var pending = handler();
+            var value = pending.IsCompletedSuccessfully
+                ? pending.Result
+                : await pending.AsTask().WaitAsync(timeout).ConfigureAwait(false);
+            return convert(value);
+        }
+        catch
+        {
+            // Timeouts and application-policy failures deliberately use the safe default.
+            return safeDefault;
         }
     }
 

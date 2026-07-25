@@ -143,6 +143,23 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task DeferredDecision_UsesResultOrSafeDefault()
+    {
+        var accepted = await NeoWebView.ResolveDecisionAsync(
+            static () => ValueTask.FromResult(7), static value => value * 2, -1, TimeSpan.FromSeconds(1));
+        var failed = await NeoWebView.ResolveDecisionAsync<int, int>(
+            static () => throw new InvalidOperationException("policy failed"), static value => value, -1, TimeSpan.FromSeconds(1));
+        var pending = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timedOut = await NeoWebView.ResolveDecisionAsync(
+            () => new ValueTask<int>(pending.Task), static value => value, -1, TimeSpan.FromMilliseconds(10));
+
+        Assert.AreEqual(14, accepted);
+        Assert.AreEqual(-1, failed);
+        Assert.AreEqual(-1, timedOut);
+        pending.SetResult(9);
+    }
+
+    [TestMethod]
     public void NativeLoader_ReportsActionableFailureOrLoadsCompatibleAbi()
     {
         try

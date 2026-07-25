@@ -253,6 +253,7 @@ struct neo_webview_view final : neo_ref_counted {
     neo_webview_native_parent_t parent{};
     neo_webview_rect_t bounds{};
     bool fill_parent{true};
+    std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
     std::string source;
     std::string title;
     neo_callback_slot<neo_webview_event_callback_t> events;
@@ -260,6 +261,13 @@ struct neo_webview_view final : neo_ref_counted {
     explicit neo_webview_view(neo_webview_environment_t* value) : environment(value) { environment->retain(); }
     ~neo_webview_view() override;
 };
+
+inline void neo_configure_decision(neo_webview_decision_t* decision, const neo_webview_view_t* view,
+                                   neo_webview_decision_kind_t kind, neo_webview_decision_action_t default_action) noexcept {
+    decision->kind = kind;
+    decision->default_action = default_action;
+    decision->deadline = std::chrono::steady_clock::now() + view->decision_timeout;
+}
 
 inline neo_webview_string_view_t neo_string_view(const std::string& text) noexcept {
     return {reinterpret_cast<const uint8_t*>(text.data()), static_cast<uint64_t>(text.size())};

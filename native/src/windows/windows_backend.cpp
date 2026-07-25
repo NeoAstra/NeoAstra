@@ -191,8 +191,7 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             auto context = std::make_unique<navigation_decision_context>();
             context->args = args;
             auto* decision = new neo_webview_decision;
-            decision->kind = NEO_WEBVIEW_DECISION_NAVIGATION;
-            decision->default_action = NEO_WEBVIEW_DECISION_ALLOW;
+            neo_configure_decision(decision, view, NEO_WEBVIEW_DECISION_NAVIGATION, NEO_WEBVIEW_DECISION_ALLOW);
             decision->completion = navigation_decided;
             decision->completion_context = context.release();
             neo_emit_view(view, NEO_WEBVIEW_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri,
@@ -298,8 +297,7 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 context->args = args;
                 context->deferral = deferral;
                 auto* decision = new neo_webview_decision;
-                decision->kind = NEO_WEBVIEW_DECISION_PERMISSION;
-                decision->default_action = NEO_WEBVIEW_DECISION_DENY;
+                neo_configure_decision(decision, view, NEO_WEBVIEW_DECISION_PERMISSION, NEO_WEBVIEW_DECISION_DENY);
                 decision->completion = permission_decided;
                 decision->completion_context = context.release();
                 neo_emit_view(view, NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED, 0, nullptr, &uri,
