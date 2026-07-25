@@ -579,6 +579,14 @@ void test_custom_scheme_validation_and_trailing_bytes() {
     neo_webview_error_release(error);
     scheme.allowed_origin_count = 0;
 
+    const std::string built_in_name = "HTTPS";
+    scheme.name = neo_string_view(built_in_name);
+    error = nullptr;
+    assert(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+    scheme.name = neo_string_view(name);
+
     struct extended_scheme {
         neo_webview_custom_scheme_t value{};
         std::array<uint8_t, 32> trailing{};
@@ -629,6 +637,39 @@ void test_custom_scheme_provider_release_once_and_exception_containment() {
         registration.release_provider_context = throw_releasing_resource_context;
     }
     assert(releases.load() == 2);
+
+    neo_webview_resource_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.status_code = 200;
+    assert(neo_valid_resource_response_shape(response));
+    response.body_kind = NEO_WEBVIEW_RESOURCE_BODY_BYTES;
+    response.byte_length = 1;
+    assert(!neo_valid_resource_response_shape(response));
+    const uint8_t byte{};
+    response.bytes = &byte;
+    assert(neo_valid_resource_response_shape(response));
+    response.body_kind = NEO_WEBVIEW_RESOURCE_BODY_FILE;
+    response.bytes = nullptr;
+    response.byte_length = 0;
+    const std::string path = "/tmp/neowebview-resource";
+    response.file_path = neo_string_view(path);
+    assert(neo_valid_resource_response_shape(response));
+    response.release_context = &releases;
+    assert(!neo_valid_resource_response_shape(response));
+    response.release = release_resource_context;
+    assert(neo_valid_resource_response_shape(response));
+    {
+        neo_resource_response_release_guard guard{response};
+        guard.release_once();
+        guard.release_once();
+    }
+    assert(releases.load() == 3);
+
+    response.release_context = &releases;
+    response.release = throw_releasing_resource_context;
+    { neo_resource_response_release_guard guard{response}; }
+    assert(releases.load() == 4);
 }
 
 void test_bridge_origin_trust() {

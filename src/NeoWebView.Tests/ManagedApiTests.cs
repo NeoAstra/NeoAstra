@@ -51,6 +51,8 @@ public sealed class ManagedApiTests
         first.AllowedOrigins = ["not an origin"];
         options.CustomSchemes = [first];
         Assert.ThrowsExactly<ArgumentException>(options.Validate);
+
+        Assert.ThrowsExactly<ArgumentException>(() => NeoCustomScheme.Create("https"));
     }
 
     [TestMethod]
@@ -84,9 +86,10 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
-    public void CocoaBackend_SourcePairsSchemeHandlingAndBridgeTrust()
+    public void PlatformBackends_SourcePairSchemeHandlingAndBridgeLimitations()
     {
         var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
+        var gtk = File.ReadAllText(FindRepositoryFile("native", "src", "linux", "gtk_backend.cpp"));
         var common = File.ReadAllText(FindRepositoryFile("native", "src", "common", "neowebview.cpp"));
         var managed = File.ReadAllText(FindRepositoryFile("src", "NeoWebView", "NeoEnvironment.cs"));
 
@@ -96,8 +99,19 @@ public sealed class ManagedApiTests
         StringAssert.Contains(cocoa, "NSDataReadingMappedIfSafe");
         StringAssert.Contains(cocoa, "response.release(response.release_context)");
         StringAssert.Contains(cocoa, "neo_bridge_origin_allowed(view,uri)");
-        StringAssert.Contains(common, "!defined(_WIN32) && !defined(__APPLE__)");
-        StringAssert.Contains(common, "custom schemes are not supported by the Linux backend");
+        StringAssert.Contains(cocoa, "NSJSONWritingFragmentsAllowed");
+        StringAssert.Contains(cocoa, "message.frameInfo.mainFrame?1u:0u");
+        StringAssert.Contains(gtk, "webkit_web_context_register_uri_scheme");
+        StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_method");
+        StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_headers");
+        StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_body");
+        StringAssert.Contains(gtk, "maximum_resource_request_body_length");
+        StringAssert.Contains(gtk, "g_file_read");
+        StringAssert.Contains(gtk, "webkit_uri_scheme_request_finish_with_response");
+        StringAssert.Contains(gtk, "native_headers.release()");
+        StringAssert.Contains(gtk, "neo_resource_response_release_guard");
+        StringAssert.Contains(gtk, "WebKitGTK custom schemes do not support service workers");
+        StringAssert.Contains(common, "WebKitGTK 4.1 script messages do not expose trustworthy source-origin data");
         StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
     }
 
@@ -510,6 +524,8 @@ public sealed class ManagedApiTests
                     Assert.IsTrue(completed.IsSuccess);
                     Assert.IsGreaterThanOrEqualTo(1, resources.RequestCount);
                     var received = await message.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.IsTrue(received.IsMainFrame);
+                    using var receivedJson = System.Text.Json.JsonDocument.Parse(received.Json);
                     StringAssert.Contains(received.Json, "custom-scheme-ready");
                     Assert.AreEqual("42", await webView.EvaluateScriptAsync("globalThis.neoWebViewInjected + 2"));
                     var popup = new TaskCompletionSource<NeoNewWindowRequest>(TaskCreationOptions.RunContinuationsAsynchronously);

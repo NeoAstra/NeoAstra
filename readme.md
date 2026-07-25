@@ -17,7 +17,7 @@ Build native desktop applications with .NET and web technologies using the platf
 - JavaScript evaluation and persistent document scripts
 - Portable page zoom control
 - JSON web/native messaging
-- Windows and macOS custom schemes and directory-backed local application assets without a localhost server
+- Cross-platform custom schemes and directory-backed local application assets without a localhost server
 - Deferred browser decisions with timeout-safe defaults, including navigation, permissions, dialogs, authentication, certificates, and fullscreen where supported
 - Tracked opener-compatible popup views hosted by normal application windows or borrowed parents
 - Download destination/default/cancel policy plus tracked lifecycle, progress, cancellation, and Windows pause/resume
@@ -55,7 +55,7 @@ return NeoApplication.Run(
 
 NeoWebView application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
-On Windows and macOS, register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based, marked secure, and automatically trusted for the message bridge:
+Register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based and marked secure. Windows and macOS also automatically trust them for the message bridge:
 
 ```csharp
 var assets = new NeoDirectoryResourceProvider(Path.Combine(AppContext.BaseDirectory, "assets"));
@@ -67,7 +67,9 @@ await using var webView = await environment.CreateWebViewAsync(NeoWebViewHost.Fi
 await webView.NavigateAsync(new Uri("app://neowebview/index.html"));
 ```
 
-Custom resource-provider callbacks currently remain synchronous on both backends: WebView2 requests its response synchronously, and WKWebView completes the scheme task directly from `startURLSchemeTask`. Return `null` for a standard `404`, use `NeoResourceResponse.FromBytes` for small generated content, or `NeoResourceResponse.FromFile`/`NeoDirectoryResourceProvider` to avoid copying local files into managed memory. Windows uses a native file stream and macOS uses native `NSData` with mapped-if-safe file access. Provider exceptions are contained at the ABI boundary and the request fails rather than unwinding into native code. On Windows and macOS, web messaging is blocked for untrusted remote origins unless they are explicitly listed in `NeoWebViewOptions.BridgeOrigins`. WKWebView has no public equivalents for WebView2's authority, secure-context, CORS-allowlist, or service-worker registration switches, so service-worker descriptors are rejected on macOS. Linux custom schemes and explicit bridge origins remain unsupported.
+Custom resource-provider callbacks currently remain synchronous on all three backends: WebView2 requests its response synchronously, WKWebView completes the scheme task directly from `startURLSchemeTask`, and WebKitGTK completes `WebKitURISchemeRequest` from its registered callback. Return `null` for a standard `404`, use `NeoResourceResponse.FromBytes` for small generated content, or `NeoResourceResponse.FromFile`/`NeoDirectoryResourceProvider` to avoid copying local files into managed memory. Windows uses a native file stream, macOS uses native `NSData` with mapped-if-safe file access, and Linux opens a `GFileInputStream`; byte responses are copied into backend-owned memory before the managed response lease is released. Provider exceptions are contained at the ABI boundary and the request fails rather than unwinding into native code.
+
+WebKitGTK exposes URI, method, headers, and a synchronously buffered request body (limited to 64 MiB), but not trustworthy initiating-origin, frame, or resource-kind metadata for these requests; those fields are reported as unknown. Linux honors secure and CORS-enabled scheme flags, but has no equivalent authority or per-origin CORS registration switches and rejects service-worker descriptors, so custom-scheme capability is reported as limited. WebKitGTK 4.1 script-message callbacks also omit trustworthy source-origin data. NeoWebView therefore does not infer trust from the current top-level URI: Linux application schemes are not automatically bridge-trusted, explicit `BridgeOrigins` remain unsupported, and message-origin capability is unavailable. Applications must not perform privileged work from Linux web messages in views that can navigate untrusted content.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

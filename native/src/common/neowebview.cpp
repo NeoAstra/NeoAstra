@@ -22,6 +22,14 @@ bool valid_scheme_name(std::string_view name) noexcept {
     return true;
 }
 
+bool built_in_scheme_name(std::string_view name) noexcept {
+    constexpr std::string_view built_in_schemes[]{
+        "about", "blob", "data", "file", "ftp", "http", "https", "javascript", "ws", "wss"
+    };
+    for (const auto built_in : built_in_schemes) if (name == built_in) return true;
+    return false;
+}
+
 bool valid_origin(std::string_view origin) noexcept {
     while (origin.size() > 1 && origin.back() == '/') origin.remove_suffix(1);
     const auto separator = origin.find("://");
@@ -51,7 +59,7 @@ bool valid_custom_schemes(const neo_webview_environment_options_t* options) noex
                 ((scheme.allowed_origin_count != 0) != (scheme.allowed_origins != nullptr))) return false;
             auto name = neo_string(scheme.name);
             std::transform(name.begin(), name.end(), name.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-            if (std::find(names.begin(), names.end(), name) != names.end()) return false;
+            if (built_in_scheme_name(name) || std::find(names.begin(), names.end(), name) != names.end()) return false;
             names.push_back(std::move(name));
             for (uint32_t origin = 0; origin < scheme.allowed_origin_count; ++origin) {
                 if (!neo_valid_utf8(scheme.allowed_origins[origin]) || scheme.allowed_origins[origin].length == 0) return false;
@@ -754,9 +762,6 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_async(neo_w
     if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
     if(!check_ui(app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"environment creation must begin on the UI thread");
     if(!accepts_ui_objects(app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
-#if !defined(_WIN32) && !defined(__APPLE__)
-    if(options->custom_scheme_count!=0)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"custom schemes are not supported by the Linux backend");
-#endif
     neo_webview_operation_t* op{};
     neo_webview_environment_t* value{};
     try {
@@ -788,11 +793,14 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
     if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoWebView backend";
     static const std::string unavailable="Not exposed by the current portable implementation";
+#if defined(__linux__)
+    static const std::string linux_custom_scheme="WebKitGTK supports synchronous byte/file responses, secure and CORS scheme flags, and request bodies up to 64 MiB; authority, allowed-origin, service-worker, initiator, frame and resource-kind semantics and application-scheme bridge trust are unavailable";
+    static const std::string linux_message_origin="WebKitGTK 4.1 script messages do not expose trustworthy source-origin data";
+#endif
     info->support=NEO_WEBVIEW_SUPPORT_NONE;info->capability_version=1;info->flags=0;
     switch(capability){
         case NEO_WEBVIEW_CAPABILITY_SCRIPT_DOCUMENT_START:
         case NEO_WEBVIEW_CAPABILITY_SCRIPT_ALL_FRAMES:
-        case NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN:
         case NEO_WEBVIEW_CAPABILITY_COOKIES:
         case NEO_WEBVIEW_CAPABILITY_PROFILE_EPHEMERAL:
         case NEO_WEBVIEW_CAPABILITY_ZOOM:
@@ -803,6 +811,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
 #if defined(_WIN32)
         case NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME:
+        case NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN:
         case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
         case NEO_WEBVIEW_CAPABILITY_PERMISSION_PERSISTENCE:
         case NEO_WEBVIEW_CAPABILITY_DOWNLOAD_PAUSE:
@@ -810,9 +819,12 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
 #elif defined(__APPLE__)
         case NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME:
             info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
+        case NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN:
+            info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
         case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
             info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
 #else
+        case NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME:
         case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
             info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
 #endif
@@ -843,7 +855,14 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
 #endif
         default:break;
     }
-    info->details=neo_string_view(info->support==NEO_WEBVIEW_SUPPORT_NONE?unavailable:available);return NEO_WEBVIEW_OK;
+#if defined(__linux__)
+    if(capability==NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME)info->details=neo_string_view(linux_custom_scheme);
+    else if(capability==NEO_WEBVIEW_CAPABILITY_MESSAGE_ORIGIN)info->details=neo_string_view(linux_message_origin);
+    else info->details=neo_string_view(info->support==NEO_WEBVIEW_SUPPORT_NONE?unavailable:available);
+#else
+    info->details=neo_string_view(info->support==NEO_WEBVIEW_SUPPORT_NONE?unavailable:available);
+#endif
+    return NEO_WEBVIEW_OK;
 }
 
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_profile_get_cookies_async(neo_webview_profile_t* p,neo_webview_string_view_t uri,neo_webview_buffer_callback_t cb,void* ctx,neo_webview_operation_t** outop,neo_webview_error_t** error){if(outop)*outop=nullptr;if(!p||!cb||!neo_valid_utf8(uri))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid cookie arguments");if(!check_ui(p->environment->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"cookie operations must begin on the UI thread");try{auto native_uri=neo_string(uri);auto* op=make_operation(outop);auto result=neo_platform_profile_get_cookies(p,native_uri,cb,ctx,op,error);if(result!=NEO_WEBVIEW_OK){op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}}return result;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,ex.what());}}

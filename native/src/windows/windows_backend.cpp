@@ -622,19 +622,14 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             LPWSTR source{};
             LPWSTR message{};
             args->get_Source(&source);
-            HRESULT message_result = args->TryGetWebMessageAsString(&message);
-            uint64_t flags{};
-            if (FAILED(message_result)) {
-                args->get_WebMessageAsJson(&message);
-                flags = 1;
-            }
+            args->get_WebMessageAsJson(&message);
             auto source_utf8 = take_string(source);
             auto message_utf8 = take_string(message);
             if (!neo_bridge_origin_allowed(view, source_utf8)) {
                 neo_log(view->environment->app, NEO_WEBVIEW_LOG_WARNING, "bridge", "Blocked a web message from an untrusted origin");
                 return S_OK;
             }
-            neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message_utf8, &source_utf8, flags);
+            neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message_utf8, &source_utf8, 1);
             return S_OK;
         }).Get(), &state->message_received);
     if (FAILED(result)) return result;

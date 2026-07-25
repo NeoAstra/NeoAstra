@@ -19,6 +19,186 @@ struct gtk_view { GtkWidget* widget{}; WebKitUserContentManager* content{}; gulo
 
 neo_webview_error_t* make_error(neo_webview_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neo_webview_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
+struct g_object_deleter { void operator()(void* value) const noexcept { if(value)g_object_unref(value); } };
+template<typename T> using g_object_ptr=std::unique_ptr<T,g_object_deleter>;
+struct g_bytes_deleter { void operator()(GBytes* value) const noexcept { if(value)g_bytes_unref(value); } };
+using g_bytes_ptr=std::unique_ptr<GBytes,g_bytes_deleter>;
+struct soup_headers_deleter { void operator()(SoupMessageHeaders* value) const noexcept { if(value)soup_message_headers_unref(value); } };
+using soup_headers_ptr=std::unique_ptr<SoupMessageHeaders,soup_headers_deleter>;
+
+constexpr size_t maximum_resource_request_body_length=64u*1024u*1024u;
+
+const neo_custom_scheme_registration* find_custom_scheme(const neo_webview_environment_t* environment, const char* name) noexcept {
+    if (!environment || !name) return nullptr;
+    const auto found=std::find_if(environment->custom_schemes.begin(),environment->custom_schemes.end(),
+        [name](const auto& scheme){return g_ascii_strcasecmp(scheme.name.c_str(),name)==0;});
+    return found==environment->custom_schemes.end()?nullptr:&*found;
+}
+
+struct header_accumulator { std::string value; bool failed{}; };
+void append_request_header(const char* name,const char* value,void* data) noexcept {
+    auto* output=static_cast<header_accumulator*>(data);
+    if(output->failed)return;
+    try{output->value+=name?name:"";output->value+=": ";output->value+=value?value:"";output->value+="\r\n";}
+    catch(...){output->failed=true;}
+}
+
+void fail_uri_scheme_request(WebKitURISchemeRequest* request,const char* message) noexcept {
+    auto* error=g_error_new_literal(G_IO_ERROR,G_IO_ERROR_FAILED,message);
+    webkit_uri_scheme_request_finish_error(request,error);
+    g_error_free(error);
+}
+
+soup_headers_ptr make_response_headers(const neo_webview_resource_response_t& response) {
+    soup_headers_ptr result(soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE));
+    const auto raw=neo_string(response.headers);
+    for(size_t position=0;position<raw.size();){
+        const auto end=raw.find('\n',position);
+        auto line=std::string_view(raw).substr(position,end==std::string::npos?raw.size()-position:end-position);
+        while(!line.empty()&&line.back()=='\r')line.remove_suffix(1);
+        const auto separator=line.find(':');
+        if(separator!=std::string_view::npos&&separator!=0){
+            auto name=std::string(line.substr(0,separator));
+            auto value=std::string(line.substr(separator+1));
+            const auto first=value.find_first_not_of(" \t");
+            if(first==std::string::npos)value.clear();else value.erase(0,first);
+            soup_message_headers_append(result.get(),name.c_str(),value.c_str());
+        }
+        if(end==std::string::npos)break;
+        position=end+1;
+    }
+    const auto mime=neo_string(response.mime_type);
+    if(!mime.empty()&&!soup_message_headers_get_one(result.get(),"Content-Type"))soup_message_headers_append(result.get(),"Content-Type",mime.c_str());
+    if(response.content_length!=UINT64_MAX&&!soup_message_headers_get_one(result.get(),"Content-Length")){
+        const auto length=std::to_string(response.content_length);
+        soup_message_headers_append(result.get(),"Content-Length",length.c_str());
+    }
+    return result;
+}
+
+void uri_scheme_requested(WebKitURISchemeRequest* native_request,void* data) noexcept {
+    auto* environment=static_cast<neo_webview_environment_t*>(data);
+    const auto* scheme=find_custom_scheme(environment,webkit_uri_scheme_request_get_scheme(native_request));
+    if(!scheme||!scheme->provider){fail_uri_scheme_request(native_request,"The custom-scheme provider is unavailable.");return;}
+
+    neo_webview_resource_response_t response{};
+    response.size=sizeof(response);
+    response.version=1;
+    neo_resource_response_release_guard response_guard{response};
+    try{
+        const char* raw_uri=webkit_uri_scheme_request_get_uri(native_request);
+        const char* raw_method=webkit_uri_scheme_request_get_http_method(native_request);
+        const std::string uri=raw_uri?raw_uri:"";
+        const std::string method=raw_method?raw_method:"GET";
+        header_accumulator headers;
+        if(auto* native_headers=webkit_uri_scheme_request_get_http_headers(native_request))soup_message_headers_foreach(native_headers,append_request_header,&headers);
+        if(headers.failed)throw std::bad_alloc();
+
+        std::vector<uint8_t> body;
+        if(auto* input=webkit_uri_scheme_request_get_http_body(native_request)){
+            uint8_t buffer[8192];
+            for(;;){
+                GError* read_error{};
+                const auto count=g_input_stream_read(input,buffer,sizeof(buffer),nullptr,&read_error);
+                if(count<0){
+                    neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Could not read a custom-scheme request body",read_error?read_error->code:0);
+                    if(read_error)g_error_free(read_error);
+                    fail_uri_scheme_request(native_request,"Could not read the custom-scheme request body.");
+                    return;
+                }
+                if(count==0)break;
+                const auto amount=static_cast<size_t>(count);
+                if(amount>maximum_resource_request_body_length-body.size()){
+                    neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request body exceeded the 64 MiB limit");
+                    fail_uri_scheme_request(native_request,"The custom-scheme request body is too large.");
+                    return;
+                }
+                body.insert(body.end(),buffer,buffer+count);
+            }
+        }
+
+        // WebKitGTK 4.1 does not expose initiator, frame, or resource-kind metadata
+        // on WebKitURISchemeRequest, so these fields remain explicitly unknown.
+        neo_webview_resource_request_t request{};
+        request.size=sizeof(request);
+        request.version=1;
+        request.uri=neo_string_view(uri);
+        request.method=neo_string_view(method);
+        request.headers=neo_string_view(headers.value);
+        request.resource_kind=NEO_WEBVIEW_RESOURCE_OTHER;
+        request.main_frame=0;
+        request.body=body.empty()?nullptr:body.data();
+        request.body_length=body.size();
+        neo_webview_result_t provider_result=NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+        try{provider_result=scheme->provider(scheme->provider_context,&request,&response);}catch(...){provider_result=NEO_WEBVIEW_ERROR_NATIVE_FAILURE;}
+        if(provider_result!=NEO_WEBVIEW_OK){
+            neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme resource provider failed",provider_result);
+            response_guard.release_once();
+            response={};response.size=sizeof(response);response.version=1;response.status_code=500;
+        }
+        if(!neo_valid_resource_response(response)||response.byte_length>G_MAXSIZE||response.byte_length>G_MAXINT64||
+            (response.content_length!=UINT64_MAX&&response.content_length>G_MAXINT64)){
+            neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme resource provider returned an invalid response");
+            fail_uri_scheme_request(native_request,"The custom-scheme provider returned an invalid response.");
+            return;
+        }
+
+        const auto reason=neo_string(response.reason_phrase);
+        const auto mime=neo_string(response.mime_type);
+        auto native_headers=make_response_headers(response);
+        g_object_ptr<GInputStream> stream;
+        gint64 stream_length{};
+        if(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES){
+            g_bytes_ptr bytes(g_bytes_new(response.bytes,static_cast<gsize>(response.byte_length)));
+            stream.reset(g_memory_input_stream_new_from_bytes(bytes.get()));
+            stream_length=static_cast<gint64>(response.byte_length);
+        }else if(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_FILE){
+            const auto path=neo_string(response.file_path);
+            g_object_ptr<GFile> file(g_file_new_for_path(path.c_str()));
+            GError* file_error{};
+            stream.reset(G_INPUT_STREAM(g_file_read(file.get(),nullptr,&file_error)));
+            if(!stream){
+                neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Could not open a custom-scheme file response",file_error?file_error->code:0);
+                if(file_error){webkit_uri_scheme_request_finish_error(native_request,file_error);g_error_free(file_error);}
+                else fail_uri_scheme_request(native_request,"Could not open the custom-scheme file response.");
+                return;
+            }
+            stream_length=response.content_length==UINT64_MAX?-1:static_cast<gint64>(response.content_length);
+        }else{
+            stream.reset(g_memory_input_stream_new());
+            stream_length=0;
+        }
+
+        g_object_ptr<WebKitURISchemeResponse> native_response(webkit_uri_scheme_response_new(stream.get(),stream_length));
+        if(!native_response){fail_uri_scheme_request(native_request,"WebKitGTK could not create the custom-scheme response.");return;}
+        webkit_uri_scheme_response_set_status(native_response.get(),response.status_code,reason.empty()?nullptr:reason.c_str());
+        if(!mime.empty())webkit_uri_scheme_response_set_content_type(native_response.get(),mime.c_str());
+        // WebKitURISchemeResponse takes ownership of the SoupMessageHeaders.
+        webkit_uri_scheme_response_set_http_headers(native_response.get(),native_headers.release());
+        webkit_uri_scheme_request_finish_with_response(native_request,native_response.get());
+    }catch(...){
+        neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request handling failed");
+        fail_uri_scheme_request(native_request,"Custom-scheme request handling failed.");
+    }
+}
+
+bool register_custom_schemes(neo_webview_environment_t* environment,WebKitWebContext* context,neo_webview_error_t** error) noexcept {
+    if(!environment||!context)return false;
+    for(const auto& scheme:environment->custom_schemes){
+        if((scheme.flags&NEO_WEBVIEW_CUSTOM_SCHEME_SERVICE_WORKERS)!=0){
+            neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"WebKitGTK custom schemes do not support service workers",0,"webkitgtk");
+            return false;
+        }
+    }
+    auto* security=webkit_web_context_get_security_manager(context);
+    for(const auto& scheme:environment->custom_schemes){
+        webkit_web_context_register_uri_scheme(context,scheme.name.c_str(),uri_scheme_requested,environment,nullptr);
+        if((scheme.flags&NEO_WEBVIEW_CUSTOM_SCHEME_SECURE)!=0)webkit_security_manager_register_uri_scheme_as_secure(security,scheme.name.c_str());
+        if((scheme.flags&NEO_WEBVIEW_CUSTOM_SCHEME_CORS_ENABLED)!=0)webkit_security_manager_register_uri_scheme_as_cors_enabled(security,scheme.name.c_str());
+    }
+    return true;
+}
+
 GtkWidget* view_parent(neo_webview_view_t* view) noexcept {
     if (view->window) { auto* state=static_cast<gtk_window*>(view->window->platform); return state?state->widget:nullptr; }
     return view->parent.kind==NEO_WEBVIEW_NATIVE_PARENT_GTK_WIDGET?static_cast<GtkWidget*>(view->parent.handle):nullptr;
@@ -88,7 +268,7 @@ void load_changed(WebKitWebView* webview, WebKitLoadEvent event, void* data) { a
 gboolean load_failed(WebKitWebView*, WebKitLoadEvent, const char* uri, GError* error, void* data) { auto* view=static_cast<neo_webview_view_t*>(data);std::string value=uri?uri:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_NAVIGATION_FAILED,0,nullptr,&value,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,error?error->code:0);return FALSE; }
 void title_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neo_webview_view_t*>(data);const auto* value=webkit_web_view_get_title(WEBKIT_WEB_VIEW(object));view->title=value?value:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_TITLE_CHANGED,0,&view->title);}
 void uri_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neo_webview_view_t*>(data);const auto* value=webkit_web_view_get_uri(WEBKIT_WEB_VIEW(object));view->source=value?value:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);}
-void message_received(WebKitUserContentManager*,WebKitJavascriptResult* result,void* data){auto* view=static_cast<neo_webview_view_t*>(data);auto* value=webkit_javascript_result_get_js_value(result);char* json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&message,nullptr,1);}
+void message_received(WebKitUserContentManager*,WebKitJavascriptResult* result,void* data){auto* view=static_cast<neo_webview_view_t*>(data);auto* value=webkit_javascript_result_get_js_value(result);char* json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&message,nullptr,0);}
 void web_process_terminated(WebKitWebView*,WebKitWebProcessTerminationReason reason,void* data){auto* view=static_cast<neo_webview_view_t*>(data);uint64_t value=NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW;if(reason==WEBKIT_WEB_PROCESS_CRASHED||reason==WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT)value|=NEO_WEBVIEW_PROCESS_FAILURE_CRASHED;neo_emit_view(view,NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,value,static_cast<int64_t>(reason));}
 
 struct script_context { neo_webview_view_t* view{};neo_webview_string_callback_t callback{};void* context{};neo_webview_operation_t* operation{}; };
@@ -125,9 +305,9 @@ neo_webview_result_t neo_platform_window_set_size_constraints(neo_webview_window
 neo_webview_result_t neo_platform_window_set_state(neo_webview_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEO_WEBVIEW_ERROR_DISPOSED;if(!gtk_widget_get_visible(state->widget))return NEO_WEBVIEW_OK;auto* value=GTK_WINDOW(state->widget);switch(window->state){case NEO_WEBVIEW_WINDOW_NORMAL:gtk_window_deiconify(value);gtk_window_unmaximize(value);gtk_window_unfullscreen(value);break;case NEO_WEBVIEW_WINDOW_MINIMIZED:gtk_window_iconify(value);break;case NEO_WEBVIEW_WINDOW_MAXIMIZED:gtk_window_maximize(value);break;case NEO_WEBVIEW_WINDOW_FULLSCREEN:gtk_window_fullscreen(value);break;default:return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;}return NEO_WEBVIEW_OK;}
 neo_webview_result_t neo_platform_window_get_handle(neo_webview_window_t* window,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* handle) noexcept {if(kind!=NEO_WEBVIEW_NATIVE_HANDLE_GTK_WIDGET)return NEO_WEBVIEW_ERROR_NOT_SUPPORTED;auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEO_WEBVIEW_ERROR_DISPOSED;handle->kind=kind;handle->value=state->widget;return NEO_WEBVIEW_OK;}
 
-bool neo_platform_environment_create_async(neo_webview_environment_t* environment,const neo_webview_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t**) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=options->private_mode?webkit_web_context_new_ephemeral():webkit_web_context_new();environment->platform=state;if(!state->context){delete state;environment->platform=nullptr;return false;}state->download_started=g_signal_connect(state->context,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
+bool neo_platform_environment_create_async(neo_webview_environment_t* environment,const neo_webview_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=options->private_mode?webkit_web_context_new_ephemeral():webkit_web_context_new();environment->platform=state;if(!state->context){delete state;environment->platform=nullptr;return false;}if(!register_custom_schemes(environment,state->context,error)){g_object_unref(state->context);delete state;environment->platform=nullptr;return false;}state->download_started=g_signal_connect(state->context,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
 void neo_platform_environment_destroy(neo_webview_environment_t* environment) noexcept {auto* state=static_cast<gtk_environment*>(environment->platform);if(!state)return;if(state->context){if(state->download_started)g_signal_handler_disconnect(state->context,state->download_started);g_object_unref(state->context);}delete state;environment->platform=nullptr;}
-bool neo_platform_profile_create(neo_webview_profile_t* profile,neo_webview_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_profile;if(!state){neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK profile allocation failed");return false;}auto* environment=static_cast<gtk_environment*>(profile->environment->platform);state->context=profile->ephemeral?webkit_web_context_new_ephemeral():environment&&environment->context?WEBKIT_WEB_CONTEXT(g_object_ref(environment->context)):nullptr;if(!state->context){delete state;neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK profile context creation failed");return false;}if(profile->ephemeral)state->download_started=g_signal_connect(state->context,"download-started",G_CALLBACK(download_started),nullptr);profile->platform=state;return true;}
+bool neo_platform_profile_create(neo_webview_profile_t* profile,neo_webview_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_profile;if(!state){neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK profile allocation failed");return false;}auto* environment=static_cast<gtk_environment*>(profile->environment->platform);state->context=profile->ephemeral?webkit_web_context_new_ephemeral():environment&&environment->context?WEBKIT_WEB_CONTEXT(g_object_ref(environment->context)):nullptr;if(!state->context){delete state;neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK profile context creation failed");return false;}if(profile->ephemeral&&!register_custom_schemes(profile->environment,state->context,error)){g_object_unref(state->context);delete state;return false;}if(profile->ephemeral)state->download_started=g_signal_connect(state->context,"download-started",G_CALLBACK(download_started),nullptr);profile->platform=state;return true;}
 void neo_platform_profile_destroy(neo_webview_profile_t* profile) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state)return;if(state->context){if(state->download_started)g_signal_handler_disconnect(state->context,state->download_started);g_object_unref(state->context);}delete state;profile->platform=nullptr;}
 neo_webview_result_t neo_platform_profile_get_cookies(neo_webview_profile_t* profile,const std::string& uri,neo_webview_buffer_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state||!state->context)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebKitGTK profile is not initialized");auto* completion=new(std::nothrow) cookie_context{callback,context,operation};if(!completion)return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK cookie operation allocation failed");webkit_cookie_manager_get_cookies(webkit_web_context_get_cookie_manager(state->context),uri.c_str(),nullptr,cookies_finished,completion);return NEO_WEBVIEW_OK;}
 neo_webview_result_t neo_platform_profile_set_cookie(neo_webview_profile_t* profile,const neo_webview_cookie_t* value,neo_webview_completion_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state||!state->context)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WebKitGTK profile is not initialized");auto* cookie=make_cookie(value);auto* completion=new(std::nothrow) cookie_change_context{callback,context,operation,false};if(!cookie||!completion){if(cookie)soup_cookie_free(cookie);delete completion;return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WebKitGTK cookie allocation failed");}webkit_cookie_manager_add_cookie(webkit_web_context_get_cookie_manager(state->context),cookie,nullptr,cookie_changed,completion);soup_cookie_free(cookie);return NEO_WEBVIEW_OK;}

@@ -115,7 +115,7 @@ public sealed class NeoCustomScheme
     /// <summary>Creates a custom scheme definition.</summary>
     /// <param name="name">A valid URI scheme name.</param>
     /// <returns>The new definition.</returns>
-    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid URI scheme name.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is invalid or identifies a built-in browser scheme.</exception>
     public static NeoCustomScheme Create(string name)
     {
         ValidateName(name);
@@ -125,14 +125,14 @@ public sealed class NeoCustomScheme
     /// <summary>Creates a secure scheme intended for trusted application content.</summary>
     /// <param name="name">A valid URI scheme name.</param>
     /// <returns>The new application scheme definition.</returns>
-    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid URI scheme name.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is invalid or identifies a built-in browser scheme.</exception>
     public static NeoCustomScheme Application(string name) => Create(name).WithApplicationDefaults();
 
     /// <summary>Creates a secure application scheme backed by a resource provider.</summary>
     /// <param name="name">A valid URI scheme name.</param>
     /// <param name="resourceProvider">The provider used to resolve resources.</param>
     /// <returns>The new application scheme definition.</returns>
-    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid URI scheme name.</exception>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is invalid or identifies a built-in browser scheme.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="resourceProvider"/> is <see langword="null"/>.</exception>
     public static NeoCustomScheme Application(string name, INeoResourceProvider resourceProvider)
     {
@@ -173,6 +173,10 @@ public sealed class NeoCustomScheme
         if (string.IsNullOrWhiteSpace(name) || !Uri.CheckSchemeName(name))
         {
             throw new ArgumentException("A custom scheme must be a valid URI scheme name.", nameof(name));
+        }
+        if (name.ToLowerInvariant() is "about" or "blob" or "data" or "file" or "ftp" or "http" or "https" or "javascript" or "ws" or "wss")
+        {
+            throw new ArgumentException("A custom scheme cannot replace a built-in browser scheme.", nameof(name));
         }
     }
 }

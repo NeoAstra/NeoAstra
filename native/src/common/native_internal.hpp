@@ -578,6 +578,40 @@ inline uint64_t neo_timestamp_ns() noexcept {
 
 bool neo_valid_utf8(neo_webview_string_view_t text) noexcept;
 std::string neo_string(neo_webview_string_view_t text);
+
+inline bool neo_valid_resource_response_shape(const neo_webview_resource_response_t& response) noexcept {
+    return response.size >= sizeof(response) && response.version == 1 &&
+        response.status_code >= 100 && response.status_code <= 599 &&
+        response.body_kind <= NEO_WEBVIEW_RESOURCE_BODY_FILE &&
+        !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.byte_length && !response.bytes) &&
+        !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_EMPTY && (response.bytes || response.byte_length || response.file_path.length)) &&
+        !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.file_path.length) &&
+        !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_FILE && (response.bytes || response.byte_length || !response.file_path.length)) &&
+        ((response.release_context != nullptr) == (response.release != nullptr));
+}
+
+inline bool neo_valid_resource_response(const neo_webview_resource_response_t& response) noexcept {
+    return neo_valid_resource_response_shape(response) &&
+        neo_valid_utf8(response.reason_phrase) && neo_valid_utf8(response.headers) &&
+        neo_valid_utf8(response.mime_type) && neo_valid_utf8(response.file_path);
+}
+
+struct neo_resource_response_release_guard final {
+    neo_webview_resource_response_t& response;
+
+    void release_once() noexcept {
+        const auto release = response.release;
+        auto* context = response.release_context;
+        response.release = nullptr;
+        response.release_context = nullptr;
+        if (release && context) {
+            try { release(context); } catch (...) { }
+        }
+    }
+
+    ~neo_resource_response_release_guard() { release_once(); }
+};
+
 neo_webview_result_t neo_fail(neo_webview_error_t** error, neo_webview_result_t code, std::string message, int64_t native_code = 0, std::string domain = "neowebview") noexcept;
 void neo_log(neo_webview_app_t* app, neo_webview_log_level_t level, std::string_view category, std::string_view message,
              int64_t native_code = 0, uint64_t object_id = 0) noexcept;
