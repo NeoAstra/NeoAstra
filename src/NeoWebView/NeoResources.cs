@@ -70,6 +70,10 @@ public interface INeoResourceProvider
 /// <summary>Describes an in-memory, file-backed, or empty custom-scheme response.</summary>
 public sealed class NeoResourceResponse
 {
+    private const int MaximumBufferedBodySize = 64 * 1024 * 1024;
+    private const int MaximumHeaderSize = 1024 * 1024;
+    private const int MaximumMetadataSize = 32 * 1024;
+
     private NeoResourceResponse(int statusCode, string reasonPhrase, string? mimeType,
         IReadOnlyDictionary<string, string>? headers, ReadOnlyMemory<byte> bytes, string? filePath, long? contentLength)
     {
@@ -78,17 +82,20 @@ public sealed class NeoResourceResponse
         ValidateHeaderText(reasonPhrase, nameof(reasonPhrase));
         if (mimeType is not null) ValidateHeaderText(mimeType, nameof(mimeType));
         if (contentLength < 0) throw new ArgumentOutOfRangeException(nameof(contentLength));
+        if (bytes.Length > MaximumBufferedBodySize) throw new ArgumentOutOfRangeException(nameof(bytes), "Buffered resource responses must not exceed 64 MiB; use a file-backed response for larger content.");
         if (filePath is not null && bytes.Length != 0) throw new ArgumentException("A resource response cannot contain both bytes and a file path.");
         if (filePath is not null && !Path.IsPathFullyQualified(filePath)) throw new ArgumentException("A resource file path must be fully qualified.", nameof(filePath));
 
         var copiedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var encodedHeaderSize = 0;
         if (headers is not null)
         {
             foreach (var pair in headers)
             {
-                if (string.IsNullOrWhiteSpace(pair.Key) || pair.Key.Contains(':')) throw new ArgumentException("A response header name is invalid.", nameof(headers));
-                ValidateHeaderText(pair.Key, nameof(headers));
+                if (string.IsNullOrEmpty(pair.Key) || !pair.Key.All(IsHeaderNameCharacter)) throw new ArgumentException("A response header name is invalid.", nameof(headers));
                 ValidateHeaderText(pair.Value, nameof(headers));
+                encodedHeaderSize = checked(encodedHeaderSize + Encoding.UTF8.GetByteCount(pair.Key) + Encoding.UTF8.GetByteCount(pair.Value) + 4);
+                if (encodedHeaderSize > MaximumHeaderSize) throw new ArgumentException("Response headers must not exceed 1 MiB when serialized as UTF-8.", nameof(headers));
                 copiedHeaders.Add(pair.Key, pair.Value);
             }
         }
@@ -121,7 +128,9 @@ public sealed class NeoResourceResponse
     /// <param name="bytes">The response body.</param>
     /// <param name="mimeType">The MIME type.</param>
     /// <returns>The response.</returns>
+    /// <exception cref="ArgumentException"><paramref name="mimeType"/> is invalid or exceeds the metadata limit.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="mimeType"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> exceeds the 64 MiB buffered-response limit.</exception>
     public static NeoResourceResponse FromBytes(ReadOnlyMemory<byte> bytes, string mimeType)
     {
         ArgumentNullException.ThrowIfNull(mimeType);
@@ -132,7 +141,7 @@ public sealed class NeoResourceResponse
     /// <param name="filePath">A fully qualified file path.</param>
     /// <param name="mimeType">The MIME type.</param>
     /// <returns>The response.</returns>
-    /// <exception cref="ArgumentException"><paramref name="filePath"/> is not fully qualified.</exception>
+    /// <exception cref="ArgumentException"><paramref name="filePath"/> is not fully qualified, or <paramref name="mimeType"/> is invalid or exceeds the metadata limit.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="filePath"/> or <paramref name="mimeType"/> is <see langword="null"/>.</exception>
     public static NeoResourceResponse FromFile(string filePath, string mimeType)
     {
@@ -146,6 +155,9 @@ public sealed class NeoResourceResponse
     /// <param name="statusCode">The HTTP-style status code.</param>
     /// <param name="reasonPhrase">The reason phrase.</param>
     /// <returns>The response.</returns>
+    /// <exception cref="ArgumentException"><paramref name="reasonPhrase"/> is invalid or exceeds the metadata limit.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="reasonPhrase"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="statusCode"/> is outside 100 through 599.</exception>
     public static NeoResourceResponse Empty(int statusCode, string reasonPhrase)
         => new(statusCode, reasonPhrase, null, null, default, null, 0);
 
@@ -157,11 +169,19 @@ public sealed class NeoResourceResponse
 
     private static void ValidateHeaderText(string value, string parameterName)
     {
-        if (value.Contains('\r') || value.Contains('\n') || value.Contains('\0'))
+        if (Encoding.UTF8.GetByteCount(value) > MaximumMetadataSize)
         {
-            throw new ArgumentException("Header text must not contain control line separators or null bytes.", parameterName);
+            throw new ArgumentException("Response metadata must not exceed 32 KiB when UTF-8 encoded.", parameterName);
+        }
+        if (value.Any(static character => (character < ' ' && character != '\t') || character == '\x7f'))
+        {
+            throw new ArgumentException("Response metadata must not contain unsafe control characters.", parameterName);
         }
     }
+
+    private static bool IsHeaderNameCharacter(char character)
+        => (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') || "!#$%&'*+-.^_`|~".Contains(character);
 }
 
 /// <summary>Securely serves files rooted beneath one application asset directory.</summary>
@@ -444,6 +464,10 @@ internal sealed unsafe class Utf8StringArray : IDisposable
 
 internal sealed unsafe class ResourceProviderRegistration : IDisposable
 {
+    private const ulong MaximumBufferedBodySize = 64UL * 1024UL * 1024UL;
+    private const ulong MaximumHeaderSize = 1024UL * 1024UL;
+    private const ulong MaximumMetadataSize = 32UL * 1024UL;
+
     private GCHandle _root;
     private INeoResourceProvider? _provider;
 
@@ -489,8 +513,13 @@ internal sealed unsafe class ResourceProviderRegistration : IDisposable
             var provider = (GCHandle.FromIntPtr((nint)context).Target as ResourceProviderRegistration)?._provider;
             if (provider is null) return NativeMethods.neo_webview_result.NEO_WEBVIEW_ERROR_DISPOSED;
             var value = request->Value;
+            if (value.uri.Value.length > MaximumMetadataSize || value.method.Value.length > MaximumMetadataSize ||
+                value.initiating_origin.Value.length > MaximumMetadataSize || value.headers.Value.length > MaximumHeaderSize ||
+                value.body_length > MaximumBufferedBodySize)
+            {
+                return NativeMethods.neo_webview_result.NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
+            }
             if (!Uri.TryCreate(Utf8String.Decode(value.uri), UriKind.Absolute, out var uri)) return NativeMethods.neo_webview_result.NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
-            if (value.body_length > int.MaxValue) return NativeMethods.neo_webview_result.NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
             var body = value.body_length == 0 ? Array.Empty<byte>() : new ReadOnlySpan<byte>(value.body, (int)value.body_length).ToArray();
             var managedRequest = new NeoResourceRequest(
                 uri,

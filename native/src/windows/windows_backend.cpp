@@ -175,13 +175,7 @@ bool contains_header(std::string_view headers, std::string_view name) noexcept {
 HRESULT create_resource_response(neo_webview_view_t* view, const neo_webview_resource_response_t& response,
                                  ICoreWebView2WebResourceResponse** output) noexcept {
     try {
-        if (response.size < sizeof(response) || response.version != 1 || response.status_code < 100 || response.status_code > 599 || response.body_kind > NEO_WEBVIEW_RESOURCE_BODY_FILE ||
-            !neo_valid_utf8(response.reason_phrase) || !neo_valid_utf8(response.headers) || !neo_valid_utf8(response.mime_type) ||
-            !neo_valid_utf8(response.file_path) || (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.byte_length && !response.bytes) ||
-            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_EMPTY && (response.bytes || response.byte_length || response.file_path.length)) ||
-            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.file_path.length) ||
-            (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_FILE && (response.bytes || response.byte_length || !response.file_path.length)) ||
-            ((response.release_context != nullptr) != (response.release != nullptr))) return E_INVALIDARG;
+        if (!neo_valid_resource_response(response)) return E_INVALIDARG;
         ComPtr<IStream> content;
         HRESULT result = S_OK;
         if (response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES) {
@@ -202,7 +196,7 @@ HRESULT create_resource_response(neo_webview_view_t* view, const neo_webview_res
         auto headers = neo_string(response.headers);
         const auto mime = neo_string(response.mime_type);
         if (!mime.empty() && !contains_header(headers, "content-type")) headers += "Content-Type: " + mime + "\r\n";
-        if (response.body_kind != NEO_WEBVIEW_RESOURCE_BODY_EMPTY && !contains_header(headers, "content-length")) {
+        if (response.body_kind != NEO_WEBVIEW_RESOURCE_BODY_EMPTY && response.content_length != UINT64_MAX && !contains_header(headers, "content-length")) {
             headers += "Content-Length: " + std::to_string(response.content_length) + "\r\n";
         }
         const auto reason = response.reason_phrase.length ? widen(neo_string(response.reason_phrase)) : std::wstring(default_reason(response.status_code));
@@ -574,6 +568,10 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 const auto* scheme = find_scheme(view->environment, uri);
                 if (!scheme || !scheme->provider) return S_OK;
                 const auto headers = request_headers(native_request.Get());
+                if (!neo_resource_request_within_limits(uri, method, headers)) {
+                    neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "resource", "Custom-scheme request metadata exceeded its size limit");
+                    return S_OK;
+                }
                 neo_webview_resource_request_t request{};
                 request.size = sizeof(request);
                 request.version = 1;
@@ -621,15 +619,26 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
         Callback<ICoreWebView2WebMessageReceivedEventHandler>([view](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             LPWSTR source{};
             LPWSTR message{};
-            args->get_Source(&source);
-            args->get_WebMessageAsJson(&message);
-            auto source_utf8 = take_string(source);
-            auto message_utf8 = take_string(message);
-            if (!neo_bridge_origin_allowed(view, source_utf8)) {
-                neo_log(view->environment->app, NEO_WEBVIEW_LOG_WARNING, "bridge", "Blocked a web message from an untrusted origin");
-                return S_OK;
+            try {
+                if (!args) return S_OK;
+                auto result = args->get_Source(&source);
+                if (SUCCEEDED(result)) result = args->get_WebMessageAsJson(&message);
+                if (FAILED(result)) {
+                    CoTaskMemFree(source);
+                    CoTaskMemFree(message);
+                    neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "bridge", "Could not read a WebView2 web message", result);
+                    return S_OK;
+                }
+                auto source_utf8 = take_string(source);
+                source = nullptr;
+                auto message_utf8 = take_string(message);
+                message = nullptr;
+                neo_emit_bridge_message(view, message_utf8, source_utf8, true);
+            } catch (...) {
+                CoTaskMemFree(source);
+                CoTaskMemFree(message);
+                neo_log(view->environment->app, NEO_WEBVIEW_LOG_ERROR, "bridge", "WebView2 web-message handling failed");
             }
-            neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message_utf8, &source_utf8, 1);
             return S_OK;
         }).Get(), &state->message_received);
     if (FAILED(result)) return result;

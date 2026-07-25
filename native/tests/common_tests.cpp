@@ -579,6 +579,17 @@ void test_custom_scheme_validation_and_trailing_bytes() {
     neo_webview_error_release(error);
     scheme.allowed_origin_count = 0;
 
+    const std::string invalid_origin = "https://user@trusted.example";
+    const auto invalid_origin_view = neo_string_view(invalid_origin);
+    scheme.allowed_origin_count = 1;
+    scheme.allowed_origins = &invalid_origin_view;
+    error = nullptr;
+    assert(neo_webview_environment_create_async(app, &options, ignore_environment, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+    scheme.allowed_origin_count = 0;
+    scheme.allowed_origins = nullptr;
+
     const std::string built_in_name = "HTTPS";
     scheme.name = neo_string_view(built_in_name);
     error = nullptr;
@@ -648,13 +659,37 @@ void test_custom_scheme_provider_release_once_and_exception_containment() {
     assert(!neo_valid_resource_response_shape(response));
     const uint8_t byte{};
     response.bytes = &byte;
+    assert(!neo_valid_resource_response_shape(response));
+    response.content_length = 1;
     assert(neo_valid_resource_response_shape(response));
+    response.byte_length = neo_maximum_buffered_resource_body_size + 1;
+    response.content_length = response.byte_length;
+    assert(!neo_valid_resource_response_shape(response));
+    response.byte_length = 1;
+    response.content_length = 2;
+    assert(!neo_valid_resource_response_shape(response));
+    response.content_length = 1;
+    const std::string invalid_headers = "Good: value\r\nInjected\r\n";
+    assert(!neo_valid_response_headers(invalid_headers));
+    assert(!neo_valid_response_headers("Good: value\r\n\r\nInjected: value\r\n"));
+    assert(neo_valid_response_headers("Good: value\r\nOther:\tvalue\n"));
+    assert(neo_resource_request_within_limits("app://host/file", "GET", "Accept: */*\r\n"));
+    assert(!neo_resource_request_within_limits(std::string(neo_maximum_resource_metadata_size + 1, 'a'), "GET", {}));
     response.body_kind = NEO_WEBVIEW_RESOURCE_BODY_FILE;
     response.bytes = nullptr;
     response.byte_length = 0;
+    response.content_length = UINT64_MAX;
+#if defined(_WIN32)
+    const std::string path = "C:\\neowebview-resource";
+#else
     const std::string path = "/tmp/neowebview-resource";
+#endif
     response.file_path = neo_string_view(path);
     assert(neo_valid_resource_response_shape(response));
+    const std::string relative_path = "relative-resource";
+    response.file_path = neo_string_view(relative_path);
+    assert(!neo_valid_resource_response_shape(response));
+    response.file_path = neo_string_view(path);
     response.release_context = &releases;
     assert(!neo_valid_resource_response_shape(response));
     response.release = release_resource_context;
@@ -678,15 +713,21 @@ void test_bridge_origin_trust() {
     application_scheme.name = "app";
     application_scheme.flags = NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION;
     custom_schemes.push_back(std::move(application_scheme));
-    const std::vector<std::string> bridge_origins={"https://trusted.example", "custom://host/"};
+    const std::vector<std::string> bridge_origins={"https://trusted.example", "custom://host/", "app://neowebview"};
 
+    assert(!neo_bridge_origin_allowed_for(custom_schemes, {}, "app://neowebview/index.html"));
     assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "app://neowebview/index.html"));
     assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "APP://NEOWEBVIEW/index.html"));
     assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example/path?q=1"));
     assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "CUSTOM://HOST/resource"));
     assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "assets://neowebview/index.html"));
+    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "app://other-host/index.html"));
     assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example.evil/path"));
     assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://untrusted.example/"));
+    assert(neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "1234", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "12345", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, true, "1", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "1", "app://other-host"));
 }
 
 } // namespace

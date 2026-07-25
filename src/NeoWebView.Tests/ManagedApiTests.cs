@@ -56,6 +56,31 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void ResourceLimitsAndBridgeOrigins_RejectUnsafeConfiguration()
+    {
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoApplicationOptions { MaximumPendingDispatches = 0 }.Validate());
+
+        var viewOptions = new NeoWebViewOptions { MaximumMessageSize = 0 };
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => viewOptions.Validate(null!));
+
+        var provider = new NullResourceProvider();
+        var scheme = NeoCustomScheme.Application("app", provider);
+        scheme.AllowedOrigins = ["https://user@example.test"];
+        Assert.ThrowsExactly<ArgumentException>(() => new NeoEnvironmentOptions { CustomSchemes = [scheme] }.Validate());
+
+        var oversizedBody = new byte[64 * 1024 * 1024 + 1];
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            NeoResourceResponse.FromBytes(oversizedBody, "application/octet-stream"));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            NeoResourceResponse.Empty(500, new string('x', 32 * 1024 + 1)));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            NeoResourceResponse.Empty(500, "Unsafe\u0001reason"));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            NeoResourceResponse.CreateEmpty(200, "OK", 0, new Dictionary<string, string> { ["Invalid Name"] = "value" }));
+    }
+
+    [TestMethod]
     public void CustomScheme_ApplicationDefaultsAndResponseShapesMatchPortableContract()
     {
         var provider = new NullResourceProvider();
@@ -90,6 +115,7 @@ public sealed class ManagedApiTests
     {
         var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
         var gtk = File.ReadAllText(FindRepositoryFile("native", "src", "linux", "gtk_backend.cpp"));
+        var windows = File.ReadAllText(FindRepositoryFile("native", "src", "windows", "windows_backend.cpp"));
         var common = File.ReadAllText(FindRepositoryFile("native", "src", "common", "neowebview.cpp"));
         var managed = File.ReadAllText(FindRepositoryFile("src", "NeoWebView", "NeoEnvironment.cs"));
 
@@ -98,18 +124,23 @@ public sealed class ManagedApiTests
         StringAssert.Contains(cocoa, "setURLSchemeHandler:handler");
         StringAssert.Contains(cocoa, "NSDataReadingMappedIfSafe");
         StringAssert.Contains(cocoa, "response.release(response.release_context)");
-        StringAssert.Contains(cocoa, "neo_bridge_origin_allowed(view,uri)");
+        StringAssert.Contains(cocoa, "neo_emit_bridge_message(view,text,uri,message.frameInfo.mainFrame)");
         StringAssert.Contains(cocoa, "NSJSONWritingFragmentsAllowed");
-        StringAssert.Contains(cocoa, "message.frameInfo.mainFrame?1u:0u");
+        StringAssert.Contains(cocoa, "message.frameInfo.mainFrame);");
+        StringAssert.Contains(cocoa, "neo_valid_resource_response(response)");
         StringAssert.Contains(gtk, "webkit_web_context_register_uri_scheme");
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_method");
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_headers");
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_body");
-        StringAssert.Contains(gtk, "maximum_resource_request_body_length");
+        StringAssert.Contains(gtk, "neo_maximum_buffered_resource_body_size");
         StringAssert.Contains(gtk, "g_file_read");
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_finish_with_response");
         StringAssert.Contains(gtk, "native_headers.release()");
         StringAssert.Contains(gtk, "neo_resource_response_release_guard");
+        StringAssert.Contains(gtk, "neo_emit_bridge_message(view,message,origin,false)");
+        StringAssert.Contains(windows, "neo_valid_resource_response(response)");
+        StringAssert.Contains(windows, "neo_emit_bridge_message(view, message_utf8, source_utf8, true)");
+        StringAssert.Contains(windows, "WebView2 web-message handling failed");
         StringAssert.Contains(gtk, "WebKitGTK custom schemes do not support service workers");
         StringAssert.Contains(common, "WebKitGTK 4.1 script messages do not expose trustworthy source-origin data");
         StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
@@ -580,7 +611,7 @@ public sealed class ManagedApiTests
                     await using var profile = await environment.CreateProfileAsync(new NeoProfileOptions { Name = "smoke-profile", IsEphemeral = true });
                     await using var webView = await environment.CreateWebViewAsync(
                         NeoWebViewHost.FillWindow(window),
-                        new NeoWebViewOptions { Profile = profile });
+                        new NeoWebViewOptions { Profile = profile, BridgeOrigins = ["app://neowebview"] });
                     webView.ZoomFactor = 1.25;
                     Assert.AreEqual(1.25, webView.ZoomFactor, 0.001);
                     webView.ResetZoom();

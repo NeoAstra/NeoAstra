@@ -85,16 +85,6 @@ bool contains_header(NSDictionary<NSString*,NSString*>* headers,NSString* name) 
     return false;
 }
 
-bool valid_resource_response(const neo_webview_resource_response_t& response) noexcept {
-    return response.size>=sizeof(response)&&response.version==1&&response.status_code>=100&&response.status_code<=599&&response.body_kind<=NEO_WEBVIEW_RESOURCE_BODY_FILE&&
-        neo_valid_utf8(response.reason_phrase)&&neo_valid_utf8(response.headers)&&neo_valid_utf8(response.mime_type)&&neo_valid_utf8(response.file_path)&&
-        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES&&response.byte_length&&!response.bytes)&&
-        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_EMPTY&&(response.bytes||response.byte_length||response.file_path.length))&&
-        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES&&response.file_path.length)&&
-        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_FILE&&(response.bytes||response.byte_length||!response.file_path.length))&&
-        ((response.release_context!=nullptr)==(response.release!=nullptr));
-}
-
 struct resource_response_guard {
     neo_webview_resource_response_t& response;
     void release() noexcept {
@@ -153,8 +143,18 @@ void report_window_state(neo_webview_window_t* value,neo_webview_window_state_t 
             const auto method=utf8(native_request.HTTPMethod.length?native_request.HTTPMethod:@"GET");
             const auto headers=request_headers(native_request);
             NSData* request_body=native_request.HTTPBody;
+            if (request_body.length>neo_maximum_buffered_resource_body_size) {
+                neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request body exceeded the 64 MiB limit");
+                fail_scheme_task(task,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,@"The custom-scheme request body is too large.");
+                return;
+            }
             const bool main_frame=!native_request.mainDocumentURL||[native_request.URL isEqual:native_request.mainDocumentURL];
             const auto initiating_origin=main_frame?std::string{}:url_origin(native_request.mainDocumentURL);
+            if (!neo_resource_request_within_limits(uri,method,headers,initiating_origin)) {
+                neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request metadata exceeded its size limit");
+                fail_scheme_task(task,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,@"The custom-scheme request metadata is too large.");
+                return;
+            }
             neo_webview_resource_request_t request{};
             request.size=sizeof(request);
             request.version=1;
@@ -174,7 +174,7 @@ void report_window_state(neo_webview_window_t* value,neo_webview_window_state_t 
                 response_guard.release();
                 response={};response.size=sizeof(response);response.version=1;response.status_code=500;
             }
-            if (!valid_resource_response(response)||response.byte_length>NSUIntegerMax) {
+            if (!neo_valid_resource_response(response)||response.byte_length>NSUIntegerMax) {
                 neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme resource provider returned an invalid response");
                 fail_scheme_task(task,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,@"The custom-scheme provider returned an invalid response.");
                 return;
@@ -236,7 +236,7 @@ void report_window_state(neo_webview_window_t* value,neo_webview_window_state_t 
 - (void)webView:(WKWebView*)webView didFailNavigation:(WKNavigation*)navigation withError:(NSError*)error { (void)navigation;auto* view=self.nativeView;if(!view)return;std::string uri=utf8(webView.URL.absoluteString);neo_emit_view(view,NEO_WEBVIEW_EVENT_NAVIGATION_FAILED,0,nullptr,&uri,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,error.code); }
 - (void)webView:(WKWebView*)webView didFailProvisionalNavigation:(WKNavigation*)navigation withError:(NSError*)error { [self webView:webView didFailNavigation:navigation withError:error]; }
 - (void)webViewWebContentProcessDidTerminate:(WKWebView*)webView { (void)webView;auto* view=self.nativeView;if(view)neo_emit_view(view,NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW); }
-- (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message { (void)controller;auto* view=self.nativeView;if(!view)return;NSError* error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:message.body options:NSJSONWritingFragmentsAllowed error:&error];std::string text;if(data&&!error)text.assign((const char*)data.bytes,data.length);else text=utf8([message.body description]);std::string uri=url_origin(message.frameInfo.request.URL);if(!neo_bridge_origin_allowed(view,uri)){neo_log(view->environment->app,NEO_WEBVIEW_LOG_WARNING,"bridge","Blocked a web message from an untrusted origin");return;}neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&text,&uri,message.frameInfo.mainFrame?1u:0u); }
+- (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message { (void)controller;auto* view=self.nativeView;if(!view)return;@try{try{NSError* error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:message.body options:NSJSONWritingFragmentsAllowed error:&error];std::string text;if(data&&!error)text.assign((const char*)data.bytes,data.length);else text=utf8([message.body description]);std::string uri=url_origin(message.frameInfo.request.URL);neo_emit_bridge_message(view,text,uri,message.frameInfo.mainFrame);}catch(...){neo_log(view->environment->app,NEO_WEBVIEW_LOG_ERROR,"bridge","WKWebView web-message handling failed");}}@catch(NSException*){neo_log(view->environment->app,NEO_WEBVIEW_LOG_ERROR,"bridge","WKWebView web-message handling raised an exception");} }
 - (void)webView:(WKWebView*)webView requestMediaCapturePermissionForOrigin:(WKSecurityOrigin*)origin initiatedByFrame:(WKFrameInfo*)frame type:(WKMediaCaptureType)type decisionHandler:(void (^)(WKPermissionDecision))handler API_AVAILABLE(macos(12.0)) { (void)webView;(void)frame;auto* view=self.nativeView;if(!view){handler(WKPermissionDecisionDeny);return;}NSString* raw=[NSString stringWithFormat:@"%@://%@:%ld",origin.protocol,origin.host,(long)origin.port];std::string uri=utf8(raw);auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_PERMISSION,NEO_WEBVIEW_DECISION_DENY);decision->completion=permission_decided;decision->completion_context=new permission_context{[handler copy]};const auto kind=type==WKMediaCaptureTypeMicrophone?NEO_WEBVIEW_PERMISSION_MICROPHONE:type==WKMediaCaptureTypeCamera?NEO_WEBVIEW_PERMISSION_CAMERA:NEO_WEBVIEW_PERMISSION_UNKNOWN;neo_emit_view(view,NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED,0,nullptr,&uri,kind,0,decision);neo_finish_decision_event(view,decision);decision->release(); }
 - (WKWebView*)webView:(WKWebView*)webView createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration forNavigationAction:(WKNavigationAction*)action windowFeatures:(WKWindowFeatures*)features { (void)webView;(void)features;auto* view=self.nativeView;if(!view)return nil;std::string uri=utf8(action.request.URL.absoluteString);std::string name;auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_NEW_WINDOW,NEO_WEBVIEW_DECISION_CANCEL);decision->completion=new_window_decided;decision->completion_context=new new_window_context{view,uri};decision->popup_context=(void*)CFRetain((__bridge CFTypeRef)configuration);decision->popup_context_release=release_popup_configuration;neo_emit_view(view,NEO_WEBVIEW_EVENT_NEW_WINDOW_REQUESTED,0,&name,&uri,action.navigationType==WKNavigationTypeLinkActivated?1u:0u,0,decision);finish_synchronous_decision(decision);WKWebView* target=nil;if(decision->resolved_target){auto* state=static_cast<cocoa_view*>(decision->resolved_target->platform);if(state)target=state->webview;}decision->release();return target;}
 - (void)webView:(WKWebView*)webView runJavaScriptAlertPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(void))completionHandler { (void)webView;auto* view=self.nativeView;if(!view){completionHandler();return;}std::string text=utf8(message),origin=utf8(frame.request.URL.absoluteString);auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_SCRIPT_DIALOG,NEO_WEBVIEW_DECISION_ALLOW);decision->completion=dialog_decided;decision->completion_context=new dialog_context{[^(BOOL,NSString*){completionHandler();} copy]};neo_emit_view(view,NEO_WEBVIEW_EVENT_SCRIPT_DIALOG_REQUESTED,0,&text,&origin,NEO_WEBVIEW_SCRIPT_DIALOG_ALERT,0,decision);neo_finish_decision_event(view,decision);decision->release();}

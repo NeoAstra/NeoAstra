@@ -185,13 +185,7 @@ struct neo_custom_scheme_registration final {
 inline bool neo_bridge_origin_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
                                           const std::vector<std::string>& bridge_origins,
                                           std::string_view uri) noexcept {
-    const auto colon = uri.find(':');
-    if (colon == std::string_view::npos) return false;
-    for (const auto& registration : custom_schemes) {
-        if ((registration.flags & NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION) != 0 && registration.name.size() == colon &&
-            std::equal(registration.name.begin(), registration.name.end(), uri.begin(),
-                [](unsigned char left, unsigned char right) { return std::tolower(left) == std::tolower(right); })) return true;
-    }
+    (void)custom_schemes;
     for (const auto& origin : bridge_origins) {
         auto normalized_origin = std::string_view(origin);
         while (normalized_origin.size() > 1 && normalized_origin.back() == '/') normalized_origin.remove_suffix(1);
@@ -201,6 +195,14 @@ inline bool neo_bridge_origin_allowed_for(const std::vector<neo_custom_scheme_re
             (uri.size() == normalized_origin.size() || uri[normalized_origin.size()] == '/' || uri[normalized_origin.size()] == '?' || uri[normalized_origin.size()] == '#')) return true;
     }
     return false;
+}
+
+inline bool neo_bridge_message_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
+                                           const std::vector<std::string>& bridge_origins,
+                                           uint32_t maximum_message_size, bool destroyed,
+                                           std::string_view message, std::string_view uri) noexcept {
+    return !destroyed && message.size() <= maximum_message_size &&
+        neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, uri);
 }
 
 enum class neo_decision_state : uint32_t { pending, deferred, completed, timed_out, abandoned };
@@ -415,6 +417,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
     bool destroying{};
     std::string source;
     std::string title;
+    uint32_t maximum_message_size{1024u * 1024u};
     std::vector<std::string> bridge_origins;
     neo_callback_slot<neo_webview_event_callback_t> events;
     void* platform{};
@@ -425,6 +428,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
 
 void neo_download_emit(neo_webview_download_t* download, neo_webview_event_type_t type) noexcept;
 bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept;
+bool neo_emit_bridge_message(neo_webview_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept;
 
 struct neo_webview_download final : neo_ui_ref_counted {
     neo_webview_view_t* view{};
@@ -579,21 +583,94 @@ inline uint64_t neo_timestamp_ns() noexcept {
 bool neo_valid_utf8(neo_webview_string_view_t text) noexcept;
 std::string neo_string(neo_webview_string_view_t text);
 
+constexpr uint64_t neo_maximum_buffered_resource_body_size = 64ull * 1024ull * 1024ull;
+constexpr uint64_t neo_maximum_resource_header_size = 1024ull * 1024ull;
+constexpr uint64_t neo_maximum_resource_metadata_size = 32ull * 1024ull;
+
+inline bool neo_resource_request_within_limits(std::string_view uri, std::string_view method,
+                                               std::string_view headers, std::string_view initiating_origin = {}) noexcept {
+    return uri.size() <= neo_maximum_resource_metadata_size &&
+        method.size() <= neo_maximum_resource_metadata_size &&
+        headers.size() <= neo_maximum_resource_header_size &&
+        initiating_origin.size() <= neo_maximum_resource_metadata_size;
+}
+
+inline bool neo_absolute_resource_path(neo_webview_string_view_t path) noexcept {
+    if (path.length == 0 || !path.data) return false;
+#if defined(_WIN32)
+    if (path.length >= 3 && std::isalpha(path.data[0]) && path.data[1] == ':' && (path.data[2] == '/' || path.data[2] == '\\')) return true;
+    return path.length >= 2 && (path.data[0] == '/' || path.data[0] == '\\') && (path.data[1] == '/' || path.data[1] == '\\');
+#else
+    return path.data[0] == '/';
+#endif
+}
+
 inline bool neo_valid_resource_response_shape(const neo_webview_resource_response_t& response) noexcept {
     return response.size >= sizeof(response) && response.version == 1 &&
         response.status_code >= 100 && response.status_code <= 599 &&
         response.body_kind <= NEO_WEBVIEW_RESOURCE_BODY_FILE &&
+        response.reason_phrase.length <= neo_maximum_resource_metadata_size &&
+        response.headers.length <= neo_maximum_resource_header_size &&
+        response.mime_type.length <= neo_maximum_resource_metadata_size &&
+        response.file_path.length <= neo_maximum_resource_metadata_size &&
         !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.byte_length && !response.bytes) &&
         !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_EMPTY && (response.bytes || response.byte_length || response.file_path.length)) &&
         !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_BYTES && response.file_path.length) &&
         !(response.body_kind == NEO_WEBVIEW_RESOURCE_BODY_FILE && (response.bytes || response.byte_length || !response.file_path.length)) &&
+        (response.body_kind != NEO_WEBVIEW_RESOURCE_BODY_BYTES ||
+            (response.byte_length <= neo_maximum_buffered_resource_body_size &&
+             (response.content_length == UINT64_MAX || response.content_length == response.byte_length))) &&
+        (response.body_kind != NEO_WEBVIEW_RESOURCE_BODY_FILE || neo_absolute_resource_path(response.file_path)) &&
         ((response.release_context != nullptr) == (response.release != nullptr));
 }
 
+inline bool neo_valid_response_header_name(std::string_view name) noexcept {
+    if (name.empty()) return false;
+    for (const auto character : name) {
+        const auto byte = static_cast<unsigned char>(character);
+        const auto alphanumeric = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9');
+        if (!alphanumeric && std::string_view("!#$%&'*+-.^_`|~").find(character) == std::string_view::npos) return false;
+    }
+    return true;
+}
+
+inline bool neo_valid_response_headers(std::string_view headers) noexcept {
+    for (size_t position = 0; position < headers.size();) {
+        const auto end = headers.find('\n', position);
+        auto line = headers.substr(position, end == std::string_view::npos ? headers.size() - position : end - position);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.empty()) return false;
+        const auto separator = line.find(':');
+        if (separator == std::string_view::npos || !neo_valid_response_header_name(line.substr(0, separator))) return false;
+        for (const auto character : line.substr(separator + 1)) {
+            const auto byte = static_cast<unsigned char>(character);
+            if (byte == 0 || byte == '\r' || (byte < 0x20 && byte != '\t') || byte == 0x7f) return false;
+        }
+        if (end == std::string_view::npos) break;
+        position = end + 1;
+    }
+    return true;
+}
+
+inline bool neo_valid_single_line_text(std::string_view text) noexcept {
+    return std::none_of(text.begin(), text.end(), [](char character) {
+        const auto byte = static_cast<unsigned char>(character);
+        return byte == 0 || byte == '\r' || byte == '\n' || (byte < 0x20 && byte != '\t') || byte == 0x7f;
+    });
+}
+
 inline bool neo_valid_resource_response(const neo_webview_resource_response_t& response) noexcept {
-    return neo_valid_resource_response_shape(response) &&
-        neo_valid_utf8(response.reason_phrase) && neo_valid_utf8(response.headers) &&
-        neo_valid_utf8(response.mime_type) && neo_valid_utf8(response.file_path);
+    if (!neo_valid_resource_response_shape(response) ||
+        !neo_valid_utf8(response.reason_phrase) || !neo_valid_utf8(response.headers) ||
+        !neo_valid_utf8(response.mime_type) || !neo_valid_utf8(response.file_path)) return false;
+    const auto as_text = [](neo_webview_string_view_t value) noexcept {
+        return value.length == 0 ? std::string_view{} :
+            std::string_view(reinterpret_cast<const char*>(value.data), static_cast<size_t>(value.length));
+    };
+    const auto reason = as_text(response.reason_phrase);
+    const auto headers = as_text(response.headers);
+    const auto mime = as_text(response.mime_type);
+    return neo_valid_single_line_text(reason) && neo_valid_response_headers(headers) && neo_valid_single_line_text(mime);
 }
 
 struct neo_resource_response_release_guard final {

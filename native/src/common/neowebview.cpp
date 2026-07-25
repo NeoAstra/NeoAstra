@@ -30,11 +30,38 @@ bool built_in_scheme_name(std::string_view name) noexcept {
     return false;
 }
 
+bool valid_port(std::string_view port) noexcept {
+    if (port.empty()) return false;
+    uint32_t value{};
+    for (const auto character : port) {
+        if (!std::isdigit(static_cast<unsigned char>(character))) return false;
+        value = value * 10u + static_cast<uint32_t>(character - '0');
+        if (value > 65535u) return false;
+    }
+    return true;
+}
+
 bool valid_origin(std::string_view origin) noexcept {
     while (origin.size() > 1 && origin.back() == '/') origin.remove_suffix(1);
     const auto separator = origin.find("://");
-    return separator != std::string_view::npos && valid_scheme_name(origin.substr(0, separator)) &&
-        separator + 3 < origin.size() && origin.find_first_of("/?#", separator + 3) == std::string_view::npos;
+    if (separator == std::string_view::npos || !valid_scheme_name(origin.substr(0, separator)) ||
+        separator + 3 >= origin.size() || origin.find_first_of("/?#", separator + 3) != std::string_view::npos) return false;
+    const auto authority = origin.substr(separator + 3);
+    if (authority.find('@') != std::string_view::npos || authority.find('\\') != std::string_view::npos) return false;
+    for (const auto character : authority) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte <= 0x20 || byte == 0x7f) return false;
+    }
+    if (authority.front() == '[') {
+        const auto close = authority.find(']');
+        if (close == std::string_view::npos || close == 1) return false;
+        if (close + 1 == authority.size()) return true;
+        return authority[close + 1] == ':' && valid_port(authority.substr(close + 2));
+    }
+    const auto port = authority.find(':');
+    if (port == 0 || (port != std::string_view::npos &&
+        (authority.find(':', port + 1) != std::string_view::npos || !valid_port(authority.substr(port + 1))))) return false;
+    return true;
 }
 
 const neo_webview_custom_scheme_t& custom_scheme_at(const neo_webview_environment_options_t* options, uint32_t index) noexcept {
@@ -62,7 +89,7 @@ bool valid_custom_schemes(const neo_webview_environment_options_t* options) noex
             if (built_in_scheme_name(name) || std::find(names.begin(), names.end(), name) != names.end()) return false;
             names.push_back(std::move(name));
             for (uint32_t origin = 0; origin < scheme.allowed_origin_count; ++origin) {
-                if (!neo_valid_utf8(scheme.allowed_origins[origin]) || scheme.allowed_origins[origin].length == 0) return false;
+                if (!neo_valid_utf8(scheme.allowed_origins[origin]) || !valid_origin(neo_string(scheme.allowed_origins[origin]))) return false;
             }
         }
         return true;
@@ -108,6 +135,26 @@ void drain_ui_destructions(neo_webview_app_t* app) noexcept {
 bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept {
     if (!view) return false;
     return neo_bridge_origin_allowed_for(view->environment->custom_schemes, view->bridge_origins, uri);
+}
+
+bool neo_emit_bridge_message(neo_webview_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept {
+    if (!view) return false;
+    const auto destroyed = view->ui_destroyed.load(std::memory_order_acquire) || view->destroying;
+    if (neo_bridge_message_allowed_for(view->environment->custom_schemes, view->bridge_origins,
+                                       view->maximum_message_size, destroyed, message, uri)) {
+        neo_emit_view(view, NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED, 0, &message, &uri, main_frame ? 1u : 0u);
+        return true;
+    }
+    if (destroyed) return false;
+    if (!neo_bridge_origin_allowed(view, uri)) {
+        neo_log(view->environment->app, NEO_WEBVIEW_LOG_WARNING, "bridge", "Blocked a web message from an untrusted origin");
+        return false;
+    }
+    if (message.size() > view->maximum_message_size) {
+        neo_log(view->environment->app, NEO_WEBVIEW_LOG_WARNING, "bridge", "Blocked a web message that exceeded the configured size limit");
+        return false;
+    }
+    return false;
 }
 
 neo_webview_app::~neo_webview_app() {
@@ -431,7 +478,7 @@ void neo_log(neo_webview_app_t* app, neo_webview_log_level_t level, std::string_
 
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id, const std::string* text,
                    const std::string* uri, uint64_t value, int64_t native_code, neo_webview_decision_t* decision) noexcept {
-    if (!view) return;
+    if (!view || view->ui_destroyed.load(std::memory_order_acquire)) return;
     neo_webview_event_t event{};
     initialize_event(view->environment->app, event, type, object_id, text, uri, value, native_code, decision);
     view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
@@ -440,7 +487,7 @@ void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint
 void neo_emit_view_detailed(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id, const std::string* text,
                             const std::string* uri, uint64_t value, int64_t native_code, neo_webview_decision_t* decision,
                             const neo_event_details& details) noexcept {
-    if (!view) return;
+    if (!view || view->ui_destroyed.load(std::memory_order_acquire)) return;
     neo_webview_event_t event{};
     initialize_event(view->environment->app, event, type, object_id, text, uri, value, native_code, decision, &details);
     view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
@@ -794,7 +841,7 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_view_async(
     if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!valid_native_parent(options->parent)||options->decision_timeout_ms>600000||((options->bridge_origin_count!=0)!=(options->bridge_origins!=nullptr)))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid view arguments");for(uint32_t index=0;index<options->bridge_origin_count;++index)if(!neo_valid_utf8(options->bridge_origins[index])||!valid_origin(neo_string(options->bridge_origins[index])))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid bridge origin");if(!check_ui(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
     if(options->profile&&options->profile->environment!=env)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"view profile belongs to a different environment");
     if(options->popup_request){auto* request=options->popup_request;if(request->kind!=NEO_WEBVIEW_DECISION_NEW_WINDOW||request->owner==nullptr||request->owner->environment!=env||options->profile!=request->owner->profile||request->state.load(std::memory_order_acquire)>neo_decision_state::deferred)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"popup request is no longer valid or opener-compatible");if(request->popup_creation_started.exchange(true,std::memory_order_acq_rel))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"popup target creation has already started");}
-    try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion{callback,context,op,value,nullptr,options->popup_request!=nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
+    try{auto* op=make_operation(outop);auto* value=new neo_webview_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->maximum_message_size)value->maximum_message_size=options->maximum_message_size;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion{callback,context,op,value,nullptr,options->popup_request!=nullptr};neo_webview_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEO_WEBVIEW_OK;}catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}}
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(const neo_webview_environment_t* env,neo_webview_capability_t capability,neo_webview_capability_info_t* info){
     if(!env||capability<NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME||capability>NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoWebView backend";

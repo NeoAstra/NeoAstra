@@ -26,8 +26,6 @@ using g_bytes_ptr=std::unique_ptr<GBytes,g_bytes_deleter>;
 struct soup_headers_deleter { void operator()(SoupMessageHeaders* value) const noexcept { if(value)soup_message_headers_unref(value); } };
 using soup_headers_ptr=std::unique_ptr<SoupMessageHeaders,soup_headers_deleter>;
 
-constexpr size_t maximum_resource_request_body_length=64u*1024u*1024u;
-
 const neo_custom_scheme_registration* find_custom_scheme(const neo_webview_environment_t* environment, const char* name) noexcept {
     if (!environment || !name) return nullptr;
     const auto found=std::find_if(environment->custom_schemes.begin(),environment->custom_schemes.end(),
@@ -93,6 +91,11 @@ void uri_scheme_requested(WebKitURISchemeRequest* native_request,void* data) noe
         header_accumulator headers;
         if(auto* native_headers=webkit_uri_scheme_request_get_http_headers(native_request))soup_message_headers_foreach(native_headers,append_request_header,&headers);
         if(headers.failed)throw std::bad_alloc();
+        if(!neo_resource_request_within_limits(uri,method,headers.value)){
+            neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request metadata exceeded its size limit");
+            fail_uri_scheme_request(native_request,"The custom-scheme request metadata is too large.");
+            return;
+        }
 
         std::vector<uint8_t> body;
         if(auto* input=webkit_uri_scheme_request_get_http_body(native_request)){
@@ -108,7 +111,7 @@ void uri_scheme_requested(WebKitURISchemeRequest* native_request,void* data) noe
                 }
                 if(count==0)break;
                 const auto amount=static_cast<size_t>(count);
-                if(amount>maximum_resource_request_body_length-body.size()){
+                if(amount>neo_maximum_buffered_resource_body_size-body.size()){
                     neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request body exceeded the 64 MiB limit");
                     fail_uri_scheme_request(native_request,"The custom-scheme request body is too large.");
                     return;
@@ -268,7 +271,7 @@ void load_changed(WebKitWebView* webview, WebKitLoadEvent event, void* data) { a
 gboolean load_failed(WebKitWebView*, WebKitLoadEvent, const char* uri, GError* error, void* data) { auto* view=static_cast<neo_webview_view_t*>(data);std::string value=uri?uri:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_NAVIGATION_FAILED,0,nullptr,&value,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,error?error->code:0);return FALSE; }
 void title_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neo_webview_view_t*>(data);const auto* value=webkit_web_view_get_title(WEBKIT_WEB_VIEW(object));view->title=value?value:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_TITLE_CHANGED,0,&view->title);}
 void uri_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neo_webview_view_t*>(data);const auto* value=webkit_web_view_get_uri(WEBKIT_WEB_VIEW(object));view->source=value?value:"";neo_emit_view(view,NEO_WEBVIEW_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);}
-void message_received(WebKitUserContentManager*,WebKitJavascriptResult* result,void* data){auto* view=static_cast<neo_webview_view_t*>(data);auto* value=webkit_javascript_result_get_js_value(result);char* json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&message,nullptr,0);}
+void message_received(WebKitUserContentManager*,WebKitJavascriptResult* result,void* data) noexcept {auto* view=static_cast<neo_webview_view_t*>(data);char* json{};try{auto* value=webkit_javascript_result_get_js_value(result);json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);json=nullptr;const std::string origin;neo_emit_bridge_message(view,message,origin,false);}catch(...){g_free(json);if(view)neo_log(view->environment->app,NEO_WEBVIEW_LOG_ERROR,"bridge","WebKitGTK web-message handling failed");}}
 void web_process_terminated(WebKitWebView*,WebKitWebProcessTerminationReason reason,void* data){auto* view=static_cast<neo_webview_view_t*>(data);uint64_t value=NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW;if(reason==WEBKIT_WEB_PROCESS_CRASHED||reason==WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT)value|=NEO_WEBVIEW_PROCESS_FAILURE_CRASHED;neo_emit_view(view,NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,value,static_cast<int64_t>(reason));}
 
 struct script_context { neo_webview_view_t* view{};neo_webview_string_callback_t callback{};void* context{};neo_webview_operation_t* operation{}; };

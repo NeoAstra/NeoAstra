@@ -12,7 +12,7 @@ public sealed class NeoApplicationOptions
     /// <summary>Gets or sets the initial shutdown policy.</summary>
     public NeoApplicationShutdownMode ShutdownMode { get; set; } = NeoApplicationShutdownMode.OnLastWindowClosed;
 
-    /// <summary>Gets or sets the maximum number of queued dispatcher callbacks.</summary>
+    /// <summary>Gets or sets the maximum number of queued dispatcher callbacks. The value must be positive.</summary>
     public uint MaximumPendingDispatches { get; set; } = 65_536;
 
     /// <summary>Gets or sets the callback that receives native diagnostic log messages.</summary>
@@ -29,6 +29,11 @@ public sealed class NeoApplicationOptions
         if (!Enum.IsDefined(ShutdownMode))
         {
             throw new ArgumentOutOfRangeException(nameof(ShutdownMode));
+        }
+
+        if (MaximumPendingDispatches == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumPendingDispatches), "The pending-dispatch limit must be positive.");
         }
     }
 }
@@ -160,7 +165,7 @@ public sealed class NeoCustomScheme
         ArgumentNullException.ThrowIfNull(AllowedOrigins);
         foreach (var origin in AllowedOrigins)
         {
-            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) ||
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length != 0 ||
                 !string.Equals(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/'), origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException($"'{origin}' is not an absolute origin.", nameof(AllowedOrigins));
@@ -298,7 +303,7 @@ public sealed class NeoWebViewOptions
     /// <summary>Gets or sets whether the view automatically fills its parent.</summary>
     public bool FillParent { get; set; } = true;
 
-    /// <summary>Gets or sets the maximum accepted web-message size in bytes.</summary>
+    /// <summary>Gets or sets the maximum accepted web-message size in bytes. The value must be positive.</summary>
     public uint MaximumMessageSize { get; set; } = 1024 * 1024;
 
     /// <summary>Gets or sets the timeout for asynchronous browser decisions.</summary>
@@ -324,10 +329,15 @@ public sealed class NeoWebViewOptions
             throw new ArgumentOutOfRangeException(nameof(DecisionTimeout), "The decision timeout must be between zero and ten minutes.");
         }
 
+        if (MaximumMessageSize == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumMessageSize), "The web-message size limit must be positive.");
+        }
+
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
         foreach (var origin in BridgeOrigins)
         {
-            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) ||
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length != 0 ||
                 !string.Equals(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/'), origin.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException($"'{origin}' is not an absolute origin.", nameof(BridgeOrigins));
