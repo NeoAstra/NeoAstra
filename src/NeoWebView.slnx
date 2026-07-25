@@ -18,4 +18,5 @@
   <Project Path="NeoWebView.Tests/NeoWebView.Tests.csproj" />
   <Project Path="NeoWebView.CodeGen/NeoWebView.CodeGen.csproj" />
   <Project Path="NeoWebView/NeoWebView.csproj" />
+  <Project Path="../samples/NeoWebView.Sample/NeoWebView.Sample.csproj" />
 </Solution>

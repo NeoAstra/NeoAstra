@@ -147,6 +147,67 @@ public sealed class NeoWebView : IAsyncDisposable
         return operation.ValueTask;
     }
 
+    /// <summary>Adds a script that is injected into future matching documents.</summary>
+    /// <param name="script">The JavaScript source.</param>
+    /// <param name="options">Injection options, or <see langword="null"/> for document-start injection.</param>
+    /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
+    /// <returns>A removable script registration.</returns>
+    public unsafe ValueTask<NeoUserScript> AddScriptAsync(string script, NeoScriptOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(script);
+        cancellationToken.ThrowIfCancellationRequested();
+        options ??= new NeoScriptOptions();
+        options.Validate();
+        using var nativeScript = new Utf8String(script);
+        using var worldName = new Utf8String(options.WorldName);
+        var raw = new NativeMethods.neo_webview_script_options
+        {
+            size = (uint)sizeof(NativeMethods.neo_webview_script_options),
+            version = 1,
+            injection_time = options.InjectAtDocumentEnd
+                ? NativeMethods.neo_webview_script_injection_time.NEO_WEBVIEW_SCRIPT_DOCUMENT_END
+                : NativeMethods.neo_webview_script_injection_time.NEO_WEBVIEW_SCRIPT_DOCUMENT_START,
+            main_frame_only = options.MainFrameOnly ? 1u : 0u,
+            isolated_world = options.IsolatedWorld ? 1u : 0u,
+            world_name = worldName.View,
+        };
+        var nativeOptions = new NativeMethods.neo_webview_script_options_t(raw);
+        var operation = new NativeOperation<NeoUserScript>(cancellationToken, this);
+        NativeMethods.neo_webview_operation_t nativeOperation = default;
+        NativeMethods.neo_webview_error_t error = default;
+        NativeMethods.neo_webview_result_t result;
+        try
+        {
+            result = NativeMethods.neo_webview_view_add_script_async(
+                NativeHandle,
+                nativeScript.View,
+                &nativeOptions,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neo_webview_result_t, NativeMethods.neo_webview_string_view_t, NativeMethods.neo_webview_error_t, void>)&ScriptAdded,
+                (void*)operation.Context,
+                &nativeOperation,
+                &error);
+        }
+        catch (Exception ex)
+        {
+            operation.FailStart(ex);
+            return operation.ValueTask;
+        }
+
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            var info = NativeError.Read(NativeError.Code(result), error.Handle);
+            if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+            operation.FailStart(NativeError.CreateException(info, "add persistent script", cancellationToken));
+        }
+        else
+        {
+            operation.AttachOperation(nativeOperation.Handle);
+        }
+
+        return operation.ValueTask;
+    }
+
     /// <summary>Posts a JSON value to web content.</summary>
     /// <param name="json">A complete JSON value.</param>
     /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
@@ -495,6 +556,37 @@ public sealed class NeoWebView : IAsyncDisposable
         {
             NativeOperation.Get<string?>(context)?.Fail(ex);
         }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ScriptAdded(void* context, NativeMethods.neo_webview_result_t result, NativeMethods.neo_webview_string_view_t value, NativeMethods.neo_webview_error_t error)
+    {
+        try
+        {
+            var operation = NativeOperation.Get<NeoUserScript>(context);
+            if (operation is null) return;
+            if (NativeError.Code(result) == NeoErrorCode.Success)
+            {
+                var identifier = Utf8String.Decode(value);
+                if (string.IsNullOrEmpty(identifier)) throw new InvalidDataException("The native backend returned an empty script identifier.");
+                operation.Complete(new NeoUserScript((NeoWebView)operation.Owner!, identifier));
+            }
+            else
+            {
+                operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "add persistent script"));
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeOperation.Get<NeoUserScript>(context)?.Fail(ex);
+        }
+    }
+
+    internal void RemoveScript(string identifier)
+    {
+        ThrowIfDisposed();
+        using var nativeIdentifier = new Utf8String(identifier);
+        NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_remove_script(NativeHandle, nativeIdentifier.View), default, "remove persistent script");
     }
 
     private readonly record struct DecisionResponse(NeoDecisionAction Action, string? Text = null, bool Persist = false);

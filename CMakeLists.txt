@@ -68,8 +68,24 @@ if(NEOWEBVIEW_ENABLE_TSAN)
 endif()
 
 if(WIN32)
+  include(FetchContent)
+  FetchContent_Declare(webview2_sdk
+    URL "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${NEOWEBVIEW_WEBVIEW2_SDK_VERSION}/microsoft.web.webview2.${NEOWEBVIEW_WEBVIEW2_SDK_VERSION}.nupkg"
+    URL_HASH SHA256=dc4d1d9168df26b830398303e50210b6e1729f6ce5a7ac69d2c766852f489962
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  FetchContent_MakeAvailable(webview2_sdk)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+    set(_neo_webview2_arch arm64)
+  elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(_neo_webview2_arch x64)
+  else()
+    set(_neo_webview2_arch x86)
+  endif()
   target_sources(neowebview_native PRIVATE native/src/windows/windows_backend.cpp)
-  target_link_libraries(neowebview_native PRIVATE user32 ole32 shell32 shcore)
+  target_include_directories(neowebview_native PRIVATE "${webview2_sdk_SOURCE_DIR}/build/native/include")
+  target_link_libraries(neowebview_native PRIVATE
+    user32 ole32 shell32 shcore
+    "${webview2_sdk_SOURCE_DIR}/build/native/${_neo_webview2_arch}/WebView2LoaderStatic.lib")
 elseif(APPLE)
   enable_language(OBJCXX)
   target_sources(neowebview_native PRIVATE native/src/macos/cocoa_backend.mm)
@@ -96,6 +112,10 @@ if(NEOWEBVIEW_BUILD_TESTS)
   add_executable(neowebview_abi_tests native/tests/abi_tests.cpp)
   target_link_libraries(neowebview_abi_tests PRIVATE neowebview_native)
   add_test(NAME neowebview_abi_tests COMMAND neowebview_abi_tests)
+  add_executable(neowebview_common_tests native/tests/common_tests.cpp)
+  target_include_directories(neowebview_common_tests PRIVATE native/include native/src/common)
+  target_link_libraries(neowebview_common_tests PRIVATE neowebview_native)
+  add_test(NAME neowebview_common_tests COMMAND neowebview_common_tests)
 endif()
 
 include(GNUInstallDirs)

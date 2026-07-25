@@ -301,3 +301,32 @@ public sealed class NeoWebViewOptions
         }
     }
 }
+
+/// <summary>Configures a script injected into each matching document.</summary>
+public sealed class NeoScriptOptions
+{
+    /// <summary>Gets or sets whether the script runs at document end instead of document start.</summary>
+    public bool InjectAtDocumentEnd { get; set; }
+
+    /// <summary>Gets or sets whether the script is restricted to the main frame.</summary>
+    public bool MainFrameOnly { get; set; }
+
+    /// <summary>Gets or sets whether the script runs in an isolated JavaScript world.</summary>
+    public bool IsolatedWorld { get; set; }
+
+    /// <summary>Gets or sets the optional isolated-world name.</summary>
+    public string? WorldName { get; set; }
+
+    internal void Validate()
+    {
+        if (WorldName is { Length: > 128 })
+        {
+            throw new ArgumentException("The script world name must not exceed 128 characters.", nameof(WorldName));
+        }
+
+        if (!IsolatedWorld && !string.IsNullOrEmpty(WorldName))
+        {
+            throw new ArgumentException("A world name requires isolated-world injection.", nameof(WorldName));
+        }
+    }
+}

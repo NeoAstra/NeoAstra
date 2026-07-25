@@ -164,27 +164,29 @@ public sealed class ManagedApiTests
             return;
         }
 
-        NeoApplication? application = null;
         try
         {
-            application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+            var result = await RunStaAsync(() =>
             {
-                ApplicationName = "NeoWebView managed smoke test",
-                ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView managed smoke test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                });
+                try
+                {
+                    return application.Dispatcher.CheckAccess() && application.Windows.Count == 0;
+                }
+                finally
+                {
+                    application.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
             });
-            Assert.IsTrue(application.Dispatcher.CheckAccess());
-            Assert.AreEqual(0, application.Windows.Count);
+            Assert.IsTrue(result);
         }
         catch (NeoWebViewNativeLibraryException)
         {
             // Native assets are optional for the managed unit-test project.
-        }
-        finally
-        {
-            if (application is not null)
-            {
-                await application.DisposeAsync();
-            }
         }
     }
 
@@ -198,7 +200,7 @@ public sealed class ManagedApiTests
 
         try
         {
-            var run = Task.Run(() => NeoApplication.Run(
+            var run = RunStaAsync(() => NeoApplication.Run(
                 new NeoApplicationOptions
                 {
                     ApplicationName = "NeoWebView async callback smoke test",
@@ -208,6 +210,36 @@ public sealed class ManagedApiTests
                 {
                     await using var environment = await application.CreateEnvironmentAsync();
                     Assert.AreEqual("windows", environment.RuntimeInfo.OperatingSystem);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDocumentStart).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Cookies).SupportLevel);
+                    var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                    await using var profile = await environment.CreateProfileAsync(new NeoProfileOptions { Name = "smoke-profile", IsEphemeral = true });
+                    await using var webView = await environment.CreateWebViewAsync(
+                        NeoWebViewHost.FillWindow(window),
+                        new NeoWebViewOptions { Profile = profile });
+                    await using var userScript = await webView.AddScriptAsync("globalThis.neoWebViewInjected = 40;");
+                    var navigation = new TaskCompletionSource<NeoNavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    webView.NavigationCompleted += (_, args) => navigation.TrySetResult(args);
+                    await webView.LoadHtmlAsync("<!doctype html><title>smoke</title><p>NeoWebView</p>");
+                    var completed = await navigation.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                    Assert.IsTrue(completed.IsSuccess);
+                    Assert.AreEqual("42", await webView.EvaluateScriptAsync("globalThis.neoWebViewInjected + 2"));
+                    var cookie = new NeoCookie("smoke", "value", "example.test")
+                    {
+                        IsHttpOnly = true,
+                        SameSite = NeoCookieSameSite.Lax,
+                    };
+                    await profile.SetCookieAsync(cookie);
+                    var cookies = await profile.GetCookiesAsync(new Uri("https://example.test/"));
+                    var stored = cookies.Single(value => value.Name == cookie.Name);
+                    Assert.AreEqual(cookie.Value, stored.Value);
+                    Assert.IsTrue(stored.IsHttpOnly);
+                    Assert.AreEqual(cookie.SameSite, stored.SameSite);
+                    await profile.DeleteCookieAsync(stored);
+                    Assert.IsFalse((await profile.GetCookiesAsync(new Uri("https://example.test/"))).Any(value => value.Name == cookie.Name), $"Deleted cookie remained: domain={stored.Domain}, path={stored.Path}, session={stored.IsSession}");
+                    await profile.SetCookieAsync(cookie);
+                    await profile.ClearDataAsync(NeoBrowsingDataKinds.Cookies);
+                    Assert.IsFalse((await profile.GetCookiesAsync(new Uri("https://example.test/"))).Any(value => value.Name == cookie.Name));
                     application.Shutdown(17);
                 }));
 
@@ -217,5 +249,31 @@ public sealed class ManagedApiTests
         {
             // Native assets are optional for the managed unit-test project.
         }
+    }
+
+    private static Task<T> RunStaAsync<T>(Func<T> callback)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completion.SetResult(callback());
+            }
+            catch (Exception exception)
+            {
+                completion.SetException(exception);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "NeoWebView test STA",
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            thread.SetApartmentState(ApartmentState.STA);
+        }
+        thread.Start();
+        return completion.Task;
     }
 }

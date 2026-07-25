@@ -31,6 +31,18 @@
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../../img/NeoWebView.png" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/windows-x64-release/neowebview_native.dll"
+          Pack="true" PackagePath="runtimes/win-x64/native/neowebview_native.dll" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/windows-x64-release/neowebview_native.dll')" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/windows-arm64-release/neowebview_native.dll"
+          Pack="true" PackagePath="runtimes/win-arm64/native/neowebview_native.dll" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/windows-arm64-release/neowebview_native.dll')" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/macos-x64-release/libneowebview_native.dylib"
+          Pack="true" PackagePath="runtimes/osx-x64/native/libneowebview_native.dylib" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/macos-x64-release/libneowebview_native.dylib')" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/macos-arm64-release/libneowebview_native.dylib"
+          Pack="true" PackagePath="runtimes/osx-arm64/native/libneowebview_native.dylib" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/macos-arm64-release/libneowebview_native.dylib')" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/linux-x64-release/libneowebview_native.so"
+          Pack="true" PackagePath="runtimes/linux-x64/native/libneowebview_native.so" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/linux-x64-release/libneowebview_native.so')" />
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/linux-arm64-release/libneowebview_native.so"
+          Pack="true" PackagePath="runtimes/linux-arm64/native/libneowebview_native.so" Condition="Exists('$(MSBuildThisFileDirectory)../../artifacts/native/linux-arm64-release/libneowebview_native.so')" />
   </ItemGroup>
 
   <ItemGroup>

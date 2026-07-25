@@ -69,6 +69,7 @@ typedef enum neo_webview_window_state : uint32_t { NEO_WEBVIEW_WINDOW_NORMAL = 0
 typedef enum neo_webview_option_state : uint32_t { NEO_WEBVIEW_OPTION_DEFAULT = 0, NEO_WEBVIEW_OPTION_ENABLED = 1, NEO_WEBVIEW_OPTION_DISABLED = 2 } neo_webview_option_state_t;
 typedef enum neo_webview_script_injection_time : uint32_t { NEO_WEBVIEW_SCRIPT_DOCUMENT_START = 0, NEO_WEBVIEW_SCRIPT_DOCUMENT_END = 1 } neo_webview_script_injection_time_t;
 typedef enum neo_webview_decision_action : uint32_t { NEO_WEBVIEW_DECISION_DEFAULT = 0, NEO_WEBVIEW_DECISION_ALLOW = 1, NEO_WEBVIEW_DECISION_DENY = 2, NEO_WEBVIEW_DECISION_CANCEL = 3, NEO_WEBVIEW_DECISION_OPEN_EXTERNAL = 4, NEO_WEBVIEW_DECISION_DOWNLOAD = 5 } neo_webview_decision_action_t;
+typedef enum neo_webview_decision_kind : uint32_t { NEO_WEBVIEW_DECISION_UNKNOWN = 0, NEO_WEBVIEW_DECISION_NAVIGATION = 1, NEO_WEBVIEW_DECISION_NEW_WINDOW = 2, NEO_WEBVIEW_DECISION_PERMISSION = 3, NEO_WEBVIEW_DECISION_DOWNLOAD_REQUEST = 4, NEO_WEBVIEW_DECISION_SCRIPT_DIALOG = 5, NEO_WEBVIEW_DECISION_FILE_CHOOSER = 6, NEO_WEBVIEW_DECISION_AUTHENTICATION = 7, NEO_WEBVIEW_DECISION_CERTIFICATE_ERROR = 8, NEO_WEBVIEW_DECISION_FULLSCREEN = 9 } neo_webview_decision_kind_t;
 typedef enum neo_webview_permission_kind : uint32_t { NEO_WEBVIEW_PERMISSION_UNKNOWN = 0, NEO_WEBVIEW_PERMISSION_GEOLOCATION, NEO_WEBVIEW_PERMISSION_CAMERA, NEO_WEBVIEW_PERMISSION_MICROPHONE, NEO_WEBVIEW_PERMISSION_NOTIFICATIONS, NEO_WEBVIEW_PERMISSION_CLIPBOARD_READ, NEO_WEBVIEW_PERMISSION_CLIPBOARD_WRITE, NEO_WEBVIEW_PERMISSION_MIDI, NEO_WEBVIEW_PERMISSION_SCREEN_CAPTURE, NEO_WEBVIEW_PERMISSION_POINTER_LOCK, NEO_WEBVIEW_PERMISSION_LOCAL_FONTS, NEO_WEBVIEW_PERMISSION_FILE_SYSTEM, NEO_WEBVIEW_PERMISSION_PERSISTENT_STORAGE } neo_webview_permission_kind_t;
 typedef enum neo_webview_event_type : uint32_t {
     NEO_WEBVIEW_EVENT_NONE = 0,
@@ -132,6 +133,7 @@ NEO_WEBVIEW_DECLARE_LIFETIME(operation);
 NEO_WEBVIEW_DECLARE_LIFETIME(decision);
 NEO_WEBVIEW_DECLARE_LIFETIME(error);
 NEO_WEBVIEW_DECLARE_LIFETIME(buffer);
+NEO_WEBVIEW_DECLARE_LIFETIME(stream);
 #undef NEO_WEBVIEW_DECLARE_LIFETIME
 
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_error_get_code(const neo_webview_error_t*);
@@ -143,6 +145,9 @@ NEO_WEBVIEW_API uint64_t NEO_WEBVIEW_CALL neo_webview_buffer_get_length(const ne
 NEO_WEBVIEW_API void NEO_WEBVIEW_CALL neo_webview_operation_cancel(neo_webview_operation_t*);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_defer(neo_webview_decision_t*);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_complete(neo_webview_decision_t*, const neo_webview_decision_response_t*, neo_webview_error_t**);
+NEO_WEBVIEW_API neo_webview_decision_kind_t NEO_WEBVIEW_CALL neo_webview_decision_get_kind(const neo_webview_decision_t*);
+NEO_WEBVIEW_API neo_webview_decision_action_t NEO_WEBVIEW_CALL neo_webview_decision_get_default_action(const neo_webview_decision_t*);
+NEO_WEBVIEW_API uint64_t NEO_WEBVIEW_CALL neo_webview_decision_get_deadline_ns(const neo_webview_decision_t*);
 
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create(const neo_webview_app_options_t*, neo_webview_app_t**, neo_webview_error_t**);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_attach(const neo_webview_app_options_t*, neo_webview_app_t**, neo_webview_error_t**);
@@ -151,6 +156,8 @@ NEO_WEBVIEW_API void NEO_WEBVIEW_CALL neo_webview_app_quit(neo_webview_app_t*, i
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_dispatch(neo_webview_app_t*, neo_webview_dispatch_callback_t, void*);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_set_event_callback(neo_webview_app_t*, neo_webview_event_callback_t, void*);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create_window(neo_webview_app_t*, const neo_webview_window_options_t*, neo_webview_window_t**, neo_webview_error_t**);
+NEO_WEBVIEW_API uint64_t NEO_WEBVIEW_CALL neo_webview_app_get_window_count(const neo_webview_app_t*);
+NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_get_window(neo_webview_app_t*, uint64_t, neo_webview_window_t**);
 
 NEO_WEBVIEW_API uint64_t NEO_WEBVIEW_CALL neo_webview_window_get_id(const neo_webview_window_t*);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_window_get_bounds(const neo_webview_window_t*, neo_webview_rect_t*);
