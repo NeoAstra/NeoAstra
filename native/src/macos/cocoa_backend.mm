@@ -27,13 +27,92 @@ neo_webview_error_t* make_error(neo_webview_result_t code,const char* message,in
 @interface NeoWindowDelegate : NSObject<NSWindowDelegate>
 @property(nonatomic,assign) neo_webview_window_t* nativeWindow;
 @end
+@interface NeoURLSchemeHandler : NSObject<WKURLSchemeHandler>
+@property(nonatomic,assign) neo_webview_environment_t* nativeEnvironment;
+@property(nonatomic,assign) const neo_custom_scheme_registration* registration;
+@end
 @interface NeoWebViewDelegate : NSObject<WKNavigationDelegate,WKScriptMessageHandler,WKUIDelegate,WKDownloadDelegate>
 @property(nonatomic,assign) neo_webview_view_t* nativeView;
 @end
 
 namespace {
 struct cocoa_window { NSWindow* window; NeoWindowDelegate* delegate; neo_webview_window_state_t reported_state{NEO_WEBVIEW_WINDOW_NORMAL}; };
-struct cocoa_view { WKWebView* webview; NeoWebViewDelegate* delegate; std::unordered_map<std::string,WKUserScript*> scripts; };
+struct cocoa_view {
+    WKWebView* webview;
+    NeoWebViewDelegate* delegate;
+    NSMutableArray<NeoURLSchemeHandler*>* scheme_handlers;
+    std::unordered_map<std::string,WKUserScript*> scripts;
+    ~cocoa_view() { if (delegate) delegate.nativeView=nullptr; }
+};
+
+std::string request_headers(NSURLRequest* request) {
+    std::string result;
+    for (NSString* name in request.allHTTPHeaderFields) {
+        result += utf8(name);
+        result += ": ";
+        result += utf8(request.allHTTPHeaderFields[name]);
+        result += "\r\n";
+    }
+    return result;
+}
+
+std::string url_origin(NSURL* url) {
+    if (!url) return {};
+    NSString* scheme=url.scheme.lowercaseString,*host=url.host.lowercaseString;
+    if (!scheme.length || !host.length) return utf8(url.absoluteString);
+    NSNumber* port=url.port;
+    const bool default_port=port&&(([scheme isEqualToString:@"http"]&&port.integerValue==80)||([scheme isEqualToString:@"https"]&&port.integerValue==443));
+    if ([host containsString:@":"] && ![host hasPrefix:@"["]) host=[NSString stringWithFormat:@"[%@]",host];
+    NSString* value=port&&!default_port?[NSString stringWithFormat:@"%@://%@:%@",scheme,host,port]:[NSString stringWithFormat:@"%@://%@",scheme,host];
+    return utf8(value);
+}
+
+NSMutableDictionary<NSString*,NSString*>* response_headers(const neo_webview_resource_response_t& response) {
+    NSMutableDictionary<NSString*,NSString*>* result=[NSMutableDictionary dictionary];
+    NSString* raw=ns_string(neo_string(response.headers));
+    for (NSString* line in [raw componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSRange separator=[line rangeOfString:@":"];
+        if (separator.location==NSNotFound || separator.location==0) continue;
+        NSString* name=[[line substringToIndex:separator.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSString* value=[[line substringFromIndex:separator.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (name.length) result[name]=value;
+    }
+    return result;
+}
+
+bool contains_header(NSDictionary<NSString*,NSString*>* headers,NSString* name) {
+    for (NSString* candidate in headers) if ([candidate caseInsensitiveCompare:name]==NSOrderedSame) return true;
+    return false;
+}
+
+bool valid_resource_response(const neo_webview_resource_response_t& response) noexcept {
+    return response.size>=sizeof(response)&&response.version==1&&response.status_code>=100&&response.status_code<=599&&response.body_kind<=NEO_WEBVIEW_RESOURCE_BODY_FILE&&
+        neo_valid_utf8(response.reason_phrase)&&neo_valid_utf8(response.headers)&&neo_valid_utf8(response.mime_type)&&neo_valid_utf8(response.file_path)&&
+        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES&&response.byte_length&&!response.bytes)&&
+        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_EMPTY&&(response.bytes||response.byte_length||response.file_path.length))&&
+        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES&&response.file_path.length)&&
+        !(response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_FILE&&(response.bytes||response.byte_length||!response.file_path.length))&&
+        ((response.release_context!=nullptr)==(response.release!=nullptr));
+}
+
+struct resource_response_guard {
+    neo_webview_resource_response_t& response;
+    void release() noexcept {
+        if (response.release&&response.release_context) {
+            try { response.release(response.release_context); } catch (...) { }
+            response.release=nullptr;
+            response.release_context=nullptr;
+        }
+    }
+    ~resource_response_guard() { release(); }
+};
+
+void fail_scheme_task(id<WKURLSchemeTask> task,NSInteger code,NSString* message) noexcept {
+    @try {
+        NSError* error=[NSError errorWithDomain:@"NeoWebView.WKURLSchemeHandler" code:code userInfo:@{NSLocalizedDescriptionKey:message?:@"Custom-scheme request failed."}];
+        [task didFailWithError:error];
+    } @catch (NSException*) { }
+}
 
 struct navigation_context { void (^handler)(WKNavigationActionPolicy); };
 void navigation_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer));context->handler(response->action==NEO_WEBVIEW_DECISION_ALLOW||response->action==NEO_WEBVIEW_DECISION_DEFAULT?WKNavigationActionPolicyAllow:WKNavigationActionPolicyCancel);}
@@ -56,6 +135,80 @@ struct download_destination_context { neo_webview_download_t* download{}; NSURL*
 void download_destination_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {@autoreleasepool{std::unique_ptr<download_destination_context> context(static_cast<download_destination_context*>(pointer));try{if(response->action==NEO_WEBVIEW_DECISION_DOWNLOAD){context->download->destination_path=neo_string(response->text);context->completion([NSURL fileURLWithPath:ns_string(context->download->destination_path)]);}else if(response->action==NEO_WEBVIEW_DECISION_ALLOW||response->action==NEO_WEBVIEW_DECISION_DEFAULT){context->download->destination_path=utf8(context->default_destination.path);context->completion(context->default_destination);}else context->completion(nil);}catch(...){context->completion(nil);}}}
 void report_window_state(neo_webview_window_t* value,neo_webview_window_state_t state){auto* native=static_cast<cocoa_window*>(value->platform);if(!native||native->reported_state==state)return;native->reported_state=state;{std::lock_guard lock(value->state_mutex);value->state=state;}neo_emit_app(value->app,NEO_WEBVIEW_EVENT_WINDOW_STATE_CHANGED,value->id,nullptr,nullptr,state);}
 }
+
+@implementation NeoURLSchemeHandler
+- (void)webView:(WKWebView*)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    (void)webView;
+    auto* environment=self.nativeEnvironment;
+    const auto* scheme=self.registration;
+    if (!environment||!scheme||!scheme->provider) { fail_scheme_task(task,NEO_WEBVIEW_ERROR_DISPOSED,@"The custom-scheme provider is unavailable.");return; }
+    neo_webview_resource_response_t response{};
+    response.size=sizeof(response);
+    response.version=1;
+    resource_response_guard response_guard{response};
+    @try {
+        try {
+            NSURLRequest* native_request=task.request;
+            const auto uri=utf8(native_request.URL.absoluteString);
+            const auto method=utf8(native_request.HTTPMethod.length?native_request.HTTPMethod:@"GET");
+            const auto headers=request_headers(native_request);
+            NSData* request_body=native_request.HTTPBody;
+            const bool main_frame=!native_request.mainDocumentURL||[native_request.URL isEqual:native_request.mainDocumentURL];
+            const auto initiating_origin=main_frame?std::string{}:url_origin(native_request.mainDocumentURL);
+            neo_webview_resource_request_t request{};
+            request.size=sizeof(request);
+            request.version=1;
+            request.uri=neo_string_view(uri);
+            request.method=neo_string_view(method);
+            request.headers=neo_string_view(headers);
+            request.initiating_origin=neo_string_view(initiating_origin);
+            request.resource_kind=main_frame?NEO_WEBVIEW_RESOURCE_DOCUMENT:NEO_WEBVIEW_RESOURCE_OTHER;
+            request.main_frame=main_frame?1u:0u;
+            request.body=static_cast<const uint8_t*>(request_body.bytes);
+            request.body_length=request_body.length;
+            neo_webview_result_t provider_result=NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+            try { provider_result=scheme->provider(scheme->provider_context,&request,&response); }
+            catch (...) { provider_result=NEO_WEBVIEW_ERROR_NATIVE_FAILURE; }
+            if (provider_result!=NEO_WEBVIEW_OK) {
+                neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme resource provider failed",provider_result);
+                response_guard.release();
+                response={};response.size=sizeof(response);response.version=1;response.status_code=500;
+            }
+            if (!valid_resource_response(response)||response.byte_length>NSUIntegerMax) {
+                neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme resource provider returned an invalid response");
+                fail_scheme_task(task,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,@"The custom-scheme provider returned an invalid response.");
+                return;
+            }
+            NSMutableDictionary<NSString*,NSString*>* native_headers=response_headers(response);
+            if (response.mime_type.length&&!contains_header(native_headers,@"Content-Type")) native_headers[@"Content-Type"]=ns_string(neo_string(response.mime_type));
+            if (response.content_length!=UINT64_MAX&&!contains_header(native_headers,@"Content-Length")) native_headers[@"Content-Length"]=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(response.content_length)];
+            NSHTTPURLResponse* native_response=[[NSHTTPURLResponse alloc]initWithURL:native_request.URL statusCode:response.status_code HTTPVersion:@"HTTP/1.1" headerFields:native_headers];
+            if (!native_response) { fail_scheme_task(task,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,@"WKWebView could not create the custom-scheme response.");return; }
+            NSData* data=nil;
+            if (response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_BYTES) data=[NSData dataWithBytes:response.bytes length:(NSUInteger)response.byte_length];
+            else if (response.body_kind==NEO_WEBVIEW_RESOURCE_BODY_FILE) {
+                NSError* file_error=nil;
+                data=[NSData dataWithContentsOfFile:ns_string(neo_string(response.file_path)) options:NSDataReadingMappedIfSafe error:&file_error];
+                if (!data) {
+                    neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Could not map a custom-scheme file response",file_error.code);
+                    [task didFailWithError:file_error?:[NSError errorWithDomain:@"NeoWebView.WKURLSchemeHandler" code:NEO_WEBVIEW_ERROR_NATIVE_FAILURE userInfo:nil]];
+                    return;
+                }
+            }
+            [task didReceiveResponse:native_response];
+            if (data.length) [task didReceiveData:data];
+            [task didFinish];
+        } catch (...) {
+            neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","Custom-scheme request handling failed");
+            fail_scheme_task(task,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,@"Custom-scheme request handling failed.");
+        }
+    } @catch (NSException* exception) {
+        neo_log(environment->app,NEO_WEBVIEW_LOG_ERROR,"resource","WKWebView custom-scheme request handling raised an exception");
+        fail_scheme_task(task,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,exception.reason?:@"Custom-scheme request handling failed.");
+    }
+}
+- (void)webView:(WKWebView*)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task { (void)webView;(void)task; }
+@end
 
 @implementation NeoWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow*)sender { (void)sender;auto* value=self.nativeWindow;if(value)neo_emit_app(value->app,NEO_WEBVIEW_EVENT_WINDOW_CLOSE_REQUESTED,value->id);return YES; }
@@ -83,7 +236,7 @@ void report_window_state(neo_webview_window_t* value,neo_webview_window_state_t 
 - (void)webView:(WKWebView*)webView didFailNavigation:(WKNavigation*)navigation withError:(NSError*)error { (void)navigation;auto* view=self.nativeView;if(!view)return;std::string uri=utf8(webView.URL.absoluteString);neo_emit_view(view,NEO_WEBVIEW_EVENT_NAVIGATION_FAILED,0,nullptr,&uri,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,error.code); }
 - (void)webView:(WKWebView*)webView didFailProvisionalNavigation:(WKNavigation*)navigation withError:(NSError*)error { [self webView:webView didFailNavigation:navigation withError:error]; }
 - (void)webViewWebContentProcessDidTerminate:(WKWebView*)webView { (void)webView;auto* view=self.nativeView;if(view)neo_emit_view(view,NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,NEO_WEBVIEW_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEO_WEBVIEW_PROCESS_FAILURE_RECREATE_VIEW); }
-- (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message { (void)controller;auto* view=self.nativeView;if(!view)return;NSError* error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:message.body options:0 error:&error];std::string text;if(data&&!error)text.assign((const char*)data.bytes,data.length);else text=utf8([message.body description]);std::string uri=utf8(message.frameInfo.request.URL.absoluteString);neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&text,&uri,data?1u:0u); }
+- (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message { (void)controller;auto* view=self.nativeView;if(!view)return;NSError* error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:message.body options:0 error:&error];std::string text;if(data&&!error)text.assign((const char*)data.bytes,data.length);else text=utf8([message.body description]);std::string uri=url_origin(message.frameInfo.request.URL);if(!neo_bridge_origin_allowed(view,uri)){neo_log(view->environment->app,NEO_WEBVIEW_LOG_WARNING,"bridge","Blocked a web message from an untrusted origin");return;}neo_emit_view(view,NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED,0,&text,&uri,data?1u:0u); }
 - (void)webView:(WKWebView*)webView requestMediaCapturePermissionForOrigin:(WKSecurityOrigin*)origin initiatedByFrame:(WKFrameInfo*)frame type:(WKMediaCaptureType)type decisionHandler:(void (^)(WKPermissionDecision))handler API_AVAILABLE(macos(12.0)) { (void)webView;(void)frame;auto* view=self.nativeView;if(!view){handler(WKPermissionDecisionDeny);return;}NSString* raw=[NSString stringWithFormat:@"%@://%@:%ld",origin.protocol,origin.host,(long)origin.port];std::string uri=utf8(raw);auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_PERMISSION,NEO_WEBVIEW_DECISION_DENY);decision->completion=permission_decided;decision->completion_context=new permission_context{[handler copy]};const auto kind=type==WKMediaCaptureTypeMicrophone?NEO_WEBVIEW_PERMISSION_MICROPHONE:type==WKMediaCaptureTypeCamera?NEO_WEBVIEW_PERMISSION_CAMERA:NEO_WEBVIEW_PERMISSION_UNKNOWN;neo_emit_view(view,NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED,0,nullptr,&uri,kind,0,decision);neo_finish_decision_event(view,decision);decision->release(); }
 - (WKWebView*)webView:(WKWebView*)webView createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration forNavigationAction:(WKNavigationAction*)action windowFeatures:(WKWindowFeatures*)features { (void)webView;(void)features;auto* view=self.nativeView;if(!view)return nil;std::string uri=utf8(action.request.URL.absoluteString);std::string name;auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_NEW_WINDOW,NEO_WEBVIEW_DECISION_CANCEL);decision->completion=new_window_decided;decision->completion_context=new new_window_context{view,uri};decision->popup_context=(void*)CFRetain((__bridge CFTypeRef)configuration);decision->popup_context_release=release_popup_configuration;neo_emit_view(view,NEO_WEBVIEW_EVENT_NEW_WINDOW_REQUESTED,0,&name,&uri,action.navigationType==WKNavigationTypeLinkActivated?1u:0u,0,decision);finish_synchronous_decision(decision);WKWebView* target=nil;if(decision->resolved_target){auto* state=static_cast<cocoa_view*>(decision->resolved_target->platform);if(state)target=state->webview;}decision->release();return target;}
 - (void)webView:(WKWebView*)webView runJavaScriptAlertPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(void))completionHandler { (void)webView;auto* view=self.nativeView;if(!view){completionHandler();return;}std::string text=utf8(message),origin=utf8(frame.request.URL.absoluteString);auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_SCRIPT_DIALOG,NEO_WEBVIEW_DECISION_ALLOW);decision->completion=dialog_decided;decision->completion_context=new dialog_context{[^(BOOL,NSString*){completionHandler();} copy]};neo_emit_view(view,NEO_WEBVIEW_EVENT_SCRIPT_DIALOG_REQUESTED,0,&text,&origin,NEO_WEBVIEW_SCRIPT_DIALOG_ALERT,0,decision);neo_finish_decision_event(view,decision);decision->release();}
@@ -124,7 +277,37 @@ neo_webview_result_t neo_platform_window_set_size_constraints(neo_webview_window
 neo_webview_result_t neo_platform_window_set_state(neo_webview_window_t* window) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEO_WEBVIEW_ERROR_DISPOSED;if(!state->window.visible&&(state->window.styleMask&NSWindowStyleMaskFullScreen)==0)return NEO_WEBVIEW_OK;switch(window->state){case NEO_WEBVIEW_WINDOW_NORMAL:if(state->window.miniaturized)[state->window deminiaturize:nil];if(state->window.zoomed)[state->window zoom:nil];if((state->window.styleMask&NSWindowStyleMaskFullScreen)!=0)[state->window toggleFullScreen:nil];break;case NEO_WEBVIEW_WINDOW_MINIMIZED:[state->window miniaturize:nil];break;case NEO_WEBVIEW_WINDOW_MAXIMIZED:if(!state->window.zoomed)[state->window zoom:nil];break;case NEO_WEBVIEW_WINDOW_FULLSCREEN:if((state->window.styleMask&NSWindowStyleMaskFullScreen)==0)[state->window toggleFullScreen:nil];break;default:return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;}return NEO_WEBVIEW_OK;}
 neo_webview_result_t neo_platform_window_get_handle(neo_webview_window_t* window,neo_webview_native_handle_kind_t kind,neo_webview_native_handle_t* handle) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEO_WEBVIEW_ERROR_DISPOSED;if(kind==NEO_WEBVIEW_NATIVE_HANDLE_COCOA_NSWINDOW)handle->value=(__bridge void*)state->window;else if(kind==NEO_WEBVIEW_NATIVE_HANDLE_COCOA_NSVIEW)handle->value=(__bridge void*)state->window.contentView;else return NEO_WEBVIEW_ERROR_NOT_SUPPORTED;handle->kind=kind;return NEO_WEBVIEW_OK;}
 
-bool neo_platform_environment_create_async(neo_webview_environment_t* environment,const neo_webview_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t**) noexcept {@autoreleasepool{auto* state=new cocoa_environment{};state->process_pool=[WKProcessPool new];state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];environment->platform=state;callback(context,nullptr);return true;}}
+bool neo_platform_environment_create_async(neo_webview_environment_t* environment,const neo_webview_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t** error) noexcept {
+    @autoreleasepool {
+        @try {
+            try {
+                for (const auto& scheme : environment->custom_schemes) {
+                    NSString* name=ns_string(scheme.name);
+                    if ((scheme.flags&NEO_WEBVIEW_CUSTOM_SCHEME_SERVICE_WORKERS)!=0) {
+                        neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"WKWebView custom schemes do not support service workers",0,"wkwebview");
+                        return false;
+                    }
+                    if (!name||[WKWebView handlesURLScheme:name]) {
+                        neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"WKWebView cannot replace a built-in URL scheme",0,"wkwebview");
+                        return false;
+                    }
+                }
+                auto state=std::make_unique<cocoa_environment>();
+                state->process_pool=[WKProcessPool new];
+                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];
+                environment->platform=state.release();
+                callback(context,nullptr);
+                return true;
+            } catch (const std::exception& exception) {
+                neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,exception.what(),0,"wkwebview");
+                return false;
+            }
+        } @catch (NSException* exception) {
+            neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,utf8(exception.reason).c_str(),0,"wkwebview");
+            return false;
+        }
+    }
+}
 void neo_platform_environment_destroy(neo_webview_environment_t* environment) noexcept {delete static_cast<cocoa_environment*>(environment->platform);environment->platform=nullptr;}
 bool neo_platform_profile_create(neo_webview_profile_t* profile,neo_webview_error_t** error) noexcept {@autoreleasepool{try{auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];profile->platform=state;return true;}catch(...){neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
 void neo_platform_profile_destroy(neo_webview_profile_t* profile) noexcept {delete static_cast<cocoa_profile*>(profile->platform);profile->platform=nullptr;}
@@ -132,7 +315,72 @@ neo_webview_result_t neo_platform_profile_get_cookies(neo_webview_profile_t* pro
 neo_webview_result_t neo_platform_profile_set_cookie(neo_webview_profile_t* profile,const neo_webview_cookie_t* cookie,neo_webview_completion_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);if(!state||!state->data_store)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WKWebView profile is not initialized");NSMutableDictionary* properties=[@{NSHTTPCookieName:ns_string(neo_string(cookie->name)),NSHTTPCookieValue:ns_string(neo_string(cookie->value)),NSHTTPCookieDomain:ns_string(neo_string(cookie->domain)),NSHTTPCookiePath:ns_string(neo_string(cookie->path))} mutableCopy];if(cookie->flags&1u)properties[NSHTTPCookieSecure]=@"TRUE";if(cookie->flags&2u)properties[@"HttpOnly"]=@"TRUE";if((cookie->flags&4u)==0&&cookie->expires_unix_ms>0)properties[NSHTTPCookieExpires]=[NSDate dateWithTimeIntervalSince1970:cookie->expires_unix_ms/1000.0];NSHTTPCookie* value=[NSHTTPCookie cookieWithProperties:properties];if(!value)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie");[state->data_store.httpCookieStore setCookie:value completionHandler:^{neo_webview_result_t actual{};if(operation->try_complete(NEO_WEBVIEW_OK,actual))callback(context,actual,nullptr);operation->release();}];return NEO_WEBVIEW_OK;}}
 neo_webview_result_t neo_platform_profile_delete_cookie(neo_webview_profile_t* profile,const neo_webview_cookie_t* cookie,neo_webview_completion_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);if(!state||!state->data_store)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WKWebView profile is not initialized");NSDictionary* properties=@{NSHTTPCookieName:ns_string(neo_string(cookie->name)),NSHTTPCookieValue:ns_string(neo_string(cookie->value)),NSHTTPCookieDomain:ns_string(neo_string(cookie->domain)),NSHTTPCookiePath:ns_string(neo_string(cookie->path))};NSHTTPCookie* value=[NSHTTPCookie cookieWithProperties:properties];if(!value)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie");[state->data_store.httpCookieStore deleteCookie:value completionHandler:^{neo_webview_result_t actual{};if(operation->try_complete(NEO_WEBVIEW_OK,actual))callback(context,actual,nullptr);operation->release();}];return NEO_WEBVIEW_OK;}}
 neo_webview_result_t neo_platform_profile_clear_data(neo_webview_profile_t* profile,neo_webview_data_kind_t kinds,int64_t start,int64_t end,neo_webview_completion_callback_t callback,void* context,neo_webview_operation_t* operation,neo_webview_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);if(!state||!state->data_store)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_INITIALIZED,"WKWebView profile is not initialized");if(end!=INT64_MAX||(kinds!=NEO_WEBVIEW_DATA_ALL&&(kinds&(NEO_WEBVIEW_DATA_SERVICE_WORKERS|NEO_WEBVIEW_DATA_PERMISSIONS|NEO_WEBVIEW_DATA_DOWNLOAD_HISTORY))))return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"WKWebView cannot clear the selected data kinds or bounded end time");NSMutableSet<NSString*>* types=[NSMutableSet set];if(kinds==NEO_WEBVIEW_DATA_ALL)[types unionSet:[WKWebsiteDataStore allWebsiteDataTypes]];else{if(kinds&NEO_WEBVIEW_DATA_COOKIES)[types addObject:WKWebsiteDataTypeCookies];if(kinds&NEO_WEBVIEW_DATA_CACHE){[types addObject:WKWebsiteDataTypeDiskCache];[types addObject:WKWebsiteDataTypeMemoryCache];}if(kinds&NEO_WEBVIEW_DATA_LOCAL_STORAGE)[types addObject:WKWebsiteDataTypeLocalStorage];if(kinds&NEO_WEBVIEW_DATA_INDEXED_DB)[types addObject:WKWebsiteDataTypeIndexedDBDatabases];}NSDate* since=start==INT64_MIN?[NSDate distantPast]:[NSDate dateWithTimeIntervalSince1970:start/1000.0];[state->data_store removeDataOfTypes:types modifiedSince:since completionHandler:^{neo_webview_result_t actual{};if(operation->try_complete(NEO_WEBVIEW_OK,actual))callback(context,actual,nullptr);operation->release();}];return NEO_WEBVIEW_OK;}}
-bool neo_platform_view_create_async(neo_webview_view_t* view,const neo_webview_view_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t** error) noexcept {@autoreleasepool{auto* environment=static_cast<cocoa_environment*>(view->environment->platform);NSView* parent=view_parent(view);if(!environment||!parent){neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"WKWebView environment or parent is unavailable");return false;}auto* state=new cocoa_view{};WKWebViewConfiguration* configuration=options->popup_request&&options->popup_request->popup_context?(__bridge WKWebViewConfiguration*)options->popup_request->popup_context:[WKWebViewConfiguration new];if(!options->popup_request){configuration.processPool=environment->process_pool;auto* profile=view->profile?static_cast<cocoa_profile*>(view->profile->platform):nullptr;configuration.websiteDataStore=profile?profile->data_store:environment->data_store;}state->delegate=[NeoWebViewDelegate new];state->delegate.nativeView=view;if(options->popup_request){WKUserContentController* content=[WKUserContentController new];for(WKUserScript* script in configuration.userContentController.userScripts)[content addUserScript:script];configuration.userContentController=content;}[configuration.userContentController addScriptMessageHandler:state->delegate name:@"neowebview"];state->webview=[[WKWebView alloc]initWithFrame:view_frame(view,parent) configuration:configuration];state->webview.navigationDelegate=state->delegate;state->webview.UIDelegate=state->delegate;state->webview.allowsMagnification=YES;if(view->fill_parent)state->webview.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;[parent addSubview:state->webview];view->platform=state;[state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];[state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];callback(context,nullptr);return true;}}
+bool neo_platform_view_create_async(neo_webview_view_t* view,const neo_webview_view_options_t* options,neo_platform_created_callback_t callback,void* context,neo_webview_error_t** error) noexcept {
+    @autoreleasepool {
+        @try {
+            try {
+                auto* environment=static_cast<cocoa_environment*>(view->environment->platform);
+                NSView* parent=view_parent(view);
+                if (!environment||!parent) {
+                    neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_STATE,"WKWebView environment or parent is unavailable");
+                    return false;
+                }
+                auto state=std::make_unique<cocoa_view>();
+                WKWebViewConfiguration* configuration=options->popup_request&&options->popup_request->popup_context?
+                    (__bridge WKWebViewConfiguration*)options->popup_request->popup_context:[WKWebViewConfiguration new];
+                if (!configuration) {
+                    neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WKWebView could not allocate a view configuration",0,"wkwebview");
+                    return false;
+                }
+                if (!options->popup_request) {
+                    configuration.processPool=environment->process_pool;
+                    auto* profile=view->profile?static_cast<cocoa_profile*>(view->profile->platform):nullptr;
+                    configuration.websiteDataStore=profile?profile->data_store:environment->data_store;
+                    state->scheme_handlers=[NSMutableArray arrayWithCapacity:view->environment->custom_schemes.size()];
+                    for (const auto& scheme : view->environment->custom_schemes) {
+                        NeoURLSchemeHandler* handler=[NeoURLSchemeHandler new];
+                        if (!handler) throw std::bad_alloc();
+                        handler.nativeEnvironment=view->environment;
+                        handler.registration=&scheme;
+                        [configuration setURLSchemeHandler:handler forURLScheme:ns_string(scheme.name)];
+                        [state->scheme_handlers addObject:handler];
+                    }
+                }
+                state->delegate=[NeoWebViewDelegate new];
+                if (!state->delegate) throw std::bad_alloc();
+                state->delegate.nativeView=view;
+                if (options->popup_request) {
+                    WKUserContentController* content=[WKUserContentController new];
+                    if (!content) throw std::bad_alloc();
+                    for (WKUserScript* script in configuration.userContentController.userScripts) [content addUserScript:script];
+                    configuration.userContentController=content;
+                }
+                [configuration.userContentController addScriptMessageHandler:state->delegate name:@"neowebview"];
+                state->webview=[[WKWebView alloc]initWithFrame:view_frame(view,parent) configuration:configuration];
+                if (!state->webview) {
+                    neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"WKWebView could not create the browser view",0,"wkwebview");
+                    return false;
+                }
+                state->webview.navigationDelegate=state->delegate;
+                state->webview.UIDelegate=state->delegate;
+                state->webview.allowsMagnification=YES;
+                if (view->fill_parent) state->webview.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+                [state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];
+                [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
+                [parent addSubview:state->webview];
+                view->platform=state.release();
+                callback(context,nullptr);
+                return true;
+            } catch (const std::exception& exception) {
+                neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,exception.what(),0,"wkwebview");
+                return false;
+            }
+        } @catch (NSException* exception) {
+            neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,utf8(exception.reason).c_str(),0,"wkwebview");
+            return false;
+        }
+    }
+}
 void neo_platform_view_destroy(neo_webview_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];}@catch(NSException*){}state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"neowebview"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
 neo_webview_result_t neo_platform_view_set_bounds(neo_webview_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEO_WEBVIEW_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view->fill_parent?(NSViewWidthSizable|NSViewHeightSizable):NSViewNotSizable;return NEO_WEBVIEW_OK;}
 neo_webview_result_t neo_platform_view_navigate(neo_webview_view_t* view,const std::string& uri,neo_webview_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url)return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation URI");[state->webview loadRequest:[NSURLRequest requestWithURL:url]];return NEO_WEBVIEW_OK;}}

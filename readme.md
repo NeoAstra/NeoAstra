@@ -17,7 +17,7 @@ Build native desktop applications with .NET and web technologies using the platf
 - JavaScript evaluation and persistent document scripts
 - Portable page zoom control
 - JSON web/native messaging
-- Windows custom schemes and directory-backed local application assets without a localhost server
+- Windows and macOS custom schemes and directory-backed local application assets without a localhost server
 - Deferred browser decisions with timeout-safe defaults, including navigation, permissions, dialogs, authentication, certificates, and fullscreen where supported
 - Tracked opener-compatible popup views hosted by normal application windows or borrowed parents
 - Download destination/default/cancel policy plus tracked lifecycle, progress, cancellation, and Windows pause/resume
@@ -55,7 +55,7 @@ return NeoApplication.Run(
 
 NeoWebView application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
-On Windows, register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application schemes are secure, authority-based origins and are automatically trusted for the message bridge:
+On Windows and macOS, register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based, marked secure, and automatically trusted for the message bridge:
 
 ```csharp
 var assets = new NeoDirectoryResourceProvider(Path.Combine(AppContext.BaseDirectory, "assets"));
@@ -67,7 +67,7 @@ await using var webView = await environment.CreateWebViewAsync(NeoWebViewHost.Fi
 await webView.NavigateAsync(new Uri("app://neowebview/index.html"));
 ```
 
-Custom resource-provider callbacks are synchronous because WebView2 requests the response synchronously. Return `null` for a standard `404`, use `NeoResourceResponse.FromBytes` for small generated content, or `NeoResourceResponse.FromFile`/`NeoDirectoryResourceProvider` to avoid copying local files into managed memory. Provider exceptions are contained at the ABI boundary and the request fails rather than unwinding into native code. On Windows, web messaging is blocked for untrusted remote origins unless they are explicitly listed in `NeoWebViewOptions.BridgeOrigins`.
+Custom resource-provider callbacks currently remain synchronous on both backends: WebView2 requests its response synchronously, and WKWebView completes the scheme task directly from `startURLSchemeTask`. Return `null` for a standard `404`, use `NeoResourceResponse.FromBytes` for small generated content, or `NeoResourceResponse.FromFile`/`NeoDirectoryResourceProvider` to avoid copying local files into managed memory. Windows uses a native file stream and macOS uses native `NSData` with mapped-if-safe file access. Provider exceptions are contained at the ABI boundary and the request fails rather than unwinding into native code. On Windows and macOS, web messaging is blocked for untrusted remote origins unless they are explicitly listed in `NeoWebViewOptions.BridgeOrigins`. WKWebView has no public equivalents for WebView2's authority, secure-context, CORS-allowlist, or service-worker registration switches, so service-worker descriptors are rejected on macOS. Linux custom schemes and explicit bridge origins remain unsupported.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

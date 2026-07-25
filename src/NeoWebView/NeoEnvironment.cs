@@ -79,7 +79,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     /// <param name="options">View options, or <see langword="null"/> for defaults.</param>
     /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
     /// <returns>The created browser view.</returns>
-    /// <exception cref="PlatformNotSupportedException">Explicit bridge origins were supplied on a backend that does not implement them.</exception>
+    /// <exception cref="PlatformNotSupportedException">Explicit bridge origins were supplied on Linux, which does not implement them.</exception>
     public ValueTask<NeoWebView> CreateWebViewAsync(NeoWebViewHost host, NeoWebViewOptions? options = null, CancellationToken cancellationToken = default)
         => CreateWebViewCoreAsync(host, options, 0, cancellationToken);
 
@@ -98,9 +98,9 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             throw new ArgumentException("The host window must belong to this environment's application.", nameof(host));
         }
 
-        if (options.BridgeOrigins.Count != 0 && !OperatingSystem.IsWindows())
+        if (options.BridgeOrigins.Count != 0 && !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
         {
-            throw new PlatformNotSupportedException("Explicit bridge origins are currently implemented only by the Windows backend.");
+            throw new PlatformNotSupportedException("Explicit bridge origins are not supported by the Linux backend.");
         }
 
         using var bridgeOrigins = new Utf8StringArray(options.BridgeOrigins);

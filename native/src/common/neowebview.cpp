@@ -99,22 +99,7 @@ void drain_ui_destructions(neo_webview_app_t* app) noexcept {
 
 bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept {
     if (!view) return false;
-    const auto colon = uri.find(':');
-    if (colon == std::string_view::npos) return false;
-    std::string scheme(uri.substr(0, colon));
-    std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
-    for (const auto& registration : view->environment->custom_schemes) {
-        if ((registration.flags & NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION) != 0 && registration.name == scheme) return true;
-    }
-    for (const auto& origin : view->bridge_origins) {
-        auto normalized_origin = std::string_view(origin);
-        while (normalized_origin.size() > 1 && normalized_origin.back() == '/') normalized_origin.remove_suffix(1);
-        const auto prefix_matches = uri.size() >= normalized_origin.size() && std::equal(normalized_origin.begin(), normalized_origin.end(), uri.begin(),
-            [](unsigned char left, unsigned char right) { return std::tolower(left) == std::tolower(right); });
-        if (prefix_matches &&
-            (uri.size() == normalized_origin.size() || uri[normalized_origin.size()] == '/' || uri[normalized_origin.size()] == '?' || uri[normalized_origin.size()] == '#')) return true;
-    }
-    return false;
+    return neo_bridge_origin_allowed_for(view->environment->custom_schemes, view->bridge_origins, uri);
 }
 
 neo_webview_app::~neo_webview_app() {
@@ -769,8 +754,8 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_create_async(neo_w
     if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEO_WEBVIEW_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
     if(!check_ui(app))return neo_fail(error,NEO_WEBVIEW_ERROR_WRONG_THREAD,"environment creation must begin on the UI thread");
     if(!accepts_ui_objects(app))return neo_fail(error,NEO_WEBVIEW_ERROR_DISPOSED,"application shutdown has begun");
-#if !defined(_WIN32)
-    if(options->custom_scheme_count!=0)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"custom schemes are currently implemented only by the Windows backend");
+#if !defined(_WIN32) && !defined(__APPLE__)
+    if(options->custom_scheme_count!=0)return neo_fail(error,NEO_WEBVIEW_ERROR_NOT_SUPPORTED,"custom schemes are not supported by the Linux backend");
 #endif
     neo_webview_operation_t* op{};
     neo_webview_environment_t* value{};
@@ -822,6 +807,11 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_environment_get_capability(con
         case NEO_WEBVIEW_CAPABILITY_PERMISSION_PERSISTENCE:
         case NEO_WEBVIEW_CAPABILITY_DOWNLOAD_PAUSE:
             info->support=NEO_WEBVIEW_SUPPORT_NATIVE;break;
+#elif defined(__APPLE__)
+        case NEO_WEBVIEW_CAPABILITY_CUSTOM_SCHEME:
+            info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
+        case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
+            info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;
 #else
         case NEO_WEBVIEW_CAPABILITY_PERMISSIONS:
             info->support=NEO_WEBVIEW_SUPPORT_LIMITED;break;

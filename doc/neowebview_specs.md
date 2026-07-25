@@ -1521,7 +1521,7 @@ Responses MUST support:
 
 The file-path response SHOULD be optimized to avoid copying file contents through managed memory.
 
-For the Phase 1 Windows slice, WebView2 asks for the response during its resource-request callback, so a byte/file resource provider is synchronous. The file response is consumed as a native stream and MUST NOT be copied through managed memory. The later streaming-body contract remains asynchronous because reads and cancellation are genuinely callback-based operations.
+The current Windows and macOS byte/file resource-provider contract is synchronous. WebView2 asks for the response during its resource-request callback; the WKWebView backend invokes the same provider and completes its `WKURLSchemeTask` from `startURLSchemeTask`. Windows consumes file responses as native streams, while macOS uses native `NSData` with mapped-if-safe file access, so neither path copies file contents through managed memory. The later streaming-body contract remains asynchronous because reads and cancellation are genuinely callback-based operations.
 
 ## 20.5 Streaming
 
@@ -1534,6 +1534,8 @@ The implementation MUST apply backpressure and MUST NOT request the entire resou
 * WebView2: custom-scheme registration and resource-request handling.
 * WKWebView: `WKURLSchemeHandler`.
 * WebKitGTK: `webkit_web_context_register_uri_scheme`.
+
+The current WKWebView mapping registers non-built-in schemes on each view configuration, including opener-compatible popup configurations inherited from WebKit. It preserves status, headers, MIME type, content length, byte and mapped-file response shapes. `NSHTTPURLResponse` does not expose a custom reason-phrase initializer, so WKWebView derives that text from the status code. Descriptor metadata remains available to portable policy such as application-scheme bridge trust, but the public WKWebView API does not expose WebView2-equivalent authority, secure-context, CORS-allowlist or service-worker registration switches; capability discovery therefore reports limited support, and service-worker requests are rejected at environment creation. Linux custom-scheme registration remains explicitly unsupported by the current implementation.
 
 WebKitGTK permits URI scheme requests to be retained and completed asynchronously.
 

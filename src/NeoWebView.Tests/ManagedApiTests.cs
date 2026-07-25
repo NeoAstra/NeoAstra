@@ -54,6 +54,54 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void CustomScheme_ApplicationDefaultsAndResponseShapesMatchPortableContract()
+    {
+        var provider = new NullResourceProvider();
+        var scheme = NeoCustomScheme.Application("Assets", provider);
+        var bytes = NeoResourceResponse.FromBytes(new byte[] { 1, 2, 3 }, "application/octet-stream");
+        var filePath = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllBytes(filePath, [4, 5, 6, 7]);
+            var file = NeoResourceResponse.FromFile(filePath, "application/octet-stream");
+
+            Assert.AreEqual("assets", scheme.Name);
+            Assert.IsTrue(scheme.HasAuthority);
+            Assert.IsTrue(scheme.IsSecure);
+            Assert.IsTrue(scheme.IsApplicationScheme);
+            Assert.AreSame(provider, scheme.ResourceProvider);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, bytes.Bytes.ToArray());
+            Assert.AreEqual(3, bytes.ContentLength);
+            Assert.IsNull(bytes.FilePath);
+            Assert.AreEqual(Path.GetFullPath(filePath), file.FilePath);
+            Assert.AreEqual(4, file.ContentLength);
+            Assert.IsTrue(file.Bytes.IsEmpty);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [TestMethod]
+    public void CocoaBackend_SourcePairsSchemeHandlingAndBridgeTrust()
+    {
+        var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
+        var common = File.ReadAllText(FindRepositoryFile("native", "src", "common", "neowebview.cpp"));
+        var managed = File.ReadAllText(FindRepositoryFile("src", "NeoWebView", "NeoEnvironment.cs"));
+
+        StringAssert.Contains(cocoa, "NSObject<WKURLSchemeHandler>");
+        StringAssert.Contains(cocoa, "startURLSchemeTask:");
+        StringAssert.Contains(cocoa, "setURLSchemeHandler:handler");
+        StringAssert.Contains(cocoa, "NSDataReadingMappedIfSafe");
+        StringAssert.Contains(cocoa, "response.release(response.release_context)");
+        StringAssert.Contains(cocoa, "neo_bridge_origin_allowed(view,uri)");
+        StringAssert.Contains(common, "!defined(_WIN32) && !defined(__APPLE__)");
+        StringAssert.Contains(common, "custom schemes are not supported by the Linux backend");
+        StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
+    }
+
+    [TestMethod]
     public void DirectoryResourceProvider_ServesAssetsAndRejectsTraversal()
     {
         var root = Path.Combine(Path.GetTempPath(), $"neowebview-assets-{Guid.NewGuid():N}");
@@ -534,6 +582,17 @@ public sealed class ManagedApiTests
             TranslateMessage(in message);
             DispatchMessageW(in message);
         }
+    }
+
+    private static string FindRepositoryFile(params string[] parts)
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var path = Path.Combine([directory.FullName, .. parts]);
+            if (File.Exists(path)) return path;
+        }
+
+        throw new FileNotFoundException($"Could not locate repository file '{Path.Combine(parts)}' from '{AppContext.BaseDirectory}'.");
     }
 
     [StructLayout(LayoutKind.Sequential)]

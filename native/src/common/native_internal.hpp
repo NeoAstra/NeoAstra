@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -180,6 +181,27 @@ struct neo_custom_scheme_registration final {
         }
     }
 };
+
+inline bool neo_bridge_origin_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
+                                          const std::vector<std::string>& bridge_origins,
+                                          std::string_view uri) noexcept {
+    const auto colon = uri.find(':');
+    if (colon == std::string_view::npos) return false;
+    for (const auto& registration : custom_schemes) {
+        if ((registration.flags & NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION) != 0 && registration.name.size() == colon &&
+            std::equal(registration.name.begin(), registration.name.end(), uri.begin(),
+                [](unsigned char left, unsigned char right) { return std::tolower(left) == std::tolower(right); })) return true;
+    }
+    for (const auto& origin : bridge_origins) {
+        auto normalized_origin = std::string_view(origin);
+        while (normalized_origin.size() > 1 && normalized_origin.back() == '/') normalized_origin.remove_suffix(1);
+        const auto prefix_matches = uri.size() >= normalized_origin.size() && std::equal(normalized_origin.begin(), normalized_origin.end(), uri.begin(),
+            [](unsigned char left, unsigned char right) { return std::tolower(left) == std::tolower(right); });
+        if (prefix_matches &&
+            (uri.size() == normalized_origin.size() || uri[normalized_origin.size()] == '/' || uri[normalized_origin.size()] == '?' || uri[normalized_origin.size()] == '#')) return true;
+    }
+    return false;
+}
 
 enum class neo_decision_state : uint32_t { pending, deferred, completed, timed_out, abandoned };
 

@@ -631,6 +631,23 @@ void test_custom_scheme_provider_release_once_and_exception_containment() {
     assert(releases.load() == 2);
 }
 
+void test_bridge_origin_trust() {
+    std::vector<neo_custom_scheme_registration> custom_schemes;
+    neo_custom_scheme_registration application_scheme;
+    application_scheme.name = "app";
+    application_scheme.flags = NEO_WEBVIEW_CUSTOM_SCHEME_APPLICATION;
+    custom_schemes.push_back(std::move(application_scheme));
+    const std::vector<std::string> bridge_origins={"https://trusted.example", "custom://host/"};
+
+    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "app://neowebview/index.html"));
+    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "APP://NEOWEBVIEW/index.html"));
+    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example/path?q=1"));
+    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "CUSTOM://HOST/resource"));
+    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "assets://neowebview/index.html"));
+    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example.evil/path"));
+    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://untrusted.example/"));
+}
+
 } // namespace
 
 int main() {
@@ -656,5 +673,6 @@ int main() {
     test_native_parent_structure();
     test_custom_scheme_validation_and_trailing_bytes();
     test_custom_scheme_provider_release_once_and_exception_containment();
+    test_bridge_origin_trust();
     return 0;
 }
