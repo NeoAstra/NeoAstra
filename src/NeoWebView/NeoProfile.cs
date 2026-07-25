@@ -295,8 +295,12 @@ public sealed unsafe class NeoProfile : IAsyncDisposable
             throw new InvalidDataException("The native cookie buffer has no data.");
         }
 
-        var bytes = new ReadOnlySpan<byte>(data, checked((int)length)).ToArray();
-        using var document = JsonDocument.Parse(bytes);
+        var reader = new Utf8JsonReader(new ReadOnlySpan<byte>(data, checked((int)length)));
+        using var document = JsonDocument.ParseValue(ref reader);
+        if (reader.Read())
+        {
+            throw new InvalidDataException("The native cookie buffer contains trailing JSON data.");
+        }
         if (document.RootElement.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("The native cookie buffer is not a JSON array.");

@@ -7,34 +7,46 @@ using NeoWebView.Interop.Generated;
 
 namespace NeoWebView.Interop;
 
-internal sealed unsafe class Utf8String : IDisposable
+internal unsafe ref struct Utf8String
 {
-    private readonly byte[] _bytes;
-    private GCHandle _pin;
+    private byte* _data;
+    private int _byteLength;
 
     internal Utf8String(string? value)
     {
-        _bytes = value is null ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(value);
-        if (_bytes.Length != 0)
+        if (string.IsNullOrEmpty(value))
         {
-            _pin = GCHandle.Alloc(_bytes, GCHandleType.Pinned);
+            return;
+        }
+
+        var byteLength = Encoding.UTF8.GetByteCount(value);
+        var data = (byte*)NativeMemory.Alloc((nuint)byteLength);
+        try
+        {
+            _byteLength = Encoding.UTF8.GetBytes(value, new Span<byte>(data, byteLength));
+            _data = data;
+        }
+        catch
+        {
+            NativeMemory.Free(data);
+            throw;
         }
     }
 
-    internal NativeMethods.neo_webview_string_view_t View
+    internal readonly NativeMethods.neo_webview_string_view_t View
     {
         get
         {
             var value = new NativeMethods.neo_webview_string_view
             {
-                data = _bytes.Length == 0 ? null : (byte*)_pin.AddrOfPinnedObject(),
-                length = (ulong)_bytes.Length,
+                data = _data,
+                length = (ulong)_byteLength,
             };
             return new(value);
         }
     }
 
-    internal int ByteLength => _bytes.Length;
+    internal readonly int ByteLength => _byteLength;
 
     internal static string Decode(NativeMethods.neo_webview_string_view_t value)
     {
@@ -59,9 +71,13 @@ internal sealed unsafe class Utf8String : IDisposable
 
     public void Dispose()
     {
-        if (_pin.IsAllocated)
+        var data = _data;
+        _data = null;
+        if (data is not null)
         {
-            _pin.Free();
+            NativeMemory.Clear(data, (nuint)_byteLength);
+            NativeMemory.Free(data);
+            _byteLength = 0;
         }
     }
 }
