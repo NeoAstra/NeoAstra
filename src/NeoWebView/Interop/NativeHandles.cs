@@ -91,6 +91,15 @@ internal sealed class SafeDecisionHandle(nint value) : NeoSafeHandle(value)
     }
 }
 
+internal sealed class SafeDownloadHandle(nint value) : NeoSafeHandle(value)
+{
+    protected override bool ReleaseHandle()
+    {
+        try { NativeMethods.neo_webview_download_release(new(handle)); } catch { }
+        return true;
+    }
+}
+
 internal sealed class SafeErrorHandle(nint value) : NeoSafeHandle(value)
 {
     protected override bool ReleaseHandle()

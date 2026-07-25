@@ -81,6 +81,12 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     /// <returns>The created browser view.</returns>
     /// <exception cref="NotSupportedException">Bridge origins were supplied, but the native ABI does not expose bridge-origin configuration.</exception>
     public ValueTask<NeoWebView> CreateWebViewAsync(NeoWebViewHost host, NeoWebViewOptions? options = null, CancellationToken cancellationToken = default)
+        => CreateWebViewCoreAsync(host, options, 0, cancellationToken);
+
+    internal ValueTask<NeoWebView> CreatePopupWebViewAsync(NeoWebViewHost host, NeoWebViewOptions? options, nint popupRequest, CancellationToken cancellationToken)
+        => CreateWebViewCoreAsync(host, options, popupRequest, cancellationToken);
+
+    private ValueTask<NeoWebView> CreateWebViewCoreAsync(NeoWebViewHost host, NeoWebViewOptions? options, nint popupRequest, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(host);
@@ -131,6 +137,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             fill_parent = host.Window is not null || options.FillParent ? 1u : 0u,
             maximum_message_size = options.MaximumMessageSize,
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
+            popup_request = new NativeMethods.neo_webview_decision_t(popupRequest),
         };
         var nativeOptions = new NativeMethods.neo_webview_view_options_t(raw);
         var operation = new NativeOperation<NeoWebView>(cancellationToken, new ViewCreation(this, host, options));

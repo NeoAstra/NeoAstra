@@ -49,7 +49,19 @@ struct windows_view {
     EventRegistrationToken permission_requested{};
     EventRegistrationToken new_window_requested{};
     EventRegistrationToken process_failed{};
+    EventRegistrationToken script_dialog{};
+    EventRegistrationToken fullscreen_changed{};
+    EventRegistrationToken download_starting{};
+    EventRegistrationToken basic_auth{};
+    EventRegistrationToken client_certificate{};
+    EventRegistrationToken server_certificate_error{};
     bool events_registered{};
+};
+
+struct windows_download {
+    ComPtr<ICoreWebView2DownloadOperation> operation;
+    EventRegistrationToken bytes_changed{};
+    EventRegistrationToken state_changed{};
 };
 
 std::wstring widen(const std::string& value) {
@@ -140,12 +152,104 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_PermissionRequested(state->permission_requested);
     state->core->remove_NewWindowRequested(state->new_window_requested);
     state->core->remove_ProcessFailed(state->process_failed);
+    state->core->remove_ScriptDialogOpening(state->script_dialog);
+    state->core->remove_ContainsFullScreenElementChanged(state->fullscreen_changed);
+    ComPtr<ICoreWebView2_4> core4;
+    if (SUCCEEDED(state->core.As(&core4))) core4->remove_DownloadStarting(state->download_starting);
+    ComPtr<ICoreWebView2_10> core10;if(SUCCEEDED(state->core.As(&core10)))core10->remove_BasicAuthenticationRequested(state->basic_auth);
+    ComPtr<ICoreWebView2_5> core5;if(SUCCEEDED(state->core.As(&core5)))core5->remove_ClientCertificateRequested(state->client_certificate);
+    ComPtr<ICoreWebView2_14> core14;if(SUCCEEDED(state->core.As(&core14)))core14->remove_ServerCertificateErrorDetected(state->server_certificate_error);
     state->events_registered = false;
+}
+
+neo_webview_result_t windows_download_command(neo_webview_download_t* download, uint32_t command) noexcept {
+    auto* state=static_cast<windows_download*>(download->platform);
+    if(!state||!state->operation)return NEO_WEBVIEW_ERROR_DISPOSED;
+    const auto current=download->state.load(std::memory_order_acquire);
+    if(current==NEO_WEBVIEW_DOWNLOAD_COMPLETED||current==NEO_WEBVIEW_DOWNLOAD_CANCELED||current==NEO_WEBVIEW_DOWNLOAD_FAILED)return NEO_WEBVIEW_ERROR_INVALID_STATE;
+    HRESULT result=E_INVALIDARG;
+    if(command==0)result=state->operation->Cancel();else if(command==1)result=state->operation->Pause();else if(command==2)result=state->operation->Resume();
+    return SUCCEEDED(result)?NEO_WEBVIEW_OK:NEO_WEBVIEW_ERROR_NATIVE_FAILURE;
+}
+
+void destroy_windows_download(neo_webview_download_t* download) noexcept {
+    auto* state=static_cast<windows_download*>(download->platform);if(!state)return;
+    if(state->operation){state->operation->remove_BytesReceivedChanged(state->bytes_changed);state->operation->remove_StateChanged(state->state_changed);}
+    delete state;
+}
+
+bool register_download_events(neo_webview_download_t* download) noexcept {
+    try {
+        auto* state=static_cast<windows_download*>(download->platform);
+        auto result=state->operation->add_BytesReceivedChanged(Callback<ICoreWebView2BytesReceivedChangedEventHandler>([download](ICoreWebView2DownloadOperation* operation,IUnknown*)->HRESULT{
+            INT64 received{},total{-1};operation->get_BytesReceived(&received);operation->get_TotalBytesToReceive(&total);
+            download->bytes_received.store(received<0?0:static_cast<uint64_t>(received),std::memory_order_release);download->total_bytes.store(total<0?UINT64_MAX:static_cast<uint64_t>(total),std::memory_order_release);
+            neo_download_emit(download,NEO_WEBVIEW_EVENT_DOWNLOAD_PROGRESS_CHANGED);return S_OK;
+        }).Get(),&state->bytes_changed);
+        if(FAILED(result))return false;
+        result=state->operation->add_StateChanged(Callback<ICoreWebView2StateChangedEventHandler>([download](ICoreWebView2DownloadOperation* operation,IUnknown*)->HRESULT{
+            COREWEBVIEW2_DOWNLOAD_STATE native{};if(FAILED(operation->get_State(&native))||native==COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS)return S_OK;
+            COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON reason{};
+            if(native==COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED)operation->get_InterruptReason(&reason);
+            const auto terminal=native==COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED?NEO_WEBVIEW_DOWNLOAD_COMPLETED:
+                reason==COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED?NEO_WEBVIEW_DOWNLOAD_CANCELED:NEO_WEBVIEW_DOWNLOAD_FAILED;
+            auto expected=NEO_WEBVIEW_DOWNLOAD_IN_PROGRESS;if(!download->state.compare_exchange_strong(expected,terminal,std::memory_order_acq_rel))return S_OK;
+            if(terminal==NEO_WEBVIEW_DOWNLOAD_FAILED)download->failure_reason="WebView2 interrupt reason "+std::to_string(static_cast<uint32_t>(reason));
+            neo_download_emit(download,NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED);download->release_lifecycle();return S_OK;
+        }).Get(),&state->state_changed);
+        if(SUCCEEDED(result))return true;
+        state->operation->remove_BytesReceivedChanged(state->bytes_changed);
+    } catch (...) { }
+    return false;
+}
+
+struct download_decision_context { ComPtr<ICoreWebView2DownloadStartingEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; neo_webview_download_t* download{}; };
+void download_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<download_decision_context> context(static_cast<download_decision_context*>(pointer));auto* download=context->download;
+    if(response->action==NEO_WEBVIEW_DECISION_DOWNLOAD&&!response->text.length)response=nullptr;
+    const auto cancel=[&](bool handled){context->args->put_Cancel(TRUE);if(handled)context->args->put_Handled(TRUE);download->state.store(NEO_WEBVIEW_DOWNLOAD_CANCELED);neo_download_emit(download,NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED);download->release_lifecycle();};
+    if(!response||response->action==NEO_WEBVIEW_DECISION_CANCEL||response->action==NEO_WEBVIEW_DECISION_DENY){cancel(false);}
+    else if(response->action==NEO_WEBVIEW_DECISION_HANDLED_EXTERNAL){cancel(true);}
+    else if(response->action==NEO_WEBVIEW_DECISION_DEFAULT||response->action==NEO_WEBVIEW_DECISION_ALLOW||response->action==NEO_WEBVIEW_DECISION_DOWNLOAD){
+        if(response->action==NEO_WEBVIEW_DECISION_DOWNLOAD){try{download->destination_path=neo_string(response->text);context->args->put_ResultFilePath(widen(download->destination_path).c_str());context->args->put_Handled(TRUE);}catch(...){cancel(false);context->deferral->Complete();return;}}
+        download->state.store(NEO_WEBVIEW_DOWNLOAD_IN_PROGRESS);
+        if(register_download_events(download))neo_download_emit(download,NEO_WEBVIEW_EVENT_DOWNLOAD_STARTED);else cancel(false);
+    } else cancel(false);
+    context->deferral->Complete();
 }
 
 struct navigation_decision_context {
     ComPtr<ICoreWebView2NavigationStartingEventArgs> args;
 };
+
+struct script_dialog_context { ComPtr<ICoreWebView2ScriptDialogOpeningEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; };
+void script_dialog_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<script_dialog_context> context(static_cast<script_dialog_context*>(pointer));
+    if(response->action==NEO_WEBVIEW_DECISION_ALLOW){if(response->text.length){try{context->args->put_ResultText(widen(neo_string(response->text)).c_str());}catch(...){}}context->args->Accept();}
+    context->deferral->Complete();
+}
+
+struct basic_auth_context { ComPtr<ICoreWebView2BasicAuthenticationRequestedEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; };
+void basic_auth_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<basic_auth_context> context(static_cast<basic_auth_context*>(pointer));
+    if(response->action==NEO_WEBVIEW_DECISION_ALLOW){try{ComPtr<ICoreWebView2BasicAuthenticationResponse> credentials;if(SUCCEEDED(context->args->get_Response(&credentials))){credentials->put_UserName(widen(neo_string(response->text)).c_str());credentials->put_Password(widen(neo_string(response->secondary_text)).c_str());}}catch(...){context->args->put_Cancel(TRUE);}}
+    else if(response->action==NEO_WEBVIEW_DECISION_CANCEL||response->action==NEO_WEBVIEW_DECISION_DENY)context->args->put_Cancel(TRUE);
+    context->deferral->Complete();
+}
+
+struct tls_context { ComPtr<ICoreWebView2ServerCertificateErrorDetectedEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; };
+void tls_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {std::unique_ptr<tls_context> context(static_cast<tls_context*>(pointer));context->args->put_Action(response->action==NEO_WEBVIEW_DECISION_ALLOW?COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW:COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);context->deferral->Complete();}
+
+struct client_cert_context { ComPtr<ICoreWebView2ClientCertificateRequestedEventArgs> args; ComPtr<ICoreWebView2ClientCertificateCollection> certificates; ComPtr<ICoreWebView2Deferral> deferral; };
+void client_cert_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {std::unique_ptr<client_cert_context> context(static_cast<client_cert_context*>(pointer));
+    if(response->action==NEO_WEBVIEW_DECISION_ALLOW){UINT count{};context->certificates->get_Count(&count);if(response->selected_index<count){ComPtr<ICoreWebView2ClientCertificate> selected;context->certificates->GetValueAtIndex(response->selected_index,&selected);context->args->put_SelectedCertificate(selected.Get());context->args->put_Handled(TRUE);}else context->args->put_Cancel(TRUE);}
+    else if(response->action==NEO_WEBVIEW_DECISION_CANCEL||response->action==NEO_WEBVIEW_DECISION_DENY){context->args->put_Cancel(TRUE);context->args->put_Handled(TRUE);}context->deferral->Complete();}
+
+struct fullscreen_context { ComPtr<ICoreWebView2> core; };
+void fullscreen_decided(void* pointer,const neo_webview_decision_response_t* response) noexcept {
+    std::unique_ptr<fullscreen_context> context(static_cast<fullscreen_context*>(pointer));
+    if(response->action!=NEO_WEBVIEW_DECISION_ALLOW)context->core->ExecuteScript(L"document.fullscreenElement && document.exitFullscreen()",nullptr);
+}
 
 neo_webview_permission_kind_t portable_permission(COREWEBVIEW2_PERMISSION_KIND kind) noexcept {
     switch (kind) {
@@ -176,7 +280,10 @@ struct new_window_decision_context {
 void new_window_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
     std::unique_ptr<new_window_decision_context> context(static_cast<new_window_decision_context*>(pointer));
     context->args->put_Handled(TRUE);
-    if (response->action == NEO_WEBVIEW_DECISION_ALLOW) {
+    if (response->action == NEO_WEBVIEW_DECISION_ALLOW && response->target_view) {
+        auto* target=static_cast<windows_view*>(response->target_view->platform);
+        if(target&&target->core)context->args->put_NewWindow(target->core.Get());
+    } else if (response->action == NEO_WEBVIEW_DECISION_ALLOW) {
         context->core->Navigate(context->uri.c_str());
     } else if (response->action == NEO_WEBVIEW_DECISION_OPEN_EXTERNAL) {
         ShellExecuteW(nullptr, L"open", context->uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -197,7 +304,7 @@ void permission_decided(void* pointer, const neo_webview_decision_response_t* re
 
 void navigation_decided(void* pointer, const neo_webview_decision_response_t* response) noexcept {
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
-    const bool cancel = response->action != NEO_WEBVIEW_DECISION_ALLOW;
+    const bool cancel = response->action != NEO_WEBVIEW_DECISION_ALLOW && response->action != NEO_WEBVIEW_DECISION_DEFAULT;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
 }
 
@@ -244,7 +351,7 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 neo_webview_decision_response_t response{};
                 response.size = sizeof(response);
                 response.version = 1;
-                response.action = NEO_WEBVIEW_DECISION_DEFAULT;
+                response.action = decision->default_action;
                 neo_webview_decision_complete(decision, &response, nullptr);
             }
             const auto allowed = decision->resolved_action.load(std::memory_order_acquire) == NEO_WEBVIEW_DECISION_ALLOW;
@@ -253,6 +360,25 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             return S_OK;
         }).Get(), &state->navigation_starting);
     if (FAILED(result)) return result;
+
+    result=state->core->add_ScriptDialogOpening(Callback<ICoreWebView2ScriptDialogOpeningEventHandler>([view](ICoreWebView2*,ICoreWebView2ScriptDialogOpeningEventArgs* args)->HRESULT{
+        LPWSTR raw_uri{},raw_message{},raw_default{};COREWEBVIEW2_SCRIPT_DIALOG_KIND kind{};ComPtr<ICoreWebView2Deferral> deferral;
+        auto hr=args->get_Uri(&raw_uri);if(SUCCEEDED(hr))hr=args->get_Kind(&kind);if(SUCCEEDED(hr))hr=args->get_Message(&raw_message);if(SUCCEEDED(hr))hr=args->get_DefaultText(&raw_default);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);
+        if(FAILED(hr)){CoTaskMemFree(raw_uri);CoTaskMemFree(raw_message);CoTaskMemFree(raw_default);return S_OK;}
+        try{auto uri=take_string(raw_uri);auto message=take_string(raw_message);auto default_text=take_string(raw_default);auto context=std::make_unique<script_dialog_context>();context->args=args;context->deferral=deferral;
+            auto* decision=new neo_webview_decision;const auto portable=kind==COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT?NEO_WEBVIEW_SCRIPT_DIALOG_ALERT:kind==COREWEBVIEW2_SCRIPT_DIALOG_KIND_CONFIRM?NEO_WEBVIEW_SCRIPT_DIALOG_CONFIRM:kind==COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT?NEO_WEBVIEW_SCRIPT_DIALOG_PROMPT:NEO_WEBVIEW_SCRIPT_DIALOG_BEFORE_UNLOAD;
+            neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_SCRIPT_DIALOG,portable==NEO_WEBVIEW_SCRIPT_DIALOG_ALERT?NEO_WEBVIEW_DECISION_ALLOW:NEO_WEBVIEW_DECISION_CANCEL);decision->completion=script_dialog_decided;decision->completion_context=context.release();neo_event_details details{};details.text2=&default_text;
+            neo_emit_view_detailed(view,NEO_WEBVIEW_EVENT_SCRIPT_DIALOG_REQUESTED,0,&message,&uri,portable,0,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;
+        }catch(...){deferral->Complete();return S_OK;}
+    }).Get(),&state->script_dialog);
+    if(FAILED(result))return result;
+
+    result=state->core->add_ContainsFullScreenElementChanged(Callback<ICoreWebView2ContainsFullScreenElementChangedEventHandler>([view](ICoreWebView2* core,IUnknown*)->HRESULT{
+        BOOL entering{};core->get_ContainsFullScreenElement(&entering);if(!entering)return S_OK;auto* decision=new(std::nothrow) neo_webview_decision;if(!decision){core->ExecuteScript(L"document.fullscreenElement && document.exitFullscreen()",nullptr);return S_OK;}
+        neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_FULLSCREEN,NEO_WEBVIEW_DECISION_DENY);decision->completion=fullscreen_decided;decision->completion_context=new(std::nothrow) fullscreen_context{core};if(!decision->completion_context){decision->release();core->ExecuteScript(L"document.fullscreenElement && document.exitFullscreen()",nullptr);return S_OK;}
+        neo_emit_view(view,NEO_WEBVIEW_EVENT_FULLSCREEN_REQUESTED,0,nullptr,&view->source,1,0,decision);neo_finish_decision_event(view,decision);decision->release();return S_OK;
+    }).Get(),&state->fullscreen_changed);
+    if(FAILED(result))return result;
 
     result = state->core->add_NavigationCompleted(
         Callback<ICoreWebView2NavigationCompletedEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
@@ -395,6 +521,47 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
             }
         }).Get(), &state->new_window_requested);
     if (FAILED(result)) return result;
+
+    ComPtr<ICoreWebView2_4> core4;
+    if (SUCCEEDED(state->core.As(&core4))) {
+        result=core4->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>([view](ICoreWebView2*,ICoreWebView2DownloadStartingEventArgs* args)->HRESULT{
+            ComPtr<ICoreWebView2DownloadOperation> operation;ComPtr<ICoreWebView2Deferral> deferral;LPWSTR raw_path{};
+            auto hr=args->get_DownloadOperation(&operation);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(SUCCEEDED(hr))args->get_ResultFilePath(&raw_path);
+            if(FAILED(hr)){CoTaskMemFree(raw_path);args->put_Cancel(TRUE);return S_OK;}
+            try{
+                auto download_guard=std::make_unique<neo_webview_download>(view);auto* download=download_guard.get();auto* platform=new windows_download;download->platform=platform;download->command=windows_download_command;download->platform_destroy=destroy_windows_download;platform->operation=operation;
+                LPWSTR raw_uri{},raw_mime{},raw_disposition{};INT64 total{-1};operation->get_Uri(&raw_uri);operation->get_MimeType(&raw_mime);operation->get_ContentDisposition(&raw_disposition);operation->get_TotalBytesToReceive(&total);
+                 download->source_uri=take_string(raw_uri);download->total_bytes.store(total<0?UINT64_MAX:static_cast<uint64_t>(total));download->destination_path=take_string(raw_path);download->can_pause=true;raw_path=nullptr;
+                auto mime=take_string(raw_mime);auto disposition=take_string(raw_disposition);auto suggested=download->destination_path;const auto slash=suggested.find_last_of("/\\");if(slash!=std::string::npos)suggested.erase(0,slash+1);
+                auto context=std::make_unique<download_decision_context>();context->args=args;context->deferral=deferral;context->download=download;
+                auto decision_guard=std::make_unique<neo_webview_decision>();auto* decision=decision_guard.get();neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_DOWNLOAD_REQUEST,NEO_WEBVIEW_DECISION_CANCEL);decision->completion=download_decided;decision->completion_context=context.release();download_guard.release();decision_guard.release();
+                neo_event_details details{};details.text2=&mime;details.text3=&disposition;details.value2=1;details.download=download;download->event_published=true;
+                neo_emit_view_detailed(view,NEO_WEBVIEW_EVENT_DOWNLOAD_REQUESTED,download->id,&suggested,&download->source_uri,total<0?UINT64_MAX:static_cast<uint64_t>(total),0,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;
+            }catch(...){CoTaskMemFree(raw_path);args->put_Cancel(TRUE);deferral->Complete();return S_OK;}
+        }).Get(),&state->download_starting);
+        if(FAILED(result))return result;
+    }
+
+    ComPtr<ICoreWebView2_10> core10;
+    if(SUCCEEDED(state->core.As(&core10))){result=core10->add_BasicAuthenticationRequested(Callback<ICoreWebView2BasicAuthenticationRequestedEventHandler>([view](ICoreWebView2*,ICoreWebView2BasicAuthenticationRequestedEventArgs* args)->HRESULT{
+        LPWSTR raw_uri{},raw_challenge{};ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_Uri(&raw_uri);if(SUCCEEDED(hr))hr=args->get_Challenge(&raw_challenge);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_uri);CoTaskMemFree(raw_challenge);args->put_Cancel(TRUE);return S_OK;}
+        try{auto uri=take_string(raw_uri);auto challenge=take_string(raw_challenge);auto context=std::make_unique<basic_auth_context>();context->args=args;context->deferral=deferral;auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_AUTHENTICATION,NEO_WEBVIEW_DECISION_DEFAULT);decision->completion=basic_auth_decided;decision->completion_context=context.release();neo_event_details details{};details.text2=&challenge;
+            neo_emit_view_detailed(view,NEO_WEBVIEW_EVENT_AUTHENTICATION_REQUESTED,0,nullptr,&uri,0,0,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Cancel(TRUE);deferral->Complete();return S_OK;}
+    }).Get(),&state->basic_auth);if(FAILED(result))return result;}
+
+    ComPtr<ICoreWebView2_5> core5;
+    if(SUCCEEDED(state->core.As(&core5))){result=core5->add_ClientCertificateRequested(Callback<ICoreWebView2ClientCertificateRequestedEventHandler>([view](ICoreWebView2*,ICoreWebView2ClientCertificateRequestedEventArgs* args)->HRESULT{
+        LPWSTR raw_host{};int port{};BOOL proxy{};ComPtr<ICoreWebView2ClientCertificateCollection> certificates;ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_Host(&raw_host);if(SUCCEEDED(hr))hr=args->get_Port(&port);if(SUCCEEDED(hr))hr=args->get_IsProxy(&proxy);if(SUCCEEDED(hr))hr=args->get_MutuallyTrustedCertificates(&certificates);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_host);args->put_Cancel(TRUE);return S_OK;}
+        try{auto host=take_string(raw_host);UINT count{};certificates->get_Count(&count);auto context=std::make_unique<client_cert_context>();context->args=args;context->certificates=certificates;context->deferral=deferral;auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_CLIENT_CERTIFICATE,NEO_WEBVIEW_DECISION_DEFAULT);decision->completion=client_cert_decided;decision->completion_context=context.release();neo_event_details details{};details.value2=proxy?1u:0u;
+            neo_emit_view_detailed(view,NEO_WEBVIEW_EVENT_CLIENT_CERTIFICATE_REQUESTED,0,&host,nullptr,count,port,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Cancel(TRUE);deferral->Complete();return S_OK;}
+    }).Get(),&state->client_certificate);if(FAILED(result))return result;}
+
+    ComPtr<ICoreWebView2_14> core14;
+    if(SUCCEEDED(state->core.As(&core14))){result=core14->add_ServerCertificateErrorDetected(Callback<ICoreWebView2ServerCertificateErrorDetectedEventHandler>([view](ICoreWebView2*,ICoreWebView2ServerCertificateErrorDetectedEventArgs* args)->HRESULT{
+        LPWSTR raw_uri{};COREWEBVIEW2_WEB_ERROR_STATUS status{};ComPtr<ICoreWebView2Certificate> certificate;ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_RequestUri(&raw_uri);if(SUCCEEDED(hr))hr=args->get_ErrorStatus(&status);if(SUCCEEDED(hr))hr=args->get_ServerCertificate(&certificate);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_uri);args->put_Action(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);return S_OK;}
+        try{auto uri=take_string(raw_uri);LPWSTR raw_subject{};certificate->get_Subject(&raw_subject);auto subject=take_string(raw_subject);auto context=std::make_unique<tls_context>();context->args=args;context->deferral=deferral;auto* decision=new neo_webview_decision;neo_configure_decision(decision,view,NEO_WEBVIEW_DECISION_CERTIFICATE_ERROR,NEO_WEBVIEW_DECISION_DENY);decision->completion=tls_decided;decision->completion_context=context.release();neo_event_details details{};details.text2=&subject;
+            neo_emit_view_detailed(view,NEO_WEBVIEW_EVENT_CERTIFICATE_ERROR,0,nullptr,&uri,0,static_cast<int64_t>(status),decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Action(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);deferral->Complete();return S_OK;}
+    }).Get(),&state->server_certificate_error);if(FAILED(result))return result;}
 
     result = state->core->add_ProcessFailed(
         Callback<ICoreWebView2ProcessFailedEventHandler>([view](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args) -> HRESULT {

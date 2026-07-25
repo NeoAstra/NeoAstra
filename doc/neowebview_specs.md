@@ -1148,7 +1148,11 @@ typedef enum neo_webview_event_type : uint32_t {
     NEO_WEBVIEW_EVENT_CERTIFICATE_ERROR,
     NEO_WEBVIEW_EVENT_FULLSCREEN_REQUESTED,
 
-    NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED
+    NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED,
+    NEO_WEBVIEW_EVENT_DOWNLOAD_STARTED,
+    NEO_WEBVIEW_EVENT_DOWNLOAD_PROGRESS_CHANGED,
+    NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED,
+    NEO_WEBVIEW_EVENT_CLIENT_CERTIFICATE_REQUESTED
 } neo_webview_event_type_t;
 ```
 
@@ -1209,7 +1213,8 @@ typedef enum neo_webview_decision_action : uint32_t {
     NEO_WEBVIEW_DECISION_DENY = 2,
     NEO_WEBVIEW_DECISION_CANCEL = 3,
     NEO_WEBVIEW_DECISION_OPEN_EXTERNAL = 4,
-    NEO_WEBVIEW_DECISION_DOWNLOAD = 5
+    NEO_WEBVIEW_DECISION_DOWNLOAD = 5,
+    NEO_WEBVIEW_DECISION_HANDLED_EXTERNAL = 6
 } neo_webview_decision_action_t;
 ```
 
@@ -3108,6 +3113,23 @@ Deliverables:
 * Process-failure event.
 * Capability system.
 * Native-handle escape hatch.
+
+The Phase 4 implementation uses paired native/managed ABI 1.6. Download requests carry a tracked
+download handle and produce started, progress (when the engine reports it), and exactly one terminal
+notification. `NeoDownloadDecision.Default` preserves engine destination handling, while an absent,
+failed, or expired handler cancels safely. Windows supports pause/resume; the other current backends
+report that capability as unavailable.
+
+Popup handlers create one opener-compatible target with `NeoNewWindowRequest.CreateViewAsync` and
+complete with `NeoNewWindowDecision.UseView`. Target creation may be started only once for a request;
+the target uses the opener profile and is hosted by a normal tracked `NeoWindow` or borrowed parent. The short-lived creation context maps to WebView2's
+new-window deferral, the supplied `WKWebViewConfiguration`, or WebKitGTK's related-view relationship.
+
+Capability reporting reflects backend limits: Windows does not expose file-chooser interception;
+Linux does not expose portable client-certificate or TLS-error decisions; macOS does not expose
+portable client-certificate or fullscreen decisions. Popup and dialog decisions that the WebKit
+callback requires synchronously use their documented safe default if a managed handler does not
+complete inline. macOS remains source-validated only when development occurs on a non-macOS host.
 
 ## Phase 5 — Hardening
 

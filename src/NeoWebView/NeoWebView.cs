@@ -15,6 +15,7 @@ public sealed class NeoWebView : IAsyncDisposable
     private readonly SafeViewHandle _handle;
     private readonly NeoWebViewHost _host;
     private readonly TimeSpan _decisionTimeout;
+    private readonly Dictionary<ulong, NeoDownload> _downloads = [];
     private GCHandle _eventRoot;
     private Uri? _source;
     private string _title = string.Empty;
@@ -83,6 +84,24 @@ public sealed class NeoWebView : IAsyncDisposable
     /// <summary>Gets or sets the single asynchronous new-window policy handler.</summary>
     public Func<NeoNewWindowRequest, ValueTask<NeoNewWindowDecision>>? NewWindowRequested { get; set; }
 
+    /// <summary>Gets or sets the single asynchronous JavaScript-dialog policy handler.</summary>
+    public Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? ScriptDialogRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous file-chooser policy handler.</summary>
+    public Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? FileChooserRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous HTTP-authentication policy handler.</summary>
+    public Func<NeoAuthenticationRequest, ValueTask<NeoAuthenticationDecision>>? AuthenticationRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous client-certificate policy handler.</summary>
+    public Func<NeoClientCertificateRequest, ValueTask<NeoClientCertificateDecision>>? ClientCertificateRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous TLS-error policy handler.</summary>
+    public Func<NeoTlsErrorRequest, ValueTask<NeoTlsErrorDecision>>? TlsErrorRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous web-content fullscreen policy handler.</summary>
+    public Func<NeoFullscreenRequest, ValueTask<NeoFullscreenDecision>>? FullscreenRequested { get; set; }
+
     /// <summary>Occurs after a navigation succeeds or fails.</summary>
     public event EventHandler<NeoNavigationCompletedEventArgs>? NavigationCompleted;
 
@@ -91,6 +110,15 @@ public sealed class NeoWebView : IAsyncDisposable
 
     /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
     public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
+
+    /// <summary>Occurs when an accepted download starts.</summary>
+    public event EventHandler<NeoDownloadEventArgs>? DownloadStarted;
+
+    /// <summary>Occurs when native download progress changes.</summary>
+    public event EventHandler<NeoDownloadEventArgs>? DownloadProgressChanged;
+
+    /// <summary>Occurs once when a download completes, fails, or is canceled.</summary>
+    public event EventHandler<NeoDownloadEventArgs>? DownloadCompleted;
 
     /// <summary>Navigates the main frame to an absolute URI.</summary>
     /// <param name="uri">The destination URI.</param>
@@ -375,6 +403,33 @@ public sealed class NeoWebView : IAsyncDisposable
             case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NEW_WINDOW_REQUESTED:
                 HandleNewWindowDecision(value, uri);
                 break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_SCRIPT_DIALOG_REQUESTED:
+                HandleScriptDialogDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_FILE_CHOOSER_REQUESTED:
+                HandleFileChooserDecision(value);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_AUTHENTICATION_REQUESTED:
+                HandleAuthenticationDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_CLIENT_CERTIFICATE_REQUESTED:
+                HandleClientCertificateDecision(value);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_CERTIFICATE_ERROR:
+                HandleTlsErrorDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_FULLSCREEN_REQUESTED:
+                HandleFullscreenDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_DOWNLOAD_STARTED:
+                RaiseDownloadEvent(value, DownloadStarted, false);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_DOWNLOAD_PROGRESS_CHANGED:
+                RaiseDownloadEvent(value, DownloadProgressChanged, false);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED:
+                RaiseDownloadEvent(value, DownloadCompleted, true);
+                break;
             case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NAVIGATION_STARTED:
                 _source = uri ?? _source;
                 _isLoading = true;
@@ -461,8 +516,15 @@ public sealed class NeoWebView : IAsyncDisposable
             return;
         }
 
+        var download = GetOrCreateDownload(value);
+        if (download is null)
+        {
+            CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Cancel));
+            return;
+        }
+
         StartDecision(value.decision.Handle,
-            () => handler(new NeoDownloadRequest(uri, Utf8String.Decode(value.text), null, value.value > 0 ? checked((long)value.value) : null)),
+            () => handler(new NeoDownloadRequest(uri, NullIfEmpty(Utf8String.Decode(value.text)), NullIfEmpty(Utf8String.Decode(value.text2)), value.value == ulong.MaxValue ? null : checked((long)value.value), download)),
             static decision => new DecisionResponse(decision.Action, decision.DestinationPath),
             new DecisionResponse(NeoDecisionAction.Cancel));
     }
@@ -478,9 +540,79 @@ public sealed class NeoWebView : IAsyncDisposable
         }
 
         StartDecision(value.decision.Handle,
-            () => handler(new NeoNewWindowRequest(uri, Utf8String.Decode(value.text), (value.value & 1) != 0, null)),
-            static decision => new DecisionResponse(decision.Action),
+            () => handler(new NeoNewWindowRequest(this, value.decision.Handle, uri, NullIfEmpty(Utf8String.Decode(value.text)), (value.value & 1) != 0, null)),
+            static decision => new DecisionResponse(decision.Action, TargetView: decision.TargetView),
             new DecisionResponse(NeoDecisionAction.Cancel));
+    }
+
+    private void HandleScriptDialogDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = ScriptDialogRequested;
+        var kind = (NeoScriptDialogKind)(int)value.value;
+        var safe = kind == NeoScriptDialogKind.Alert ? NeoDecisionAction.Allow : NeoDecisionAction.Cancel;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(safe)); return; }
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoScriptDialogRequest(kind, Utf8String.Decode(value.text), NullIfEmpty(Utf8String.Decode(value.text2)), uri)),
+            static decision => new DecisionResponse(decision.Action, decision.Text), new DecisionResponse(safe));
+    }
+
+    private void HandleFileChooserDecision(NativeMethods.neo_webview_event value)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = FileChooserRequested;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Cancel)); return; }
+        var accepted = Utf8String.Decode(value.text).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoFileChooserRequest(accepted, (value.value & 1) != 0)),
+            static decision => new DecisionResponse(decision.Action, Paths: decision.Paths), new DecisionResponse(NeoDecisionAction.Cancel));
+    }
+
+    private void HandleAuthenticationDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = AuthenticationRequested;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Default)); return; }
+        var realm = NullIfEmpty(Utf8String.Decode(value.text2));
+        var scheme = NullIfEmpty(Utf8String.Decode(value.text3));
+        if (scheme is null && realm is not null)
+        {
+            var separator = realm.IndexOf(' ');
+            scheme = separator > 0 ? realm[..separator] : realm;
+        }
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoAuthenticationRequest(uri?.Host ?? Utf8String.Decode(value.text), value.native_code != 0 ? checked((int)value.native_code) : uri?.Port ?? 0, realm, scheme, uri)),
+            static decision => new DecisionResponse(decision.Action, decision.UserName, SecondaryText: decision.Password), new DecisionResponse(NeoDecisionAction.Default));
+    }
+
+    private void HandleClientCertificateDecision(NativeMethods.neo_webview_event value)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = ClientCertificateRequested;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Default)); return; }
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoClientCertificateRequest(Utf8String.Decode(value.text), checked((int)value.native_code), checked((int)value.value), (value.value2 & 1) != 0)),
+            static decision => new DecisionResponse(decision.Action, SelectedIndex: decision.SelectedIndex), new DecisionResponse(NeoDecisionAction.Default));
+    }
+
+    private void HandleTlsErrorDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = TlsErrorRequested;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Deny)); return; }
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoTlsErrorRequest(uri, NullIfEmpty(Utf8String.Decode(value.text2)), value.native_code)),
+            static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Deny));
+    }
+
+    private void HandleFullscreenDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = FullscreenRequested;
+        if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Deny)); return; }
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoFullscreenRequest((value.value & 1) != 0, uri)),
+            static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Deny));
     }
 
     private void StartDecision<T>(nint nativeDecision, Func<ValueTask<T>> handler, Func<T, DecisionResponse> convert, DecisionResponse safeDefault)
@@ -548,20 +680,100 @@ public sealed class NeoWebView : IAsyncDisposable
 
     private static unsafe void CompleteDecision(SafeDecisionHandle decision, DecisionResponse response)
     {
-        using var text = new Utf8String(response.Text);
-        var raw = new NativeMethods.neo_webview_decision_response
+        if (response.Paths is { Count: 0 } || response.Paths?.Any(string.IsNullOrWhiteSpace) == true)
         {
-            size = (uint)sizeof(NativeMethods.neo_webview_decision_response),
-            version = 1,
-            action = (NativeMethods.neo_webview_decision_action)response.Action,
-            text = text.View,
-            persist = response.Persist ? 1u : 0u,
-        };
-        var native = new NativeMethods.neo_webview_decision_response_t(raw);
-        NativeMethods.neo_webview_error_t error = default;
-        var result = NativeMethods.neo_webview_decision_complete(new(decision.DangerousGetHandle()), &native, &error);
-        if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
-        _ = result;
+            response = new DecisionResponse(NeoDecisionAction.Cancel);
+        }
+
+        NativeMethods.neo_webview_view_t targetView = default;
+        try { if (response.TargetView is not null) targetView = response.TargetView.NativeHandle; }
+        catch (ObjectDisposedException) { response = new DecisionResponse(NeoDecisionAction.Cancel); }
+
+        using var text = new Utf8String(response.Text);
+        using var secondaryText = new Utf8String(response.SecondaryText);
+        NativeMethods.neo_webview_string_view_t* paths = null;
+        byte** pathBuffers = null;
+        var pathCount = response.Paths?.Count ?? 0;
+        try
+        {
+            if (pathCount != 0)
+            {
+                paths = (NativeMethods.neo_webview_string_view_t*)NativeMemory.Alloc((nuint)pathCount, (nuint)sizeof(NativeMethods.neo_webview_string_view_t));
+                pathBuffers = (byte**)NativeMemory.AllocZeroed((nuint)pathCount, (nuint)sizeof(byte*));
+                for (var index = 0; index < pathCount; index++)
+                {
+                    var path = response.Paths![index];
+                    var length = System.Text.Encoding.UTF8.GetByteCount(path);
+                    var buffer = (byte*)NativeMemory.Alloc((nuint)length);
+                    pathBuffers[index] = buffer;
+                    System.Text.Encoding.UTF8.GetBytes(path, new Span<byte>(buffer, length));
+                    paths[index] = new NativeMethods.neo_webview_string_view_t(new NativeMethods.neo_webview_string_view { data = buffer, length = (ulong)length });
+                }
+            }
+
+            var raw = new NativeMethods.neo_webview_decision_response
+            {
+                size = (uint)sizeof(NativeMethods.neo_webview_decision_response),
+                version = 1,
+                action = (NativeMethods.neo_webview_decision_action)response.Action,
+                text = text.View,
+                paths = paths,
+                path_count = checked((uint)pathCount),
+                persist = response.Persist ? 1u : 0u,
+                secondary_text = secondaryText.View,
+                target_view = targetView,
+                selected_index = response.SelectedIndex < 0 ? uint.MaxValue : checked((uint)response.SelectedIndex),
+            };
+            var native = new NativeMethods.neo_webview_decision_response_t(raw);
+            NativeMethods.neo_webview_error_t error = default;
+            var result = NativeMethods.neo_webview_decision_complete(new(decision.DangerousGetHandle()), &native, &error);
+            if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+            if (NativeError.Code(result) is not (NeoErrorCode.Success or NeoErrorCode.InvalidState or NeoErrorCode.TimedOut))
+            {
+                var fallback = new NativeMethods.neo_webview_decision_response_t(new NativeMethods.neo_webview_decision_response
+                {
+                    size = (uint)sizeof(NativeMethods.neo_webview_decision_response),
+                    version = 1,
+                    action = NativeMethods.neo_webview_decision_action.NEO_WEBVIEW_DECISION_CANCEL,
+                    selected_index = uint.MaxValue,
+                });
+                NativeMethods.neo_webview_decision_complete(new(decision.DangerousGetHandle()), &fallback, null);
+            }
+        }
+        finally
+        {
+            if (pathBuffers is not null)
+            {
+                for (var index = 0; index < pathCount; index++)
+                {
+                    if (pathBuffers[index] is not null)
+                    {
+                        NativeMemory.Clear(pathBuffers[index], (nuint)paths[index].Value.length);
+                        NativeMemory.Free(pathBuffers[index]);
+                    }
+                }
+                NativeMemory.Free(pathBuffers);
+            }
+            NativeMemory.Free(paths);
+        }
+    }
+
+    private NeoDownload? GetOrCreateDownload(NativeMethods.neo_webview_event value)
+    {
+        if (value.download.Handle == 0) return null;
+        if (_downloads.TryGetValue(value.object_id, out var existing)) return existing;
+        var created = new NeoDownload(value.download.Handle);
+        _downloads[value.object_id] = created;
+        return created;
+    }
+
+    private void RaiseDownloadEvent(NativeMethods.neo_webview_event value, EventHandler<NeoDownloadEventArgs>? handler, bool terminal)
+    {
+        var download = GetOrCreateDownload(value);
+        if (download is null) return;
+        try { download.Refresh(); } catch { }
+        try { handler?.Invoke(this, new NeoDownloadEventArgs(download)); } catch { }
+        if (terminal) _downloads.Remove(value.object_id);
     }
 
     private void RaiseNavigationCompleted(NeoNavigationCompletedEventArgs args)
@@ -574,6 +786,8 @@ public sealed class NeoWebView : IAsyncDisposable
         var text = Utf8String.Decode(value);
         return Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri : null;
     }
+
+    private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static void ValidateAbsoluteUri(Uri? uri, string parameterName)
     {
@@ -652,5 +866,12 @@ public sealed class NeoWebView : IAsyncDisposable
         NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_remove_script(NativeHandle, nativeIdentifier.View), default, "remove persistent script");
     }
 
-    private readonly record struct DecisionResponse(NeoDecisionAction Action, string? Text = null, bool Persist = false);
+    private readonly record struct DecisionResponse(
+        NeoDecisionAction Action,
+        string? Text = null,
+        bool Persist = false,
+        string? SecondaryText = null,
+        IReadOnlyList<string>? Paths = null,
+        NeoWebView? TargetView = null,
+        int SelectedIndex = -1);
 }

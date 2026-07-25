@@ -328,6 +328,21 @@ void test_decision_state() {
     assert(captured.action == NEO_WEBVIEW_DECISION_ALLOW);
     assert(captured.persist == 1 && captured.text == text && captured.path == path);
     assert(neo_webview_decision_complete(&decision, &response, nullptr) == NEO_WEBVIEW_ERROR_INVALID_STATE);
+
+    neo_webview_decision explicit_default;
+    captured_decision default_capture;
+    explicit_default.kind = NEO_WEBVIEW_DECISION_DOWNLOAD_REQUEST;
+    explicit_default.default_action = NEO_WEBVIEW_DECISION_CANCEL;
+    explicit_default.completion = capture_decision;
+    explicit_default.completion_context = &default_capture;
+    response.action = NEO_WEBVIEW_DECISION_DEFAULT;
+    response.text = {};
+    response.paths = nullptr;
+    response.path_count = 0;
+    response.persist = 0;
+    assert(neo_webview_decision_complete(&explicit_default, &response, nullptr) == NEO_WEBVIEW_OK);
+    assert(explicit_default.resolved_action.load() == NEO_WEBVIEW_DECISION_DEFAULT);
+    assert(default_capture.action == NEO_WEBVIEW_DECISION_DEFAULT);
 }
 
 void test_decision_timeout() {

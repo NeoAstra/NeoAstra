@@ -2,6 +2,7 @@
 
 #include "neowebview.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -160,12 +161,16 @@ struct neo_webview_decision final : neo_ref_counted {
     neo_webview_decision_kind_t kind{NEO_WEBVIEW_DECISION_UNKNOWN};
     neo_webview_decision_action_t default_action{NEO_WEBVIEW_DECISION_DENY};
     std::atomic<neo_webview_decision_action_t> resolved_action{NEO_WEBVIEW_DECISION_DEFAULT};
+    std::atomic_bool popup_creation_started{};
+    neo_webview_view_t* resolved_target{};
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::now() + std::chrono::seconds(30)};
     void (*completion)(void* context, const neo_webview_decision_response_t* response) noexcept{};
     void* completion_context{};
     neo_webview_view_t* owner{};
     neo_webview_decision_t* owner_previous{};
     neo_webview_decision_t* owner_next{};
+    void* popup_context{};
+    void (*popup_context_release)(void*) noexcept{};
 
     void detach_owner() noexcept;
     void resolve(const neo_webview_decision_response_t& response) noexcept;
@@ -356,6 +361,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
     std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
     std::mutex decisions_mutex;
     neo_webview_decision_t* decisions{};
+    std::vector<neo_webview_download_t*> downloads; // UI-thread-only weak references.
     bool destroying{};
     std::string source;
     std::string title;
@@ -364,6 +370,64 @@ struct neo_webview_view final : neo_ui_ref_counted {
     explicit neo_webview_view(neo_webview_environment_t* value) : neo_ui_ref_counted(value->app), environment(value) { environment->retain(); }
     ~neo_webview_view() override;
     void destroy_ui() noexcept override;
+};
+
+void neo_download_emit(neo_webview_download_t* download, neo_webview_event_type_t type) noexcept;
+
+struct neo_webview_download final : neo_ui_ref_counted {
+    neo_webview_view_t* view{};
+    uint64_t id{};
+    std::atomic<neo_webview_download_state_t> state{NEO_WEBVIEW_DOWNLOAD_REQUESTED};
+    std::atomic<uint64_t> bytes_received{};
+    std::atomic<uint64_t> total_bytes{UINT64_MAX};
+    std::atomic<bool> lifecycle_released{};
+    std::string source_uri;
+    std::string destination_path;
+    std::string failure_reason;
+    bool can_pause{};
+    bool event_published{};
+    bool destructing{};
+    void* platform{};
+    neo_webview_result_t (*command)(neo_webview_download_t*, uint32_t) noexcept{};
+    void (*platform_destroy)(neo_webview_download_t*) noexcept{};
+
+    explicit neo_webview_download(neo_webview_view_t* owner)
+        : neo_ui_ref_counted(owner->environment->app), view(owner), id(owner->environment->app->next_id.fetch_add(1)) {
+        owner->downloads.push_back(this);
+    }
+    ~neo_webview_download() override { destructing = true; destroy_ui_once(); }
+    void destroy_ui() noexcept override {
+        const auto current = state.load(std::memory_order_acquire);
+        if (current == NEO_WEBVIEW_DOWNLOAD_REQUESTED || current == NEO_WEBVIEW_DOWNLOAD_IN_PROGRESS) {
+            state.store(NEO_WEBVIEW_DOWNLOAD_CANCELED, std::memory_order_release);
+            if (command) command(this, 0);
+            neo_download_emit(this, NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED);
+        }
+        if (platform_destroy) platform_destroy(this);
+        platform = nullptr;
+        if (view) {
+            auto& tracked = view->downloads;
+            tracked.erase(std::remove(tracked.begin(), tracked.end(), this), tracked.end());
+            view = nullptr;
+        }
+        if (destructing) lifecycle_released.store(true, std::memory_order_release);
+        else release_lifecycle();
+    }
+
+    void release_lifecycle() noexcept {
+        if (!lifecycle_released.exchange(true, std::memory_order_acq_rel)) {
+            destroy_ui_once();
+            release();
+        }
+    }
+};
+
+struct neo_event_details {
+    const std::string* text2{};
+    const std::string* text3{};
+    uint64_t value2{};
+    neo_webview_rect_t bounds{};
+    neo_webview_download_t* download{};
 };
 
 inline void neo_configure_decision(neo_webview_decision_t* decision, const neo_webview_view_t* view,
@@ -403,6 +467,7 @@ inline void neo_webview_decision::detach_owner() noexcept {
 
 inline void neo_webview_decision::resolve(const neo_webview_decision_response_t& response) noexcept {
     resolved_action.store(response.action, std::memory_order_release);
+    if (response.target_view && response.target_view->retain()) resolved_target = response.target_view;
     const auto callback = completion;
     const auto context = completion_context;
     completion = nullptr;
@@ -445,7 +510,11 @@ inline bool neo_webview_decision::expire() noexcept {
     return current == neo_decision_state::timed_out;
 }
 
-inline neo_webview_decision::~neo_webview_decision() { abandon(); }
+inline neo_webview_decision::~neo_webview_decision() {
+    abandon();
+    if (resolved_target) resolved_target->release();
+    if (popup_context_release && popup_context) popup_context_release(popup_context);
+}
 
 inline neo_webview_string_view_t neo_string_view(const std::string& text) noexcept {
     return {reinterpret_cast<const uint8_t*>(text.data()), static_cast<uint64_t>(text.size())};
@@ -462,6 +531,8 @@ void neo_log(neo_webview_app_t* app, neo_webview_log_level_t level, std::string_
              int64_t native_code = 0, uint64_t object_id = 0) noexcept;
 void neo_emit_app(neo_webview_app_t* app, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
+void neo_emit_view_detailed(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id, const std::string* text, const std::string* uri, uint64_t value, int64_t native_code, neo_webview_decision_t* decision, const neo_event_details& details) noexcept;
+void neo_download_emit(neo_webview_download_t* download, neo_webview_event_type_t type) noexcept;
 void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
 void neo_drain_dispatch(neo_webview_app_t* app) noexcept;
 void neo_complete_ui_shutdown(neo_webview_app_t* app) noexcept;

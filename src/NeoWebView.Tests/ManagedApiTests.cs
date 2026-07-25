@@ -162,6 +162,21 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void Phase4Decisions_ValidateTerminalPayloads()
+    {
+        Assert.AreEqual(NeoDecisionAction.Download, NeoDownloadDecision.Accept("download.bin").Action);
+        Assert.AreEqual(NeoDecisionAction.HandledExternal, NeoDownloadDecision.HandledExternal.Action);
+        Assert.ThrowsExactly<ArgumentException>(() => NeoDownloadDecision.Accept(" "));
+        CollectionAssert.AreEqual(new[] { "a.txt", "b.txt" }, NeoFileChooserDecision.Select("a.txt", "b.txt").Paths!.ToArray());
+        Assert.ThrowsExactly<ArgumentException>(() => NeoFileChooserDecision.Select());
+        Assert.AreEqual("secret", NeoAuthenticationDecision.Credentials("user", "secret").Password);
+        Assert.AreEqual(2, NeoClientCertificateDecision.Select(2).SelectedIndex);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => NeoClientCertificateDecision.Select(-1));
+        Assert.AreEqual(NeoDecisionAction.Deny, NeoTlsErrorDecision.Deny.Action);
+        Assert.AreEqual(NeoDecisionAction.Cancel, NeoScriptDialogDecision.Cancel.Action);
+    }
+
+    [TestMethod]
     public void ProcessFailure_DecodesPortableKindFlagsAndRecovery()
     {
         var failure = NeoWebView.DecodeProcessFailure(
@@ -371,6 +386,14 @@ public sealed class ManagedApiTests
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Permissions).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.PermissionPersistence).SupportLevel);
                     Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Zoom).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.Downloads).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.TrackedPopups).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ScriptDialogs).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.None, environment.GetCapability(NeoCapability.FileChooser).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.HttpAuthentication).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.ClientCertificates).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.TlsErrorDecisions).SupportLevel);
+                    Assert.AreEqual(NeoSupportLevel.Native, environment.GetCapability(NeoCapability.FullscreenDecisions).SupportLevel);
                     var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
                     window.MaximumClientSize = new NeoSize(1200, 900);
                     window.MinimumClientSize = new NeoSize(320, 200);

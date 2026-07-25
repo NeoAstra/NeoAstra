@@ -117,6 +117,20 @@ public enum NeoCapability
     Composition,
     /// <summary>Page zoom control.</summary>
     Zoom,
+    /// <summary>Tracked opener-compatible popup views.</summary>
+    TrackedPopups,
+    /// <summary>JavaScript dialog decisions.</summary>
+    ScriptDialogs,
+    /// <summary>File chooser decisions.</summary>
+    FileChooser,
+    /// <summary>HTTP authentication decisions.</summary>
+    HttpAuthentication,
+    /// <summary>Client-certificate decisions.</summary>
+    ClientCertificates,
+    /// <summary>TLS certificate-error decisions.</summary>
+    TlsErrorDecisions,
+    /// <summary>Web-content fullscreen decisions.</summary>
+    FullscreenDecisions,
 }
 
 /// <summary>Identifies a backend-specific borrowed native handle.</summary>

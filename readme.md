@@ -17,7 +17,10 @@ Build native desktop applications with .NET and web technologies using the platf
 - JavaScript evaluation and persistent document scripts
 - Portable page zoom control
 - JSON web/native messaging
-- Deferred navigation, popup, and permission decisions with safe defaults
+- Deferred browser decisions with timeout-safe defaults, including navigation, permissions, dialogs, authentication, certificates, and fullscreen where supported
+- Tracked opener-compatible popup views hosted by normal application windows or borrowed parents
+- Download destination/default/cancel policy plus tracked lifecycle, progress, cancellation, and Windows pause/resume
+- Portable file chooser decisions on macOS and Linux
 - Typed native handles and runtime capability discovery
 - Generated, size/versioned C ABI interop with explicit lifetime management
 
@@ -54,6 +57,8 @@ NeoWebView application and browser operations must begin on the platform UI thre
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 
 Native diagnostics can be observed without an additional logging dependency by setting `NeoApplicationOptions.LogCallback`. The callback can run on any native thread; its `NeoLogMessage` includes severity, category, UTF-8 message, native thread identifier, monotonic timestamp, optional native code, and object identifier. Exceptions thrown by the callback are contained at the managed/native boundary.
+
+Use `NeoEnvironment.GetCapability` before enabling optional browser UX. WebView2 does not expose portable file-chooser interception, WebKitGTK does not expose the current TLS/client-certificate decision hooks, and WKWebView does not expose the portable client-certificate or fullscreen hooks.
 
 The basic sample is configured for NativeAOT. Publish it for the current platform, for example with `dotnet publish samples/NeoWebView.Sample/NeoWebView.Sample.csproj -c Release -r win-x64 --self-contained`. Passing `--validate-native-library` performs a non-interactive native load and dispatcher-detach smoke check without creating a browser view; CI runs that check against the freshly built Windows native asset.
 

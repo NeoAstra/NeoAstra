@@ -150,6 +150,8 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_DECISION_OPEN_EXTERNAL = unchecked((uint)4),
 
             NEO_WEBVIEW_DECISION_DOWNLOAD = unchecked((uint)5),
+
+            NEO_WEBVIEW_DECISION_HANDLED_EXTERNAL = unchecked((uint)6),
         }
 
         public enum neo_webview_decision_kind : uint
@@ -173,6 +175,32 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_DECISION_CERTIFICATE_ERROR = unchecked((uint)8),
 
             NEO_WEBVIEW_DECISION_FULLSCREEN = unchecked((uint)9),
+
+            NEO_WEBVIEW_DECISION_CLIENT_CERTIFICATE = unchecked((uint)10),
+        }
+
+        public enum neo_webview_script_dialog_kind : uint
+        {
+            NEO_WEBVIEW_SCRIPT_DIALOG_ALERT = unchecked((uint)0),
+
+            NEO_WEBVIEW_SCRIPT_DIALOG_CONFIRM = unchecked((uint)1),
+
+            NEO_WEBVIEW_SCRIPT_DIALOG_PROMPT = unchecked((uint)2),
+
+            NEO_WEBVIEW_SCRIPT_DIALOG_BEFORE_UNLOAD = unchecked((uint)3),
+        }
+
+        public enum neo_webview_download_state : uint
+        {
+            NEO_WEBVIEW_DOWNLOAD_REQUESTED = unchecked((uint)0),
+
+            NEO_WEBVIEW_DOWNLOAD_IN_PROGRESS = unchecked((uint)1),
+
+            NEO_WEBVIEW_DOWNLOAD_COMPLETED = unchecked((uint)2),
+
+            NEO_WEBVIEW_DOWNLOAD_CANCELED = unchecked((uint)3),
+
+            NEO_WEBVIEW_DOWNLOAD_FAILED = unchecked((uint)4),
         }
 
         public enum neo_webview_permission_kind : uint
@@ -276,6 +304,14 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_EVENT_FULLSCREEN_REQUESTED = unchecked((uint)28),
 
             NEO_WEBVIEW_EVENT_WEB_PROCESS_TERMINATED = unchecked((uint)29),
+
+            NEO_WEBVIEW_EVENT_DOWNLOAD_STARTED = unchecked((uint)30),
+
+            NEO_WEBVIEW_EVENT_DOWNLOAD_PROGRESS_CHANGED = unchecked((uint)31),
+
+            NEO_WEBVIEW_EVENT_DOWNLOAD_COMPLETED = unchecked((uint)32),
+
+            NEO_WEBVIEW_EVENT_CLIENT_CERTIFICATE_REQUESTED = unchecked((uint)33),
         }
 
         public enum neo_webview_capability : uint
@@ -331,6 +367,20 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_CAPABILITY_COMPOSITION = unchecked((uint)24),
 
             NEO_WEBVIEW_CAPABILITY_ZOOM = unchecked((uint)25),
+
+            NEO_WEBVIEW_CAPABILITY_TRACKED_POPUPS = unchecked((uint)26),
+
+            NEO_WEBVIEW_CAPABILITY_SCRIPT_DIALOGS = unchecked((uint)27),
+
+            NEO_WEBVIEW_CAPABILITY_FILE_CHOOSER = unchecked((uint)28),
+
+            NEO_WEBVIEW_CAPABILITY_HTTP_AUTHENTICATION = unchecked((uint)29),
+
+            NEO_WEBVIEW_CAPABILITY_CLIENT_CERTIFICATES = unchecked((uint)30),
+
+            NEO_WEBVIEW_CAPABILITY_TLS_ERROR_DECISIONS = unchecked((uint)31),
+
+            NEO_WEBVIEW_CAPABILITY_FULLSCREEN_DECISIONS = unchecked((uint)32),
         }
 
         public enum neo_webview_log_level : uint
@@ -379,6 +429,11 @@ namespace NeoWebView.Interop.Generated
         }
 
         public readonly partial record struct neo_webview_decision_t(nint Handle)
+        {
+            public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
+        }
+
+        public readonly partial record struct neo_webview_download_t(nint Handle)
         {
             public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
         }
@@ -519,6 +574,16 @@ namespace NeoWebView.Interop.Generated
             public long native_code;
 
             public NativeMethods.neo_webview_decision_t decision;
+
+            public NativeMethods.neo_webview_string_view_t text2;
+
+            public NativeMethods.neo_webview_string_view_t text3;
+
+            public ulong value2;
+
+            public NativeMethods.neo_webview_rect_t bounds;
+
+            public NativeMethods.neo_webview_download_t download;
         }
 
         public readonly partial record struct neo_webview_event_header_t(NativeMethods.neo_webview_event_header Value)
@@ -533,6 +598,13 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_string_view (neo_webview_string_view_t from) => from.Value;
 
             public static implicit operator neo_webview_string_view_t (NativeMethods.neo_webview_string_view from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_rect_t(NativeMethods.neo_webview_rect Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_rect (neo_webview_rect_t from) => from.Value;
+
+            public static implicit operator neo_webview_rect_t (NativeMethods.neo_webview_rect from) => new (from);
         }
 
         public partial struct neo_webview_capability_info
@@ -670,13 +742,6 @@ namespace NeoWebView.Interop.Generated
             public NativeMethods.neo_webview_color_t background_color;
         }
 
-        public readonly partial record struct neo_webview_rect_t(NativeMethods.neo_webview_rect Value)
-        {
-            public static implicit operator NativeMethods.neo_webview_rect (neo_webview_rect_t from) => from.Value;
-
-            public static implicit operator neo_webview_rect_t (NativeMethods.neo_webview_rect from) => new (from);
-        }
-
         public readonly partial record struct neo_webview_size_t(NativeMethods.neo_webview_size Value)
         {
             public static implicit operator NativeMethods.neo_webview_size (neo_webview_size_t from) => from.Value;
@@ -717,6 +782,8 @@ namespace NeoWebView.Interop.Generated
             public uint maximum_message_size;
 
             public ulong decision_timeout_ms;
+
+            public NativeMethods.neo_webview_decision_t popup_request;
         }
 
         public readonly partial record struct neo_webview_native_parent_t(NativeMethods.neo_webview_native_parent Value)
@@ -763,6 +830,14 @@ namespace NeoWebView.Interop.Generated
             public uint path_count;
 
             public uint persist;
+
+            public NativeMethods.neo_webview_string_view_t secondary_text;
+
+            public NativeMethods.neo_webview_view_t target_view;
+
+            public uint selected_index;
+
+            public uint reserved;
         }
 
         public readonly partial record struct neo_webview_decision_action_t(NativeMethods.neo_webview_decision_action Value)
@@ -770,6 +845,36 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_decision_action (neo_webview_decision_action_t from) => from.Value;
 
             public static implicit operator neo_webview_decision_action_t (NativeMethods.neo_webview_decision_action from) => new (from);
+        }
+
+        public partial struct neo_webview_download_info
+        {
+            public uint size;
+
+            public uint version;
+
+            public ulong id;
+
+            public NativeMethods.neo_webview_download_state_t state;
+
+            public uint can_pause;
+
+            public NativeMethods.neo_webview_string_view_t source_uri;
+
+            public NativeMethods.neo_webview_string_view_t destination_path;
+
+            public ulong bytes_received;
+
+            public ulong total_bytes;
+
+            public NativeMethods.neo_webview_string_view_t failure_reason;
+        }
+
+        public readonly partial record struct neo_webview_download_state_t(NativeMethods.neo_webview_download_state Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_download_state (neo_webview_download_state_t from) => from.Value;
+
+            public static implicit operator neo_webview_download_state_t (NativeMethods.neo_webview_download_state from) => new (from);
         }
 
         public partial struct neo_webview_runtime_info
@@ -849,6 +954,13 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_decision_kind (neo_webview_decision_kind_t from) => from.Value;
 
             public static implicit operator neo_webview_decision_kind_t (NativeMethods.neo_webview_decision_kind from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_script_dialog_kind_t(NativeMethods.neo_webview_script_dialog_kind Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_script_dialog_kind (neo_webview_script_dialog_kind_t from) => from.Value;
+
+            public static implicit operator neo_webview_script_dialog_kind_t (NativeMethods.neo_webview_script_dialog_kind from) => new (from);
         }
 
         public readonly partial record struct neo_webview_permission_kind_t(NativeMethods.neo_webview_permission_kind Value)
@@ -993,6 +1105,13 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_decision_response (neo_webview_decision_response_t from) => from.Value;
 
             public static implicit operator neo_webview_decision_response_t (NativeMethods.neo_webview_decision_response from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_download_info_t(NativeMethods.neo_webview_download_info Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_download_info (neo_webview_download_info_t from) => from.Value;
+
+            public static implicit operator neo_webview_download_info_t (NativeMethods.neo_webview_download_info from) => new (from);
         }
 
         public readonly partial record struct neo_webview_runtime_info_t(NativeMethods.neo_webview_runtime_info Value)
@@ -1219,6 +1338,14 @@ namespace NeoWebView.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial void neo_webview_decision_release(NativeMethods.neo_webview_decision_t arg0);
 
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_retain")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial void neo_webview_download_retain(NativeMethods.neo_webview_download_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_release")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial void neo_webview_download_release(NativeMethods.neo_webview_download_t arg0);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_error_retain")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial void neo_webview_error_retain(NativeMethods.neo_webview_error_t arg0);
@@ -1290,6 +1417,22 @@ namespace NeoWebView.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_decision_get_deadline_ns")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial ulong neo_webview_decision_get_deadline_ns(NativeMethods.neo_webview_decision_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_get_info")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_download_get_info(NativeMethods.neo_webview_download_t arg0, NativeMethods.neo_webview_download_info_t* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_cancel")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_download_cancel(NativeMethods.neo_webview_download_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_pause")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_download_pause(NativeMethods.neo_webview_download_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_download_resume")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_download_resume(NativeMethods.neo_webview_download_t arg0);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_app_create")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
