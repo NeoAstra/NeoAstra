@@ -7,6 +7,8 @@
 
     <!-- Enable AOT analyzers -->
     <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
   </PropertyGroup>
 
   <PropertyGroup>

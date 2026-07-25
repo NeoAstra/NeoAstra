@@ -6,5 +6,11 @@
   <ItemGroup>
     <PackageVersion Include="MinVer" Version="7.0.0" />
     <PackageVersion Include="MSTest" Version="4.1.0" />
+    <PackageVersion Include="CppAst.CodeGen" Version="0.28.2" />
+    <PackageVersion Include="libClangSharp.runtime.win-x64" Version="21.1.8.2" />
+    <PackageVersion Include="libClangSharp.runtime.win-arm64" Version="21.1.8.2" />
+    <PackageVersion Include="libClangSharp.runtime.linux-x64" Version="21.1.8.2" />
+    <PackageVersion Include="libClangSharp.runtime.linux-arm64" Version="21.1.8.2" />
+    <PackageVersion Include="libClangSharp.runtime.osx-arm64" Version="21.1.8.2" />
   </ItemGroup>
 </Project>

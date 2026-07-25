@@ -1,0 +1,501 @@
+// Copyright (c) Alexandre Mutel. All rights reserved.
+// Licensed under the BSD-Clause 2 license.
+
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using NeoWebView.Interop;
+using NeoWebView.Interop.Generated;
+
+namespace NeoWebView;
+
+/// <summary>Represents one browser view hosted by an owned window or borrowed native parent.</summary>
+public sealed class NeoWebView : IAsyncDisposable
+{
+    private readonly SafeViewHandle _handle;
+    private readonly NeoWebViewHost _host;
+    private GCHandle _eventRoot;
+    private Uri? _source;
+    private string _title = string.Empty;
+    private bool _isLoading;
+    private bool _canGoBack;
+    private bool _canGoForward;
+    private int _disposed;
+
+    internal NeoWebView(NeoEnvironment environment, SafeViewHandle handle, NeoWebViewHost host, NeoWebViewOptions options)
+    {
+        Environment = environment;
+        _handle = handle;
+        _host = host;
+        Profile = options.Profile;
+        RegisterEventCallback();
+    }
+
+    /// <summary>Gets the last source URI reported by the backend.</summary>
+    public Uri? Source => _source;
+
+    /// <summary>Gets the last document title reported by the backend.</summary>
+    public string Title => _title;
+
+    /// <summary>Gets whether a main-frame navigation is in progress.</summary>
+    public bool IsLoading => _isLoading;
+
+    /// <summary>Gets whether backward history navigation is available.</summary>
+    public bool CanGoBack => _canGoBack;
+
+    /// <summary>Gets whether forward history navigation is available.</summary>
+    public bool CanGoForward => _canGoForward;
+
+    /// <summary>Gets or sets the single asynchronous navigation policy handler.</summary>
+    public Func<NeoNavigationRequest, ValueTask<NeoNavigationDecision>>? NavigationRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous permission policy handler.</summary>
+    public Func<NeoPermissionRequest, ValueTask<NeoPermissionDecision>>? PermissionRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous download policy handler.</summary>
+    public Func<NeoDownloadRequest, ValueTask<NeoDownloadDecision>>? DownloadRequested { get; set; }
+
+    /// <summary>Gets or sets the single asynchronous new-window policy handler.</summary>
+    public Func<NeoNewWindowRequest, ValueTask<NeoNewWindowDecision>>? NewWindowRequested { get; set; }
+
+    /// <summary>Occurs after a navigation succeeds or fails.</summary>
+    public event EventHandler<NeoNavigationCompletedEventArgs>? NavigationCompleted;
+
+    /// <summary>Occurs when web content sends a bridge message.</summary>
+    public event EventHandler<NeoWebMessageReceivedEventArgs>? MessageReceived;
+
+    /// <summary>Navigates the main frame to an absolute URI.</summary>
+    /// <param name="uri">The destination URI.</param>
+    /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
+    /// <returns>A completed task after the backend accepts the navigation.</returns>
+    public unsafe ValueTask NavigateAsync(Uri uri, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ValidateAbsoluteUri(uri, nameof(uri));
+        cancellationToken.ThrowIfCancellationRequested();
+        using var nativeUri = new Utf8String(uri.AbsoluteUri);
+        NativeMethods.neo_webview_error_t error = default;
+        var result = NativeMethods.neo_webview_view_navigate(NativeHandle, nativeUri.View, &error);
+        NativeError.ThrowIfFailed(result, error, "navigate", cancellationToken);
+        _source = uri;
+        _isLoading = true;
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Loads an HTML document with an optional base URI.</summary>
+    /// <param name="html">The HTML source.</param>
+    /// <param name="baseUri">An optional absolute base URI.</param>
+    /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
+    /// <returns>A completed task after the backend accepts the document.</returns>
+    public unsafe ValueTask LoadHtmlAsync(string html, Uri? baseUri = null, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(html);
+        if (baseUri is not null) ValidateAbsoluteUri(baseUri, nameof(baseUri));
+        cancellationToken.ThrowIfCancellationRequested();
+        using var nativeHtml = new Utf8String(html);
+        using var nativeBase = new Utf8String(baseUri?.AbsoluteUri);
+        NativeMethods.neo_webview_error_t error = default;
+        var result = NativeMethods.neo_webview_view_load_html(NativeHandle, nativeHtml.View, nativeBase.View, &error);
+        NativeError.ThrowIfFailed(result, error, "load HTML", cancellationToken);
+        _source = baseUri;
+        _isLoading = true;
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Evaluates JavaScript and returns the backend's JSON-encoded result.</summary>
+    /// <param name="script">The JavaScript source.</param>
+    /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
+    /// <returns>The JSON-encoded result, or <see langword="null"/> for JavaScript null.</returns>
+    public unsafe ValueTask<string?> EvaluateScriptAsync(string script, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(script);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var nativeScript = new Utf8String(script);
+        var operation = new NativeOperation<string?>(cancellationToken, "evaluate script");
+        NativeMethods.neo_webview_operation_t nativeOperation = default;
+        NativeMethods.neo_webview_error_t error = default;
+        NativeMethods.neo_webview_result_t result;
+        try
+        {
+            result = NativeMethods.neo_webview_view_evaluate_script_async(
+                NativeHandle,
+                nativeScript.View,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neo_webview_result_t, NativeMethods.neo_webview_string_view_t, NativeMethods.neo_webview_error_t, void>)&ScriptEvaluated,
+                (void*)operation.Context,
+                &nativeOperation,
+                &error);
+        }
+        catch (Exception ex)
+        {
+            operation.FailStart(ex);
+            return operation.ValueTask;
+        }
+
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            var info = NativeError.Read(NativeError.Code(result), error.Handle);
+            if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+            operation.FailStart(NativeError.CreateException(info, "evaluate script", cancellationToken));
+        }
+        else
+        {
+            operation.AttachOperation(nativeOperation.Handle);
+        }
+
+        return operation.ValueTask;
+    }
+
+    /// <summary>Posts a JSON value to web content.</summary>
+    /// <param name="json">A complete JSON value.</param>
+    /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
+    /// <returns>A completed task after the backend accepts the message.</returns>
+    /// <exception cref="JsonException"><paramref name="json"/> is not valid JSON.</exception>
+    public unsafe ValueTask PostMessageAsync(string json, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(json);
+        cancellationToken.ThrowIfCancellationRequested();
+        using (JsonDocument.Parse(json)) { }
+        using var nativeJson = new Utf8String(json);
+        NativeMethods.neo_webview_error_t error = default;
+        var result = NativeMethods.neo_webview_view_post_message(NativeHandle, nativeJson.View, 1, &error);
+        NativeError.ThrowIfFailed(result, error, "post web message", cancellationToken);
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Reloads the current document.</summary>
+    public void Reload()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_reload(NativeHandle, 0), default, "reload");
+    }
+
+    /// <summary>Stops the current navigation.</summary>
+    public void Stop()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_stop(NativeHandle), default, "stop navigation");
+    }
+
+    /// <summary>Navigates backward in history.</summary>
+    public void GoBack()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_go_back(NativeHandle), default, "go back");
+    }
+
+    /// <summary>Navigates forward in history.</summary>
+    public void GoForward()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neo_webview_view_go_forward(NativeHandle), default, "go forward");
+    }
+
+    /// <summary>Gets a typed borrowed native browser handle.</summary>
+    /// <param name="kind">The requested backend handle kind.</param>
+    /// <returns>A borrowed native handle valid while this view remains alive.</returns>
+    public unsafe NeoNativeHandle GetNativeHandle(NeoNativeHandleKind kind)
+    {
+        ThrowIfDisposed();
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        var raw = new NativeMethods.neo_webview_native_handle
+        {
+            size = (uint)sizeof(NativeMethods.neo_webview_native_handle),
+            version = 1,
+            kind = (NativeMethods.neo_webview_native_handle_kind)kind,
+        };
+        var native = new NativeMethods.neo_webview_native_handle_t(raw);
+        NativeError.ThrowIfFailed(
+            NativeMethods.neo_webview_view_get_native_handle(NativeHandle, (NativeMethods.neo_webview_native_handle_kind)kind, &native),
+            default,
+            "get web view native handle");
+        return new NeoNativeHandle((NeoNativeHandleKind)native.Value.kind.Value, (nint)native.Value.value);
+    }
+
+    /// <summary>Unregisters events and releases the native view reference.</summary>
+    /// <returns>A completed value task.</returns>
+    public unsafe ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        try
+        {
+            NativeMethods.neo_webview_view_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
+        }
+        catch
+        {
+            // Release remains required if the backend is shutting down.
+        }
+
+        if (_eventRoot.IsAllocated) _eventRoot.Free();
+        _handle.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    internal NeoEnvironment Environment { get; }
+
+    internal NeoProfile? Profile { get; }
+
+    internal NativeMethods.neo_webview_view_t NativeHandle
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return new(_handle.DangerousGetHandle());
+        }
+    }
+
+    private unsafe void RegisterEventCallback()
+    {
+        _eventRoot = GCHandle.Alloc(this);
+        var result = NativeMethods.neo_webview_view_set_event_callback(
+            new(_handle.DangerousGetHandle()),
+            (delegate* unmanaged[Cdecl]<void*, NativeMethods.neo_webview_event_t*, void>)&ViewEvent,
+            (void*)GCHandle.ToIntPtr(_eventRoot));
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            _eventRoot.Free();
+            _handle.Dispose();
+            NativeError.ThrowIfFailed(result, default, "register web view events");
+        }
+    }
+
+    private void DispatchEvent(NativeMethods.neo_webview_event value)
+    {
+        var type = value.header.Value.type.Value;
+        var uri = DecodeUri(value.uri);
+        switch (type)
+        {
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NAVIGATION_REQUESTED:
+                HandleNavigationDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED:
+                HandlePermissionDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_DOWNLOAD_REQUESTED:
+                HandleDownloadDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NEW_WINDOW_REQUESTED:
+                HandleNewWindowDecision(value, uri);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NAVIGATION_STARTED:
+                _source = uri ?? _source;
+                _isLoading = true;
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NAVIGATION_COMPLETED:
+                _source = uri ?? _source;
+                _isLoading = false;
+                RaiseNavigationCompleted(new NeoNavigationCompletedEventArgs(_source, true, NeoErrorCode.Success, value.native_code, value.header.Value.sequence));
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_NAVIGATION_FAILED:
+                _isLoading = false;
+                RaiseNavigationCompleted(new NeoNavigationCompletedEventArgs(uri ?? _source, false, (NeoErrorCode)(int)value.value, value.native_code, value.header.Value.sequence));
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_SOURCE_CHANGED:
+                _source = uri;
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_TITLE_CHANGED:
+                _title = Utf8String.Decode(value.text);
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_HISTORY_CHANGED:
+                _canGoBack = (value.value & 1) != 0;
+                _canGoForward = (value.value & 2) != 0;
+                break;
+            case NativeMethods.neo_webview_event_type.NEO_WEBVIEW_EVENT_MESSAGE_RECEIVED:
+                try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(Utf8String.Decode(value.text), uri, (value.value & 1) != 0)); } catch { }
+                break;
+        }
+    }
+
+    private void HandleNavigationDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        var handler = NavigationRequested;
+        if (handler is null || value.decision.Handle == 0 || uri is null) return;
+        StartDecision(value.decision.Handle, () => handler(new NeoNavigationRequest(uri, (value.value & 1) != 0, (value.value & 2) != 0)),
+            static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Default));
+    }
+
+    private void HandlePermissionDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        var handler = PermissionRequested;
+        if (value.decision.Handle == 0) return;
+        if (handler is null)
+        {
+            CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Deny));
+            return;
+        }
+
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoPermissionRequest((NeoPermissionKind)(int)value.value, uri)),
+            static decision => new DecisionResponse(decision.Action, null, decision.Persist),
+            new DecisionResponse(NeoDecisionAction.Deny));
+    }
+
+    private void HandleDownloadDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = DownloadRequested;
+        if (handler is null || uri is null)
+        {
+            CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Cancel));
+            return;
+        }
+
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoDownloadRequest(uri, Utf8String.Decode(value.text), null, value.value > 0 ? checked((long)value.value) : null)),
+            static decision => new DecisionResponse(decision.Action, decision.DestinationPath),
+            new DecisionResponse(NeoDecisionAction.Cancel));
+    }
+
+    private void HandleNewWindowDecision(NativeMethods.neo_webview_event value, Uri? uri)
+    {
+        if (value.decision.Handle == 0) return;
+        var handler = NewWindowRequested;
+        if (handler is null)
+        {
+            CompleteImmediate(value.decision.Handle, new DecisionResponse(NeoDecisionAction.Cancel));
+            return;
+        }
+
+        StartDecision(value.decision.Handle,
+            () => handler(new NeoNewWindowRequest(uri, Utf8String.Decode(value.text), (value.value & 1) != 0, null)),
+            static decision => new DecisionResponse(decision.Action),
+            new DecisionResponse(NeoDecisionAction.Cancel));
+    }
+
+    private void StartDecision<T>(nint nativeDecision, Func<ValueTask<T>> handler, Func<T, DecisionResponse> convert, DecisionResponse safeDefault)
+    {
+        NativeMethods.neo_webview_decision_retain(new(nativeDecision));
+        var handle = new SafeDecisionHandle(nativeDecision);
+        var result = NativeMethods.neo_webview_decision_defer(new(nativeDecision));
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            handle.Dispose();
+            return;
+        }
+
+        _ = RunDecisionAsync(handle, handler, convert, safeDefault);
+    }
+
+    private async Task RunDecisionAsync<T>(SafeDecisionHandle decision, Func<ValueTask<T>> handler, Func<T, DecisionResponse> convert, DecisionResponse safeDefault)
+    {
+        var response = safeDefault;
+        try
+        {
+            response = convert(await handler());
+        }
+        catch
+        {
+            // Safe defaults are deliberately applied when application policy throws.
+        }
+
+        try
+        {
+            if (Environment.Application.Dispatcher.CheckAccess())
+            {
+                CompleteDecision(decision, response);
+            }
+            else
+            {
+                await Environment.Application.Dispatcher.InvokeAsync(() => CompleteDecision(decision, response));
+            }
+        }
+        catch
+        {
+            // Expired decisions and application shutdown are safely contained.
+        }
+        finally
+        {
+            decision.Dispose();
+        }
+    }
+
+    private static void CompleteImmediate(nint decision, DecisionResponse response)
+    {
+        using var handle = new SafeDecisionHandle(decision);
+        NativeMethods.neo_webview_decision_retain(new(decision));
+        CompleteDecision(handle, response);
+    }
+
+    private static unsafe void CompleteDecision(SafeDecisionHandle decision, DecisionResponse response)
+    {
+        using var text = new Utf8String(response.Text);
+        var raw = new NativeMethods.neo_webview_decision_response
+        {
+            size = (uint)sizeof(NativeMethods.neo_webview_decision_response),
+            version = 1,
+            action = (NativeMethods.neo_webview_decision_action)response.Action,
+            text = text.View,
+            persist = response.Persist ? 1u : 0u,
+        };
+        var native = new NativeMethods.neo_webview_decision_response_t(raw);
+        NativeMethods.neo_webview_error_t error = default;
+        var result = NativeMethods.neo_webview_decision_complete(new(decision.DangerousGetHandle()), &native, &error);
+        if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+        _ = result;
+    }
+
+    private void RaiseNavigationCompleted(NeoNavigationCompletedEventArgs args)
+    {
+        try { NavigationCompleted?.Invoke(this, args); } catch { }
+    }
+
+    private static Uri? DecodeUri(NativeMethods.neo_webview_string_view_t value)
+    {
+        var text = Utf8String.Decode(value);
+        return Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    private static void ValidateAbsoluteUri(Uri? uri, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(uri, parameterName);
+        if (!uri.IsAbsoluteUri) throw new ArgumentException("An absolute URI is required.", parameterName);
+    }
+
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ViewEvent(void* context, NativeMethods.neo_webview_event_t* nativeEvent)
+    {
+        try
+        {
+            if (nativeEvent is null) return;
+            var root = GCHandle.FromIntPtr((nint)context);
+            (root.Target as NeoWebView)?.DispatchEvent(nativeEvent->Value);
+        }
+        catch
+        {
+            // No managed exception may cross the unmanaged callback boundary.
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ScriptEvaluated(void* context, NativeMethods.neo_webview_result_t result, NativeMethods.neo_webview_string_view_t value, NativeMethods.neo_webview_error_t error)
+    {
+        try
+        {
+            var operation = NativeOperation.Get<string?>(context);
+            if (operation is null) return;
+            if (NativeError.Code(result) == NeoErrorCode.Success)
+            {
+                var text = Utf8String.Decode(value);
+                operation.Complete(string.Equals(text, "null", StringComparison.Ordinal) ? null : text);
+            }
+            else
+            {
+                operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "evaluate script"));
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeOperation.Get<string?>(context)?.Fail(ex);
+        }
+    }
+
+    private readonly record struct DecisionResponse(NeoDecisionAction Action, string? Text = null, bool Persist = false);
+}
