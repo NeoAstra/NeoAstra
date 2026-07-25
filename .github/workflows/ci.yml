@@ -13,7 +13,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: ubuntu-latest
+            rid: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +37,8 @@ jobs:
         run: dotnet build src/NeoWebView.slnx -c Release --no-restore
       - name: Test
         run: dotnet test src/NeoWebView.slnx -c Release --no-build
+      - name: Publish NativeAOT sample
+        run: dotnet publish samples/NeoWebView.Sample/NeoWebView.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
 
   native:
     uses: ./.github/workflows/native.yml
@@ -74,6 +82,8 @@ jobs:
           dotnet restore src/NeoWebView.slnx
           dotnet build src/NeoWebView.slnx -c Release --no-restore
           dotnet pack src/NeoWebView/NeoWebView.csproj -c Release --no-build -o artifacts/packages
+          dotnet publish samples/NeoWebView.Sample/NeoWebView.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
+          & artifacts/nativeaot/NeoWebView.Sample.exe --validate-native-library
       - name: Verify native package assets
         shell: pwsh
         run: |

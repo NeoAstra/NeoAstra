@@ -11,9 +11,12 @@ namespace NeoWebView;
 /// <summary>Dispatches managed work to a NeoWebView application's UI thread.</summary>
 public sealed unsafe class NeoDispatcher
 {
+    private static readonly CancellationToken ShutdownCancellationToken = new(canceled: true);
     private readonly NeoApplication _application;
     private readonly int _threadId;
-    private volatile bool _shutdown;
+    private readonly object _sync = new();
+    private readonly Dictionary<nint, DispatchRegistration> _outstanding = [];
+    private bool _shutdown;
 
     internal NeoDispatcher(NeoApplication application, int threadId)
     {
@@ -73,7 +76,7 @@ public sealed unsafe class NeoDispatcher
         return new ValueTask<T>(work.Task);
     }
 
-    internal void MarkShutdown() => _shutdown = true;
+    internal void MarkShutdown() => MarkShutdown(except: null);
 
     internal ValueTask InvokeShutdownAsync(Action action)
     {
@@ -85,6 +88,7 @@ public sealed unsafe class NeoDispatcher
 
         var work = new InvokedWork(action, CancellationToken.None);
         Queue(work, _application.DangerousNativeHandle, allowShutdown: true);
+        MarkShutdown(work);
         return new ValueTask(work.Task);
     }
 
@@ -93,31 +97,68 @@ public sealed unsafe class NeoDispatcher
 
     private void Queue(IDispatchWork work, NativeMethods.neo_webview_app_t handle, bool allowShutdown)
     {
-        if (_shutdown && !allowShutdown)
+        lock (_sync)
         {
-            throw new ObjectDisposedException(nameof(NeoApplication));
+            if (_shutdown && !allowShutdown)
+            {
+                throw new ObjectDisposedException(nameof(NeoApplication));
+            }
+
+            var registration = new DispatchRegistration(this, work);
+            var root = GCHandle.Alloc(registration);
+            var context = GCHandle.ToIntPtr(root);
+            NativeMethods.neo_webview_result_t result;
+            try
+            {
+                result = NativeMethods.neo_webview_app_dispatch(
+                    handle,
+                    (delegate* unmanaged[Cdecl]<void*, void>)&Dispatch,
+                    (void*)context);
+            }
+            catch
+            {
+                root.Free();
+                throw;
+            }
+
+            if (NativeError.Code(result) != NeoErrorCode.Success)
+            {
+                root.Free();
+                NativeError.ThrowIfFailed(result, default, "dispatch managed work");
+            }
+
+            // Native dispatch promises not to invoke the callback before returning. Holding
+            // _sync here lets a callback race safely with registration and shutdown.
+            _outstanding.Add(context, registration);
+        }
+    }
+
+    private void MarkShutdown(IDispatchWork? except)
+    {
+        IDispatchWork[] pending;
+        lock (_sync)
+        {
+            _shutdown = true;
+            pending = _outstanding.Values
+                .Select(static registration => registration.Work)
+                .Where(work => !ReferenceEquals(work, except))
+                .ToArray();
         }
 
-        var root = GCHandle.Alloc(work);
-        NativeMethods.neo_webview_result_t result;
-        try
+        foreach (var work in pending)
         {
-            result = NativeMethods.neo_webview_app_dispatch(
-                handle,
-                (delegate* unmanaged[Cdecl]<void*, void>)&Dispatch,
-                (void*)GCHandle.ToIntPtr(root));
+            work.Cancel();
         }
-        catch
+    }
+
+    private void CompleteDispatch(nint context, DispatchRegistration registration)
+    {
+        lock (_sync)
         {
-            root.Free();
-            throw;
+            _outstanding.Remove(context);
         }
 
-        if (NativeError.Code(result) != NeoErrorCode.Success)
-        {
-            root.Free();
-            NativeError.ThrowIfFailed(result, default, "dispatch managed work");
-        }
+        registration.Work.Execute();
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -125,10 +166,11 @@ public sealed unsafe class NeoDispatcher
     {
         try
         {
-            var root = GCHandle.FromIntPtr((nint)context);
-            var work = root.Target as IDispatchWork;
+            var contextValue = (nint)context;
+            var root = GCHandle.FromIntPtr(contextValue);
+            var registration = root.Target as DispatchRegistration;
             root.Free();
-            work?.Execute();
+            registration?.Dispatcher.CompleteDispatch(contextValue, registration);
         }
         catch
         {
@@ -139,14 +181,25 @@ public sealed unsafe class NeoDispatcher
     private interface IDispatchWork
     {
         void Execute();
+
+        void Cancel();
     }
 
     private sealed class PostedWork(Action action) : IDispatchWork
     {
+        private int _completed;
+
         public void Execute()
         {
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            {
+                return;
+            }
+
             try { action(); } catch { }
         }
+
+        public void Cancel() => Interlocked.Exchange(ref _completed, 1);
     }
 
     private sealed class InvokedWork : IDispatchWork
@@ -154,6 +207,7 @@ public sealed unsafe class NeoDispatcher
         private readonly Action _action;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _completed;
 
         internal InvokedWork(Action action, CancellationToken cancellationToken)
         {
@@ -165,6 +219,11 @@ public sealed unsafe class NeoDispatcher
 
         public void Execute()
         {
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            {
+                return;
+            }
+
             if (_cancellationToken.IsCancellationRequested)
             {
                 _completion.TrySetCanceled(_cancellationToken);
@@ -181,6 +240,14 @@ public sealed unsafe class NeoDispatcher
                 _completion.TrySetException(ex);
             }
         }
+
+        public void Cancel()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 0)
+            {
+                _completion.TrySetCanceled(ShutdownCancellationToken);
+            }
+        }
     }
 
     private sealed class InvokedWork<T> : IDispatchWork
@@ -188,6 +255,7 @@ public sealed unsafe class NeoDispatcher
         private readonly Func<T> _function;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource<T> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _completed;
 
         internal InvokedWork(Func<T> function, CancellationToken cancellationToken)
         {
@@ -199,6 +267,11 @@ public sealed unsafe class NeoDispatcher
 
         public void Execute()
         {
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            {
+                return;
+            }
+
             if (_cancellationToken.IsCancellationRequested)
             {
                 _completion.TrySetCanceled(_cancellationToken);
@@ -214,6 +287,21 @@ public sealed unsafe class NeoDispatcher
                 _completion.TrySetException(ex);
             }
         }
+
+        public void Cancel()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 0)
+            {
+                _completion.TrySetCanceled(ShutdownCancellationToken);
+            }
+        }
+    }
+
+    private sealed class DispatchRegistration(NeoDispatcher dispatcher, IDispatchWork work)
+    {
+        internal NeoDispatcher Dispatcher { get; } = dispatcher;
+
+        internal IDispatchWork Work { get; } = work;
     }
 }
 

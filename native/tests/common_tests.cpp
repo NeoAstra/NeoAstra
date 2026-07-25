@@ -100,6 +100,41 @@ struct captured_decision {
     std::string path;
 };
 
+struct captured_logs {
+    std::atomic<int> information{};
+    std::atomic<int> warnings{};
+    std::atomic<bool> metadata_valid{true};
+};
+
+void NEO_WEBVIEW_CALL capture_log(void* context, neo_webview_log_level_t level,
+                                  neo_webview_string_view_t category, neo_webview_string_view_t message,
+                                  uint64_t thread_id, uint64_t timestamp_ns, int64_t native_code, uint64_t object_id) {
+    auto* captured = static_cast<captured_logs*>(context);
+    const auto valid = category.data != nullptr && category.length != 0 && message.data != nullptr &&
+        message.length != 0 && thread_id != 0 && timestamp_ns != 0 && native_code == 0 && object_id == 0;
+    if (!valid) captured->metadata_valid.store(false);
+    if (level == NEO_WEBVIEW_LOG_INFORMATION) ++captured->information;
+    else if (level == NEO_WEBVIEW_LOG_WARNING) ++captured->warnings;
+    else captured->metadata_valid.store(false);
+}
+
+void NEO_WEBVIEW_CALL throw_from_log(void*, neo_webview_log_level_t, neo_webview_string_view_t,
+                                     neo_webview_string_view_t, uint64_t, uint64_t, int64_t, uint64_t) {
+    throw std::runtime_error("logging callback failed");
+}
+
+struct releasing_log_context {
+    neo_webview_app_t* app{};
+    std::atomic<int> calls{};
+};
+
+void NEO_WEBVIEW_CALL release_app_from_shutdown_log(void* context, neo_webview_log_level_t,
+                                                    neo_webview_string_view_t, neo_webview_string_view_t,
+                                                    uint64_t, uint64_t, int64_t, uint64_t) {
+    auto* value = static_cast<releasing_log_context*>(context);
+    if (++value->calls == 2) neo_webview_app_release(value->app);
+}
+
 void capture_decision(void* context, const neo_webview_decision_response_t* response) noexcept {
     auto* captured = static_cast<captured_decision*>(context);
     captured->action = response->action;
@@ -328,6 +363,76 @@ void test_callback_quiescence() {
     slot.clear();
     assert(!slot.invoke([](auto callback, void* context) { callback(context); }));
     assert(calls.load() == 1);
+
+    std::atomic<bool> worker_entered{};
+    std::atomic<bool> release_worker{};
+    slot.set(increment, &calls);
+    std::thread worker([&] {
+        assert(slot.invoke([&](auto, void*) {
+            worker_entered.store(true, std::memory_order_release);
+            while (!release_worker.load(std::memory_order_acquire)) std::this_thread::yield();
+        }));
+    });
+    while (!worker_entered.load(std::memory_order_acquire)) std::this_thread::yield();
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        release_worker.store(true, std::memory_order_release);
+    });
+    assert(slot.invoke([&](auto, void*) { slot.clear(); }));
+    worker.join();
+    releaser.join();
+    assert(!slot.invoke([](auto callback, void* context) { callback(context); }));
+}
+
+void test_logging_thread_safety_and_exception_containment() {
+    captured_logs captured;
+    neo_webview_app_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.shutdown_mode = NEO_WEBVIEW_APP_SHUTDOWN_EXPLICIT;
+    options.maximum_pending_dispatches = 1;
+    options.log_callback = capture_log;
+    options.log_context = &captured;
+    neo_webview_app_t* app{};
+    assert(neo_webview_app_attach(&options, &app, nullptr) == NEO_WEBVIEW_OK);
+    assert(captured.information.load() == 1);
+    std::atomic<int> dispatch_calls{};
+    assert(neo_webview_app_dispatch(app, increment, &dispatch_calls) == NEO_WEBVIEW_OK);
+
+    constexpr int thread_count = 8;
+    constexpr int messages_per_thread = 100;
+    std::array<std::thread, thread_count> threads;
+    for (auto& thread : threads) {
+        thread = std::thread([app, &dispatch_calls] {
+            for (int index = 0; index < messages_per_thread; ++index) {
+                assert(neo_webview_app_dispatch(app, increment, &dispatch_calls) == NEO_WEBVIEW_ERROR_INVALID_STATE);
+            }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+
+    assert(captured.warnings.load() == thread_count * messages_per_thread);
+    assert(captured.metadata_valid.load());
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    assert(dispatch_calls.load() == 1);
+    assert(captured.information.load() == 2);
+    neo_webview_app_release(app);
+
+    options.log_callback = throw_from_log;
+    options.log_context = nullptr;
+    app = nullptr;
+    assert(neo_webview_app_attach(&options, &app, nullptr) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    neo_webview_app_release(app);
+
+    releasing_log_context releasing;
+    options.log_callback = release_app_from_shutdown_log;
+    options.log_context = &releasing;
+    app = nullptr;
+    assert(neo_webview_app_attach(&options, &app, nullptr) == NEO_WEBVIEW_OK);
+    releasing.app = app;
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    assert(releasing.calls.load() == 2);
 }
 
 void test_utf8() {
@@ -345,13 +450,35 @@ void test_utf8() {
 }
 
 void test_structure_versions() {
-    neo_webview_runtime_info_t info{};
     neo_webview_error_t* error{};
-    info.size = sizeof(info);
-    info.version = 2;
-    assert(neo_webview_get_runtime_info(&info, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+
+    neo_webview_runtime_info_t undersized{};
+    undersized.size = sizeof(undersized) - 1;
+    undersized.version = 1;
+    assert(neo_webview_get_runtime_info(&undersized, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
     assert(error != nullptr);
     neo_webview_error_release(error);
+
+    neo_webview_runtime_info_t unsupported{};
+    unsupported.size = sizeof(unsupported);
+    unsupported.version = 2;
+    error = nullptr;
+    assert(neo_webview_get_runtime_info(&unsupported, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+
+    struct extended_runtime_info {
+        neo_webview_runtime_info_t value{};
+        std::array<uint8_t, 32> trailing{};
+    } extended;
+    extended.trailing.fill(0xa5);
+    extended.value.size = sizeof(extended);
+    extended.value.version = 1;
+    error = nullptr;
+    assert(neo_webview_get_runtime_info(&extended.value, &error) == NEO_WEBVIEW_OK);
+    assert(error == nullptr);
+    assert(extended.value.backend_name.length != 0);
+    for (const auto byte : extended.trailing) assert(byte == 0xa5);
 }
 
 void test_native_parent_structure() {
@@ -396,6 +523,7 @@ int main() {
     test_decision_timeout();
     test_deferred_decision_self_lifetime();
     test_callback_quiescence();
+    test_logging_thread_safety_and_exception_containment();
     test_utf8();
     test_structure_versions();
     test_native_parent_structure();

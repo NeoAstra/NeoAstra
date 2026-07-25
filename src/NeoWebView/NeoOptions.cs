@@ -15,6 +15,10 @@ public sealed class NeoApplicationOptions
     /// <summary>Gets or sets the maximum number of queued dispatcher callbacks.</summary>
     public uint MaximumPendingDispatches { get; set; } = 65_536;
 
+    /// <summary>Gets or sets the callback that receives native diagnostic log messages.</summary>
+    /// <remarks>The callback can run on any native thread. Exceptions are contained and ignored.</remarks>
+    public Action<NeoLogMessage>? LogCallback { get; set; }
+
     internal void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApplicationName))

@@ -16,15 +16,17 @@ public sealed class NeoApplication : IAsyncDisposable
     private readonly SafeAppHandle _handle;
     private readonly Dictionary<ulong, NeoWindow> _windows = [];
     private GCHandle _eventRoot;
+    private GCHandle _logRoot;
     private NeoWindow? _mainWindow;
     private NeoApplicationShutdownMode _shutdownMode;
     private ExceptionDispatchInfo? _startupException;
     private readonly TaskCompletionSource _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
-    private NeoApplication(SafeAppHandle handle, NeoApplicationOptions options)
+    private NeoApplication(SafeAppHandle handle, NeoApplicationOptions options, GCHandle logRoot)
     {
         _handle = handle;
+        _logRoot = logRoot;
         _shutdownMode = options.ShutdownMode;
         Dispatcher = new NeoDispatcher(this, Environment.CurrentManagedThreadId);
         RegisterEventCallback();
@@ -34,6 +36,7 @@ public sealed class NeoApplication : IAsyncDisposable
     ~NeoApplication()
     {
         UnregisterEventCallback();
+        ReleaseLogCallback(canFree: false);
     }
 
     /// <summary>Runs a standalone application event loop on the current thread.</summary>
@@ -267,6 +270,7 @@ public sealed class NeoApplication : IAsyncDisposable
             return;
         }
 
+        Dispatcher.MarkShutdown();
         NativeMethods.neo_webview_app_quit(NativeHandle, exitCode);
     }
 
@@ -335,6 +339,7 @@ public sealed class NeoApplication : IAsyncDisposable
         NativeMethods.neo_webview_error_t error = default;
         var result = NativeMethods.neo_webview_app_detach(DangerousNativeHandle, &error);
         NativeError.ThrowIfFailed(result, error, "detach application");
+        ReleaseLogCallback(canFree: true);
         _handle.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -359,6 +364,7 @@ public sealed class NeoApplication : IAsyncDisposable
     {
         Dispatcher.MarkShutdown();
         UnregisterEventCallback();
+        ReleaseLogCallback(canFree: false);
         DisposeManagedWindows();
         _handle.Dispose();
         GC.SuppressFinalize(this);
@@ -381,6 +387,24 @@ public sealed class NeoApplication : IAsyncDisposable
         }
     }
 
+    private void ReleaseLogCallback(bool canFree)
+    {
+        if (!_logRoot.IsAllocated)
+        {
+            return;
+        }
+
+        (_logRoot.Target as LogCallbackRegistration)?.Clear();
+        if (canFree)
+        {
+            _logRoot.Free();
+        }
+
+        // When detach cannot be acknowledged, retain the small registration root so a
+        // late native callback can safely observe the cleared registration.
+        _logRoot = default;
+    }
+
     internal NativeMethods.neo_webview_app_t NativeHandle
     {
         get
@@ -397,6 +421,9 @@ public sealed class NeoApplication : IAsyncDisposable
         options.Validate();
         NativeLibraryLoader.EnsureLoaded();
         using var name = new Utf8String(options.ApplicationName);
+        var logRoot = options.LogCallback is null
+            ? default
+            : GCHandle.Alloc(new LogCallbackRegistration(options.LogCallback));
         var raw = new NativeMethods.neo_webview_app_options
         {
             size = (uint)sizeof(NativeMethods.neo_webview_app_options),
@@ -405,20 +432,44 @@ public sealed class NeoApplication : IAsyncDisposable
             // Managed code implements the mutable shutdown modes from application events.
             shutdown_mode = NativeMethods.neo_webview_app_shutdown_mode.NEO_WEBVIEW_APP_SHUTDOWN_EXPLICIT,
             maximum_pending_dispatches = options.MaximumPendingDispatches,
+            log_callback = options.LogCallback is null
+                ? default
+                : (delegate* unmanaged[Cdecl]<void*, NativeMethods.neo_webview_log_level_t, NativeMethods.neo_webview_string_view_t, NativeMethods.neo_webview_string_view_t, ulong, ulong, long, ulong, void>)&NativeLog,
+            log_context = logRoot.IsAllocated ? (void*)GCHandle.ToIntPtr(logRoot) : null,
         };
         var nativeOptions = new NativeMethods.neo_webview_app_options_t(raw);
         NativeMethods.neo_webview_app_t app = default;
         NativeMethods.neo_webview_error_t error = default;
-        var result = embedded
-            ? NativeMethods.neo_webview_app_attach(&nativeOptions, &app, &error)
-            : NativeMethods.neo_webview_app_create(&nativeOptions, &app, &error);
-        NativeError.ThrowIfFailed(result, error, embedded ? "attach application" : "create application");
-        if (app.Handle == 0)
+        try
         {
-            throw new NeoWebViewException(NeoErrorCode.NativeFailure, "The native backend returned a null application.");
-        }
+            var result = embedded
+                ? NativeMethods.neo_webview_app_attach(&nativeOptions, &app, &error)
+                : NativeMethods.neo_webview_app_create(&nativeOptions, &app, &error);
+            NativeError.ThrowIfFailed(result, error, embedded ? "attach application" : "create application");
+            if (app.Handle == 0)
+            {
+                throw new NeoWebViewException(NeoErrorCode.NativeFailure, "The native backend returned a null application.");
+            }
 
-        return new NeoApplication(new SafeAppHandle(app.Handle), options);
+            return new NeoApplication(new SafeAppHandle(app.Handle), options, logRoot);
+        }
+        catch
+        {
+            if (logRoot.IsAllocated)
+            {
+                (logRoot.Target as LogCallbackRegistration)?.Clear();
+                if (app.Handle == 0)
+                {
+                    logRoot.Free();
+                }
+
+                // Once native creation succeeds, the partially constructed application or
+                // native final-release path may still observe this context. Keep it rooted
+                // when teardown was not acknowledged rather than risking a late callback.
+            }
+
+            throw;
+        }
     }
 
     private unsafe void RegisterEventCallback()
@@ -557,6 +608,44 @@ public sealed class NeoApplication : IAsyncDisposable
         {
             // User handlers and malformed native events are contained at the ABI boundary.
         }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void NativeLog(
+        void* context,
+        NativeMethods.neo_webview_log_level_t level,
+        NativeMethods.neo_webview_string_view_t category,
+        NativeMethods.neo_webview_string_view_t message,
+        ulong threadId,
+        ulong timestampNanoseconds,
+        long nativeCode,
+        ulong objectId)
+    {
+        try
+        {
+            var root = GCHandle.FromIntPtr((nint)context);
+            (root.Target as LogCallbackRegistration)?.Invoke(new NeoLogMessage(
+                (NeoLogLevel)level.Value,
+                Utf8String.Decode(category),
+                Utf8String.Decode(message),
+                threadId,
+                timestampNanoseconds,
+                nativeCode,
+                objectId));
+        }
+        catch
+        {
+            // User logging and malformed native strings are contained at the ABI boundary.
+        }
+    }
+
+    private sealed class LogCallbackRegistration(Action<NeoLogMessage> callback)
+    {
+        private Action<NeoLogMessage>? _callback = callback;
+
+        internal void Invoke(NeoLogMessage message) => Volatile.Read(ref _callback)?.Invoke(message);
+
+        internal void Clear() => Interlocked.Exchange(ref _callback, null);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

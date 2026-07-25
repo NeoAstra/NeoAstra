@@ -3,8 +3,20 @@ using NeoWebView;
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args is ["--validate-native-library"])
+        {
+            var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+            {
+                ApplicationName = "NeoWebView NativeAOT Validation",
+                ShutdownMode = NeoApplicationShutdownMode.Explicit,
+            });
+            application.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Console.WriteLine("NeoWebView native library loaded and detached successfully.");
+            return 0;
+        }
+
         return NeoApplication.Run(
             new NeoApplicationOptions { ApplicationName = "NeoWebView Sample" },
             async app =>

@@ -1,6 +1,7 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
@@ -253,6 +254,89 @@ public sealed class ManagedApiTests
 
                 disposal.GetAwaiter().GetResult();
                 Assert.ThrowsExactly<ObjectDisposedException>(() => application.Dispatcher.Post(() => { }));
+                return true;
+            });
+        }
+        catch (NeoWebViewNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+    }
+
+    [TestMethod]
+    public async Task AttachedApplication_ShutdownCancelsAcceptedManagedDispatcherWorkExactlyOnce()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView dispatcher shutdown test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                });
+                var executions = 0;
+                var pending = application.Dispatcher.InvokeAsync(() => Interlocked.Increment(ref executions)).AsTask();
+                application.Shutdown();
+
+                Assert.IsTrue(pending.IsCanceled);
+                var cancellation = Assert.ThrowsExactly<TaskCanceledException>(() => pending.GetAwaiter().GetResult());
+                Assert.IsTrue(cancellation.CancellationToken.IsCancellationRequested);
+                Assert.AreEqual(0, executions);
+                Assert.ThrowsExactly<ObjectDisposedException>(() => application.Dispatcher.Post(() => { }));
+
+                application.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                Assert.AreEqual(0, executions);
+                return true;
+            });
+        }
+        catch (NeoWebViewNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+    }
+
+    [TestMethod]
+    public async Task AttachedApplication_ForwardsNativeLogsAndContainsLoggerExceptions()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var logs = new ConcurrentQueue<NeoLogMessage>();
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView logging test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                    LogCallback = logs.Enqueue,
+                });
+                application.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+                var messages = logs.ToArray();
+                Assert.IsTrue(messages.Length >= 2);
+                Assert.IsTrue(messages.Any(message => message.Message.Contains("initialized", StringComparison.Ordinal)));
+                Assert.IsTrue(messages.Any(message => message.Message.Contains("shutdown", StringComparison.Ordinal)));
+                Assert.IsTrue(messages.All(message => message.Level == NeoLogLevel.Information));
+                Assert.IsTrue(messages.All(message => message.Category == "application"));
+                Assert.IsTrue(messages.All(message => message.NativeThreadId != 0 && message.TimestampNanoseconds != 0));
+
+                var throwingApplication = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView throwing logger test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                    LogCallback = static _ => throw new InvalidOperationException("logger failed"),
+                });
+                throwingApplication.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 return true;
             });
         }

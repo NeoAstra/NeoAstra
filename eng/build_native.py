@@ -72,7 +72,7 @@ def main() -> int:
     run("cmake", "--preset", preset, "-B", str(build_directory))
     run("cmake", "--build", str(build_directory), "--config", "Release")
     if not args.skip_tests:
-        run("ctest", "--test-dir", str(build_directory), "--build-config", "Release", "--output-on-failure")
+        run("ctest", "--test-dir", str(build_directory), "--build-config", "Release", "--output-on-failure", "--no-tests=error")
 
     source = build_directory / library_name
     if not source.is_file():

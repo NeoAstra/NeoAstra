@@ -307,6 +307,26 @@ void neo_emit_app(neo_webview_app_t* app, neo_webview_event_type_t type, uint64_
     app->events.invoke([&](auto callback, void* context) { callback(context, &event); });
 }
 
+void neo_log(neo_webview_app_t* app, neo_webview_log_level_t level, std::string_view category, std::string_view message,
+             int64_t native_code, uint64_t object_id) noexcept {
+    if (!app || neo_active_callback_count(&app->logs) != 0 || !app->retain()) return;
+    try {
+        const neo_webview_string_view_t category_view{
+            reinterpret_cast<const uint8_t*>(category.data()), static_cast<uint64_t>(category.size())};
+        const neo_webview_string_view_t message_view{
+            reinterpret_cast<const uint8_t*>(message.data()), static_cast<uint64_t>(message.size())};
+        const auto hashed_thread_id = static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+        const auto thread_id = hashed_thread_id == 0 ? UINT64_C(1) : hashed_thread_id;
+        const auto timestamp = neo_timestamp_ns();
+        app->logs.invoke([&](auto callback, void* context) {
+            callback(context, level, category_view, message_view, thread_id, timestamp, native_code, object_id);
+        });
+    } catch (...) {
+        // Logging is diagnostic and must never affect the operation that emitted it.
+    }
+    app->release();
+}
+
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id, const std::string* text,
                    const std::string* uri, uint64_t value, int64_t native_code, neo_webview_decision_t* decision) noexcept {
     if (!view) return;
@@ -386,6 +406,7 @@ void neo_complete_app_shutdown(neo_webview_app_t* app) noexcept {
         app->state.store(neo_app_state::stopping, std::memory_order_release);
     }
 
+    neo_log(app, NEO_WEBVIEW_LOG_INFORMATION, "application", "Native application shutdown started");
     neo_drain_dispatch(app);
     neo_complete_ui_shutdown(app);
     app->events.clear();
@@ -520,17 +541,27 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create(const neo_webview_a
         app->logs.set(options->log_callback,options->log_context);
         if(!neo_platform_initialize(app,error)){app->release();return error&&*error?(*error)->code:NEO_WEBVIEW_ERROR_BACKEND_UNAVAILABLE;}
         app->wake_ui=neo_platform_wake;
-        *output=app; return NEO_WEBVIEW_OK;
+        neo_log(app, NEO_WEBVIEW_LOG_INFORMATION, "application", "Native application initialized");
+        *output=app;
+        return NEO_WEBVIEW_OK;
     } catch(const std::exception& ex){return neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,ex.what());}
 }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_attach(const neo_webview_app_options_t* options, neo_webview_app_t** output, neo_webview_error_t** error) { auto result=neo_webview_app_create(options,output,error); if(result==NEO_WEBVIEW_OK)(*output)->embedded=true; return result; }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_detach(neo_webview_app_t* app, neo_webview_error_t** error) {
     if (error) *error = nullptr;
     if (!app) return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_ARGUMENT, "application is null");
-    if (!check_ui(app)) return neo_fail(error, NEO_WEBVIEW_ERROR_WRONG_THREAD, "application detach must run on the owning UI thread");
+    if (!app->retain()) return neo_fail(error, NEO_WEBVIEW_ERROR_DISPOSED, "application is disposed");
+    if (!check_ui(app)) {
+        app->release();
+        return neo_fail(error, NEO_WEBVIEW_ERROR_WRONG_THREAD, "application detach must run on the owning UI thread");
+    }
     const auto state = app->state.load(std::memory_order_acquire);
-    if (!app->embedded && state == neo_app_state::running) return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_STATE, "a running standalone application is shut down by its run loop");
+    if (!app->embedded && state == neo_app_state::running) {
+        app->release();
+        return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_STATE, "a running standalone application is shut down by its run loop");
+    }
     neo_complete_app_shutdown(app);
+    app->release();
     return NEO_WEBVIEW_OK;
 }
 int32_t NEO_WEBVIEW_CALL neo_webview_app_run(neo_webview_app_t* app) {
@@ -551,7 +582,10 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_dispatch(neo_webview_app_t
     neo_webview_result_t result=NEO_WEBVIEW_OK;
     try { std::lock_guard lock(app->dispatch_mutex); if(app->stopped.load()||app->state.load()==neo_app_state::stopping)result=NEO_WEBVIEW_ERROR_DISPOSED;else if(app->dispatches.size()>=app->dispatch_limit)result=NEO_WEBVIEW_ERROR_INVALID_STATE;else app->dispatches.push_back({callback,context}); }
     catch (...) { result=NEO_WEBVIEW_ERROR_NATIVE_FAILURE; }
-    if(result!=NEO_WEBVIEW_OK){app->release();return result;}
+    if(result!=NEO_WEBVIEW_OK){
+        if(result==NEO_WEBVIEW_ERROR_INVALID_STATE)neo_log(app,NEO_WEBVIEW_LOG_WARNING,"dispatcher","Native dispatcher queue limit reached");
+        app->release();return result;
+    }
     neo_wake_app(app); return NEO_WEBVIEW_OK;
 }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_set_event_callback(neo_webview_app_t* app, neo_webview_event_callback_t callback, void* context){if(!app)return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;app->events.set(callback,context);return NEO_WEBVIEW_OK;}

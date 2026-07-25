@@ -51,7 +51,11 @@ return NeoApplication.Run(
 
 NeoWebView application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
-An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, drains accepted dispatcher callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
+An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
+
+Native diagnostics can be observed without an additional logging dependency by setting `NeoApplicationOptions.LogCallback`. The callback can run on any native thread; its `NeoLogMessage` includes severity, category, UTF-8 message, native thread identifier, monotonic timestamp, optional native code, and object identifier. Exceptions thrown by the callback are contained at the managed/native boundary.
+
+The basic sample is configured for NativeAOT. Publish it for the current platform, for example with `dotnet publish samples/NeoWebView.Sample/NeoWebView.Sample.csproj -c Release -r win-x64 --self-contained`. Passing `--validate-native-library` performs a non-interactive native load and dispatcher-detach smoke check without creating a browser view; CI runs that check against the freshly built Windows native asset.
 
 ## Building
 

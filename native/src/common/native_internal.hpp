@@ -8,16 +8,31 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-inline thread_local const void* neo_active_callback_slot = nullptr;
+struct neo_callback_activation {
+    const void* slot;
+    const neo_callback_activation* previous;
+};
+
+inline thread_local const neo_callback_activation* neo_active_callbacks = nullptr;
+
+inline uint32_t neo_active_callback_count(const void* slot) noexcept {
+    uint32_t count{};
+    for (auto* active = neo_active_callbacks; active; active = active->previous) {
+        if (active->slot == slot) ++count;
+    }
+    return count;
+}
 
 template<typename TCallback>
 class neo_callback_slot final {
@@ -30,9 +45,8 @@ public:
         std::unique_lock lock(_mutex);
         _callback = nullptr;
         _context = nullptr;
-        if (neo_active_callback_slot != this) {
-            _quiesced.wait(lock, [this] { return _active == 0; });
-        }
+        const auto current_thread_active = neo_active_callback_count(this);
+        _quiesced.wait(lock, [this, current_thread_active] { return _active <= current_thread_active; });
         _callback = callback;
         _context = callback ? context : nullptr;
     }
@@ -51,18 +65,19 @@ public:
             ++_active;
         }
 
-        const auto* previous = neo_active_callback_slot;
-        neo_active_callback_slot = this;
+        const neo_callback_activation activation{this, neo_active_callbacks};
+        neo_active_callbacks = &activation;
         try {
             invoker(callback, context);
         } catch (...) {
             // No exception may cross an ABI callback boundary.
         }
-        neo_active_callback_slot = previous;
+        neo_active_callbacks = activation.previous;
 
         {
             std::lock_guard lock(_mutex);
-            if (--_active == 0) _quiesced.notify_all();
+            --_active;
+            _quiesced.notify_all();
         }
         return true;
     }
@@ -443,6 +458,8 @@ inline uint64_t neo_timestamp_ns() noexcept {
 bool neo_valid_utf8(neo_webview_string_view_t text) noexcept;
 std::string neo_string(neo_webview_string_view_t text);
 neo_webview_result_t neo_fail(neo_webview_error_t** error, neo_webview_result_t code, std::string message, int64_t native_code = 0, std::string domain = "neowebview") noexcept;
+void neo_log(neo_webview_app_t* app, neo_webview_log_level_t level, std::string_view category, std::string_view message,
+             int64_t native_code = 0, uint64_t object_id = 0) noexcept;
 void neo_emit_app(neo_webview_app_t* app, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
 void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
