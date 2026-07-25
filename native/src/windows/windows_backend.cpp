@@ -25,7 +25,7 @@ constexpr UINT quit_message = WM_APP + 0x4f;
 constexpr wchar_t dispatch_class[] = L"NeoWebView.Dispatcher";
 constexpr wchar_t window_class[] = L"NeoWebView.Window";
 
-struct windows_app { HWND dispatcher{}; bool owns_com{}; };
+struct windows_app { HWND dispatcher{}; bool owns_com{}; std::vector<neo_webview_decision_t*> decision_timers; };
 struct windows_window {
     HWND hwnd{};
     bool fullscreen{};
@@ -302,13 +302,7 @@ HRESULT register_view_events(neo_webview_view_t* view, windows_view* state) {
                 decision->completion_context = context.release();
                 neo_emit_view(view, NEO_WEBVIEW_EVENT_PERMISSION_REQUESTED, 0, nullptr, &uri,
                               portable_permission(kind), user_initiated ? 1 : 0, decision);
-                if (decision->state.load(std::memory_order_acquire) == neo_decision_state::pending) {
-                    neo_webview_decision_response_t response{};
-                    response.size = sizeof(response);
-                    response.version = 1;
-                    response.action = NEO_WEBVIEW_DECISION_DEFAULT;
-                    neo_webview_decision_complete(decision, &response, nullptr);
-                }
+                neo_finish_decision_event(view, decision);
                 decision->release();
                 return S_OK;
             } catch (...) {
@@ -329,6 +323,18 @@ LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     auto* app = reinterpret_cast<neo_webview_app_t*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == dispatch_message && app) { neo_drain_dispatch(app); return 0; }
     if (message == quit_message && app) { neo_drain_dispatch(app); PostQuitMessage(app->exit_code.load()); return 0; }
+    if (message == WM_TIMER && app) {
+        auto* decision = reinterpret_cast<neo_webview_decision_t*>(wparam);
+        auto* state = static_cast<windows_app*>(app->platform);
+        KillTimer(hwnd, wparam);
+        if (state) {
+            auto& timers = state->decision_timers;
+            timers.erase(std::remove(timers.begin(), timers.end(), decision), timers.end());
+        }
+        decision->expire();
+        decision->release();
+        return 0;
+    }
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
@@ -548,6 +554,8 @@ bool neo_platform_initialize(neo_webview_app_t* app, neo_webview_error_t** error
 
 void neo_platform_shutdown(neo_webview_app_t* app) noexcept {
     auto* state = static_cast<windows_app*>(app->platform); if (!state) return;
+    for (auto* decision : state->decision_timers) { KillTimer(state->dispatcher, reinterpret_cast<UINT_PTR>(decision)); decision->release(); }
+    state->decision_timers.clear();
     if (state->dispatcher && IsWindow(state->dispatcher)) DestroyWindow(state->dispatcher);
     if (state->owns_com && app->ui_thread == std::this_thread::get_id()) CoUninitialize();
     delete state; app->platform = nullptr;
@@ -560,6 +568,7 @@ int32_t neo_platform_run(neo_webview_app_t* app) noexcept {
 }
 void neo_platform_quit(neo_webview_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,quit_message,0,0); }
 void neo_platform_wake(neo_webview_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,dispatch_message,0,0); }
+bool neo_platform_schedule_decision_timeout(neo_webview_view_t* view,neo_webview_decision_t* decision) noexcept {auto* state=static_cast<windows_app*>(view->environment->app->platform);if(!state||!state->dispatcher)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(decision->deadline-std::chrono::steady_clock::now()).count();const auto delay=static_cast<UINT>(std::clamp<int64_t>(remaining+1,1,USER_TIMER_MAXIMUM));decision->retain();try{state->decision_timers.push_back(decision);}catch(...){decision->release();return false;}if(!SetTimer(state->dispatcher,reinterpret_cast<UINT_PTR>(decision),delay,nullptr)){state->decision_timers.pop_back();decision->release();return false;}return true;}
 
 bool neo_platform_window_create(neo_webview_window_t* window, const neo_webview_window_options_t* options, neo_webview_error_t** error) noexcept {
     try {

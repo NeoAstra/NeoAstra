@@ -108,6 +108,24 @@ void test_decision_timeout() {
     assert(decision.resolved_action.load() == NEO_WEBVIEW_DECISION_DENY);
 }
 
+void test_deferred_decision_self_lifetime() {
+    std::atomic<int> completed{};
+    auto* decision = new neo_webview_decision;
+    decision->kind = NEO_WEBVIEW_DECISION_PERMISSION;
+    decision->default_action = NEO_WEBVIEW_DECISION_DENY;
+    decision->completion = [](void* context, const neo_webview_decision_response_t*) noexcept { ++*static_cast<std::atomic<int>*>(context); };
+    decision->completion_context = &completed;
+    assert(neo_webview_decision_defer(decision) == NEO_WEBVIEW_OK);
+    decision->release();
+
+    neo_webview_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = NEO_WEBVIEW_DECISION_ALLOW;
+    assert(neo_webview_decision_complete(decision, &response, nullptr) == NEO_WEBVIEW_OK);
+    assert(completed.load() == 1);
+}
+
 void test_callback_quiescence() {
     neo_callback_slot<neo_webview_dispatch_callback_t> slot;
     std::atomic<int> calls{};
@@ -150,6 +168,7 @@ int main() {
     test_operation_terminal_state();
     test_decision_state();
     test_decision_timeout();
+    test_deferred_decision_self_lifetime();
     test_callback_quiescence();
     test_utf8();
     test_structure_versions();

@@ -144,43 +144,16 @@ struct neo_webview_decision final : neo_ref_counted {
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::now() + std::chrono::seconds(30)};
     void (*completion)(void* context, const neo_webview_decision_response_t* response) noexcept{};
     void* completion_context{};
+    neo_webview_view_t* owner{};
+    neo_webview_decision_t* owner_previous{};
+    neo_webview_decision_t* owner_next{};
 
-    void resolve(const neo_webview_decision_response_t& response) noexcept {
-        resolved_action.store(response.action, std::memory_order_release);
-        if (completion) completion(completion_context, &response);
-        completion = nullptr;
-        completion_context = nullptr;
-    }
-
-    void resolve(neo_webview_decision_action_t action) noexcept {
-        neo_webview_decision_response_t response{};
-        response.size = sizeof(response);
-        response.version = 1;
-        response.action = action;
-        resolve(response);
-    }
-
-    ~neo_webview_decision() override {
-        auto current = state.load(std::memory_order_acquire);
-        while (current == neo_decision_state::pending || current == neo_decision_state::deferred) {
-            if (state.compare_exchange_weak(current, neo_decision_state::abandoned, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                resolve(default_action);
-                break;
-            }
-        }
-    }
-
-    bool expire() noexcept {
-        if (std::chrono::steady_clock::now() < deadline) return false;
-        auto current = state.load(std::memory_order_acquire);
-        while (current == neo_decision_state::pending || current == neo_decision_state::deferred) {
-            if (state.compare_exchange_weak(current, neo_decision_state::timed_out, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                resolve(default_action);
-                return true;
-            }
-        }
-        return current == neo_decision_state::timed_out;
-    }
+    void detach_owner() noexcept;
+    void resolve(const neo_webview_decision_response_t& response) noexcept;
+    void resolve(neo_webview_decision_action_t action) noexcept;
+    void abandon() noexcept;
+    bool expire() noexcept;
+    ~neo_webview_decision() override;
 };
 
 struct neo_dispatch_item {
@@ -254,6 +227,9 @@ struct neo_webview_view final : neo_ref_counted {
     neo_webview_rect_t bounds{};
     bool fill_parent{true};
     std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
+    std::mutex decisions_mutex;
+    neo_webview_decision_t* decisions{};
+    bool destroying{};
     std::string source;
     std::string title;
     neo_callback_slot<neo_webview_event_callback_t> events;
@@ -267,7 +243,81 @@ inline void neo_configure_decision(neo_webview_decision_t* decision, const neo_w
     decision->kind = kind;
     decision->default_action = default_action;
     decision->deadline = std::chrono::steady_clock::now() + view->decision_timeout;
+    auto* mutable_view = const_cast<neo_webview_view_t*>(view);
+    std::lock_guard lock(mutable_view->decisions_mutex);
+    if (!mutable_view->destroying) {
+        decision->owner = mutable_view;
+        decision->owner_next = mutable_view->decisions;
+        if (decision->owner_next) decision->owner_next->owner_previous = decision;
+        mutable_view->decisions = decision;
+        decision->retain();
+    }
 }
+
+inline void neo_webview_decision::detach_owner() noexcept {
+    auto* view = owner;
+    if (!view) return;
+    bool detached{};
+    {
+        std::lock_guard lock(view->decisions_mutex);
+        if (owner == view) {
+            if (owner_previous) owner_previous->owner_next = owner_next;
+            else view->decisions = owner_next;
+            if (owner_next) owner_next->owner_previous = owner_previous;
+            owner = nullptr;
+            owner_previous = nullptr;
+            owner_next = nullptr;
+            detached = true;
+        }
+    }
+    if (detached) release();
+}
+
+inline void neo_webview_decision::resolve(const neo_webview_decision_response_t& response) noexcept {
+    resolved_action.store(response.action, std::memory_order_release);
+    const auto callback = completion;
+    const auto context = completion_context;
+    completion = nullptr;
+    completion_context = nullptr;
+    if (callback) callback(context, &response);
+    detach_owner();
+}
+
+inline void neo_webview_decision::resolve(neo_webview_decision_action_t action) noexcept {
+    neo_webview_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = action;
+    resolve(response);
+}
+
+inline void neo_webview_decision::abandon() noexcept {
+    auto current = state.load(std::memory_order_acquire);
+    while (current == neo_decision_state::pending || current == neo_decision_state::deferred) {
+        const auto was_deferred = current == neo_decision_state::deferred;
+        if (state.compare_exchange_weak(current, neo_decision_state::abandoned, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            resolve(default_action);
+            if (was_deferred) release();
+            return;
+        }
+    }
+}
+
+inline bool neo_webview_decision::expire() noexcept {
+    if (std::chrono::steady_clock::now() < deadline) return false;
+    auto current = state.load(std::memory_order_acquire);
+    while (current == neo_decision_state::pending || current == neo_decision_state::deferred) {
+        const auto was_deferred = current == neo_decision_state::deferred;
+        if (state.compare_exchange_weak(current, neo_decision_state::timed_out, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            resolve(default_action);
+            if (was_deferred) release();
+            return true;
+        }
+    }
+    return current == neo_decision_state::timed_out;
+}
+
+inline neo_webview_decision::~neo_webview_decision() { abandon(); }
 
 inline neo_webview_string_view_t neo_string_view(const std::string& text) noexcept {
     return {reinterpret_cast<const uint8_t*>(text.data()), static_cast<uint64_t>(text.size())};
@@ -282,6 +332,7 @@ std::string neo_string(neo_webview_string_view_t text);
 neo_webview_result_t neo_fail(neo_webview_error_t** error, neo_webview_result_t code, std::string message, int64_t native_code = 0, std::string domain = "neowebview") noexcept;
 void neo_emit_app(neo_webview_app_t* app, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
 void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neo_webview_decision_t* decision = nullptr) noexcept;
+void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
 void neo_drain_dispatch(neo_webview_app_t* app) noexcept;
 void neo_window_closed(neo_webview_window_t* window) noexcept;
 
@@ -290,6 +341,7 @@ void neo_platform_shutdown(neo_webview_app_t* app) noexcept;
 int32_t neo_platform_run(neo_webview_app_t* app) noexcept;
 void neo_platform_quit(neo_webview_app_t* app) noexcept;
 void neo_platform_wake(neo_webview_app_t* app) noexcept;
+bool neo_platform_schedule_decision_timeout(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
 bool neo_platform_window_create(neo_webview_window_t* window, const neo_webview_window_options_t* options, neo_webview_error_t** error) noexcept;
 void neo_platform_window_destroy(neo_webview_window_t* window) noexcept;
 neo_webview_result_t neo_platform_window_show(neo_webview_window_t* window, bool visible) noexcept;

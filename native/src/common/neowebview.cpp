@@ -19,6 +19,22 @@ neo_webview_window::~neo_webview_window() {
     app->release();
 }
 neo_webview_view::~neo_webview_view() {
+    for (;;) {
+        neo_webview_decision_t* decision{};
+        {
+            std::lock_guard lock(decisions_mutex);
+            destroying = true;
+            decision = decisions;
+            if (!decision) break;
+            decisions = decision->owner_next;
+            if (decisions) decisions->owner_previous = nullptr;
+            decision->owner = nullptr;
+            decision->owner_previous = nullptr;
+            decision->owner_next = nullptr;
+        }
+        decision->abandon();
+        decision->release();
+    }
     events.clear();
     neo_platform_view_destroy(this);
     if (window) {
@@ -272,6 +288,16 @@ void neo_window_closed(neo_webview_window_t* window) noexcept {
     if (should_quit) neo_webview_app_quit(app, 0);
 }
 
+void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept {
+    const auto state=decision->state.load(std::memory_order_acquire);
+    if(state==neo_decision_state::pending){
+        neo_webview_decision_response_t response{};response.size=sizeof(response);response.version=1;response.action=NEO_WEBVIEW_DECISION_DEFAULT;
+        neo_webview_decision_complete(decision,&response,nullptr);
+    }else if(state==neo_decision_state::deferred&&!neo_platform_schedule_decision_timeout(view,decision)){
+        decision->abandon();
+    }
+}
+
 extern "C" {
 
 uint32_t NEO_WEBVIEW_CALL neo_webview_get_abi_version_major() { return NEO_WEBVIEW_ABI_VERSION_MAJOR; }
@@ -323,7 +349,10 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_defer(neo_webview_dec
     if (!value) return NEO_WEBVIEW_ERROR_INVALID_ARGUMENT;
     if (value->expire()) return NEO_WEBVIEW_ERROR_TIMED_OUT;
     auto expected=neo_decision_state::pending;
-    return value->state.compare_exchange_strong(expected,neo_decision_state::deferred,std::memory_order_acq_rel) ? NEO_WEBVIEW_OK : NEO_WEBVIEW_ERROR_INVALID_STATE;
+    value->retain();
+    if (value->state.compare_exchange_strong(expected,neo_decision_state::deferred,std::memory_order_acq_rel)) return NEO_WEBVIEW_OK;
+    value->release();
+    return NEO_WEBVIEW_ERROR_INVALID_STATE;
 }
 neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_complete(neo_webview_decision_t* value, const neo_webview_decision_response_t* response, neo_webview_error_t** error) {
     if (!value || !valid_struct(response, response ? response->size : 0, sizeof(*response)) || !valid_decision_action(response->action)) return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_ARGUMENT, "invalid decision response");
@@ -333,14 +362,17 @@ neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_decision_complete(neo_webview_
     auto current=value->state.load(std::memory_order_acquire);
     while(current==neo_decision_state::pending || current==neo_decision_state::deferred) {
         if(value->state.compare_exchange_weak(current,neo_decision_state::completed,std::memory_order_acq_rel,std::memory_order_acquire)) {
+            const auto was_deferred=current==neo_decision_state::deferred;
             auto effective=*response;
             if(effective.action==NEO_WEBVIEW_DECISION_DEFAULT)effective.action=value->default_action;
             value->resolve(effective);
+            if(was_deferred)value->release();
             return NEO_WEBVIEW_OK;
         }
     }
     return neo_fail(error, NEO_WEBVIEW_ERROR_INVALID_STATE, "decision is already complete");
 }
+
 neo_webview_decision_kind_t NEO_WEBVIEW_CALL neo_webview_decision_get_kind(const neo_webview_decision_t* value) { return value ? value->kind : NEO_WEBVIEW_DECISION_UNKNOWN; }
 neo_webview_decision_action_t NEO_WEBVIEW_CALL neo_webview_decision_get_default_action(const neo_webview_decision_t* value) { return value ? value->default_action : NEO_WEBVIEW_DECISION_DENY; }
 uint64_t NEO_WEBVIEW_CALL neo_webview_decision_get_deadline_ns(const neo_webview_decision_t* value) { return value ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(value->deadline.time_since_epoch()).count()) : 0; }
