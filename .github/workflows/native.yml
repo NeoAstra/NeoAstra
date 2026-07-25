@@ -1,0 +1,61 @@
+name: native
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Native (${{ matrix.rid }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-latest
+            skip_tests: false
+          - rid: win-arm64
+            runner: windows-latest
+            skip_tests: true
+          - rid: osx-x64
+            runner: macos-15-intel
+            skip_tests: false
+          - rid: osx-arm64
+            runner: macos-latest
+            skip_tests: false
+          - rid: linux-x64
+            runner: ubuntu-latest
+            skip_tests: false
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            skip_tests: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux dependencies
+        if: startsWith(matrix.rid, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+      - name: Build, test, and stage native runtime
+        shell: bash
+        run: |
+          args=(--rid "${{ matrix.rid }}" --clean)
+          if [[ "${{ matrix.skip_tests }}" == "true" ]]; then args+=(--skip-tests); fi
+          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.skip_tests }}" != "true" ]]; then
+            xvfb-run -a python eng/build_native.py "${args[@]}"
+          else
+            python eng/build_native.py "${args[@]}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: src/NeoWebView/runtimes/${{ matrix.rid }}/native/*
+          if-no-files-found: error

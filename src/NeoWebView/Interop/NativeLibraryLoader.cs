@@ -109,8 +109,10 @@ internal static class NativeLibraryLoader
             ? "neowebview_native.dll"
             : OperatingSystem.IsMacOS() ? "libneowebview_native.dylib" : "libneowebview_native.so";
         var baseDirectory = AppContext.BaseDirectory;
+        var portableRid = $"{(OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")}-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}";
         yield return Path.Combine(baseDirectory, fileName);
         yield return Path.Combine(baseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", fileName);
+        yield return Path.Combine(baseDirectory, "runtimes", portableRid, "native", fileName);
 
         var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
         var architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
@@ -118,6 +120,8 @@ internal static class NativeLibraryLoader
         for (var index = 0; index < 8 && current is not null; index++, current = current.Parent)
         {
             var artifacts = Path.Combine(current.FullName, "artifacts", "native");
+            yield return Path.Combine(current.FullName, "src", "NeoWebView", "runtimes", portableRid, "native", fileName);
+            yield return Path.Combine(artifacts, portableRid, fileName);
             yield return Path.Combine(artifacts, $"{platform}-{architecture}-release", fileName);
             yield return Path.Combine(artifacts, $"{platform}-{architecture}-debug", fileName);
         }

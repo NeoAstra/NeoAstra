@@ -74,7 +74,8 @@ if(WIN32)
     URL_HASH SHA256=dc4d1d9168df26b830398303e50210b6e1729f6ce5a7ac69d2c766852f489962
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(webview2_sdk)
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
+  if(CMAKE_CXX_COMPILER_TARGET MATCHES "^(ARM64|arm64|aarch64)" OR
+     CMAKE_SYSTEM_PROCESSOR MATCHES "^(ARM64|arm64|aarch64)$")
     set(_neo_webview2_arch arm64)
   elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(_neo_webview2_arch x64)

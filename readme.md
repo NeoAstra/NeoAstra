@@ -60,13 +60,13 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
-The native library uses CMake presets and Clang. For example, on Windows:
+The native library uses CMake presets and Clang. The build helper selects a .NET RID, runs the native tests, and stages the resulting library in `src/NeoWebView/runtimes/<RID>/native`:
 
 ```sh
-cmake --preset windows-x64-debug
-cmake --build --preset windows-x64-debug
-ctest --preset windows-x64-debug
+python eng/build_native.py --rid win-x64 --clean
 ```
+
+The managed project directly copies the staged library for the current host RID beside its development output, so local applications and tests use the latest native build without creating or installing a NuGet package. Rerun the helper after native changes. The same command accepts `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`; use `--skip-tests` when cross-compiling a binary that cannot run on the build host.
 
 See [`doc/neowebview_specs.md`](doc/neowebview_specs.md) for the architecture and normative implementation requirements.
 
