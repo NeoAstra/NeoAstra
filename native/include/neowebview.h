@@ -156,6 +156,9 @@ NEO_WEBVIEW_API uint64_t NEO_WEBVIEW_CALL neo_webview_decision_get_deadline_ns(c
 
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_create(const neo_webview_app_options_t*, neo_webview_app_t**, neo_webview_error_t**);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_attach(const neo_webview_app_options_t*, neo_webview_app_t**, neo_webview_error_t**);
+/* Must be called on the owning UI thread before an attached host stops pumping.
+   Drains accepted dispatch work, rejects new work, and completes platform teardown. Idempotent after shutdown. */
+NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_detach(neo_webview_app_t*, neo_webview_error_t**);
 NEO_WEBVIEW_API int32_t NEO_WEBVIEW_CALL neo_webview_app_run(neo_webview_app_t*);
 NEO_WEBVIEW_API void NEO_WEBVIEW_CALL neo_webview_app_quit(neo_webview_app_t*, int32_t);
 NEO_WEBVIEW_API neo_webview_result_t NEO_WEBVIEW_CALL neo_webview_app_dispatch(neo_webview_app_t*, neo_webview_dispatch_callback_t, void*);

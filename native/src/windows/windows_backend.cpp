@@ -22,6 +22,7 @@ using Microsoft::WRL::Make;
 namespace {
 constexpr UINT dispatch_message = WM_APP + 0x4e;
 constexpr UINT quit_message = WM_APP + 0x4f;
+constexpr UINT destroy_app_message = WM_APP + 0x50;
 constexpr wchar_t dispatch_class[] = L"NeoWebView.Dispatcher";
 constexpr wchar_t window_class[] = L"NeoWebView.Window";
 
@@ -430,6 +431,7 @@ LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     auto* app = reinterpret_cast<neo_webview_app_t*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == dispatch_message && app) { neo_drain_dispatch(app); return 0; }
     if (message == quit_message && app) { neo_drain_dispatch(app); PostQuitMessage(app->exit_code.load()); return 0; }
+    if (message == destroy_app_message && app) { neo_destroy_app_on_ui(app); return 0; }
     if (message == WM_TIMER && app) {
         auto* decision = reinterpret_cast<neo_webview_decision_t*>(wparam);
         auto* state = static_cast<windows_app*>(app->platform);
@@ -667,6 +669,8 @@ void neo_platform_shutdown(neo_webview_app_t* app) noexcept {
     if (state->owns_com && app->ui_thread == std::this_thread::get_id()) CoUninitialize();
     delete state; app->platform = nullptr;
 }
+
+bool neo_platform_schedule_app_destruction(neo_webview_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); return state&&state->dispatcher&&PostMessageW(state->dispatcher,destroy_app_message,0,0)!=FALSE; }
 
 int32_t neo_platform_run(neo_webview_app_t* app) noexcept {
     MSG message{};

@@ -1299,6 +1299,14 @@ namespace NeoWebView.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neo_webview_result_t neo_webview_app_attach(NativeMethods.neo_webview_app_options_t* arg0, NativeMethods.neo_webview_app_t* arg1, NativeMethods.neo_webview_error_t* arg2);
 
+        /// <summary>
+        /// Must be called on the owning UI thread before an attached host stops pumping.
+        /// Drains accepted dispatch work, rejects new work, and completes platform teardown. Idempotent after shutdown.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_app_detach")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neo_webview_result_t neo_webview_app_detach(NativeMethods.neo_webview_app_t arg0, NativeMethods.neo_webview_error_t* arg1);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neo_webview_app_run")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial int neo_webview_app_run(NativeMethods.neo_webview_app_t arg0);

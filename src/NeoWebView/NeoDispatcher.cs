@@ -75,9 +75,25 @@ public sealed unsafe class NeoDispatcher
 
     internal void MarkShutdown() => _shutdown = true;
 
-    private void Queue(IDispatchWork work)
+    internal ValueTask InvokeShutdownAsync(Action action)
     {
-        if (_shutdown)
+        if (CheckAccess())
+        {
+            action();
+            return ValueTask.CompletedTask;
+        }
+
+        var work = new InvokedWork(action, CancellationToken.None);
+        Queue(work, _application.DangerousNativeHandle, allowShutdown: true);
+        return new ValueTask(work.Task);
+    }
+
+    private void Queue(IDispatchWork work)
+        => Queue(work, _application.NativeHandle, allowShutdown: false);
+
+    private void Queue(IDispatchWork work, NativeMethods.neo_webview_app_t handle, bool allowShutdown)
+    {
+        if (_shutdown && !allowShutdown)
         {
             throw new ObjectDisposedException(nameof(NeoApplication));
         }
@@ -87,7 +103,7 @@ public sealed unsafe class NeoDispatcher
         try
         {
             result = NativeMethods.neo_webview_app_dispatch(
-                _application.NativeHandle,
+                handle,
                 (delegate* unmanaged[Cdecl]<void*, void>)&Dispatch,
                 (void*)GCHandle.ToIntPtr(root));
         }

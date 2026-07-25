@@ -1,6 +1,7 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 using NeoWebView.Interop;
@@ -226,6 +227,42 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task AttachedApplication_WorkerDisposalCompletesWhileHostPumps()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoWebView worker disposal test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                });
+                var disposal = Task.Run(async () => await application.DisposeAsync());
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                while (!disposal.IsCompleted && DateTime.UtcNow < deadline)
+                {
+                    PumpWindowsMessages();
+                    Thread.Sleep(1);
+                }
+
+                disposal.GetAwaiter().GetResult();
+                Assert.ThrowsExactly<ObjectDisposedException>(() => application.Dispatcher.Post(() => { }));
+                return true;
+            });
+        }
+        catch (NeoWebViewNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+    }
+
+    [TestMethod]
     public async Task StandaloneAsyncCallback_SmokeTestWhenDevelopmentLibraryIsAvailable()
     {
         if (!OperatingSystem.IsWindows())
@@ -335,4 +372,37 @@ public sealed class ManagedApiTests
         thread.Start();
         return completion.Task;
     }
+
+    private static void PumpWindowsMessages()
+    {
+        while (PeekMessageW(out var message, 0, 0, 0, 1))
+        {
+            TranslateMessage(in message);
+            DispatchMessageW(in message);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMessage
+    {
+        internal nint Window;
+        internal uint Message;
+        internal nuint WParam;
+        internal nint LParam;
+        internal uint Time;
+        internal int X;
+        internal int Y;
+        internal uint Private;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PeekMessageW(out NativeMessage message, nint window, uint minimum, uint maximum, uint remove);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TranslateMessage(in NativeMessage message);
+
+    [DllImport("user32.dll")]
+    private static extern nint DispatchMessageW(in NativeMessage message);
 }

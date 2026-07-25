@@ -19,6 +19,7 @@ public sealed class NeoApplication : IAsyncDisposable
     private NeoWindow? _mainWindow;
     private NeoApplicationShutdownMode _shutdownMode;
     private ExceptionDispatchInfo? _startupException;
+    private readonly TaskCompletionSource _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
     private NeoApplication(SafeAppHandle handle, NeoApplicationOptions options)
@@ -27,6 +28,12 @@ public sealed class NeoApplication : IAsyncDisposable
         _shutdownMode = options.ShutdownMode;
         Dispatcher = new NeoDispatcher(this, Environment.CurrentManagedThreadId);
         RegisterEventCallback();
+    }
+
+    /// <summary>Releases the managed callback root before safe-handle finalization requests native teardown.</summary>
+    ~NeoApplication()
+    {
+        UnregisterEventCallback();
     }
 
     /// <summary>Runs a standalone application event loop on the current thread.</summary>
@@ -70,6 +77,7 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <returns>The attached application.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
     /// <exception cref="NeoWebViewNativeLibraryException">The native library cannot be loaded or has an incompatible ABI.</exception>
+    /// <remarks>The host must await <see cref="DisposeAsync"/> while continuing to pump this thread's UI loop.</remarks>
     public static NeoApplication AttachToCurrentThread(NeoApplicationOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -262,30 +270,77 @@ public sealed class NeoApplication : IAsyncDisposable
         NativeMethods.neo_webview_app_quit(NativeHandle, exitCode);
     }
 
-    /// <summary>Unregisters callbacks and releases this application's native reference.</summary>
-    /// <returns>A completed value task.</returns>
-    public unsafe ValueTask DisposeAsync()
+    /// <summary>Detaches the native application on its owning UI thread and releases its native reference.</summary>
+    /// <returns>A task completed after native UI and platform teardown is acknowledged.</returns>
+    /// <exception cref="NeoWebViewException">Native application detach fails.</exception>
+    /// <remarks>
+    /// For an application created by <see cref="AttachToCurrentThread"/>, the host must continue pumping its UI loop
+    /// until this task completes. Finalization can only request teardown and cannot complete it after pumping stops.
+    /// </remarks>
+    public ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            return ValueTask.CompletedTask;
+            return new ValueTask(_disposeCompletion.Task);
         }
 
-        Dispatcher.MarkShutdown();
+        if (Dispatcher.CheckAccess())
+        {
+            CompleteDisposeOnCurrentThread();
+        }
+        else
+        {
+            _ = DisposeOnDispatcherAsync();
+        }
+
+        return new ValueTask(_disposeCompletion.Task);
+    }
+
+    internal NativeMethods.neo_webview_app_t DangerousNativeHandle => new(_handle.DangerousGetHandle());
+
+    private async Task DisposeOnDispatcherAsync()
+    {
         try
         {
-            NativeMethods.neo_webview_app_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
+            await Dispatcher.InvokeShutdownAsync(DisposeCore);
+            _disposeCompletion.TrySetResult();
         }
-        catch
+        catch (Exception ex)
         {
-            // The native application may already have completed shutdown.
+            ReleaseWithoutDetach();
+            _disposeCompletion.TrySetException(ex);
         }
+    }
 
-        if (_eventRoot.IsAllocated)
+    private void CompleteDisposeOnCurrentThread()
+    {
+        try
         {
-            _eventRoot.Free();
+            DisposeCore();
+            _disposeCompletion.TrySetResult();
         }
+        catch (Exception ex)
+        {
+            ReleaseWithoutDetach();
+            _disposeCompletion.TrySetException(ex);
+        }
+    }
 
+    private unsafe void DisposeCore()
+    {
+        Dispatcher.MarkShutdown();
+        UnregisterEventCallback();
+        DisposeManagedWindows();
+
+        NativeMethods.neo_webview_error_t error = default;
+        var result = NativeMethods.neo_webview_app_detach(DangerousNativeHandle, &error);
+        NativeError.ThrowIfFailed(result, error, "detach application");
+        _handle.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    private void DisposeManagedWindows()
+    {
         NeoWindow[] windows;
         lock (_sync)
         {
@@ -298,9 +353,32 @@ public sealed class NeoApplication : IAsyncDisposable
         {
             window.DisposeFromApplication();
         }
+    }
 
+    private void ReleaseWithoutDetach()
+    {
+        Dispatcher.MarkShutdown();
+        UnregisterEventCallback();
+        DisposeManagedWindows();
         _handle.Dispose();
-        return ValueTask.CompletedTask;
+        GC.SuppressFinalize(this);
+    }
+
+    private unsafe void UnregisterEventCallback()
+    {
+        try
+        {
+            NativeMethods.neo_webview_app_set_event_callback(DangerousNativeHandle, default, null);
+        }
+        catch
+        {
+            // SafeHandle finalization may run after native loading or shutdown failed.
+        }
+
+        if (_eventRoot.IsAllocated)
+        {
+            _eventRoot.Free();
+        }
     }
 
     internal NativeMethods.neo_webview_app_t NativeHandle
@@ -345,7 +423,7 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private unsafe void RegisterEventCallback()
     {
-        _eventRoot = GCHandle.Alloc(this);
+        _eventRoot = GCHandle.Alloc(this, GCHandleType.Weak);
         var result = NativeMethods.neo_webview_app_set_event_callback(
             new(_handle.DangerousGetHandle()),
             (delegate* unmanaged[Cdecl]<void*, NativeMethods.neo_webview_event_t*, void>)&ApplicationEvent,

@@ -10,6 +10,7 @@ namespace NeoWebView.Interop;
 internal static class NativeLibraryLoader
 {
     private const uint ExpectedAbiMajor = 1;
+    private const uint MinimumAbiMinor = 5;
     private static readonly object Sync = new();
     private static readonly List<string> AttemptedPaths = [];
     private static nint _loadedHandle;
@@ -33,10 +34,10 @@ internal static class NativeLibraryLoader
             {
                 var major = NativeMethods.neo_webview_get_abi_version_major();
                 var minor = NativeMethods.neo_webview_get_abi_version_minor();
-                if (major != ExpectedAbiMajor)
+                if (major != ExpectedAbiMajor || minor < MinimumAbiMinor)
                 {
                     throw new NeoWebViewNativeLibraryException(
-                        $"The loaded NeoWebView native ABI is {major}.{minor}; managed NeoWebView requires ABI {ExpectedAbiMajor}.x.");
+                        $"The loaded NeoWebView native ABI is {major}.{minor}; managed NeoWebView requires ABI {ExpectedAbiMajor}.{MinimumAbiMinor} or newer within major version {ExpectedAbiMajor}.");
                 }
 
                 _validated = true;

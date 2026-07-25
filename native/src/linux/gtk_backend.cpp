@@ -26,6 +26,7 @@ GtkWidget* view_parent(neo_webview_view_t* view) noexcept {
 
 void NEO_WEBVIEW_CALL invoke_dispatch(void* data) { auto* app=static_cast<neo_webview_app_t*>(data); neo_drain_dispatch(app); app->release(); }
 gboolean dispatch_on_main(void* data) { invoke_dispatch(data); return G_SOURCE_REMOVE; }
+gboolean destroy_app_on_main(void* data) { neo_destroy_app_on_ui(static_cast<neo_webview_app_t*>(data)); return G_SOURCE_REMOVE; }
 gboolean decision_timed_out(void* data){static_cast<neo_webview_decision_t*>(data)->expire();return G_SOURCE_REMOVE;}
 void release_timed_decision(void* data){static_cast<neo_webview_decision_t*>(data)->release();}
 
@@ -82,6 +83,7 @@ void clear_finished(GObject* object,GAsyncResult* result,void* data){std::unique
 
 bool neo_platform_initialize(neo_webview_app_t* app,neo_webview_error_t** error) noexcept {if(!gtk_init_check(nullptr,nullptr)){neo_fail(error,NEO_WEBVIEW_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEO_WEBVIEW_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();app->platform=state;return true;}
 void neo_platform_shutdown(neo_webview_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state)return;if(state->context)g_main_context_unref(state->context);delete state;app->platform=nullptr;}
+bool neo_platform_schedule_app_destruction(neo_webview_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return false;auto* source=g_idle_source_new();if(!source)return false;g_source_set_callback(source,destroy_app_on_main,app,nullptr);const auto id=g_source_attach(source,state->context);g_source_unref(source);return id!=0;}
 int32_t neo_platform_run(neo_webview_app_t* app) noexcept {gtk_main();return app->exit_code.load();}
 void neo_platform_quit(neo_webview_app_t*) noexcept {auto* source=g_idle_source_new();g_source_set_callback(source,[](void*)->gboolean{gtk_main_quit();return G_SOURCE_REMOVE;},nullptr,nullptr);g_source_attach(source,nullptr);g_source_unref(source);}
 void neo_platform_wake(neo_webview_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return;app->retain();auto* source=g_idle_source_new();g_source_set_callback(source,dispatch_on_main,app,nullptr);g_source_attach(source,state->context);g_source_unref(source);}

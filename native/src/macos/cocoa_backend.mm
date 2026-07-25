@@ -81,6 +81,7 @@ NSRect view_frame(neo_webview_view_t* view,NSView* parent){if(view->fill_parent)
 
 bool neo_platform_initialize(neo_webview_app_t* app,neo_webview_error_t**) noexcept {@autoreleasepool{[NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];app->platform=new cocoa_app;return true;}}
 void neo_platform_shutdown(neo_webview_app_t* app) noexcept {delete static_cast<cocoa_app*>(app->platform);app->platform=nullptr;}
+bool neo_platform_schedule_app_destruction(neo_webview_app_t* app) noexcept {dispatch_async(dispatch_get_main_queue(),^{neo_destroy_app_on_ui(app);});return true;}
 int32_t neo_platform_run(neo_webview_app_t* app) noexcept {@autoreleasepool{[NSApp run];return app->exit_code.load();}}
 void neo_platform_quit(neo_webview_app_t*) noexcept {dispatch_async(dispatch_get_main_queue(),^{[NSApp stop:nil];NSEvent* event=[NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];[NSApp postEvent:event atStart:NO];});}
 void neo_platform_wake(neo_webview_app_t* app) noexcept {app->retain();dispatch_async(dispatch_get_main_queue(),^{neo_drain_dispatch(app);app->release();});}

@@ -11,6 +11,12 @@
 #include <thread>
 #include <type_traits>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace {
 
 struct counted final : neo_ref_counted {
@@ -63,7 +69,7 @@ void NEO_WEBVIEW_CALL quit_app(void* context) {
     neo_webview_app_quit(static_cast<neo_webview_app_t*>(context), 0);
 }
 
-neo_webview_app_t* create_test_app() {
+neo_webview_app_t* create_test_app(bool embedded = false) {
     neo_webview_app_options_t options{};
     options.size = sizeof(options);
     options.version = 1;
@@ -72,9 +78,17 @@ neo_webview_app_t* create_test_app() {
     options.application_name = neo_string_view(name);
     neo_webview_app_t* app{};
     neo_webview_error_t* error{};
-    assert(neo_webview_app_create(&options, &app, &error) == NEO_WEBVIEW_OK);
+    const auto result = embedded ? neo_webview_app_attach(&options, &app, &error) : neo_webview_app_create(&options, &app, &error);
+    assert(result == NEO_WEBVIEW_OK);
     assert(app != nullptr && error == nullptr);
     return app;
+}
+
+void NEO_WEBVIEW_CALL release_app_from_worker_and_quit(void* context) {
+    auto* app = static_cast<neo_webview_app_t*>(context);
+    std::thread worker([app] { neo_webview_app_release(app); });
+    worker.join();
+    neo_webview_app_quit(app, 0);
 }
 
 struct captured_decision {
@@ -195,6 +209,53 @@ void test_worker_release_while_shutdown_is_draining() {
     neo_webview_app_release(app);
 }
 
+void test_explicit_detach() {
+    auto* app = create_test_app(true);
+    std::atomic<int> calls{};
+    assert(neo_webview_app_dispatch(app, increment, &calls) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    assert(calls.load() == 1);
+    assert(app->state.load(std::memory_order_acquire) == neo_app_state::stopped);
+    assert(app->platform == nullptr);
+    assert(neo_webview_app_dispatch(app, increment, &calls) == NEO_WEBVIEW_ERROR_DISPOSED);
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    std::thread worker([app] { neo_webview_app_release(app); });
+    worker.join();
+}
+
+void test_detach_requires_ui_thread() {
+    auto* app = create_test_app(true);
+    std::atomic<neo_webview_result_t> result{NEO_WEBVIEW_OK};
+    std::thread worker([&] { result.store(neo_webview_app_detach(app, nullptr)); });
+    worker.join();
+    assert(result.load() == NEO_WEBVIEW_ERROR_WRONG_THREAD);
+    assert(neo_webview_app_detach(app, nullptr) == NEO_WEBVIEW_OK);
+    neo_webview_app_release(app);
+}
+
+void test_worker_release_during_run() {
+    auto* app = create_test_app();
+    assert(neo_webview_app_dispatch(app, release_app_from_worker_and_quit, app) == NEO_WEBVIEW_OK);
+    assert(neo_webview_app_run(app) == 0);
+}
+
+#if defined(_WIN32)
+void test_attached_worker_final_release_is_marshaled() {
+    auto* app = create_test_app(true);
+    std::thread worker([app] { neo_webview_app_release(app); });
+    worker.join();
+
+    MSG message{};
+    bool dispatched{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+        dispatched = true;
+    }
+    assert(dispatched);
+}
+#endif
+
 void test_operation_terminal_state() {
     neo_webview_operation operation;
     operation.cancel();
@@ -299,6 +360,12 @@ int main() {
     test_ui_destruction_from_worker();
     test_ui_destruction_after_shutdown();
     test_worker_release_while_shutdown_is_draining();
+    test_explicit_detach();
+    test_detach_requires_ui_thread();
+    test_worker_release_during_run();
+#if defined(_WIN32)
+    test_attached_worker_final_release_is_marshaled();
+#endif
     test_operation_terminal_state();
     test_decision_state();
     test_decision_timeout();

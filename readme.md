@@ -51,6 +51,8 @@ return NeoApplication.Run(
 
 NeoWebView application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
+An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, drains accepted dispatcher callbacks, and completes child-before-application platform teardown. Native hosts must call `neo_webview_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoWebView intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
+
 ## Building
 
 Managed projects target .NET 10:

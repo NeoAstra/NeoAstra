@@ -181,6 +181,7 @@ struct neo_webview_app final : neo_ref_counted {
     uint32_t dispatch_limit{65536};
     std::mutex dispatch_mutex;
     std::deque<neo_dispatch_item> dispatches;
+    std::mutex platform_mutex;
     std::mutex ui_lifetime_mutex;
     neo_ui_ref_counted* ui_objects{};
     neo_ui_ref_counted* pending_ui_destructions{};
@@ -196,7 +197,16 @@ struct neo_webview_app final : neo_ref_counted {
     uint64_t main_window_id{};
     void* platform{};
     ~neo_webview_app() override;
+
+protected:
+    void on_zero_references() noexcept override;
 };
+
+inline void neo_wake_app(neo_webview_app_t* app) noexcept {
+    if (!app) return;
+    std::lock_guard lock(app->platform_mutex);
+    if (app->platform && app->wake_ui && !app->stopped.load(std::memory_order_acquire)) app->wake_ui(app);
+}
 
 struct neo_ui_ref_counted : neo_ref_counted {
     neo_webview_app_t* const destruction_app;
@@ -281,7 +291,7 @@ inline void neo_ui_ref_counted::on_zero_references() noexcept {
     }
 
     if (queued) {
-        if (wake) wake(app);
+        if (wake) neo_wake_app(app);
     } else delete this;
 }
 
@@ -438,10 +448,13 @@ void neo_emit_view(neo_webview_view_t* view, neo_webview_event_type_t type, uint
 void neo_finish_decision_event(neo_webview_view_t* view, neo_webview_decision_t* decision) noexcept;
 void neo_drain_dispatch(neo_webview_app_t* app) noexcept;
 void neo_complete_ui_shutdown(neo_webview_app_t* app) noexcept;
+void neo_complete_app_shutdown(neo_webview_app_t* app) noexcept;
+void neo_destroy_app_on_ui(neo_webview_app_t* app) noexcept;
 void neo_window_closed(neo_webview_window_t* window) noexcept;
 
 bool neo_platform_initialize(neo_webview_app_t* app, neo_webview_error_t** error) noexcept;
 void neo_platform_shutdown(neo_webview_app_t* app) noexcept;
+bool neo_platform_schedule_app_destruction(neo_webview_app_t* app) noexcept;
 int32_t neo_platform_run(neo_webview_app_t* app) noexcept;
 void neo_platform_quit(neo_webview_app_t* app) noexcept;
 void neo_platform_wake(neo_webview_app_t* app) noexcept;
