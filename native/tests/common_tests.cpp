@@ -65,6 +65,8 @@ void NEO_WEBVIEW_CALL increment(void* context) {
     ++*static_cast<std::atomic<int>*>(context);
 }
 
+void NEO_WEBVIEW_CALL ignore_view(void*, neo_webview_result_t, neo_webview_view_t*, const neo_webview_error_t*) { }
+
 void NEO_WEBVIEW_CALL quit_app(void* context) {
     neo_webview_app_quit(static_cast<neo_webview_app_t*>(context), 0);
 }
@@ -352,6 +354,29 @@ void test_structure_versions() {
     neo_webview_error_release(error);
 }
 
+void test_native_parent_structure() {
+    auto* environment = reinterpret_cast<neo_webview_environment_t*>(1);
+    neo_webview_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.parent.kind = NEO_WEBVIEW_NATIVE_PARENT_WIN32_HWND;
+    options.parent.handle = reinterpret_cast<void*>(1);
+
+    neo_webview_error_t* error{};
+    options.parent.size = sizeof(options.parent) - 1;
+    options.parent.version = 1;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+
+    error = nullptr;
+    options.parent.size = sizeof(options.parent);
+    options.parent.version = 2;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    assert(error != nullptr);
+    neo_webview_error_release(error);
+}
+
 } // namespace
 
 int main() {
@@ -373,5 +398,6 @@ int main() {
     test_callback_quiescence();
     test_utf8();
     test_structure_versions();
+    test_native_parent_structure();
     return 0;
 }

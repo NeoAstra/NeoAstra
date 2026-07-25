@@ -57,6 +57,8 @@ An embedded host created with `NeoApplication.AttachToCurrentThread` must await 
 
 Managed projects target .NET 10:
 
+Managed and RID-specific native assets are a paired release unit. The managed loader rejects a native ABI major or minor mismatch rather than supporting mixed NeoWebView releases.
+
 ```sh
 cd src
 dotnet build -c Release
