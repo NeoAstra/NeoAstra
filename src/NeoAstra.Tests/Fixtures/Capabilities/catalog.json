@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "permissions": [
+    {
+      "id": "documents:open",
+      "version": 1,
+      "commands": ["documents.open"],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "maximumConcurrency": 4,
+      "timeoutMilliseconds": 15000,
+      "redaction": "full",
+      "documentation": "Open a document selected by trusted application policy."
+    }
+  ],
+  "plugins": [
+    {
+      "id": "fixture.plugin",
+      "version": "1.0.0",
+      "minimumNeoAstraVersion": "2.0.0",
+      "permissions": [
+        {
+          "id": "fixture:inspect",
+          "version": 1,
+          "commands": ["fixture.inspect"],
+          "risk": "low",
+          "scopeFamily": "none",
+          "documentation": "Fixture permission that remains ungranted."
+        }
+      ],
+      "permissionSets": { "readOnly": ["fixture:inspect"] }
+    }
+  ]
+}

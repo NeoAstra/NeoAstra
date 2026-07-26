@@ -28,12 +28,31 @@ public sealed class RpcGeneratorTests
     [TestMethod]
     public void GeneratorDiagnosesDuplicateCommandsAndMissingSerializerMetadata()
     {
-        var duplicate = Run(ValidSource.Replace("[NeoRpcMethod(\"open\")]", "[NeoRpcMethod(\"open\")]\n    public ValueTask<Response> Again(Request request) => ValueTask.FromResult(new Response());\n    [NeoRpcMethod(\"open\")]"));
+        var duplicate = Run(ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]\n    public ValueTask<Response> Again(Request request) => ValueTask.FromResult(new Response());\n    [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]"));
         Assert.IsTrue(duplicate.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC002"));
         var missing = Run(ValidSource.Replace("[assembly: NeoRpcJsonContext(typeof(AppJsonContext))]", string.Empty));
         Assert.IsTrue(missing.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC009"));
         var missingRoot = Run(ValidSource.Replace("[JsonSerializable(typeof(Response))]", string.Empty));
         Assert.IsTrue(missingRoot.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC009"));
+    }
+
+    [TestMethod]
+    public void GeneratorRequiresBoundedPermissionsForEveryRendererCallableOperation()
+    {
+        var missingMethod = Run(ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"open\")]"));
+        Assert.IsTrue(missingMethod.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        var missingEvent = Run(ValidSource.Replace("[NeoRpcEvent(\"documents.changed\", Permission = \"test:event\")]", "[NeoRpcEvent(\"documents.changed\")]"));
+        Assert.IsTrue(missingEvent.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        var malformed = Run(ValidSource.Replace("Permission = \"test:invoke\"", "Permission = \"Test.Invoke\""));
+        Assert.IsTrue(malformed.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        var emptySegment = Run(ValidSource.Replace("Permission = \"test:invoke\"", "Permission = \"test:\""));
+        Assert.IsTrue(emptySegment.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        var longValidPermission = $"{new string('a', 100)}:{new string('b', 50)}";
+        var longValid = Run(ValidSource.Replace("test:invoke", longValidPermission));
+        Assert.IsFalse(longValid.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"), string.Join(Environment.NewLine, longValid.Diagnostics));
+        var tooLongPermission = $"{new string('a', 100)}:{new string('b', 92)}";
+        var tooLong = Run(ValidSource.Replace("test:invoke", tooLongPermission));
+        Assert.IsTrue(tooLong.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
     }
 
     [TestMethod]
@@ -87,14 +106,14 @@ public enum ContractKind { First, Second }
         const string original = "public ValueTask<Response> OpenAsync(Request request, NeoRpcContext context, CancellationToken cancellationToken) => ValueTask.FromResult(new Response());";
         const string shapes = """
     public Response Sync(Request request) => new();
-    [NeoRpcMethod("taskValue")] public Task<Response> TaskValueAsync(Request request) => Task.FromResult(new Response());
-    [NeoRpcMethod("valueTaskValue")] public ValueTask<Response> ValueTaskValueAsync(Request request) => ValueTask.FromResult(new Response());
-    [NeoRpcMethod("syncVoid")] public void SyncVoid(Request request) { }
-    [NeoRpcMethod("taskVoid")] public Task TaskVoidAsync(Request request) => Task.CompletedTask;
-    [NeoRpcMethod("valueTaskVoid")] public ValueTask ValueTaskVoidAsync(Request request) => ValueTask.CompletedTask;
-    [NeoRpcMethod("syncChannel")] public NeoRpcChannel<Response> SyncChannel(Request request) => throw new System.NotImplementedException();
-    [NeoRpcMethod("taskChannel")] public Task<NeoRpcChannel<Response>> TaskChannelAsync(Request request) => throw new System.NotImplementedException();
-    [NeoRpcMethod("valueTaskChannel")] public ValueTask<NeoRpcChannel<Response>> ValueTaskChannelAsync(Request request) => throw new System.NotImplementedException();
+    [NeoRpcMethod("taskValue", Permission = "test:invoke")] public Task<Response> TaskValueAsync(Request request) => Task.FromResult(new Response());
+    [NeoRpcMethod("valueTaskValue", Permission = "test:invoke")] public ValueTask<Response> ValueTaskValueAsync(Request request) => ValueTask.FromResult(new Response());
+    [NeoRpcMethod("syncVoid", Permission = "test:invoke")] public void SyncVoid(Request request) { }
+    [NeoRpcMethod("taskVoid", Permission = "test:invoke")] public Task TaskVoidAsync(Request request) => Task.CompletedTask;
+    [NeoRpcMethod("valueTaskVoid", Permission = "test:invoke")] public ValueTask ValueTaskVoidAsync(Request request) => ValueTask.CompletedTask;
+    [NeoRpcMethod("syncChannel", Permission = "test:invoke")] public NeoRpcChannel<Response> SyncChannel(Request request) => throw new System.NotImplementedException();
+    [NeoRpcMethod("taskChannel", Permission = "test:invoke")] public Task<NeoRpcChannel<Response>> TaskChannelAsync(Request request) => throw new System.NotImplementedException();
+    [NeoRpcMethod("valueTaskChannel", Permission = "test:invoke")] public ValueTask<NeoRpcChannel<Response>> ValueTaskChannelAsync(Request request) => throw new System.NotImplementedException();
 """;
         var result = Run(ValidSource.Replace(original, shapes));
         Assert.AreEqual(0, result.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, result.Diagnostics));
@@ -111,7 +130,7 @@ public enum ContractKind { First, Second }
 
         var collision = ValidSource
             .Replace("public sealed class Request {", "namespace First { public sealed class Collision { public string Value { get; set; } = \"\"; } } namespace Second { public sealed class Collision { public string Value { get; set; } = \"\"; } } public sealed class Request {")
-            .Replace("[NeoRpcMethod(\"open\")]", "[NeoRpcMethod(\"first\")] public ValueTask<First.Collision> FirstAsync(Request request) => ValueTask.FromResult(new First.Collision()); [NeoRpcMethod(\"second\")] public ValueTask<Second.Collision> SecondAsync(Request request) => ValueTask.FromResult(new Second.Collision()); [NeoRpcMethod(\"open\")]")
+            .Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"first\", Permission = \"test:invoke\")] public ValueTask<First.Collision> FirstAsync(Request request) => ValueTask.FromResult(new First.Collision()); [NeoRpcMethod(\"second\", Permission = \"test:invoke\")] public ValueTask<Second.Collision> SecondAsync(Request request) => ValueTask.FromResult(new Second.Collision()); [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]")
             .Replace("[JsonSerializable(typeof(Response))]", "[JsonSerializable(typeof(Response))] [JsonSerializable(typeof(First.Collision))] [JsonSerializable(typeof(Second.Collision))]");
         Assert.IsTrue(Run(collision).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC010"));
 
@@ -146,14 +165,14 @@ public enum ContractKind { First, Second }
         var hidden = ValidSource.Replace("public sealed class Request { public string Id { get; set; } = \"\"; }", "public class RequestBase { public string Id { get; set; } = \"\"; } public sealed class Request : RequestBase { public new string Id { get; set; } = \"\"; }");
         Assert.IsTrue(Run(hidden).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC005"));
 
-        var methodCollision = ValidSource.Replace("[NeoRpcMethod(\"open\")]", "[NeoRpcMethod(\"load\")] public Response Load(Request request) => new(); [NeoRpcMethod(\"loadAsync\")] public Response LoadAsync(Request request) => new(); [NeoRpcMethod(\"open\")]");
+        var methodCollision = ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"load\", Permission = \"test:invoke\")] public Response Load(Request request) => new(); [NeoRpcMethod(\"loadAsync\", Permission = \"test:invoke\")] public Response LoadAsync(Request request) => new(); [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]");
         Assert.IsTrue(Run(methodCollision).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC014"));
 
-        var eventMemberCollision = ValidSource.Replace("[NeoRpcMethod(\"open\")]", "[NeoRpcMethod(\"onChanged\")] public Response OnChanged(Request request) => new(); [NeoRpcMethod(\"open\")]");
+        var eventMemberCollision = ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"onChanged\", Permission = \"test:invoke\")] public Response OnChanged(Request request) => new(); [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]");
         Assert.IsTrue(Run(eventMemberCollision).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC014"));
 
         var eventRegistrationCollision = ValidSource
-            .Replace("public sealed class Events", "namespace Other { public sealed class Events { [NeoRpcEvent(\"other.changed\")] public global::Response Changed { get; } = new(); } } public sealed class Events");
+            .Replace("public sealed class Events", "namespace Other { public sealed class Events { [NeoRpcEvent(\"other.changed\", Permission = \"test:event\")] public global::Response Changed { get; } = new(); } } public sealed class Events");
         Assert.IsTrue(Run(eventRegistrationCollision).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC014"));
     }
 
@@ -203,7 +222,7 @@ public enum ContractKind { First, Second }
         Assert.AreEqual(0, nestedOutputResult.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, nestedOutputResult.Diagnostics));
         StringAssert.Contains(nestedOutputResult.TypeScript, "readonly \"nested\": NestedOutput;");
 
-        var bothDirections = readOnlyOutput.Replace("[NeoRpcMethod(\"open\")]", "[NeoRpcMethod(\"echo\")] public Response Echo(Response request) => request; [NeoRpcMethod(\"open\")]");
+        var bothDirections = readOnlyOutput.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"echo\", Permission = \"test:invoke\")] public Response Echo(Response request) => request; [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]");
         Assert.IsTrue(Run(bothDirections).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC005" && diagnostic.GetMessage().Contains("no public setter", StringComparison.Ordinal)));
     }
 
@@ -262,12 +281,12 @@ using NeoAstra.Rpc;
 [NeoRpcService("documents")]
 public sealed class DocumentsService
 {
-    [NeoRpcMethod("open")]
+    [NeoRpcMethod("open", Permission = "test:invoke")]
     public ValueTask<Response> OpenAsync(Request request, NeoRpcContext context, CancellationToken cancellationToken) => ValueTask.FromResult(new Response());
 }
 public sealed class Request { public string Id { get; set; } = ""; }
 public sealed class Response { public string Title { get; set; } = ""; }
-public sealed class Events { [NeoRpcEvent("documents.changed")] public Response Changed { get; } = new(); }
+public sealed class Events { [NeoRpcEvent("documents.changed", Permission = "test:event")] public Response Changed { get; } = new(); }
 [JsonSerializable(typeof(Request))]
 [JsonSerializable(typeof(Response))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, UseStringEnumConverter = true)]

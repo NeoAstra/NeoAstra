@@ -102,6 +102,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         var identity = new NeoRpcSessionIdentity(view.ViewLabel!, snapshot.DocumentSessionId)
         {
+            Platform = CurrentPlatform(),
             WholeViewTrust = snapshot.WholeViewTrust,
             ProtocolMinor = snapshot.ProtocolMinor,
             Features = snapshot.Features,
@@ -112,6 +113,14 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             async (json, cancellationToken) => await view.PostMessageAsync(json, cancellationToken).ConfigureAwait(false),
             view,
             view.OwnedWindow);
+    }
+
+    private static NeoCapabilityPlatform CurrentPlatform()
+    {
+        if (OperatingSystem.IsWindows()) return NeoCapabilityPlatform.Windows;
+        if (OperatingSystem.IsMacOS()) return NeoCapabilityPlatform.MacOS;
+        if (OperatingSystem.IsLinux()) return NeoCapabilityPlatform.Linux;
+        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require a supported Windows, macOS, or Linux backend.");
     }
 
     private void OnMessage(NeoTransportApplicationMessage message)

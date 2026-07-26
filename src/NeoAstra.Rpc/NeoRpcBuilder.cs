@@ -177,6 +177,11 @@ public sealed class NeoRpcBuilder
     public NeoRpcHost Build()
     {
         EnsureMutable();
+        if (_options.CapabilityManifest is { } manifest)
+        {
+            foreach (var pair in _commands) manifest.ValidateRegistration(pair.Key, pair.Value.Options.Permission!, pair.Value.Options.MaximumConcurrency, pair.Value.Options.Timeout, _options.InvocationTimeout);
+            foreach (var pair in _events) manifest.ValidateRegistration(pair.Key, pair.Value.Options.Permission!, null, null, _options.InvocationTimeout);
+        }
         _built = true;
         var host = new NeoRpcHost(_options, _commands, _events, _serviceLifetimes);
         foreach (var handle in _eventHandles) handle.Bind(host);
@@ -254,9 +259,15 @@ internal sealed record EventDescriptor(string Name, NeoRpcEventOptions Options);
 
 internal abstract class CommandDescriptor
 {
+    private int _active;
     protected CommandDescriptor(string name, NeoRpcCommandOptions options) { Name = name; Options = options; }
     internal string Name { get; }
     internal NeoRpcCommandOptions Options { get; }
+    internal bool TryEnter()
+    {
+        while (true) { var current = Volatile.Read(ref _active); if (current >= Options.MaximumConcurrency) return false; if (Interlocked.CompareExchange(ref _active, current + 1, current) == current) return true; }
+    }
+    internal void Exit() => Interlocked.Decrement(ref _active);
     internal abstract object DeserializeRequest(JsonElement args);
     internal abstract ValueTask<object?> InvokeHandlerAsync(object request, NeoRpcContext context, CancellationToken cancellationToken);
     internal abstract CommandResult SerializeResult(object? result);

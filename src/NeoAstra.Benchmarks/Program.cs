@@ -179,14 +179,16 @@ internal static class Program
             var builder = new NeoRpcBuilder(new NeoRpcOptions
             {
                 MaximumRetainedRequestIds = count + 16,
-                MaximumConcurrentInvocations = 1,
+                MaximumConcurrentInvocations = 2,
                 MaximumConcurrentInvocationsPerSession = 1,
+                AuthorizationService = BenchmarkAuthorization.Instance,
             });
             builder.AddCommand<RpcEchoRequest, RpcEchoResponse>(
                 "benchmark.echo",
                 static (request, _, _) => ValueTask.FromResult(new RpcEchoResponse(request.Value)),
                 BenchmarkRpcJsonContext.Default.RpcEchoRequest,
-                BenchmarkRpcJsonContext.Default.RpcEchoResponse);
+                BenchmarkRpcJsonContext.Default.RpcEchoResponse,
+                new NeoRpcCommandOptions { Permission = "benchmark:echo" });
             await using var host = builder.Build();
             var completed = 0;
             await using var session = host.OpenSession(
@@ -701,6 +703,12 @@ internal static class Program
 
 internal sealed record RpcEchoRequest(int Value);
 internal sealed record RpcEchoResponse(int Value);
+
+internal sealed class BenchmarkAuthorization : INeoRpcAuthorizationService
+{
+    internal static BenchmarkAuthorization Instance { get; } = new();
+    public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(NeoRpcAuthorizationResult.Allow());
+}
 
 [JsonSerializable(typeof(RpcEchoRequest))]
 [JsonSerializable(typeof(RpcEchoResponse))]

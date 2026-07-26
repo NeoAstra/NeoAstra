@@ -16,6 +16,7 @@
     <File Path="global.json" />
   </Folder>
   <Project Path="NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj" />
+  <Project Path="NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj" />
   <Project Path="NeoAstra.Rpc/NeoAstra.Rpc.csproj" />
   <Project Path="NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj" />
   <Project Path="NeoAstra.Rpc.NativeAotFixture/NeoAstra.Rpc.NativeAotFixture.csproj" />

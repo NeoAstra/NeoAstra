@@ -2,6 +2,8 @@
 
 This review covers the implemented ABI 1.8 behavior relevant to specification sections 19, 34–35, and 38. Browser content, navigated origins, resource request data, and native provider output are untrusted. Application configuration and application-supplied event/resource callbacks are trusted, but failures at those callback boundaries must remain contained.
 
+The v2 Step 3 RPC layer adds fail-closed authorization above bridge admission. Every renderer operation requires one permission; immutable resolved policy checks backend-owned view/session/platform/main-frame/origin/whole-view metadata and typed scopes before dispatch. Registration and plugin discovery grant nothing. Strict release resolution, token-bucket rate and synchronized concurrency/resource limits, cancellation/session closure, redacted errors, and bounded snapshots address policy broadening, flooding, races, and leakage. Exact scope policy is restricted to the build review artifact. See [capabilities and security](capabilities-and-security.md) and the [threat model](security-threat-model.md) for test evidence, OS-handle/redirect responsibilities, and platform limitations.
+
 ## Verified controls
 
 - **C and callback boundaries.** Public C arguments use sized/versioned structures, pointer/count pairing, UTF-8 validation, enum/range checks, UI-thread checks, and explicit ownership. Callback slots contain exceptions and wait for active calls when cleared. Resource-provider and release callbacks are exception-contained. WebView2, WKWebView, and WebKitGTK message ingress now contain C++, Objective-C, and backend failures rather than allowing them to unwind through a browser callback.

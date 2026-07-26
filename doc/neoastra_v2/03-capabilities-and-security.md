@@ -229,15 +229,15 @@ No capability design can protect privileged commands from XSS executing in the s
 
 ## 13. Implementation order
 
-- [ ] Define permission IDs, declarations, capability schema, selectors, and build-time resolved manifest.
-- [ ] Implement immutable view labels/document sessions in all creation paths.
-- [ ] Add permission registration and fail-closed command dispatch hook.
-- [ ] Implement origin/platform/view matching and Linux-specific denial behavior.
-- [ ] Implement scope schema generation, parsing, canonicalization helpers, and permission-specific validators.
-- [ ] Add security profiles and resolved-policy diagnostics.
-- [ ] Integrate plugin permission catalogs without implicit grants.
-- [ ] Add rate/concurrency/resource limits and abuse handling.
-- [ ] Complete threat model, security review, and migration docs.
+- [x] Define permission IDs, declarations, capability schema, selectors, and build-time resolved manifest.
+- [x] Implement immutable view labels/document sessions in all creation paths.
+- [x] Add permission registration and fail-closed command dispatch hook.
+- [x] Implement origin/platform/view matching and Linux-specific denial behavior.
+- [x] Implement scope schema generation, parsing, canonicalization helpers, and permission-specific validators.
+- [x] Add security profiles and resolved-policy diagnostics.
+- [x] Integrate plugin permission catalogs without implicit grants.
+- [x] Add rate/concurrency/resource limits and abuse handling.
+- [x] Complete threat model, security review, and migration docs.
 
 ## 14. Verification
 

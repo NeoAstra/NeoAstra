@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "neoastra-capabilities-v1.schema.json",
+  "title": "NeoAstra capability grants v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "version", "capabilities"],
+  "properties": {
+    "$schema": { "const": "neoastra-capabilities-v1.schema.json" },
+    "version": { "const": 1 },
+    "capabilities": { "type": "array", "minItems": 1, "maxItems": 1024, "items": { "$ref": "#/$defs/capability" } }
+  },
+  "$defs": {
+    "policyIdentifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]*$" },
+    "shortIdentifier": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]*$" },
+    "permissionIdentifier": { "type": "string", "minLength": 3, "maxLength": 192, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})+$" },
+    "environmentIdentifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_]+$" },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "views", "permissions"],
+      "properties": {
+        "id": { "$ref": "#/$defs/policyIdentifier" },
+        "views": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "oneOf": [{ "$ref": "#/$defs/policyIdentifier" }, { "type": "string", "minLength": 4, "maxLength": 128, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]*\\*$" }] } },
+        "platforms": { "type": "array", "maxItems": 3, "uniqueItems": true, "items": { "enum": ["windows", "macos", "linux"] } },
+        "origins": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 2048 } },
+        "developmentOnly": { "type": "boolean" },
+        "permissions": { "type": "array", "minItems": 1, "maxItems": 512, "items": { "oneOf": [{ "$ref": "#/$defs/permissionIdentifier" }, { "$ref": "#/$defs/permission" }] } }
+      }
+    },
+    "permission": {
+      "type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": { "id": { "$ref": "#/$defs/permissionIdentifier" }, "version": { "type": "integer", "minimum": 1, "maximum": 1024 }, "scope": { "oneOf": [
+        { "$ref": "#/$defs/filesystemScope" }, { "$ref": "#/$defs/urlScope" }, { "$ref": "#/$defs/processScope" }, { "$ref": "#/$defs/clipboardScope" },
+        { "$ref": "#/$defs/notificationScope" }, { "$ref": "#/$defs/dialogScope" }, { "$ref": "#/$defs/networkScope" }, { "$ref": "#/$defs/persistenceScope" }
+      ] } }
+    },
+    "filesystemScope": { "type": "object", "additionalProperties": false, "required": ["roots", "operations"], "properties": {
+      "roots": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["token", "path"], "properties": { "token": { "$ref": "#/$defs/shortIdentifier" }, "path": { "type": "string", "minLength": 1, "maxLength": 4096 } } } },
+      "operations": { "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": { "enum": ["read", "write", "create", "delete"] } }, "allowSymlinks": { "type": "boolean" } } },
+    "urlScope": { "type": "object", "additionalProperties": false, "required": ["schemes", "hosts"], "properties": {
+      "schemes": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "enum": ["https", "http"] } }, "hosts": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 253 } },
+      "ports": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }, "pathPrefixes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 2048 } } } },
+    "processScope": { "type": "object", "additionalProperties": false, "required": ["executables"], "properties": { "executables": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["id", "path", "arguments"], "properties": { "id": { "$ref": "#/$defs/shortIdentifier" }, "path": { "type": "string", "minLength": 1, "maxLength": 4096 }, "arguments": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 4096 } }, "workingDirectory": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 }, "environment": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/environmentIdentifier" } } } } } } },
+    "clipboardScope": { "type": "object", "additionalProperties": false, "required": ["formats", "operations"], "properties": { "formats": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["text", "html", "image", "files"] } }, "operations": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["read", "write"] } } } },
+    "notificationScope": { "type": "object", "additionalProperties": false, "required": ["appIdentity", "categories", "maximumPayloadBytes", "urgencies"], "properties": { "appIdentity": { "$ref": "#/$defs/policyIdentifier" }, "categories": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/policyIdentifier" } }, "maximumPayloadBytes": { "type": "integer", "minimum": 1, "maximum": 65536 }, "persistent": { "type": "boolean" }, "urgencies": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["low", "normal", "high"] } } } },
+    "dialogScope": { "type": "object", "additionalProperties": false, "required": ["kinds", "initialLocations"], "properties": { "kinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["openFile", "saveFile", "openFolder", "message"] } }, "initialLocations": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/policyIdentifier" } }, "extensions": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9]{1,32}$" } } } },
+    "networkScope": { "type": "object", "additionalProperties": false, "required": ["schemes", "hosts", "methods", "maximumBodyBytes", "maximumResponseBytes"], "properties": {
+      "schemes": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "enum": ["https", "http"] } }, "hosts": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 253 } }, "ports": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } }, "pathPrefixes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 2048 } },
+      "methods": { "type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] } }, "headers": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "maxLength": 128 } }, "allowRedirects": { "type": "boolean" }, "maximumBodyBytes": { "type": "integer", "minimum": 0, "maximum": 16777216 }, "maximumResponseBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+    } },
+    "persistenceScope": { "type": "object", "additionalProperties": false, "required": ["identities", "kinds", "maximumDurationSeconds"], "properties": { "identities": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/policyIdentifier" } }, "kinds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["browserPermission", "nativeGrant", "applicationGrant"] } }, "maximumDurationSeconds": { "type": "integer", "minimum": 0, "maximum": 31536000 } } }
+  }
+}

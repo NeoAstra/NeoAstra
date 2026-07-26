@@ -26,8 +26,13 @@ public sealed class NeoRpcHost : IAsyncDisposable
     private readonly object _lifecycleLock = new();
     private readonly object _admissionLock = new();
     private readonly Dictionary<string, int> _activeInvocationsByView = new(StringComparer.Ordinal);
+    private readonly object _resourceLock = new();
+    private readonly Dictionary<string, int> _activeResourcesByView = new(StringComparer.Ordinal);
     private int _activeInvocations;
+    private int _activeResources;
+    private long _activeResourceBytes;
     private int _disposed;
+    private Task? _disposeTask;
 
     internal NeoRpcHost(NeoRpcOptions options, IReadOnlyDictionary<string, CommandDescriptor> commands, IReadOnlyDictionary<string, EventDescriptor> events, IReadOnlyList<INeoRpcServiceLifetimeOwner> serviceLifetimes)
     {
@@ -39,6 +44,22 @@ public sealed class NeoRpcHost : IAsyncDisposable
 
     /// <summary>Gets the number of active document sessions.</summary>
     public int ActiveSessionCount => _sessions.Count;
+
+    /// <summary>Creates a redacted snapshot of resolved policy, bounded limits, and current aggregate usage.</summary>
+    /// <returns>The immutable support snapshot.</returns>
+    public NeoRpcDiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        var limits = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            ["frameBytes"] = _options.MaximumFrameBytes, ["jsonDepth"] = _options.MaximumJsonDepth,
+            ["applicationInvocations"] = _options.MaximumConcurrentInvocations, ["sessionInvocations"] = _options.MaximumConcurrentInvocationsPerSession,
+            ["requestRatePerSecond"] = _options.RequestRatePerSecond, ["requestBurst"] = _options.RequestRateBurst,
+            ["subscriptionsPerSession"] = _options.MaximumSubscriptionsPerSession, ["channelsPerSession"] = _options.MaximumChannelsPerSession,
+            ["resourcesPerSession"] = _options.MaximumResourcesPerSession, ["resourcesPerView"] = _options.MaximumResourcesPerView,
+            ["applicationResources"] = _options.MaximumResources, ["applicationResourceBytes"] = _options.MaximumResourceBytes,
+        };
+        lock (_resourceLock) return new(_options.SecurityProfile.Name, _options.CapabilityManifest?.Hash, _sessions.Count, Volatile.Read(ref _activeInvocations), _activeResources, _activeResourceBytes, limits, _options.CapabilityManifest?.GrantSummaries ?? Array.Empty<string>());
+    }
 
     /// <summary>Opens one trusted document session.</summary>
     /// <param name="identity">Trusted host identity. Its values are snapshotted before return.</param>
@@ -70,18 +91,36 @@ public sealed class NeoRpcHost : IAsyncDisposable
 
     /// <summary>Closes all sessions and releases all request, subscription, channel, and resource state.</summary>
     /// <returns>A task representing deterministic teardown.</returns>
-    public async ValueTask DisposeAsync()
+    /// <exception cref="AggregateException">One or more application-owned cancellation or service teardown callbacks failed after all owned state was closed.</exception>
+    public ValueTask DisposeAsync()
     {
-        NeoRpcSession[] sessions;
         lock (_lifecycleLock)
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            sessions = _sessions.Values.ToArray();
+            if (_disposeTask is not null) return new(_disposeTask);
+            Volatile.Write(ref _disposed, 1);
+            var sessions = _sessions.Values.ToArray();
+            _disposeTask = Task.Run(() => DisposeCoreAsync(sessions));
+            return new(_disposeTask);
         }
-        _shutdown.Cancel();
-        foreach (var session in sessions) await session.DisposeAsync().ConfigureAwait(false);
-        foreach (var lifetime in _serviceLifetimes) await lifetime.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private async Task DisposeCoreAsync(NeoRpcSession[] sessions)
+    {
+        List<Exception>? failures = null;
+        try { _shutdown.Cancel(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        foreach (var session in sessions)
+        {
+            try { await session.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
+        foreach (var lifetime in _serviceLifetimes)
+        {
+            try { await lifetime.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
         _shutdown.Dispose();
+        if (failures is not null) throw new AggregateException("One or more RPC teardown operations failed after all owned state was closed.", failures);
     }
 
     internal NeoRpcOptions Options => _options;
@@ -111,6 +150,25 @@ public sealed class NeoRpcHost : IAsyncDisposable
         }
     }
     internal void Remove(NeoRpcSession session) => _sessions.TryRemove(new KeyValuePair<string, NeoRpcSession>(session.DocumentSessionId, session));
+
+    internal bool TryAddResource(string viewLabel, long bytes)
+    {
+        lock (_resourceLock)
+        {
+            _activeResourcesByView.TryGetValue(viewLabel, out var viewCount);
+            if (_activeResources >= _options.MaximumResources || viewCount >= _options.MaximumResourcesPerView || bytes > _options.MaximumResourceBytes - _activeResourceBytes) return false;
+            _activeResources++; _activeResourceBytes += bytes; _activeResourcesByView[viewLabel] = viewCount + 1; return true;
+        }
+    }
+
+    internal void RemoveResource(string viewLabel, long bytes)
+    {
+        lock (_resourceLock)
+        {
+            _activeResources--; _activeResourceBytes -= bytes; var count = _activeResourcesByView[viewLabel] - 1;
+            if (count == 0) _activeResourcesByView.Remove(viewLabel); else _activeResourcesByView[viewLabel] = count;
+        }
+    }
 
     internal async ValueTask CloseSessionServicesAsync(string documentSessionId)
     {
@@ -154,6 +212,7 @@ public sealed class NeoRpcHost : IAsyncDisposable
             SourceOrigin = source.SourceOrigin,
             IsMainFrame = source.IsMainFrame,
             WholeViewTrust = source.WholeViewTrust,
+            Platform = source.Platform,
             DocumentId = source.DocumentId,
             ProtocolMinor = source.ProtocolMinor,
             Features = Array.AsReadOnly(features),
@@ -181,11 +240,17 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly ConcurrentDictionary<string, ChannelState> _channels = new(StringComparer.Ordinal);
     private readonly NeoRpcResourceCollection _resources;
     private readonly TaskCompletionSource _invocationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object _disposeLock = new();
     private int _activeInvocations;
     private int _disposed;
+    private Task? _disposeTask;
     private long _nextChannelId;
     private long _unknownCancelCount;
     private int _subscriptionSlots;
+    private readonly object _rateLock = new();
+    private double _rateTokens;
+    private long _lastRateTimestamp;
+    private int _abuseDenials;
 
     internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
     {
@@ -196,6 +261,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _window = window is null ? null : new(window);
         _closed = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
         _resources = new NeoRpcResourceCollection(this, host.Options.MaximumResourcesPerSession);
+        _rateTokens = host.Options.RequestRateBurst;
+        _lastRateTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
     /// <summary>Gets the opaque trusted document-session ID.</summary>
@@ -300,24 +367,44 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     /// <summary>Closes the session and deterministically cancels and disposes all owned state.</summary>
     /// <returns>A task representing teardown.</returns>
-    public async ValueTask DisposeAsync()
+    /// <exception cref="AggregateException">One or more application-owned cancellation or service teardown callbacks failed after all session state was closed.</exception>
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _closed.Cancel();
-        foreach (var request in _requests.Values) request.Cancel();
+        lock (_disposeLock)
+        {
+            if (_disposeTask is not null) return new(_disposeTask);
+            Volatile.Write(ref _disposed, 1);
+            _disposeTask = Task.Run(DisposeCoreAsync);
+            return new(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        List<Exception>? failures = null;
+        try { _closed.Cancel(); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        foreach (var request in _requests.Values)
+        {
+            try { request.Cancel(); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
         if (Volatile.Read(ref _activeInvocations) == 0) _invocationsDrained.TrySetResult();
         try { await _invocationsDrained.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
         catch (TimeoutException) { _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_timeout", "RPC invocation teardown exceeded five seconds."); }
         foreach (var subscription in _subscriptions.Values) subscription.Close();
         foreach (var channel in _channels.Values) channel.Close();
-        await _resources.DisposeAsync().ConfigureAwait(false);
-        await _host.CloseSessionServicesAsync(DocumentSessionId).ConfigureAwait(false);
+        try { await _resources.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
+        try { await _host.CloseSessionServicesAsync(DocumentSessionId).ConfigureAwait(false); }
+        catch (Exception exception) { (failures ??= []).Add(exception); }
         var pumps = _subscriptions.Values.Select(static value => value.Completion)
             .Concat(_channels.Values.Select(static value => value.Completion)).ToArray();
         if (pumps.Length != 0)
         {
             try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
             catch (Exception exception) when (exception is OperationCanceledException or TimeoutException) { }
+            catch (Exception) { _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_pump_failure", "An RPC pump failed while the session was closing."); }
         }
         _subscriptions.Clear();
         Volatile.Write(ref _subscriptionSlots, 0);
@@ -326,15 +413,19 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _host.Remove(this);
         _sendLock.Dispose();
         _closed.Dispose();
+        if (failures is not null) throw new AggregateException("One or more RPC session teardown callbacks failed after all session state was closed.", failures);
     }
 
     internal void DisposeWithoutCallback()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        lock (_disposeLock)
         {
+            if (_disposeTask is not null) return;
+            Volatile.Write(ref _disposed, 1);
             _closed.Cancel();
             _closed.Dispose();
             _sendLock.Dispose();
+            _disposeTask = Task.CompletedTask;
         }
     }
 
@@ -385,6 +476,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }), cancellationToken);
 
     internal void RemoveChannel(string id, ChannelState state) => _channels.TryRemove(new KeyValuePair<string, ChannelState>(id, state));
+    internal bool TryAddResource(long bytes, long sessionBytes) => bytes >= 0 && bytes <= _host.Options.MaximumResourceBytesPerSession - sessionBytes && _host.TryAddResource(ViewLabel, bytes);
+    internal void RemoveResource(long bytes) => _host.RemoveResource(ViewLabel, bytes);
     private void RemoveSubscription(string id, SubscriptionState state)
     {
         if (_subscriptions.TryRemove(new KeyValuePair<string, SubscriptionState>(id, state))) Interlocked.Decrement(ref _subscriptionSlots);
@@ -397,6 +490,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
             !root.TryGetProperty("args", out var args))
         {
             if (!string.IsNullOrEmpty(id)) await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.InvalidRequest, "The invocation frame is invalid.", null)).ConfigureAwait(false);
+            return;
+        }
+        if (!TryAdmitRate())
+        {
+            await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
+            await HandleAbuseAsync().ConfigureAwait(false);
             return;
         }
         if (!RememberRequestId(id))
@@ -419,9 +518,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (!enteredHost)
         {
             if (enteredSession) Interlocked.Decrement(ref _activeInvocations);
-            await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC concurrency limit is exhausted.", null, retryable: true)).ConfigureAwait(false);
+            await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "An RPC concurrency limit is exhausted.", null, retryable: true)).ConfigureAwait(false);
             return;
         }
+        var enteredCommand = false;
 
         var correlationId = NewCorrelationId();
         var timeout = descriptor.Options.Timeout ?? _host.Options.InvocationTimeout;
@@ -442,12 +542,20 @@ public sealed class NeoRpcSession : IAsyncDisposable
         var context = CreateContext(correlationId, state.Token, sourceOrigin, isMainFrame);
         try
         {
-            var authorizationError = await AuthorizeAsync(context, command, descriptor.Options.Permission, isSubscription: false, state.Token).ConfigureAwait(false);
+            var authorization = await AuthorizeAsync(context, command, descriptor.Options.Permission, isSubscription: false, args, state.Token).ConfigureAwait(false);
+            var authorizationError = authorization.Error;
             if (authorizationError is { } denied)
             {
                 await state.TryCommitAsync(() => SendTerminalErrorResultAsync(id, denied)).ConfigureAwait(false);
                 return;
             }
+            context = authorization.Context;
+            if (!descriptor.TryEnter())
+            {
+                await state.TryCommitAsync(() => SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC command concurrency limit is exhausted.", correlationId, retryable: true))).ConfigureAwait(false);
+                return;
+            }
+            enteredCommand = true;
 
             object request;
             try { request = descriptor.DeserializeRequest(args); }
@@ -515,6 +623,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             {
                 _requests.TryRemove(new KeyValuePair<string, InvocationState>(id, state));
                 state.Dispose();
+                if (enteredCommand) descriptor.Exit();
                 ExitInvocation();
             }
         }
@@ -534,6 +643,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
             !_host.TryGetEvent(eventName, out var descriptor) || descriptor is null)
         {
             if (!string.IsNullOrEmpty(id)) await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.InvalidRequest, "The subscription frame or event is invalid.", null)).ConfigureAwait(false);
+            return;
+        }
+        if (!TryAdmitRate())
+        {
+            await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
+            await HandleAbuseAsync().ConfigureAwait(false);
             return;
         }
         if (!ContractMatches(root))
@@ -566,7 +681,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             var context = CreateContext(NewCorrelationId(), subscription.Token, sourceOrigin, isMainFrame);
             NeoRpcError? error;
-            try { error = await AuthorizeAsync(context, eventName, descriptor.Options.Permission, true, subscription.Token).ConfigureAwait(false); }
+            try { error = (await AuthorizeAsync(context, eventName, descriptor.Options.Permission, true, default, subscription.Token).ConfigureAwait(false)).Error; }
             catch (OperationCanceledException) when (subscription.Token.IsCancellationRequested) { return; }
             if (error is { } denied)
             {
@@ -625,21 +740,35 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (TryValidId(root, "resource", out var id)) await _resources.CloseAsync(id).ConfigureAwait(false);
     }
 
-    private async ValueTask<NeoRpcError?> AuthorizeAsync(NeoRpcContext context, string operation, string? permission, bool isSubscription, CancellationToken cancellationToken)
+    private async ValueTask<(NeoRpcError? Error, NeoRpcContext Context)> AuthorizeAsync(NeoRpcContext context, string operation, string? permission, bool isSubscription, JsonElement arguments, CancellationToken cancellationToken)
     {
+        if (permission is null)
+        {
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.PermissionMissing, "An RPC operation omitted its required permission declaration.", context.CorrelationId);
+            return (FrameworkError(NeoRpcErrorCodes.PermissionDenied, "Permission was denied.", context.CorrelationId), context);
+        }
         var service = _host.Options.AuthorizationService;
-        if (service is null) return null;
+        if (service is null)
+        {
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.NoMatchingCapability, "No capability authorization service is configured; RPC dispatch was denied.", context.CorrelationId);
+            return (FrameworkError(NeoRpcErrorCodes.PermissionDenied, "Permission was denied.", context.CorrelationId), context);
+        }
         NeoRpcAuthorizationResult decision;
-        try { decision = await service.AuthorizeAsync(new(context, operation, permission, isSubscription), cancellationToken).ConfigureAwait(false); }
+        try { decision = await service.AuthorizeAsync(new(context, operation, permission, isSubscription, arguments), cancellationToken).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception)
+        catch (Exception)
         {
             _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.InternalError, "RPC authorization failed safely.", context.CorrelationId);
-            return MapException(exception, context, null);
+            return (FrameworkError(NeoRpcErrorCodes.InternalError, "RPC authorization failed internally.", context.CorrelationId), context);
         }
-        if (decision.IsAllowed) return null;
+        if (decision.IsAllowed)
+        {
+            var attached = decision.Decision ?? new NeoRpcAuthorizationDecision(permission, decision.DecisionCode ?? NeoCapabilityDecisionCodes.Allowed, Array.Empty<NeoCapabilityScope>());
+            return (null, context.WithAuthorization(attached));
+        }
+        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, decision.DecisionCode ?? NeoCapabilityDecisionCodes.PermissionMissing, "RPC authorization denied the operation.", context.CorrelationId);
         var code = decision.ErrorCode is NeoRpcErrorCodes.ScopeDenied ? NeoRpcErrorCodes.ScopeDenied : NeoRpcErrorCodes.PermissionDenied;
-        return FrameworkError(code, code == NeoRpcErrorCodes.ScopeDenied ? "The command is outside the allowed scope." : "Permission was denied.", context.CorrelationId);
+        return (FrameworkError(code, code == NeoRpcErrorCodes.ScopeDenied ? "The command is outside the allowed scope." : "Permission was denied.", context.CorrelationId), context);
     }
 
     private NeoRpcError MapException(Exception exception, NeoRpcContext context, InvocationState? state)
@@ -673,6 +802,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             SourceOrigin = sourceOrigin,
             IsMainFrame = isMainFrame,
             WholeViewTrust = _identity.WholeViewTrust,
+            Platform = _identity.Platform,
             DocumentId = _identity.DocumentId,
             ProtocolMinor = _identity.ProtocolMinor,
             Features = _identity.Features,
@@ -694,6 +824,26 @@ public sealed class NeoRpcSession : IAsyncDisposable
             if (_usedRequestIds.Count >= _host.Options.MaximumRetainedRequestIds) return false;
             return _usedRequestIds.Add(id);
         }
+    }
+
+    private bool TryAdmitRate()
+    {
+        lock (_rateLock)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            var elapsed = (now - _lastRateTimestamp) / (double)System.Diagnostics.Stopwatch.Frequency;
+            _lastRateTimestamp = now;
+            _rateTokens = Math.Min(_host.Options.RequestRateBurst, _rateTokens + elapsed * _host.Options.RequestRatePerSecond);
+            if (_rateTokens < 1) return false;
+            _rateTokens -= 1;
+            return true;
+        }
+    }
+
+    private async ValueTask HandleAbuseAsync()
+    {
+        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.LimitExceeded, "A document session exceeded its bounded RPC request rate.");
+        if (Interlocked.Increment(ref _abuseDenials) >= _host.Options.AbuseClosureThreshold) await DisposeAsync().ConfigureAwait(false);
     }
 
     private bool TryEnterInvocation()

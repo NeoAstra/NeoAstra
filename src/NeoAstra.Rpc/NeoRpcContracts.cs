@@ -118,27 +118,43 @@ public interface INeoRpcAuthorizationService
 /// <param name="Operation">The stable command or event wire name.</param>
 /// <param name="Permission">The declared permission, when one exists.</param>
 /// <param name="IsSubscription">Whether the request creates an event subscription.</param>
-public readonly record struct NeoRpcAuthorizationRequest(NeoRpcContext Context, string Operation, string? Permission, bool IsSubscription);
+/// <param name="Arguments">The bounded command arguments, or an undefined value for subscriptions.</param>
+public readonly record struct NeoRpcAuthorizationRequest(NeoRpcContext Context, string Operation, string? Permission, bool IsSubscription, System.Text.Json.JsonElement Arguments);
 
 /// <summary>Represents an authorization decision.</summary>
 public readonly record struct NeoRpcAuthorizationResult
 {
-    private NeoRpcAuthorizationResult(bool allowed, string? errorCode)
+    private NeoRpcAuthorizationResult(bool allowed, string? errorCode, string? decisionCode, NeoRpcAuthorizationDecision? decision)
     {
         IsAllowed = allowed;
         ErrorCode = errorCode;
+        DecisionCode = decisionCode;
+        Decision = decision;
     }
 
     /// <summary>Gets whether dispatch is allowed.</summary>
     public bool IsAllowed { get; }
     /// <summary>Gets the stable denial code.</summary>
     public string? ErrorCode { get; }
+    /// <summary>Gets the detailed stable host-side decision code.</summary>
+    public string? DecisionCode { get; }
+    /// <summary>Gets validated immutable authorization state for an allowed operation.</summary>
+    public NeoRpcAuthorizationDecision? Decision { get; }
     /// <summary>Creates an allowed result.</summary>
-    public static NeoRpcAuthorizationResult Allow() => new(true, null);
+    public static NeoRpcAuthorizationResult Allow() => new(true, null, NeoCapabilityDecisionCodes.Allowed, null);
+    /// <summary>Creates an allowed result with validated immutable capability state.</summary>
+    /// <param name="decision">The capability decision attached to the invocation context.</param>
+    public static NeoRpcAuthorizationResult Allow(NeoRpcAuthorizationDecision decision) { ArgumentNullException.ThrowIfNull(decision); return new(true, null, decision.Code, decision); }
     /// <summary>Creates a permission denial.</summary>
-    public static NeoRpcAuthorizationResult DenyPermission() => new(false, NeoRpcErrorCodes.PermissionDenied);
+    public static NeoRpcAuthorizationResult DenyPermission() => DenyPermission(NeoCapabilityDecisionCodes.PermissionMissing);
+    /// <summary>Creates a permission denial with a detailed host-side reason.</summary>
+    /// <param name="decisionCode">Stable capability decision code.</param>
+    public static NeoRpcAuthorizationResult DenyPermission(string decisionCode) => new(false, NeoRpcErrorCodes.PermissionDenied, decisionCode, null);
     /// <summary>Creates a scope denial.</summary>
-    public static NeoRpcAuthorizationResult DenyScope() => new(false, NeoRpcErrorCodes.ScopeDenied);
+    public static NeoRpcAuthorizationResult DenyScope() => DenyScope(NeoCapabilityDecisionCodes.ScopeDenied);
+    /// <summary>Creates a scope denial with a detailed host-side reason.</summary>
+    /// <param name="decisionCode">Stable capability decision code.</param>
+    public static NeoRpcAuthorizationResult DenyScope(string decisionCode) => new(false, NeoRpcErrorCodes.ScopeDenied, decisionCode, null);
 }
 
 /// <summary>Receives bounded RPC lifecycle diagnostics without taking a logging dependency.</summary>
@@ -208,23 +224,33 @@ public sealed class NeoRpcSessionIdentity
     /// <summary>Gets the opaque host-generated document-session ID.</summary>
     public string DocumentSessionId { get; }
     /// <summary>Gets or sets the backend-authenticated sender origin.</summary>
-    public Uri? SourceOrigin { get; set; }
+    public Uri? SourceOrigin { get; init; }
     /// <summary>Gets or sets whether the backend authenticated the main frame as sender.</summary>
-    public bool IsMainFrame { get; set; }
+    public bool IsMainFrame { get; init; }
     /// <summary>Gets or sets whether the application explicitly trusts every script in the view.</summary>
-    public bool WholeViewTrust { get; set; }
+    public bool WholeViewTrust { get; init; }
+    /// <summary>Gets the trusted host platform.</summary>
+    public NeoCapabilityPlatform Platform { get; init; } = GetCurrentPlatform();
     /// <summary>Gets or sets an opaque application document identifier.</summary>
-    public string? DocumentId { get; set; }
+    public string? DocumentId { get; init; }
     /// <summary>Gets or sets the negotiated protocol minor version.</summary>
-    public int ProtocolMinor { get; set; }
+    public int ProtocolMinor { get; init; }
     /// <summary>Gets or sets the negotiated immutable feature set.</summary>
-    public IReadOnlyList<string> Features { get; set; } = Array.Empty<string>();
+    public IReadOnlyList<string> Features { get; init; } = Array.Empty<string>();
     /// <summary>Gets or sets the generated application contract hash.</summary>
-    public string ContractHash { get; set; } = string.Empty;
+    public string ContractHash { get; init; } = string.Empty;
     /// <summary>Gets or sets an optional per-view or per-session service provider.</summary>
-    public IServiceProvider? Services { get; set; }
+    public IServiceProvider? Services { get; init; }
     /// <summary>Gets or sets an optional trusted UI dispatcher.</summary>
-    public INeoRpcDispatcher? Dispatcher { get; set; }
+    public INeoRpcDispatcher? Dispatcher { get; init; }
+
+    private static NeoCapabilityPlatform GetCurrentPlatform()
+    {
+        if (OperatingSystem.IsWindows()) return NeoCapabilityPlatform.Windows;
+        if (OperatingSystem.IsMacOS()) return NeoCapabilityPlatform.MacOS;
+        if (OperatingSystem.IsLinux()) return NeoCapabilityPlatform.Linux;
+        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require Windows, macOS, or Linux.");
+    }
 }
 
 /// <summary>Provides immutable trusted state for one RPC invocation.</summary>
@@ -247,6 +273,7 @@ public readonly struct NeoRpcContext
         SourceOrigin = identity.SourceOrigin;
         IsMainFrame = identity.IsMainFrame;
         WholeViewTrust = identity.WholeViewTrust;
+        Platform = identity.Platform;
         CorrelationId = correlationId;
         CancellationToken = cancellationToken;
         Services = identity.Services;
@@ -255,6 +282,7 @@ public readonly struct NeoRpcContext
         ContractHash = identity.ContractHash;
         Dispatcher = identity.Dispatcher;
         Resources = resources;
+        Authorization = null;
         _view = view is null ? null : new(view);
         _window = window is null ? null : new(window);
     }
@@ -271,6 +299,8 @@ public readonly struct NeoRpcContext
     public bool IsMainFrame { get; }
     /// <summary>Gets whether all scripts in the view were explicitly trusted.</summary>
     public bool WholeViewTrust { get; }
+    /// <summary>Gets the trusted host platform.</summary>
+    public NeoCapabilityPlatform Platform { get; }
     /// <summary>Gets the host-generated correlation ID.</summary>
     public string CorrelationId { get; }
     /// <summary>Gets the request cancellation token.</summary>
@@ -285,7 +315,24 @@ public readonly struct NeoRpcContext
     public string ContractHash { get; }
     /// <summary>Gets the session-owned resource collection.</summary>
     public NeoRpcResourceCollection Resources { get; }
+    /// <summary>Gets the completed framework authorization decision, or <see langword="null"/> while authorization is pending.</summary>
+    public NeoRpcAuthorizationDecision? Authorization { get; }
     internal INeoRpcDispatcher? Dispatcher { get; }
+
+    internal NeoRpcContext WithAuthorization(NeoRpcAuthorizationDecision decision)
+    {
+        var copy = this;
+        return new NeoRpcContext(copy, decision);
+    }
+
+    private NeoRpcContext(NeoRpcContext source, NeoRpcAuthorizationDecision decision)
+    {
+        ViewLabel = source.ViewLabel; DocumentSessionId = source.DocumentSessionId; DocumentId = source.DocumentId; SourceOrigin = source.SourceOrigin;
+        IsMainFrame = source.IsMainFrame; WholeViewTrust = source.WholeViewTrust; Platform = source.Platform; CorrelationId = source.CorrelationId;
+        CancellationToken = source.CancellationToken; Services = source.Services; ProtocolMinor = source.ProtocolMinor; Features = source.Features;
+        ContractHash = source.ContractHash; Resources = source.Resources; Dispatcher = source.Dispatcher; Authorization = decision;
+        _view = source._view; _window = source._window;
+    }
 
     /// <summary>Attempts to obtain the originating view without keeping it alive.</summary>
     /// <param name="view">Receives the live view.</param>

@@ -23,8 +23,8 @@ public sealed class RpcTests
             {
                 Interlocked.Increment(ref invoked);
                 return ValueTask.FromResult(new Response(request.Id.ToUpperInvariant(), context.ViewLabel));
-            }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request>("documents.touch", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request);
+            }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request>("documents.touch", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request, CommandPolicy);
         });
         await using (host) await using (session)
         {
@@ -51,7 +51,7 @@ public sealed class RpcTests
         {
             await gate.Task.WaitAsync(token);
             return new Response(request.Id, "done");
-        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response), options);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy), options);
         await using (host) await using (session)
         {
             var first = session.ReceiveAsync(Invoke("slow-1", "slow.wait", "{\"id\":\"a\"}")).AsTask();
@@ -83,10 +83,10 @@ public sealed class RpcTests
         var closeRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var (host, session, frames) = Create(builder =>
         {
-            builder.AddCommand<Request, Response>("race.cancel", async (request, _, _) => { cancelEntered.TrySetResult(); await cancelRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("race.result", async (request, _, _) => { resultEntered.TrySetResult(); await resultRelease.Task; return new(request.Id, "winner"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("race.timeout", async (request, _, _) => { timeoutEntered.TrySetResult(); await timeoutRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, new() { Timeout = TimeSpan.FromMilliseconds(30) });
-            builder.AddCommand<Request, Response>("race.close", async (request, _, _) => { closeEntered.TrySetResult(); await closeRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+            builder.AddCommand<Request, Response>("race.cancel", async (request, _, _) => { cancelEntered.TrySetResult(); await cancelRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("race.result", async (request, _, _) => { resultEntered.TrySetResult(); await resultRelease.Task; return new(request.Id, "winner"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("race.timeout", async (request, _, _) => { timeoutEntered.TrySetResult(); await timeoutRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, new() { Permission = "test:invoke", Timeout = TimeSpan.FromMilliseconds(30) });
+            builder.AddCommand<Request, Response>("race.close", async (request, _, _) => { closeEntered.TrySetResult(); await closeRelease.Task; return new(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         });
         await using (host) await using (session)
         {
@@ -128,8 +128,8 @@ public sealed class RpcTests
         var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var frames = new ConcurrentQueue<string>();
-        var builder = new NeoRpcBuilder();
-        builder.AddCommand<Request, Response>("race.commit", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "winner")), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("race.commit", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "winner")), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         await using var host = builder.Build();
         await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "commit-session"), async (json, _) =>
         {
@@ -164,7 +164,7 @@ public sealed class RpcTests
             var (host, session, frames) = Create(builder =>
             {
                 builder.AddServiceActivator(activator);
-                builder.AddCommand<Request, ServiceResponse>("service.resolve", (request, context, _) => activator.InvokeAsync(context, service => ValueTask.FromResult(new ServiceResponse(service.Id))), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ServiceResponse);
+                builder.AddCommand<Request, ServiceResponse>("service.resolve", (request, context, _) => activator.InvokeAsync(context, service => ValueTask.FromResult(new ServiceResponse(service.Id))), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ServiceResponse, CommandPolicy);
             }, new NeoRpcOptions { MaximumConcurrentInvocations = 17, MaximumConcurrentInvocationsPerSession = 16 });
             await using (host) await using (session)
             {
@@ -206,7 +206,7 @@ public sealed class RpcTests
         var (host, session, frames) = Create(builder =>
         {
             builder.AddServiceActivator(activator);
-            builder.AddCommand<Request, ServiceResponse>("service.retry", (_, context, _) => activator.InvokeAsync(context, service => ValueTask.FromResult(new ServiceResponse(service.Id))), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ServiceResponse);
+            builder.AddCommand<Request, ServiceResponse>("service.retry", (_, context, _) => activator.InvokeAsync(context, service => ValueTask.FromResult(new ServiceResponse(service.Id))), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ServiceResponse, CommandPolicy);
         });
         await using (host) await using (session)
         {
@@ -246,7 +246,7 @@ public sealed class RpcTests
     public async Task HostOpenCannotEscapeAConcurrentDisposeSnapshot()
     {
         var features = new BlockingFeatureList();
-        var host = new NeoRpcBuilder().Build();
+        var host = new NeoRpcBuilder(TestOptions()).Build();
         var identity = new NeoRpcSessionIdentity("view", "late-session") { Features = features };
         var opening = Task.Run(() => host.OpenSession(identity, (_, _) => ValueTask.CompletedTask));
         await features.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -264,7 +264,7 @@ public sealed class RpcTests
         var lockHeld = true;
         Exception? reentryException = null;
         NeoRpcHost? host = null;
-        var builder = new NeoRpcBuilder();
+        var builder = new NeoRpcBuilder(TestOptions());
         builder.AddCommand<Request, Response>("lifecycle.wait", async (request, _, cancellationToken) =>
         {
             using var registration = cancellationToken.Register(() =>
@@ -278,7 +278,7 @@ public sealed class RpcTests
             entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new Response(request.Id, "unreachable");
-        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         host = builder.Build();
         var session = host.OpenSession(new NeoRpcSessionIdentity("view", "document"), (_, _) => ValueTask.CompletedTask);
         var invocation = session.ReceiveAsync(Invoke("lifecycle-call", "lifecycle.wait", "{\"id\":\"x\"}")).AsTask();
@@ -295,9 +295,9 @@ public sealed class RpcTests
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var builder = new NeoRpcBuilder();
-        builder.AddCommand<Request, Response>("binding.wait", async (request, _, _) => { entered.TrySetResult(); await release.Task; return new Response(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-        builder.AddCommand<Request, Response>("binding.echo", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.DocumentSessionId)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("binding.wait", async (request, _, _) => { entered.TrySetResult(); await release.Task; return new Response(request.Id, "late"); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        builder.AddCommand<Request, Response>("binding.echo", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.DocumentSessionId)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         await using var host = builder.Build();
         var frames = new ConcurrentDictionary<string, ConcurrentQueue<string>>(StringComparer.Ordinal);
         var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
@@ -331,6 +331,51 @@ public sealed class RpcTests
         Assert.AreEqual(0, host.ActiveSessionCount);
 
         static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
+    public async Task AbuseClosureAndConcurrentDisposalAwaitOneCompleteTeardown()
+    {
+        var resource = new BlockingAsyncDisposable();
+        var service = new BlockingAsyncDisposable();
+        var activator = new NeoRpcServiceActivator<BlockingAsyncDisposable>(_ => service, NeoRpcServiceLifetime.PerDocumentSession);
+        var options = TestOptions(new NeoRpcOptions { RequestRatePerSecond = 1, RequestRateBurst = 1, AbuseClosureThreshold = 1 });
+        var builder = new NeoRpcBuilder(options);
+        builder.AddServiceActivator(activator);
+        builder.AddCommand<Request, Response>("abuse.allocate", async (request, context, _) =>
+        {
+            context.Resources.Add(resource, 1);
+            await activator.InvokeAsync(context, static _ => ValueTask.CompletedTask);
+            return new Response(request.Id, context.ViewLabel);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        var host = builder.Build();
+        var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "abuse-session"), (_, _) => ValueTask.CompletedTask);
+
+        await session.ReceiveAsync(Invoke("first", "abuse.allocate", "{\"id\":\"first\"}"));
+        var abuseClosure = session.ReceiveAsync(Invoke("second", "abuse.allocate", "{\"id\":\"second\"}")).AsTask();
+        await resource.DisposeEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var concurrentSessionDispose = session.DisposeAsync().AsTask();
+        var concurrentHostDispose = host.DisposeAsync().AsTask();
+        Assert.IsFalse(abuseClosure.IsCompleted);
+        Assert.IsFalse(concurrentSessionDispose.IsCompleted);
+        Assert.IsFalse(concurrentHostDispose.IsCompleted);
+
+        resource.ReleaseDispose.TrySetResult();
+        await service.DisposeEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.IsFalse(abuseClosure.IsCompleted);
+        Assert.IsFalse(concurrentSessionDispose.IsCompleted);
+        Assert.IsFalse(concurrentHostDispose.IsCompleted);
+
+        service.ReleaseDispose.TrySetResult();
+        await Task.WhenAll(abuseClosure, concurrentSessionDispose, concurrentHostDispose).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(1, resource.DisposeCount);
+        Assert.AreEqual(1, service.DisposeCount);
+        Assert.AreEqual(0, host.ActiveSessionCount);
+        Assert.AreEqual(0, host.GetDiagnosticSnapshot().ActiveResources);
+        await session.DisposeAsync();
+        await host.DisposeAsync();
+        Assert.AreEqual(1, resource.DisposeCount);
+        Assert.AreEqual(1, service.DisposeCount);
     }
 
     [TestMethod]
@@ -378,10 +423,10 @@ public sealed class RpcTests
         var invoked = 0;
         var (host, session, frames) = Create(builder =>
         {
-            builder.AddCommand<Request, Response>("phase.normal", (request, _, _) => { invoked++; return ValueTask.FromResult(new Response(request.Id, "ok")); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("phase.jsonException", (_, _, _) => throw new JsonException("application secret json failure"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("phase.notSupported", (_, _, _) => throw new NotSupportedException("application secret unsupported failure"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, SerializationFailureResponse>("phase.serialize", (_, _, _) => ValueTask.FromResult(new SerializationFailureResponse { Value = "secret result" }), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.SerializationFailureResponse);
+            builder.AddCommand<Request, Response>("phase.normal", (request, _, _) => { invoked++; return ValueTask.FromResult(new Response(request.Id, "ok")); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("phase.jsonException", (_, _, _) => throw new JsonException("application secret json failure"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("phase.notSupported", (_, _, _) => throw new NotSupportedException("application secret unsupported failure"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, SerializationFailureResponse>("phase.serialize", (_, _, _) => ValueTask.FromResult(new SerializationFailureResponse { Value = "secret result" }), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.SerializationFailureResponse, CommandPolicy);
         });
         await using (host) await using (session)
         {
@@ -406,12 +451,12 @@ public sealed class RpcTests
         var entered = 0;
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new NeoRpcOptions { MaximumConcurrentInvocations = 3, MaximumConcurrentInvocationsPerSession = 2 };
-        var builder = new NeoRpcBuilder(options);
+        var builder = new NeoRpcBuilder(TestOptions(options));
         builder.AddCommand<Request, Response>("fair.wait", async (request, context, _) =>
         {
             if (request.Id != "cold") { Interlocked.Increment(ref entered); await release.Task; }
             return new Response(request.Id, context.ViewLabel);
-        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         await using var host = builder.Build();
         var hotFrames1 = new ConcurrentQueue<string>();
         var hotFrames2 = new ConcurrentQueue<string>();
@@ -441,9 +486,9 @@ public sealed class RpcTests
         var (host, session, frames) = Create(builder =>
         {
             builder.AddCommand<Request, Response>("secure.denied", (_, _, _) => throw new Exception("must not execute"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, new() { Permission = "secure:read" });
-            builder.AddCommand<Request, Response>("mapped.fail", (_, _, _) => throw new InvalidOperationException("host secret path C:\\secret"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("explicit.fail", (_, _, _) => throw new NeoRpcException("documents:not_found", "Not found."), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
-            builder.AddCommand<Request, Response>("internal.fail", (_, _, _) => throw new Exception("C:\\secret\\password"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+            builder.AddCommand<Request, Response>("mapped.fail", (_, _, _) => throw new InvalidOperationException("host secret path C:\\secret"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("explicit.fail", (_, _, _) => throw new NeoRpcException("documents:not_found", "Not found."), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            builder.AddCommand<Request, Response>("internal.fail", (_, _, _) => throw new Exception("C:\\secret\\password"), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
         }, options);
         await using (host) await using (session)
         {
@@ -464,7 +509,7 @@ public sealed class RpcTests
     public async Task ContractHashMismatchIsRejectedBeforeApplicationDispatch()
     {
         var invoked = 0;
-        var (host, session, frames) = Create(builder => builder.AddCommand<Request, Response>("documents.open", (request, context, _) => { invoked++; return ValueTask.FromResult(new Response(request.Id, context.ViewLabel)); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response), new NeoRpcOptions { ContractHash = "expected" });
+        var (host, session, frames) = Create(builder => builder.AddCommand<Request, Response>("documents.open", (request, context, _) => { invoked++; return ValueTask.FromResult(new Response(request.Id, context.ViewLabel)); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy), new NeoRpcOptions { ContractHash = "expected" });
         await using (host) await using (session)
         {
             await session.ReceiveAsync(Invoke("wrong", "documents.open", "{\"id\":\"x\"}"));
@@ -483,9 +528,9 @@ public sealed class RpcTests
         var disposed = 0;
         var (host, session, frames) = Create(builder =>
         {
-            changed = builder.AddEvent("documents.changed", RpcTestJsonContext.Default.Response, new() { OverflowBehavior = NeoRpcOverflowBehavior.DropOldest });
-            builder.AddChannelCommand<Request, Response>("documents.stream", (request, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(request.Id), RpcTestJsonContext.Default.Response)), RpcTestJsonContext.Default.Request);
-            builder.AddCommand<Request, ResourceResponse>("documents.resource", (_, context, _) => ValueTask.FromResult(new ResourceResponse(context.Resources.Add(new TrackedDisposable(() => Interlocked.Increment(ref disposed))).Id)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ResourceResponse);
+            changed = builder.AddEvent("documents.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event", OverflowBehavior = NeoRpcOverflowBehavior.DropOldest });
+            builder.AddChannelCommand<Request, Response>("documents.stream", (request, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(request.Id), RpcTestJsonContext.Default.Response)), RpcTestJsonContext.Default.Request, CommandPolicy);
+            builder.AddCommand<Request, ResourceResponse>("documents.resource", (_, context, _) => ValueTask.FromResult(new ResourceResponse(context.Resources.Add(new TrackedDisposable(() => Interlocked.Increment(ref disposed))).Id)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.ResourceResponse, CommandPolicy);
         });
         await using (host) await using (session)
         {
@@ -512,8 +557,8 @@ public sealed class RpcTests
         {
             var eventSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseEventSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumQueuedEventsPerSubscription = 1, MaximumQueuedEventBytesPerSubscription = 1024 });
-            var changed = builder.AddEvent("documents.changed", RpcTestJsonContext.Default.Response, new() { OverflowBehavior = policy });
+            var builder = new NeoRpcBuilder(TestOptions(new NeoRpcOptions { MaximumQueuedEventsPerSubscription = 1, MaximumQueuedEventBytesPerSubscription = 1024 }));
+            var changed = builder.AddEvent("documents.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event", OverflowBehavior = policy });
             await using var host = builder.Build();
             await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", $"overflow-{policy}"), async (json, cancellationToken) =>
             {
@@ -539,11 +584,19 @@ public sealed class RpcTests
     private static (NeoRpcHost Host, NeoRpcSession Session, ConcurrentQueue<string> Frames) Create(Action<NeoRpcBuilder> configure, NeoRpcOptions? options = null)
     {
         var frames = new ConcurrentQueue<string>();
-        var builder = new NeoRpcBuilder(options ?? new NeoRpcOptions());
+        var builder = new NeoRpcBuilder(TestOptions(options));
         configure(builder);
         var host = builder.Build();
         var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "document-session"), (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
         return (host, session, frames);
+    }
+
+    private static NeoRpcCommandOptions CommandPolicy => new() { Permission = "test:invoke", MaximumConcurrency = 4096 };
+    private static NeoRpcOptions TestOptions(NeoRpcOptions? options = null)
+    {
+        options ??= new NeoRpcOptions();
+        options.AuthorizationService ??= AllowAuthorization.Instance;
+        return options;
     }
 
     private static string Invoke(string id, string command, string args) => $"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"{id}\",\"command\":\"{command}\",\"args\":{args}}}";
@@ -559,7 +612,12 @@ public sealed class RpcTests
     private static async Task WaitUntilAsync(Func<bool> predicate) { for (var i = 0; i < 100 && !predicate(); i++) await Task.Delay(5); Assert.IsTrue(predicate()); }
     private static async IAsyncEnumerable<Response> Items(string value) { yield return new(value, "1"); await Task.Yield(); yield return new(value, "2"); }
 
-    private sealed class DenyAuthorization : INeoRpcAuthorizationService { public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(request.Permission is null ? NeoRpcAuthorizationResult.Allow() : NeoRpcAuthorizationResult.DenyPermission()); }
+    private sealed class DenyAuthorization : INeoRpcAuthorizationService { public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(request.Permission == "secure:read" ? NeoRpcAuthorizationResult.DenyPermission() : NeoRpcAuthorizationResult.Allow()); }
+    private sealed class AllowAuthorization : INeoRpcAuthorizationService
+    {
+        internal static AllowAuthorization Instance { get; } = new();
+        public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(NeoRpcAuthorizationResult.Allow());
+    }
     private sealed class InvalidOperationMapper : INeoRpcErrorMapper { public bool TryMap(Exception exception, NeoRpcContext context, out NeoRpcError error) { error = new("mapped_failure", "Mapped safely.", context.CorrelationId); return exception is InvalidOperationException; } }
     private sealed class UnsafeMapper : INeoRpcErrorMapper { public bool TryMap(Exception exception, NeoRpcContext context, out NeoRpcError error) { error = new("Bad.Code", "unsafe\nmessage", "bad\ncorrelation"); return true; } }
     private sealed class BlockingAuthorization : INeoRpcAuthorizationService
@@ -588,6 +646,19 @@ public sealed class RpcTests
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
     private sealed class TrackedDisposable(Action action) : IDisposable { public void Dispose() => action(); }
+    private sealed class BlockingAsyncDisposable : IAsyncDisposable
+    {
+        private int _disposeCount;
+        internal TaskCompletionSource DisposeEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseDispose { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int DisposeCount => Volatile.Read(ref _disposeCount);
+        public async ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCount);
+            DisposeEntered.TrySetResult();
+            await ReleaseDispose.Task.ConfigureAwait(false);
+        }
+    }
     private sealed class ConcurrentService(int id, Action dispose) : IDisposable
     {
         internal static int NextId;

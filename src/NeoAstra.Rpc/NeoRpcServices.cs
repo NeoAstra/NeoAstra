@@ -71,15 +71,19 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
     async ValueTask INeoRpcServiceLifetimeOwner.CloseSessionAsync(string documentSessionId)
     {
         ScopeEntry? entry;
-        lock (_lifecycleLock) entry = _sessions.Remove(documentSessionId, out var removed) ? removed : null;
-        if (entry is not null) await entry.CloseAsync().ConfigureAwait(false);
+        lock (_lifecycleLock) _sessions.TryGetValue(documentSessionId, out entry);
+        if (entry is null) return;
+        try { await entry.CloseAsync().ConfigureAwait(false); }
+        finally { lock (_lifecycleLock) if (_sessions.TryGetValue(documentSessionId, out var current) && ReferenceEquals(current, entry)) _sessions.Remove(documentSessionId); }
     }
 
     async ValueTask INeoRpcServiceLifetimeOwner.CloseViewAsync(string viewLabel)
     {
         ScopeEntry? entry;
-        lock (_lifecycleLock) entry = _views.Remove(viewLabel, out var removed) ? removed : null;
-        if (entry is not null) await entry.CloseAsync().ConfigureAwait(false);
+        lock (_lifecycleLock) _views.TryGetValue(viewLabel, out entry);
+        if (entry is null) return;
+        try { await entry.CloseAsync().ConfigureAwait(false); }
+        finally { lock (_lifecycleLock) if (_views.TryGetValue(viewLabel, out var current) && ReferenceEquals(current, entry)) _views.Remove(viewLabel); }
     }
 
     async ValueTask IAsyncDisposable.DisposeAsync()
@@ -132,6 +136,7 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
         private TService? _service;
         private int _active;
         private bool _closing;
+        private Task? _closeTask;
 
         internal ServiceLease Acquire(NeoRpcContext context)
         {
@@ -144,22 +149,23 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
             }
         }
 
-        internal async ValueTask CloseAsync()
+        internal ValueTask CloseAsync()
         {
-            TService? service;
-            Task? drained;
             lock (_lock)
             {
-                if (_closing) { drained = _drained?.Task; service = null; }
-                else
-                {
-                    _closing = true;
-                    service = _service;
-                    _service = null;
-                    if (_active == 0) drained = null;
-                    else { _drained = new(TaskCreationOptions.RunContinuationsAsynchronously); drained = _drained.Task; }
-                }
+                if (_closeTask is not null) return new(_closeTask);
+                _closing = true;
+                var service = _service;
+                _service = null;
+                Task? drained = null;
+                if (_active != 0) { _drained = new(TaskCreationOptions.RunContinuationsAsynchronously); drained = _drained.Task; }
+                _closeTask = Task.Run(() => CloseCoreAsync(service, drained));
+                return new(_closeTask);
             }
+        }
+
+        private static async Task CloseCoreAsync(TService? service, Task? drained)
+        {
             if (drained is not null) await drained.ConfigureAwait(false);
             if (service is not null) await DisposeServiceAsync(service).ConfigureAwait(false);
         }

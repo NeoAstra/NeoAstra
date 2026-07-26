@@ -1,0 +1,11 @@
+{
+  "$schema": "neoastra-capabilities-v1.schema.json",
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "main",
+      "views": ["main"],
+      "permissions": ["documents:open"]
+    }
+  ]
+}

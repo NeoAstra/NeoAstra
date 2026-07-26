@@ -38,6 +38,30 @@ public sealed class NeoRpcOptions
     public int MaximumUnacknowledgedChannelItems { get; set; } = 16;
     /// <summary>Gets or sets the maximum resources owned by one session.</summary>
     public int MaximumResourcesPerSession { get; set; } = 64;
+    /// <summary>Gets or sets the maximum resources owned by one view across document sessions.</summary>
+    public int MaximumResourcesPerView { get; set; } = 256;
+    /// <summary>Gets or sets the maximum resources owned by the application.</summary>
+    public int MaximumResources { get; set; } = 4096;
+    /// <summary>Gets or sets maximum declared resource bytes per document session.</summary>
+    public long MaximumResourceBytesPerSession { get; set; } = 64 * 1024 * 1024;
+    /// <summary>Gets or sets maximum declared resource bytes across the application.</summary>
+    public long MaximumResourceBytes { get; set; } = 1024L * 1024 * 1024;
+    /// <summary>Gets or sets sustained accepted invocation/subscription frames per second in one document session.</summary>
+    public int RequestRatePerSecond { get; set; } = 100;
+    /// <summary>Gets or sets the bounded per-session request burst.</summary>
+    public int RequestRateBurst { get; set; } = 200;
+    /// <summary>Gets or sets the abuse-denial count after which the offending document session is closed.</summary>
+    public int AbuseClosureThreshold { get; set; } = 20;
+    /// <summary>Gets or sets the named resolved security profile.</summary>
+    public NeoSecurityProfile SecurityProfile { get; set; } = NeoSecurityProfile.ProductionLocalApp;
+    /// <summary>Gets or sets the immutable embedded capability manifest used for diagnostics.</summary>
+    public NeoCapabilityManifest? CapabilityManifest { get; set; }
+    /// <summary>Gets or sets whether release configuration validation is active.</summary>
+    public bool Release { get; set; } = true;
+    /// <summary>Gets or sets an exact development origin.</summary>
+    public Uri? DevelopmentOrigin { get; set; }
+    /// <summary>Gets or sets whether a non-loopback development origin was explicitly reviewed.</summary>
+    public bool AllowRemoteDevelopmentOrigin { get; set; }
     /// <summary>Gets or sets the configured authorization service.</summary>
     public INeoRpcAuthorizationService? AuthorizationService { get; set; }
     /// <summary>Gets or sets application exception mappers, evaluated in order.</summary>
@@ -67,6 +91,19 @@ public sealed class NeoRpcOptions
         if (MaximumChannelsPerSession is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumChannelsPerSession));
         if (MaximumUnacknowledgedChannelItems is < 1 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumUnacknowledgedChannelItems));
         if (MaximumResourcesPerSession is < 1 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumResourcesPerSession));
+        if (MaximumResourcesPerView < MaximumResourcesPerSession || MaximumResourcesPerView > 1_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumResourcesPerView));
+        if (MaximumResources <= MaximumResourcesPerView || MaximumResources > 10_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumResources));
+        if (MaximumResourceBytesPerSession is < 1024 or > 16L * 1024 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumResourceBytesPerSession));
+        if (MaximumResourceBytes <= MaximumResourceBytesPerSession || MaximumResourceBytes > 1024L * 1024 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumResourceBytes));
+        if (RequestRatePerSecond is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(RequestRatePerSecond));
+        if (RequestRateBurst < RequestRatePerSecond || RequestRateBurst > 1_000_000) throw new ArgumentOutOfRangeException(nameof(RequestRateBurst));
+        if (AbuseClosureThreshold is < 1 or > 10_000) throw new ArgumentOutOfRangeException(nameof(AbuseClosureThreshold));
+        ArgumentNullException.ThrowIfNull(SecurityProfile);
+        SecurityProfile.Validate(Release, DevelopmentOrigin, AllowRemoteDevelopmentOrigin);
+        if (!SecurityProfile.BridgeEnabled && (AuthorizationService is not null || CapabilityManifest is not null)) throw new InvalidOperationException("The remote-content profile cannot enable RPC authorization or capabilities.");
+        if (CapabilityManifest is not null && !ReferenceEquals(CapabilityManifest.Profile, SecurityProfile)) throw new InvalidOperationException("The capability manifest security profile does not match the RPC host profile.");
+        if (AuthorizationService is NeoCapabilityAuthorizationService capabilityAuthorization && CapabilityManifest is not null && !ReferenceEquals(capabilityAuthorization.Manifest, CapabilityManifest)) throw new InvalidOperationException("The authorization service and diagnostic manifest must use the same immutable resolved manifest.");
+        if (IncludeDevelopmentErrorDetails && (Release || !SecurityProfile.DetailedErrors)) throw new InvalidOperationException("Detailed RPC errors require a non-release development profile.");
         ArgumentNullException.ThrowIfNull(ErrorMappers);
         if (ErrorMappers.Any(static mapper => mapper is null)) throw new ArgumentException("Error mapper collections cannot contain null.", nameof(ErrorMappers));
 
@@ -87,6 +124,18 @@ public sealed class NeoRpcOptions
             MaximumChannelsPerSession = MaximumChannelsPerSession,
             MaximumUnacknowledgedChannelItems = MaximumUnacknowledgedChannelItems,
             MaximumResourcesPerSession = MaximumResourcesPerSession,
+            MaximumResourcesPerView = MaximumResourcesPerView,
+            MaximumResources = MaximumResources,
+            MaximumResourceBytesPerSession = MaximumResourceBytesPerSession,
+            MaximumResourceBytes = MaximumResourceBytes,
+            RequestRatePerSecond = RequestRatePerSecond,
+            RequestRateBurst = RequestRateBurst,
+            AbuseClosureThreshold = AbuseClosureThreshold,
+            SecurityProfile = SecurityProfile,
+            CapabilityManifest = CapabilityManifest,
+            Release = Release,
+            DevelopmentOrigin = DevelopmentOrigin,
+            AllowRemoteDevelopmentOrigin = AllowRemoteDevelopmentOrigin,
             AuthorizationService = AuthorizationService,
             ErrorMappers = ErrorMappers.ToArray(),
             DiagnosticSink = DiagnosticSink,
@@ -104,13 +153,16 @@ public sealed class NeoRpcCommandOptions
     public NeoRpcDispatchMode Dispatch { get; set; }
     /// <summary>Gets or sets a command-specific timeout, or <see langword="null"/> for the host default.</summary>
     public TimeSpan? Timeout { get; set; }
+    /// <summary>Gets or sets a command-specific concurrency bound.</summary>
+    public int MaximumConcurrency { get; set; } = 8;
 
     internal NeoRpcCommandOptions CloneValidated()
     {
-        if (Permission is not null && !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("The command permission is malformed.", nameof(Permission));
+        if (Permission is null || !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("Every renderer-callable command requires one permission declaration.", nameof(Permission));
         if (!Enum.IsDefined(Dispatch)) throw new ArgumentOutOfRangeException(nameof(Dispatch));
         if (Timeout is { } timeout && (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(10))) throw new ArgumentOutOfRangeException(nameof(Timeout));
-        return new NeoRpcCommandOptions { Permission = Permission, Dispatch = Dispatch, Timeout = Timeout };
+        if (MaximumConcurrency is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumConcurrency));
+        return new NeoRpcCommandOptions { Permission = Permission, Dispatch = Dispatch, Timeout = Timeout, MaximumConcurrency = MaximumConcurrency };
     }
 }
 
@@ -124,7 +176,7 @@ public sealed class NeoRpcEventOptions
 
     internal NeoRpcEventOptions CloneValidated()
     {
-        if (Permission is not null && !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("The event permission is malformed.", nameof(Permission));
+        if (Permission is null || !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("Every renderer-callable event requires one permission declaration.", nameof(Permission));
         if (!Enum.IsDefined(OverflowBehavior)) throw new ArgumentOutOfRangeException(nameof(OverflowBehavior));
         return new NeoRpcEventOptions { Permission = Permission, OverflowBehavior = OverflowBehavior };
     }
@@ -142,7 +194,12 @@ internal static class NeoRpcValidation
         return true;
     }
 
-    internal static bool IsPermission(string value) => IsWireName(value, 192) && value.Contains(':', StringComparison.Ordinal);
+    internal static bool IsPermission(string value)
+    {
+        if (!IsWireName(value, 192)) return false;
+        var segments = value.Split(':');
+        return segments.Length >= 2 && segments.All(static segment => IsWireName(segment, 128));
+    }
 
     internal static bool IsErrorCode(string? value)
     {

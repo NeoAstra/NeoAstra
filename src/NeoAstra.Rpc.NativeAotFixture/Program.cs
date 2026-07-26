@@ -9,16 +9,24 @@ using NeoAstra.Rpc;
 
 var frames = new List<string>();
 var secondFrames = new List<string>();
-var builder = new NeoRpcBuilder(new NeoRpcOptions { ContractHash = NeoRpcGeneratedContract.Hash });
+var catalog = new NeoPermissionCatalogBuilder()
+    .Add(new NeoPermissionDeclaration("documents:open", 1, ["documents.open"], NeoPermissionRisk.Sensitive, NeoScopeFamily.None))
+    .Add(new NeoPermissionDeclaration("documents:read", 1, ["documents.changed"], NeoPermissionRisk.Low, NeoScopeFamily.None))
+    .Build();
+var capabilityJson = """
+{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"fixture","views":["fixture","fixture-secondary"],"permissions":["documents:open","documents:read"]}]}
+"""u8;
+var capabilityManifest = NeoCapabilityManifest.Resolve(capabilityJson, catalog, new() { Platform = CurrentPlatform(), Release = true, Profile = NeoSecurityProfile.ProductionLocalApp });
+var builder = new NeoRpcBuilder(new NeoRpcOptions { ContractHash = NeoRpcGeneratedContract.Hash, AuthorizationService = new NeoCapabilityAuthorizationService(capabilityManifest), CapabilityManifest = capabilityManifest });
 builder.AddDocumentsService(new DocumentsService());
 _ = builder.AddDocumentEventsChangedEvent();
 await using var host = builder.Build();
-await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "native-aot-document"), (json, _) =>
+await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "native-aot-document") { Platform = CurrentPlatform(), WholeViewTrust = CurrentPlatform() == NeoCapabilityPlatform.Linux, IsMainFrame = true }, (json, _) =>
 {
     frames.Add(json);
     return ValueTask.CompletedTask;
 });
-await using var secondSession = host.OpenSession(new NeoRpcSessionIdentity("fixture-secondary", "native-aot-document-2"), (json, _) =>
+await using var secondSession = host.OpenSession(new NeoRpcSessionIdentity("fixture-secondary", "native-aot-document-2") { Platform = CurrentPlatform(), WholeViewTrust = CurrentPlatform() == NeoCapabilityPlatform.Linux, IsMainFrame = true }, (json, _) =>
 {
     secondFrames.Add(json);
     return ValueTask.CompletedTask;
@@ -40,6 +48,8 @@ if (!result.RootElement.GetProperty("ok").GetBoolean() || result.RootElement.Get
 }
 Console.WriteLine($"NeoAstra RPC NativeAOT fixture passed ({NeoRpcGeneratedContract.Hash}).");
 return 0;
+
+static NeoCapabilityPlatform CurrentPlatform() => OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
 
 [NeoRpcService("documents", Version = 1)]
 public sealed class DocumentsService
