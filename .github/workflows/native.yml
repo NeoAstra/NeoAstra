@@ -84,3 +84,9 @@ jobs:
           name: native-${{ matrix.rid }}
           path: src/NeoWebView/runtimes/${{ matrix.rid }}/native/*
           if-no-files-found: error
+      - name: Upload native release-readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-readiness-native-${{ matrix.rid }}
+          path: artifacts/native/${{ matrix.rid }}/release-readiness
+          if-no-files-found: error

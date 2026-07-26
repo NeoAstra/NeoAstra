@@ -13,17 +13,17 @@
       }
     },
     { "name": "windows-x64-debug", "inherits": "base", "architecture": { "value": "x64", "strategy": "external" }, "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_C_COMPILER": "clang-cl", "CMAKE_CXX_COMPILER": "clang-cl" }, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" } },
-    { "name": "windows-x64-release", "inherits": "windows-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "windows-x64-release", "inherits": "windows-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NEOWEBVIEW_RETAIN_RELEASE_SYMBOLS": "ON" } },
     { "name": "windows-arm64-release", "inherits": "windows-x64-release", "architecture": { "value": "arm64", "strategy": "external" }, "cacheVariables": { "CMAKE_C_COMPILER_TARGET": "arm64-pc-windows-msvc", "CMAKE_CXX_COMPILER_TARGET": "arm64-pc-windows-msvc" } },
     { "name": "macos-x64-debug", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_OSX_ARCHITECTURES": "x86_64" }, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" } },
-    { "name": "macos-x64-release", "inherits": "macos-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "macos-x64-release", "inherits": "macos-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NEOWEBVIEW_RETAIN_RELEASE_SYMBOLS": "ON" } },
     { "name": "macos-arm64-debug", "inherits": "macos-x64-debug", "cacheVariables": { "CMAKE_OSX_ARCHITECTURES": "arm64" } },
-    { "name": "macos-arm64-release", "inherits": "macos-arm64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "macos-arm64-release", "inherits": "macos-arm64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NEOWEBVIEW_RETAIN_RELEASE_SYMBOLS": "ON" } },
     { "name": "macos-universal-release", "inherits": "macos-arm64-release", "cacheVariables": { "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64" } },
     { "name": "linux-x64-debug", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }, "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" } },
     { "name": "linux-x64-asan-ubsan", "inherits": "linux-x64-debug", "cacheVariables": { "NEOWEBVIEW_ENABLE_ASAN": "ON", "NEOWEBVIEW_ENABLE_UBSAN": "ON", "NEOWEBVIEW_ENABLE_LTO": "OFF" } },
     { "name": "linux-x64-analysis", "inherits": "linux-x64-debug", "cacheVariables": { "NEOWEBVIEW_BUILD_TESTS": "OFF", "NEOWEBVIEW_ENABLE_CLANG_TIDY": "ON", "NEOWEBVIEW_ENABLE_LTO": "OFF" } },
-    { "name": "linux-x64-release", "inherits": "linux-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "linux-x64-release", "inherits": "linux-x64-debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "NEOWEBVIEW_RETAIN_RELEASE_SYMBOLS": "ON" } },
     { "name": "linux-arm64-release", "inherits": "linux-x64-release", "toolchainFile": "eng/native/linux-arm64.cmake" }
   ],
   "buildPresets": [

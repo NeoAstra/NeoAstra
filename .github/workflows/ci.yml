@@ -56,6 +56,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: src/global.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           name: native-win-x64
@@ -116,7 +119,15 @@ jobs:
           $symbolEntries = $symbolArchive.Entries.FullName
           $symbolArchive.Dispose()
           if ('lib/net10.0/NeoWebView.pdb' -notin $symbolEntries) { throw 'Missing managed symbols' }
-      - uses: actions/upload-artifact@v4
+      - name: Generate package checksums
+        run: |
+          python -m unittest eng.tests.test_release_readiness
+          python eng/release_readiness.py checksums --directory artifacts/packages
+      - name: Upload package and release-readiness evidence
+        uses: actions/upload-artifact@v4
         with:
           name: packages
-          path: artifacts/packages/*.*nupkg
+          path: |
+            artifacts/packages/*.*nupkg
+            artifacts/packages/SHA256SUMS
+          if-no-files-found: error

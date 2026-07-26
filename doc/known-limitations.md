@@ -9,9 +9,12 @@ implemented source, configured workflow coverage, and actual runtime validation.
 - Release-level browser validation is not established here for macOS or Linux. Windows ARM64 native
   execution and browser validation are also not established.
 - The minimum supported macOS version has not been frozen.
-- The repository workflows build and package artifacts but do not publish a release. Checksums,
-  symbols, source-link verification, an ABI report, and inclusion of runtime documentation and
-  third-party notices in final artifacts remain release acceptance work.
+- The repository workflows build and package artifacts but do not publish a release. Each configured
+  native RID now assembles a separate readiness artifact containing the staged native binary, public
+  headers, separate native debug symbols, runtime documentation, third-party notices, an export-based
+  ABI report, and a SHA-256 manifest; the package artifact also receives a SHA-256 manifest. Workflow
+  configuration is not evidence that those platform jobs passed. Source-link verification and review
+  of the complete artifact set remain release acceptance work.
 - [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) records the redistributed WebView2 SDK
   material evidenced by the current build. It, this limitations page, the platform-support page, and
   the public native headers are included in the NuGet package.

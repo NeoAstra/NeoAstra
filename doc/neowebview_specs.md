@@ -3216,6 +3216,13 @@ The release-facing readiness documentation is maintained in [`platform-support.m
 [`known-limitations.md`](known-limitations.md), and [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md).
 Their presence does not by itself satisfy the runtime-validation or release-artifact acceptance criteria.
 
+The configured native release jobs retain a linker PDB on Windows, a dSYM bundle on macOS, or detached
+ELF debug data on Linux in a per-RID readiness artifact without adding symbols to the NuGet runtime-asset
+layout. Each artifact carries the public headers, frozen ABI 1.7 export floor, an ABI report comparing
+header declarations and that floor with exports inspected from the staged binary, and a `SHA256SUMS`
+manifest. The package job similarly checksums its assembled NuGet artifacts. These jobs upload CI
+readiness evidence only; they do not publish packages or create a release.
+
 ---
 
 # 41. v1 acceptance criteria

@@ -7,6 +7,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -77,9 +78,22 @@ def main() -> int:
     source = build_directory / library_name
     if not source.is_file():
         raise FileNotFoundError(f"Native build did not produce {source}")
-    runtime_directory.mkdir(parents=True, exist_ok=True)
     destination = runtime_directory / library_name
-    shutil.copy2(source, destination)
+    run(
+        sys.executable,
+        "eng/release_readiness.py",
+        "native",
+        "--rid",
+        args.rid,
+        "--binary",
+        str(source),
+        "--runtime-binary",
+        str(destination),
+        "--output",
+        str(build_directory / "release-readiness"),
+    )
+    if not destination.is_file():
+        raise FileNotFoundError(f"Readiness assembly did not stage {destination}")
     print(f"Staged {destination.relative_to(ROOT)}", flush=True)
     return 0
 
