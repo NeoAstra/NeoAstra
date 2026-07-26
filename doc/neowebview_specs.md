@@ -3221,7 +3221,10 @@ ELF debug data on Linux in a per-RID readiness artifact without adding symbols t
 layout. Each artifact carries the public headers, frozen ABI 1.7 export floor, an ABI report comparing
 header declarations and that floor with exports inspected from the staged binary, and a `SHA256SUMS`
 manifest. The package job similarly checksums its assembled NuGet artifacts. These jobs upload CI
-readiness evidence only; they do not publish packages or create a release.
+readiness evidence only; they do not publish packages or create a release. The package build enables
+the SDK's continuous-integration mode, emits managed portable symbols in the existing `.snupkg`, and
+must verify the packaged `NeoWebView.pdb` Source Link record maps to the checked-out commit under
+`https://github.com/xoofx/NeoWebView`, rather than accepting only the presence of a PDB entry.
 
 ---
 

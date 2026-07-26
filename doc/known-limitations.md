@@ -12,9 +12,10 @@ implemented source, configured workflow coverage, and actual runtime validation.
 - The repository workflows build and package artifacts but do not publish a release. Each configured
   native RID now assembles a separate readiness artifact containing the staged native binary, public
   headers, separate native debug symbols, runtime documentation, third-party notices, an export-based
-  ABI report, and a SHA-256 manifest; the package artifact also receives a SHA-256 manifest. Workflow
-  configuration is not evidence that those platform jobs passed. Source-link verification and review
-  of the complete artifact set remain release acceptance work.
+  ABI report, and a SHA-256 manifest; the package artifact also receives a SHA-256 manifest. The CI
+  package job verifies that the managed symbol package's portable PDB maps sources to the checked-out
+  commit in this GitHub repository. Workflow configuration is not evidence that those jobs passed,
+  and review of the complete artifact set remains release acceptance work.
 - [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) records the redistributed WebView2 SDK
   material evidenced by the current build. It, this limitations page, the platform-support page, and
   the public native headers are included in the NuGet package.

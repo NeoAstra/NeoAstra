@@ -87,7 +87,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet restore src/NeoWebView.slnx
-          dotnet build src/NeoWebView.slnx -c Release --no-restore
+          dotnet build src/NeoWebView.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
           dotnet pack src/NeoWebView/NeoWebView.csproj -c Release --no-build -o artifacts/packages
           dotnet publish samples/NeoWebView.Sample/NeoWebView.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
           & artifacts/nativeaot/NeoWebView.Sample.exe --validate-native-library
@@ -119,6 +119,13 @@ jobs:
           $symbolEntries = $symbolArchive.Entries.FullName
           $symbolArchive.Dispose()
           if ('lib/net10.0/NeoWebView.pdb' -notin $symbolEntries) { throw 'Missing managed symbols' }
+      - name: Verify managed Source Link
+        shell: pwsh
+        run: |
+          $symbolPackages = @(Get-ChildItem artifacts/packages/*.snupkg)
+          if ($symbolPackages.Count -ne 1) { throw "Expected one managed symbol package; found $($symbolPackages.Count)" }
+          $commit = git rev-parse HEAD
+          & eng/verify_sourcelink.ps1 -SymbolPackage $symbolPackages[0].FullName -Repository xoofx/NeoWebView -Commit $commit
       - name: Generate package checksums
         run: |
           python -m unittest eng.tests.test_release_readiness

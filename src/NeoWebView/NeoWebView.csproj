@@ -22,7 +22,8 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageProjectUrl>https://github.com/xoofx/NeoWebView</PackageProjectUrl>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-    <!--Add support for sourcelink-->
+    <!-- The .NET 10 SDK supplies the Git/GitHub Source Link targets. -->
+    <RepositoryUrl>https://github.com/xoofx/NeoWebView</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
