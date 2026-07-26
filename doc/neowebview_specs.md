@@ -2998,6 +2998,12 @@ CI SHOULD run:
 
 Windows SHOULD use Application Verifier or equivalent diagnostics where practical.
 
+The repository configures Linux x64 AddressSanitizer plus UndefinedBehaviorSanitizer, selected Linux x64
+ThreadSanitizer common/stress CTests, macOS x64 AddressSanitizer plus UndefinedBehaviorSanitizer, and Linux
+x64 Clang static-analysis presets. The sanitizer presets instrument the test executables and shared library,
+disable LTO, and use fail-fast runtime options. This describes configured coverage; an executed result is
+established only by a successful job or a run on the preset's host platform.
+
 ## 38.7 Linux display tests
 
 Linux integration tests SHOULD execute under:
@@ -3189,15 +3195,21 @@ layout offsets, invokes core functions through explicit C-calling-convention dec
 attached application detach/release cycle. Normal public-header and generated-managed layout tests remain in
 place, so the fixture supplements rather than duplicates current-header conformance.
 
-Linux x64 CI is configured to compile and execute the native suite with AddressSanitizer and
-UndefinedBehaviorSanitizer, and to compile the native implementation with Clang's static-analyzer checks.
-Sanitizer instrumentation applies to the tests as well as the shared library. LeakSanitizer is disabled until
-GTK/WebKitGTK process-global allocations have reviewed suppressions. These jobs do not establish sanitizer-clean
-status on macOS, do not execute ThreadSanitizer, and are not claimed as having run on a Windows development
-host. Opt-in conformance and benchmark projects now exercise controlled local fixtures, bounded browser-object
+CI is configured to compile and execute the Linux x64 native suite with AddressSanitizer plus
+UndefinedBehaviorSanitizer, selected Linux x64 common/stress CTests with ThreadSanitizer, and the macOS x64
+native suite with AddressSanitizer plus UndefinedBehaviorSanitizer. Linux x64 Clang static-analyzer coverage
+remains separate. Sanitizer instrumentation applies to the tests as well as the shared library, each sanitizer
+preset disables LTO, and ThreadSanitizer is not combined with either AddressSanitizer or UndefinedBehaviorSanitizer.
+LeakSanitizer is disabled until GTK/WebKitGTK and Apple WebKit process-global allocations have reviewed
+suppressions. The selected ThreadSanitizer tests initialize the platform application support needed by the
+common code, but do not create browser views or run browser conformance automation.
+
+This is configured coverage, not executed sanitizer-clean evidence: the macOS and Linux jobs must complete on
+their respective hosts before such a result can be recorded, and none is claimed from a Windows development
+host. Opt-in conformance and benchmark projects exercise controlled local fixtures, bounded browser-object
 stress, and the section 34.4 measurements; Windows WebView2 normal/stress conformance and quick benchmarks are
-verified. Cross-platform browser/display execution, macOS sanitizer execution, and selected ThreadSanitizer
-coverage remain Phase 5 work.
+verified. Cross-platform browser/display execution and review of external-framework leak suppressions remain
+Phase 5 work.
 
 ## Phase 6 — v1 release
 

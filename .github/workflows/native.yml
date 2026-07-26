@@ -19,11 +19,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang clang-tidy libclang-rt-dev ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
       - name: AddressSanitizer and UndefinedBehaviorSanitizer
-        env:
-          # GTK/WebKitGTK process-global allocations are outside NeoWebView ownership;
-          # leak checking needs a separate suppression-reviewed job.
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           cmake --preset linux-x64-asan-ubsan
           cmake --build --preset linux-x64-asan-ubsan
@@ -32,6 +27,34 @@ jobs:
         run: |
           cmake --preset linux-x64-analysis
           cmake --build --preset linux-x64-analysis
+
+  thread-sanitizer:
+    name: ThreadSanitizer (Linux x64 common code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - name: Install Linux native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-dev ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+      - name: ThreadSanitizer selected common-code tests
+        run: |
+          cmake --preset linux-x64-tsan
+          cmake --build --preset linux-x64-tsan
+          xvfb-run -a ctest --preset linux-x64-tsan
+
+  macos-sanitizers:
+    name: AddressSanitizer and UndefinedBehaviorSanitizer (macOS x64)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - name: Build and test with sanitizers
+        run: |
+          cmake --preset macos-x64-asan-ubsan
+          cmake --build --preset macos-x64-asan-ubsan
+          ctest --preset macos-x64-asan-ubsan
 
   build:
     name: Native (${{ matrix.rid }})
