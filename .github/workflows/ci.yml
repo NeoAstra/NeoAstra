@@ -97,6 +97,12 @@ jobs:
           $entries = $archive.Entries.FullName
           $archive.Dispose()
           @(
+            'license.txt',
+            'THIRD-PARTY-NOTICES.md',
+            'docs/platform-support.md',
+            'docs/known-limitations.md',
+            'build/native/include/neowebview.h',
+            'build/native/include/neowebview_version.h',
             'runtimes/win-x64/native/neowebview_native.dll',
             'runtimes/win-arm64/native/neowebview_native.dll',
             'runtimes/linux-x64/native/libneowebview_native.so',
@@ -104,6 +110,12 @@ jobs:
             'runtimes/osx-x64/native/libneowebview_native.dylib',
             'runtimes/osx-arm64/native/libneowebview_native.dylib'
           ) | ForEach-Object { if ($_ -notin $entries) { throw "Missing package asset: $_" } }
+          $symbolPackage = Get-ChildItem artifacts/packages/*.snupkg | Select-Object -First 1
+          if ($null -eq $symbolPackage) { throw 'Missing managed symbol package' }
+          $symbolArchive = [IO.Compression.ZipFile]::OpenRead($symbolPackage.FullName)
+          $symbolEntries = $symbolArchive.Entries.FullName
+          $symbolArchive.Dispose()
+          if ('lib/net10.0/NeoWebView.pdb' -notin $symbolEntries) { throw 'Missing managed symbols' }
       - uses: actions/upload-artifact@v4
         with:
           name: packages

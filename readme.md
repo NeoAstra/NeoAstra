@@ -6,6 +6,8 @@ Build native desktop applications with .NET and web technologies using the platf
 
 > NeoWebView is pre-release software. The portable core and Windows vertical slice are usable; some advanced browser features and cross-platform validation are still in progress.
 
+See [platform support and runtime dependencies](doc/platform-support.md) for the distinction between v1 support intent, implemented backends, configured workflow coverage, and runtime validation. Review the [known limitations](doc/known-limitations.md) before shipping an application.
+
 ## Features
 
 - Native top-level windows or embedding into a borrowed `HWND`, `NSView`, or `GtkWidget`
@@ -122,6 +124,8 @@ See [`doc/neowebview_specs.md`](doc/neowebview_specs.md) for the architecture an
 ## License
 
 This software is released under the [BSD-2-Clause license](https://opensource.org/licenses/BSD-2-Clause).
+
+Release artifacts also require the applicable [third-party notices](THIRD-PARTY-NOTICES.md).
 
 ## Author
 

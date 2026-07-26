@@ -119,6 +119,12 @@ Native menus, tray icons, notifications, drag-and-drop helpers and installer gen
 
 ## 5.1 Initial support matrix
 
+This matrix defines the required v1 support intent; it is not a statement that every row has passed
+release-level runtime validation. Current implementation status, configured workflow coverage, actual
+validation boundaries, and runtime dependencies are documented in
+[`platform-support.md`](platform-support.md). Known backend and release-readiness limitations are
+documented in [`known-limitations.md`](known-limitations.md).
+
 | Platform      | Architecture | Backend       | Initial status |
 | ------------- | -----------: | ------------- | -------------- |
 | Windows 10/11 |          x64 | WebView2      | Required       |
@@ -3205,6 +3211,10 @@ Requirements:
 * Release pipeline.
 * Supported-platform documentation.
 * Known limitations documented.
+
+The release-facing readiness documentation is maintained in [`platform-support.md`](platform-support.md),
+[`known-limitations.md`](known-limitations.md), and [`../THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md).
+Their presence does not by itself satisfy the runtime-validation or release-artifact acceptance criteria.
 
 ---
 
