@@ -119,7 +119,7 @@ Native tests include a public-header ABI test, common ownership tests, contended
 
 Native CI is configured with explicit `linux-x64-asan-ubsan`, `linux-x64-tsan`, `linux-x64-analysis`, and `macos-x64-asan-ubsan` presets. The ThreadSanitizer test preset selects only the common ownership and contended teardown tests; it does not run browser conformance automation. Sanitizer test presets use fail-fast runtime options, instrument the test executables and shared library, and disable LTO. LeakSanitizer remains disabled until process-global allocations in GTK/WebKitGTK and Apple WebKit have reviewed suppressions. These are configured CI jobs, not evidence that they ran on a Windows development host; run the matching preset on its named host to establish an execution result. ThreadSanitizer remains separate from AddressSanitizer and UndefinedBehaviorSanitizer.
 
-See [`doc/neoastra_specs.md`](doc/neoastra_specs.md) for the architecture and normative implementation requirements.
+See [`doc/neoastra_specs.md`](doc/neoastra_specs.md) for the current architecture and normative v1 implementation requirements. The planned application-platform evolution is specified by [`doc/neoastra_v2_specs.md`](doc/neoastra_v2_specs.md) and its implementation-step sub-specifications.
 
 ## License
 
