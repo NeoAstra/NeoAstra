@@ -233,16 +233,16 @@ This step starts the v2 reference app. It MUST use Generic Host integration when
 
 ## 12. Implementation order
 
-- [ ] Define project JSON Schema, resolution rules, MSBuild properties, and inspect output.
-- [ ] Implement process runner/readiness/teardown with fake-process tests.
-- [ ] Implement `dev`, exact loopback-origin policy, and frontend log routing.
-- [ ] Implement RPC contract generation ordering and stale-check target.
-- [ ] Implement production build target and strict asset manifest builder.
-- [ ] Extend asset host with manifest lookup, SPA fallback, MIME/cache/security headers.
-- [ ] Create vanilla, React, and Vue templates from shared secure host fragments.
-- [ ] Implement conflict-safe existing-project `init` and `doctor`.
-- [ ] Build the reference app and publish it under NativeAOT.
-- [ ] Document manual/CI/offline/prebuilt workflows.
+- [x] Define project JSON Schema, resolution rules, MSBuild properties, and inspect output.
+- [x] Implement process runner/readiness/teardown with fake-process tests.
+- [x] Implement `dev`, exact loopback-origin policy, and frontend log routing.
+- [x] Implement RPC contract generation ordering and stale-check target.
+- [x] Implement production build target and strict asset manifest builder.
+- [x] Extend asset host with manifest lookup, SPA fallback, MIME/cache/security headers.
+- [x] Create vanilla, React, and Vue templates from shared secure host fragments.
+- [x] Implement conflict-safe existing-project `init` and `doctor`.
+- [x] Build the reference app and publish it under NativeAOT.
+- [x] Document manual/CI/offline/prebuilt workflows.
 
 ## 13. Verification
 

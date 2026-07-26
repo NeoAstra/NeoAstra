@@ -1,0 +1,3 @@
+globalThis.addEventListener("message", () => {
+  globalThis.postMessage("Reference module worker replied.");
+});

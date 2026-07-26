@@ -1,0 +1,1 @@
+{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main-read","views":["main"],"permissions":["notes:read"]}]}

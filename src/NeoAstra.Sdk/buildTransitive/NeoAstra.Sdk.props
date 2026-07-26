@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <NeoAstraProjectConfig Condition="'$(NeoAstraProjectConfig)' == ''">$(MSBuildProjectDirectory)/neoastra.json</NeoAstraProjectConfig>
+    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == ''">true</NeoAstraFrontendEnabled>
+    <NeoAstraPrebuiltAssets Condition="'$(NeoAstraPrebuiltAssets)' == ''">false</NeoAstraPrebuiltAssets>
+    <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == ''">$(MSBuildThisFileDirectory)..\tools\net10.0\any\NeoAstra.Tool.dll</NeoAstraToolPath>
+    <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == '' and '$(DotNetHostPath)' != ''">$(DotNetHostPath)</NeoAstraDotNetHost>
+    <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2022","module":"ESNext","moduleResolution":"Bundler","strict":true,"noEmit":true,"types":["vite/client"],"lib":["ES2022","DOM"]},"include":["src","src/**/*.vue"]}

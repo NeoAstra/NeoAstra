@@ -9,7 +9,7 @@
     "test": "npm run build && node --test packages/client/test/*.test.mjs",
     "check:size": "node tools/check-size.mjs",
     "check:package": "node tools/check-package.mjs && node tools/check-licenses.mjs",
-    "check:fixtures": "node tools/build-fixtures.mjs",
+    "check:fixtures": "node tools/build-fixtures.mjs && node tools/generate-templates.mjs --check",
     "check": "npm test && npm run check:size && npm run check:package && npm run check:fixtures"
   },
   "devDependencies": {

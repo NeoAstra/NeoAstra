@@ -1,0 +1,1 @@
+function e(){return`Dynamic reference chunk loaded.`}export{e as referenceDetails};

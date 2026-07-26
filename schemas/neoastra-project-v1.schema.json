@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neoastra.dev/schemas/neoastra-project-v1.schema.json",
+  "title": "NeoAstra project configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "version", "app", "frontend", "assets", "capabilities"],
+  "properties": {
+    "$schema": { "const": "neoastra-project-v1.schema.json" },
+    "version": { "const": 1 },
+    "app": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "displayName"],
+      "properties": {
+        "identifier": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+$", "maxLength": 255 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "frontend": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root", "devCommand", "devUrl", "buildCommand", "dist", "spaFallback"],
+      "properties": {
+        "root": { "$ref": "#/$defs/path" },
+        "devCommand": { "$ref": "#/$defs/command" },
+        "backendCommand": { "$ref": "#/$defs/command", "default": ["dotnet", "watch", "run"] },
+        "contractCommand": { "$ref": "#/$defs/command", "default": ["dotnet", "build", "--no-restore"] },
+        "devUrl": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "buildCommand": { "$ref": "#/$defs/command" },
+        "dist": { "$ref": "#/$defs/path" },
+        "spaFallback": { "$ref": "#/$defs/relativeAsset" },
+        "packageManager": { "enum": ["npm", "pnpm", "yarn", "bun", "none"] },
+        "lockfile": { "$ref": "#/$defs/path" },
+        "generatedContract": { "$ref": "#/$defs/path" },
+        "allowRemoteDevServer": { "type": "boolean" },
+        "environment": {
+          "type": "object", "maxProperties": 128,
+          "propertyNames": { "$ref": "#/$defs/environmentName" },
+          "additionalProperties": { "type": "string", "maxLength": 32768 }
+        },
+        "secretEnvironment": {
+          "type": "array", "maxItems": 128, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/environmentName" }
+        }
+      }
+    },
+    "assets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["origin", "cacheHashedAssets", "csp"],
+      "properties": {
+        "origin": {
+          "type": "string", "pattern": "^[a-z][a-z0-9+.-]*://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$", "maxLength": 256,
+          "not": { "pattern": "^(?:about|blob|data|file|ftp|http|https|javascript|ws|wss)://" }
+        },
+        "cacheHashedAssets": { "type": "boolean" },
+        "csp": {
+          "type": "string", "minLength": 1, "maxLength": 16384,
+          "allOf": [
+            { "not": { "pattern": "[uU][nN][sS][aA][fF][eE]-[eE][vV][aA][lL]" } },
+            { "not": { "pattern": "\\*" } }
+          ]
+        },
+        "referrerPolicy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "includeSourceMaps": { "type": "boolean" },
+        "maximumFiles": { "type": "integer", "minimum": 1, "maximum": 50000 },
+        "maximumFileBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+        "maximumTotalBytes": { "type": "integer", "minimum": 1, "maximum": 4294967296 },
+        "spaRoutePrefixes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/route" } },
+        "excludedPrefixes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/route" } }
+      }
+    },
+    "capabilities": {
+      "type": "array", "maxItems": 256, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/path" }
+    }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "maxLength": 1024, "not": { "pattern": "[\\u0000]" } },
+    "relativeAsset": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?/)[^\\\\:\\u0000]+$", "maxLength": 1024 },
+    "route": {
+      "type": "string", "pattern": "^/(?:[^/\\\\?#[\\u0000]:]+(?:/[^/\\\\?#[\\u0000]:]+)*)?$", "maxLength": 1024,
+      "allOf": [
+        { "not": { "pattern": "(?:^|/)\\.\\.?(?:/|$)" } },
+        { "not": { "pattern": "%[2][eEfF]|%[5][cC]" } }
+      ]
+    },
+    "environmentName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "maxLength": 1024 },
+    "command": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 32768 } }
+  }
+}

@@ -1,0 +1,1 @@
+{"format":1,"services":[{"name":"notes","version":1,"commands":[{"name":"hello","request":"HelloRequest","response":"HelloResponse","channel":false,"permission":"notes:read"}]}],"events":[],"types":["HelloRequest","HelloResponse","string"]}

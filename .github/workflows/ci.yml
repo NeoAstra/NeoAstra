@@ -76,6 +76,13 @@ jobs:
           cmp src/NeoAstra.Rpc.NativeAotFixture/generated/neoastra.ts frontend/fixtures/generated/neoastra.ts
       - name: Publish NativeAOT sample
         run: dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
+      - name: Inspect and publish v2 reference assets under NativeAOT
+        shell: bash
+        run: |
+          dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.V2.Reference/neoastra.json > artifacts/reference-inspect.json
+          dotnet publish samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/v2-reference
+          ./artifacts/v2-reference/NeoAstra.V2.Reference${{ matrix.os == 'windows-latest' && '.exe' || '' }} --validate-reference
+          git diff --exit-code -- samples/NeoAstra.V2.Reference/generated samples/NeoAstra.V2.Reference/ClientApp/src/generated
 
   native:
     uses: ./.github/workflows/native.yml
@@ -125,6 +132,9 @@ jobs:
           dotnet pack src/NeoAstra.Rpc/NeoAstra.Rpc.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Sdk/NeoAstra.Sdk.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Templates/NeoAstra.Templates.csproj -c Release --no-build -o artifacts/packages
           dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
           & artifacts/nativeaot/NeoAstra.Sample.exe --validate-native-library
       - name: Verify native package assets
@@ -172,6 +182,22 @@ jobs:
           $toolEntries = $toolArchive.Entries.FullName
           $toolArchive.Dispose()
           @('tools/net10.0/any/NeoAstra.Capabilities.Tool.dll', 'schemas/neoastra-capabilities-v1.schema.json') | ForEach-Object { if ($_ -notin $toolEntries) { throw "Missing capability tool asset: $_" } }
+          $frontendToolPackage = Get-ChildItem artifacts/packages/NeoAstra.Tool.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          $frontendToolArchive = [IO.Compression.ZipFile]::OpenRead($frontendToolPackage.FullName)
+          $frontendToolEntries = $frontendToolArchive.Entries.FullName
+          $frontendToolArchive.Dispose()
+          @('tools/net10.0/any/NeoAstra.Tool.dll', 'tools/net10.0/any/DotnetToolSettings.xml', 'schemas/neoastra-project-v1.schema.json') | ForEach-Object { if ($_ -notin $frontendToolEntries) { throw "Missing frontend tool package asset: $_" } }
+          $sdkPackage = Get-ChildItem artifacts/packages/NeoAstra.Sdk.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          $sdkArchive = [IO.Compression.ZipFile]::OpenRead($sdkPackage.FullName)
+          $sdkEntries = $sdkArchive.Entries.FullName
+          $sdkArchive.Dispose()
+          @('buildTransitive/NeoAstra.Sdk.props', 'buildTransitive/NeoAstra.Sdk.targets', 'tools/net10.0/any/NeoAstra.Tool.dll', 'schemas/neoastra-project-v1.schema.json', 'docs/frontend-tooling-and-assets.md') | ForEach-Object { if ($_ -notin $sdkEntries) { throw "Missing SDK package asset: $_" } }
+          $templatePackage = Get-ChildItem artifacts/packages/NeoAstra.Templates.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          if ($null -eq $templatePackage) { throw 'Missing template package' }
+          $templateArchive = [IO.Compression.ZipFile]::OpenRead($templatePackage.FullName)
+          $templateEntries = $templateArchive.Entries.FullName
+          $templateArchive.Dispose()
+          @('content/neoastra-vanilla/.template.config/template.json', 'content/neoastra-react/.template.config/template.json', 'content/neoastra-vue/.template.config/template.json') | ForEach-Object { if ($_ -notin $templateEntries) { throw "Missing template package asset: $_" } }
       - name: Verify managed Source Link
         shell: pwsh
         run: |

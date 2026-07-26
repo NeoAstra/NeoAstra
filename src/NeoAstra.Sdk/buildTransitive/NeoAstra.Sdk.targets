@@ -1,0 +1,33 @@
+<Project>
+  <Target Name="NeoAstraVerifyContracts" AfterTargets="Compile"
+          Condition="'$(NeoAstraFrontendEnabled)' == 'true' and '$(NeoRpcTypeScriptOutput)' != '' and '$(NeoRpcManifestOutput)' != ''">
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; contract check --typescript &quot;$(NeoRpcTypeScriptOutput)&quot; --manifest &quot;$(NeoRpcManifestOutput)&quot;" />
+  </Target>
+
+  <Target Name="NeoAstraPrepareFrontend" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="Compile;NeoAstraVerifyContracts"
+          Condition="'$(NeoAstraFrontendEnabled)' == 'true'">
+    <PropertyGroup>
+      <NeoAstraAssetManifest Condition="'$(NeoAstraAssetManifest)' == ''">$(IntermediateOutputPath)neoastra/assets/neoastra-assets.json</NeoAstraAssetManifest>
+      <NeoAstraAssetOutput Condition="'$(NeoAstraAssetOutput)' == ''">$(IntermediateOutputPath)neoastra/assets/package</NeoAstraAssetOutput>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(NeoAstraProjectConfig)')" Text="NeoAstra project configuration was not found at $(NeoAstraProjectConfig)." />
+    <PropertyGroup>
+      <_NeoAstraPrebuiltArgument Condition="'$(NeoAstraPrebuiltAssets)' == 'true'">--prebuilt &quot;$(NeoAstraPrebuiltAssetDirectory)&quot;</_NeoAstraPrebuiltArgument>
+      <_NeoAstraDevelopmentArgument Condition="'$(NeoAstraAllowDevelopmentSettingsInRelease)' == 'true'">--allow-development-settings</_NeoAstraDevelopmentArgument>
+      <_NeoAstraDevUrlArgument Condition="'$(NeoAstraDevUrl)' != ''">--dev-url &quot;$(NeoAstraDevUrl)&quot;</_NeoAstraDevUrlArgument>
+    </PropertyGroup>
+    <Error Condition="'$(NeoAstraPrebuiltAssets)' == 'true' and '$(NeoAstraPrebuiltAssetDirectory)' == ''" Text="Prebuilt mode requires an explicit NeoAstraPrebuiltAssetDirectory." />
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; assets --config &quot;$(NeoAstraProjectConfig)&quot; --manifest &quot;$(NeoAstraAssetManifest)&quot; --copy &quot;$(NeoAstraAssetOutput)&quot; $(_NeoAstraPrebuiltArgument) $(_NeoAstraDevelopmentArgument) $(_NeoAstraDevUrlArgument)" />
+    <ItemGroup>
+      <_NeoAstraAssetFile Include="$(NeoAstraAssetOutput)\**\*" />
+      <ResolvedFileToPublish Include="@(_NeoAstraAssetFile)">
+        <RelativePath>assets/%(_NeoAstraAssetFile.RecursiveDir)%(_NeoAstraAssetFile.Filename)%(_NeoAstraAssetFile.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraInspect">
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; inspect --config &quot;$(NeoAstraProjectConfig)&quot;" />
+  </Target>
+</Project>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>neoastra</ToolCommandName>
+    <PackageId>NeoAstra.Tool</PackageId>
+    <Description>Secure development, inspection, initialization, and asset tooling for NeoAstra applications.</Description>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NeoAstra.Tooling\NeoAstra.Tooling.csproj" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

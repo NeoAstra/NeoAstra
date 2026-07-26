@@ -167,6 +167,9 @@ public sealed class NeoResourceResponse
     internal static NeoResourceResponse CreateEmpty(int statusCode, string reasonPhrase, long contentLength, IReadOnlyDictionary<string, string>? headers)
         => new(statusCode, reasonPhrase, null, headers, default, null, contentLength);
 
+    internal static NeoResourceResponse CreateEmpty(int statusCode, string reasonPhrase, long contentLength, IReadOnlyDictionary<string, string>? headers, string mimeType)
+        => new(statusCode, reasonPhrase, mimeType, headers, default, null, contentLength);
+
     private static void ValidateHeaderText(string value, string parameterName)
     {
         if (Encoding.UTF8.GetByteCount(value) > MaximumMetadataSize)

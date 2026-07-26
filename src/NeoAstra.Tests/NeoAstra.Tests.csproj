@@ -15,6 +15,8 @@
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <ProjectReference Include="..\NeoAstra.Rpc\NeoAstra.Rpc.csproj" />
     <ProjectReference Include="..\NeoAstra.Rpc.Generator\NeoAstra.Rpc.Generator.csproj" />
+    <ProjectReference Include="..\NeoAstra.Tooling\NeoAstra.Tooling.csproj" />
+    <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\NeoAstra.Capabilities.Tool\NeoAstra.Capabilities.Tool.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
