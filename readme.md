@@ -101,6 +101,10 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
+The browser conformance and performance executables are built with the solution but are never run by a normal build or test. Both are noninteractive and opt-in; invoking either without arguments exits successfully without creating an application or browser. From the repository root, run local conformance with `dotnet run --project src/NeoWebView.Conformance -c Release -- --run`. Add `--stress` for the bounded high-volume scenarios or `--timeout-seconds N` to change the per-scenario limit. The harness uses only copied `conformance://` fixtures and prints an explicit `SKIP` when a backend capability, trusted user activation, destructive process failure, filesystem mutation, or subprocess isolation prevents safe automation.
+
+Run the dependency-free benchmark harness with `dotnet run --project src/NeoWebView.Benchmarks -c Release -- --run --quick`; omit `--quick` for the bounded default sample, or use `--iterations`, `--lifecycle-iterations`, `--timeout-seconds`, and `--idle-seconds` to tune it. Each `RESULT`/`SKIP` identifies the backend and platform. Results include browser-engine, native-backend, OS-scheduling, and machine effects; environment/view timing must not be interpreted as NeoWebView controlling engine startup, and memory/idle-CPU figures currently cover only the host process. Use same-machine, same-engine regression baselines rather than absolute comparisons across platforms.
+
 The native library uses CMake presets and Clang. The build helper selects a .NET RID, runs the native tests, and stages the resulting library in `src/NeoWebView/runtimes/<RID>/native`:
 
 ```sh

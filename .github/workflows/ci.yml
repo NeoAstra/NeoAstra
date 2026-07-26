@@ -35,6 +35,10 @@ jobs:
           git diff --exit-code -- src/NeoWebView/Generated/Interop/NativeMethods.Generated.cs
       - name: Build
         run: dotnet build src/NeoWebView.slnx -c Release --no-restore
+      - name: Verify opt-in harness defaults
+        run: |
+          dotnet run --project src/NeoWebView.Conformance/NeoWebView.Conformance.csproj -c Release --no-build
+          dotnet run --project src/NeoWebView.Benchmarks/NeoWebView.Benchmarks.csproj -c Release --no-build
       - name: Test
         run: dotnet test src/NeoWebView.slnx -c Release --no-build
       - name: Publish NativeAOT sample

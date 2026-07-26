@@ -2681,6 +2681,8 @@ Benchmarks MUST report results separately per engine and platform. They MUST NOT
 
 Performance acceptance should primarily use regression thresholds against stored baselines rather than one absolute number across all machines.
 
+The repository's dependency-free `src/NeoWebView.Benchmarks` executable is opt-in: running it without arguments MUST exit successfully without creating a browser, while `--run` performs bounded, warmed measurements against copied local fixtures. Every category above MUST produce either a real `RESULT` or an explicit `SKIP` with the unavailable capability or measurement boundary. Output MUST identify backend and platform. Host-process idle CPU and memory results MUST be labeled as excluding browser child processes, and environment/view timing MUST be labeled as including backend/engine effects that NeoWebView does not exclusively control.
+
 ---
 
 # 35. Security requirements
@@ -2953,6 +2955,8 @@ Test pages MUST exercise:
 * Process termination recovery.
 * Popup opener/environment relationship and requested window features.
 
+The repository's `src/NeoWebView.Conformance` executable is an opt-in, noninteractive harness using copied local custom-scheme fixtures rather than network resources. Running it without arguments MUST exit successfully without opening a browser. `--run` executes capability-aware scenarios with a finite per-scenario timeout and explicit `SKIP` results for requirements that need trusted user activation, destructive filesystem/process operations, manual interaction, or public API hooks that are not available. For ABI 1.8 messaging tests, Windows and macOS MUST use `TrustedOrigins` with a non-empty exact origin list. Linux MUST explicitly use `TrustEntireView` only for the fully controlled fixture and MUST assert that the received source origin is unavailable (`null`), never inferred or treated as verified. An empty trusted-origin list MUST be rejected and MUST never mean allow-all.
+
 ## 38.5 Stress tests
 
 Required stress scenarios:
@@ -2971,6 +2975,8 @@ Required stress scenarios:
 * Shutdown with pending operations.
 * Resource-stream cancellation.
 * Browser-process failure.
+
+The conformance executable runs bounded, low-count creation, concurrent-view, window-lifecycle, rapid-navigation, and repeated-environment probes under `--run`; `--stress` raises bounded counts and enables the 100,000-message scenario. Scenarios that would terminate the harness, require crash injection or trusted user activation, mutate user files, or require a cancellable public resource stream MUST be reported as explicit skips until they can run in an isolated automation host.
 
 ## 38.6 Sanitizers and analysis
 
@@ -3182,8 +3188,10 @@ UndefinedBehaviorSanitizer, and to compile the native implementation with Clang'
 Sanitizer instrumentation applies to the tests as well as the shared library. LeakSanitizer is disabled until
 GTK/WebKitGTK process-global allocations have reviewed suppressions. These jobs do not establish sanitizer-clean
 status on macOS, do not execute ThreadSanitizer, and are not claimed as having run on a Windows development
-host. Browser/display conformance, broader browser-object stress, benchmarks, macOS sanitizer
-execution, and selected ThreadSanitizer coverage remain Phase 5 work.
+host. Opt-in conformance and benchmark projects now exercise controlled local fixtures, bounded browser-object
+stress, and the section 34.4 measurements; Windows WebView2 normal/stress conformance and quick benchmarks are
+verified. Cross-platform browser/display execution, macOS sanitizer execution, and selected ThreadSanitizer
+coverage remain Phase 5 work.
 
 ## Phase 6 — v1 release
 

@@ -15,6 +15,8 @@
     <File Path="dotnet-releaser.toml" />
     <File Path="global.json" />
   </Folder>
+  <Project Path="NeoWebView.Benchmarks/NeoWebView.Benchmarks.csproj" />
+  <Project Path="NeoWebView.Conformance/NeoWebView.Conformance.csproj" />
   <Project Path="NeoWebView.Tests/NeoWebView.Tests.csproj" />
   <Project Path="NeoWebView.CodeGen/NeoWebView.CodeGen.csproj" />
   <Project Path="NeoWebView/NeoWebView.csproj" />
