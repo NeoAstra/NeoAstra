@@ -309,7 +309,17 @@ public sealed class NeoWebViewOptions
     /// <summary>Gets or sets the timeout for asynchronous browser decisions.</summary>
     public TimeSpan DecisionTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>Gets or sets origins that may use the managed web-message bridge.</summary>
+    /// <summary>Gets or sets the trust policy for inbound and outbound web/native messaging.</summary>
+    /// <remarks>
+    /// <see cref="NeoBridgePolicy.TrustEntireView"/> trusts all scripts executing in the view;
+    /// origin metadata, when present, is informational and is not an authorization check.
+    /// </remarks>
+    public NeoBridgePolicy BridgePolicy { get; set; }
+
+    /// <summary>
+    /// Gets or sets the exact origins that may use web/native messaging when <see cref="BridgePolicy"/>
+    /// is <see cref="NeoBridgePolicy.TrustedOrigins"/>. An empty collection never enables messaging.
+    /// </summary>
     public IReadOnlyList<string> BridgeOrigins { get; set; } = Array.Empty<string>();
 
     internal void Validate(NeoEnvironment environment)
@@ -334,7 +344,22 @@ public sealed class NeoWebViewOptions
             throw new ArgumentOutOfRangeException(nameof(MaximumMessageSize), "The web-message size limit must be positive.");
         }
 
+        if (!Enum.IsDefined(BridgePolicy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(BridgePolicy));
+        }
+
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
+        if (BridgePolicy == NeoBridgePolicy.TrustedOrigins && BridgeOrigins.Count == 0)
+        {
+            throw new ArgumentException("TrustedOrigins requires at least one bridge origin.", nameof(BridgeOrigins));
+        }
+
+        if (BridgePolicy != NeoBridgePolicy.TrustedOrigins && BridgeOrigins.Count != 0)
+        {
+            throw new ArgumentException("Bridge origins may be specified only with the TrustedOrigins policy.", nameof(BridgeOrigins));
+        }
+
         foreach (var origin in BridgeOrigins)
         {
             if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host) || uri.UserInfo.Length != 0 ||
@@ -342,6 +367,11 @@ public sealed class NeoWebViewOptions
             {
                 throw new ArgumentException($"'{origin}' is not an absolute origin.", nameof(BridgeOrigins));
             }
+        }
+
+        if (BridgePolicy == NeoBridgePolicy.TrustedOrigins && OperatingSystem.IsLinux())
+        {
+            throw new PlatformNotSupportedException("WebKitGTK 4.1 does not expose trustworthy script-message sender origins. Use Disabled or explicitly opt into TrustEntireView.");
         }
     }
 }

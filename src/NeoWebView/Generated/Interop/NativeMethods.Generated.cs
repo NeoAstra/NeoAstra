@@ -436,6 +436,15 @@ namespace NeoWebView.Interop.Generated
             NEO_WEBVIEW_RESOURCE_BODY_FILE = unchecked((uint)2),
         }
 
+        public enum neo_webview_bridge_policy : uint
+        {
+            NEO_WEBVIEW_BRIDGE_DISABLED = unchecked((uint)0),
+
+            NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS = unchecked((uint)1),
+
+            NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW = unchecked((uint)2),
+        }
+
         public readonly partial record struct neo_webview_app_t(nint Handle)
         {
             public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
@@ -990,7 +999,7 @@ namespace NeoWebView.Interop.Generated
 
             public uint bridge_origin_count;
 
-            public uint reserved;
+            public NativeMethods.neo_webview_bridge_policy_t bridge_policy;
 
             public NativeMethods.neo_webview_string_view_t* bridge_origins;
         }
@@ -1000,6 +1009,13 @@ namespace NeoWebView.Interop.Generated
             public static implicit operator NativeMethods.neo_webview_native_parent (neo_webview_native_parent_t from) => from.Value;
 
             public static implicit operator neo_webview_native_parent_t (NativeMethods.neo_webview_native_parent from) => new (from);
+        }
+
+        public readonly partial record struct neo_webview_bridge_policy_t(NativeMethods.neo_webview_bridge_policy Value)
+        {
+            public static implicit operator NativeMethods.neo_webview_bridge_policy (neo_webview_bridge_policy_t from) => from.Value;
+
+            public static implicit operator neo_webview_bridge_policy_t (NativeMethods.neo_webview_bridge_policy from) => new (from);
         }
 
         public partial struct neo_webview_script_options

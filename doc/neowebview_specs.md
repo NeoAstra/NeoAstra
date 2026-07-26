@@ -1435,26 +1435,32 @@ WKScriptMessageHandler is specifically intended for receiving messages from Java
 
 ## 19.4 Bridge security
 
-The native bridge MUST be disabled for untrusted origins by default.
+The native bridge MUST use an explicit policy and MUST default to `Disabled`. An empty or missing origin
+collection MUST NOT enable messaging. Custom-scheme registration, including an application-scheme flag,
+MUST NOT implicitly grant bridge access.
 
-Default bridge access SHOULD be limited to:
+The supported policies are:
 
-* The configured application origin.
-* Explicitly allowed custom-scheme origins.
-* Additional origins explicitly allowlisted by the application.
+* `Disabled`: deny inbound and outbound messaging.
+* `TrustedOrigins`: require a non-empty exact-origin allowlist and authenticate each message against
+  backend sender provenance. Navigating from a trusted document to another origin MUST revoke access.
+* `TrustEntireView`: permit messages to and from every script capable of using the handler in that view,
+  without treating origin metadata as an authorization result. This mode MUST be an explicit opt-in and
+  MUST NOT be combined with an origin allowlist.
 
-The bridge configuration MUST distinguish:
+`TrustEntireView` is intended only for locked-down local applications that control all documents, frames,
+scripts, assets, and navigation. Applications MUST account for remote navigation, remote or compromised
+iframes, remote script dependencies, mutable local assets, injection vulnerabilities, and CSP failures:
+any such script that can reach the registered handler receives the view's bridge authority.
 
-* Main frame only.
-* All frames.
-* Exact origin.
-* Origin wildcard, discouraged.
-* Local application content.
-* Remote HTTP/HTTPS content.
+Each message event MUST report the source origin where the backend provides trustworthy provenance.
+WebKitGTK 4.1 does not provide that provenance: Linux MUST reject `TrustedOrigins`, MAY support
+`TrustEntireView`, and when it does MUST report the message origin as unavailable rather than substituting
+the current top-level URI. The message-origin capability MUST remain unavailable on that backend.
 
-Each message event MUST report the source origin where available.
-
-Navigating from trusted local content to arbitrary remote content MUST NOT silently preserve privileged bridge access.
+`MaximumMessageSize` and view-teardown gates apply independently of policy. The application MUST still
+validate message shape and authorize individual bridge operations; origin or whole-view trust does not
+make payload data trustworthy.
 
 ## 19.5 RPC layer
 
@@ -2500,6 +2506,7 @@ return NeoApplication.Run(
             new NeoWebViewOptions
             {
                 Profile = profile,
+                BridgePolicy = NeoBridgePolicy.TrustedOrigins,
                 BridgeOrigins = ["app://neowebview"]
             });
 
@@ -3157,8 +3164,10 @@ Deliverables:
 * ABI compatibility tests.
 * Packaging documentation.
 
-The current Phase 5 hardening baseline preserves paired ABI 1.7. Native CTest now separates deterministic
-common tests from contended dispatch/detach and UI-affine final-release stress loops. Managed tests race
+The current Phase 5 hardening baseline uses paired ABI 1.8. ABI 1.8 adds an explicit bridge-policy field
+in the existing view-options layout: zero-initialized callers remain default-denied, `TrustedOrigins`
+requires a non-empty allowlist, and `TrustEntireView` cannot be combined with one. Native CTest separates
+deterministic common tests from contended dispatch/detach and UI-affine final-release stress loops. Managed tests race
 cancellation against native completion and race repeated application disposal against concurrent shutdown.
 `NeoApplication.Shutdown` holds a safe native reference across that race and remains a no-op after disposal.
 
@@ -3173,7 +3182,7 @@ UndefinedBehaviorSanitizer, and to compile the native implementation with Clang'
 Sanitizer instrumentation applies to the tests as well as the shared library. LeakSanitizer is disabled until
 GTK/WebKitGTK process-global allocations have reviewed suppressions. These jobs do not establish sanitizer-clean
 status on macOS, do not execute ThreadSanitizer, and are not claimed as having run on a Windows development
-host. Browser/display conformance, broader browser-object stress, benchmarks, security review, macOS sanitizer
+host. Browser/display conformance, broader browser-object stress, benchmarks, macOS sanitizer
 execution, and selected ThreadSanitizer coverage remain Phase 5 work.
 
 ## Phase 6 — v1 release

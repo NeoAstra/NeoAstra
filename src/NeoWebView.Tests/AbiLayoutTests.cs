@@ -10,9 +10,9 @@ namespace NeoWebView.Tests;
 public sealed class AbiLayoutTests
 {
     [TestMethod]
-    public void GeneratedStructuresMatchNativeAbi17Layout()
+    public void GeneratedStructuresMatchNativeAbi18Layout()
     {
-        Assert.AreEqual(8, IntPtr.Size, "ABI 1.7 is validated for the current 64-bit primary targets.");
+        Assert.AreEqual(8, IntPtr.Size, "ABI 1.8 is validated for the current 64-bit primary targets.");
 
         AssertLayout<NativeMethods.neo_webview_string_view>(16, (nameof(NativeMethods.neo_webview_string_view.length), 8));
         AssertLayout<NativeMethods.neo_webview_struct_header>(8, (nameof(NativeMethods.neo_webview_struct_header.version), 4));
@@ -29,7 +29,9 @@ public sealed class AbiLayoutTests
         AssertLayout<NativeMethods.neo_webview_environment_options>(96, (nameof(NativeMethods.neo_webview_environment_options.custom_scheme_stride), 88));
         AssertLayout<NativeMethods.neo_webview_profile_options>(32, (nameof(NativeMethods.neo_webview_profile_options.ephemeral), 24));
         AssertLayout<NativeMethods.neo_webview_window_options>(80, (nameof(NativeMethods.neo_webview_window_options.background_color), 72));
-        AssertLayout<NativeMethods.neo_webview_view_options>(104, (nameof(NativeMethods.neo_webview_view_options.bridge_origins), 96));
+        AssertLayout<NativeMethods.neo_webview_view_options>(104,
+            (nameof(NativeMethods.neo_webview_view_options.bridge_policy), 92),
+            (nameof(NativeMethods.neo_webview_view_options.bridge_origins), 96));
         AssertLayout<NativeMethods.neo_webview_script_options>(40, (nameof(NativeMethods.neo_webview_script_options.world_name), 24));
         AssertLayout<NativeMethods.neo_webview_decision_response>(80, (nameof(NativeMethods.neo_webview_decision_response.target_view), 64));
         AssertLayout<NativeMethods.neo_webview_download_info>(88, (nameof(NativeMethods.neo_webview_download_info.failure_reason), 72));
@@ -41,7 +43,7 @@ public sealed class AbiLayoutTests
     }
 
     [TestMethod]
-    public void GeneratedEnumsMatchNativeAbi17ValuesAndStorage()
+    public void GeneratedEnumsMatchNativeAbi18ValuesAndStorage()
     {
         AssertEnum<int, NativeMethods.neo_webview_result>(-14, 0);
         AssertEnum<uint, NativeMethods.neo_webview_support_level>(0, 3);
@@ -62,6 +64,7 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neo_webview_log_level>(0, 5);
         AssertEnum<uint, NativeMethods.neo_webview_resource_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neo_webview_resource_body_kind>(0, 2);
+        AssertEnum<uint, NativeMethods.neo_webview_bridge_policy>(0, 2);
     }
 
     [TestMethod]
@@ -72,6 +75,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoApplicationShutdownMode, NativeMethods.neo_webview_app_shutdown_mode>();
         AssertEquivalent<NeoWindowState, NativeMethods.neo_webview_window_state>();
         AssertEquivalent<NeoOptionState, NativeMethods.neo_webview_option_state>();
+        AssertEquivalent<NeoBridgePolicy, NativeMethods.neo_webview_bridge_policy>();
         AssertEquivalent<NeoDecisionAction, NativeMethods.neo_webview_decision_action>();
         AssertEquivalent<NeoScriptDialogKind, NativeMethods.neo_webview_script_dialog_kind>();
         AssertEquivalent<NeoDownloadState, NativeMethods.neo_webview_download_state>();

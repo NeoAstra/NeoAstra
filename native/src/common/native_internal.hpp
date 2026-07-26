@@ -182,10 +182,12 @@ struct neo_custom_scheme_registration final {
     }
 };
 
-inline bool neo_bridge_origin_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
+inline bool neo_bridge_access_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
                                           const std::vector<std::string>& bridge_origins,
-                                          std::string_view uri) noexcept {
+                                          neo_webview_bridge_policy_t policy, std::string_view uri) noexcept {
     (void)custom_schemes;
+    if (policy == NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW) return true;
+    if (policy != NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS) return false;
     for (const auto& origin : bridge_origins) {
         auto normalized_origin = std::string_view(origin);
         while (normalized_origin.size() > 1 && normalized_origin.back() == '/') normalized_origin.remove_suffix(1);
@@ -199,10 +201,10 @@ inline bool neo_bridge_origin_allowed_for(const std::vector<neo_custom_scheme_re
 
 inline bool neo_bridge_message_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
                                            const std::vector<std::string>& bridge_origins,
-                                           uint32_t maximum_message_size, bool destroyed,
+                                           neo_webview_bridge_policy_t policy, uint32_t maximum_message_size, bool destroyed,
                                            std::string_view message, std::string_view uri) noexcept {
     return !destroyed && message.size() <= maximum_message_size &&
-        neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, uri);
+        neo_bridge_access_allowed_for(custom_schemes, bridge_origins, policy, uri);
 }
 
 enum class neo_decision_state : uint32_t { pending, deferred, completed, timed_out, abandoned };
@@ -418,6 +420,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
     std::string source;
     std::string title;
     uint32_t maximum_message_size{1024u * 1024u};
+    neo_webview_bridge_policy_t bridge_policy{NEO_WEBVIEW_BRIDGE_DISABLED};
     std::vector<std::string> bridge_origins;
     neo_callback_slot<neo_webview_event_callback_t> events;
     void* platform{};
@@ -427,7 +430,7 @@ struct neo_webview_view final : neo_ui_ref_counted {
 };
 
 void neo_download_emit(neo_webview_download_t* download, neo_webview_event_type_t type) noexcept;
-bool neo_bridge_origin_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept;
+bool neo_bridge_access_allowed(const neo_webview_view_t* view, std::string_view uri) noexcept;
 bool neo_emit_bridge_message(neo_webview_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept;
 
 struct neo_webview_download final : neo_ui_ref_counted {

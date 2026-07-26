@@ -36,11 +36,8 @@ internal static class Program
                 {
                     CustomSchemes = [NeoCustomScheme.Application("app", assets)],
                 });
-                var viewOptions = new NeoWebViewOptions();
-                if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
-                {
-                    viewOptions.BridgeOrigins = ["app://neowebview"];
-                }
+                // Safe here only because this sample loads controlled local assets with no remote dependencies.
+                var viewOptions = new NeoWebViewOptions { BridgePolicy = NeoBridgePolicy.TrustEntireView };
                 await using var webView = await environment.CreateWebViewAsync(NeoWebViewHost.FillWindow(window), viewOptions);
                 webView.NavigationCompleted += (_, navigation) =>
                     Console.WriteLine($"Navigation to {navigation.Uri} succeeded: {navigation.IsSuccess}");

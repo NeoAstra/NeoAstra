@@ -535,11 +535,37 @@ void test_native_parent_structure() {
     const std::string malformed_origin = "https:";
     const auto malformed_origin_view = neo_string_view(malformed_origin);
     options.parent.version = 1;
+    options.bridge_policy = NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS;
     options.bridge_origin_count = 1;
     options.bridge_origins = &malformed_origin_view;
     error = nullptr;
     assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
     assert(error != nullptr);
+    neo_webview_error_release(error);
+
+    const std::string valid_origin = "https://trusted.example";
+    const auto valid_origin_view = neo_string_view(valid_origin);
+    options.bridge_origins = &valid_origin_view;
+    options.bridge_policy = NEO_WEBVIEW_BRIDGE_DISABLED;
+    error = nullptr;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    neo_webview_error_release(error);
+
+    options.bridge_policy = NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW;
+    error = nullptr;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    neo_webview_error_release(error);
+
+    options.bridge_policy = NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS;
+    options.bridge_origin_count = 0;
+    options.bridge_origins = nullptr;
+    error = nullptr;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
+    neo_webview_error_release(error);
+
+    options.bridge_policy = static_cast<neo_webview_bridge_policy_t>(3);
+    error = nullptr;
+    assert(neo_webview_environment_create_view_async(environment, &options, ignore_view, nullptr, nullptr, &error) == NEO_WEBVIEW_ERROR_INVALID_ARGUMENT);
     neo_webview_error_release(error);
 }
 
@@ -715,19 +741,24 @@ void test_bridge_origin_trust() {
     custom_schemes.push_back(std::move(application_scheme));
     const std::vector<std::string> bridge_origins={"https://trusted.example", "custom://host/", "app://neowebview"};
 
-    assert(!neo_bridge_origin_allowed_for(custom_schemes, {}, "app://neowebview/index.html"));
-    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "app://neowebview/index.html"));
-    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "APP://NEOWEBVIEW/index.html"));
-    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example/path?q=1"));
-    assert(neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "CUSTOM://HOST/resource"));
-    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "assets://neowebview/index.html"));
-    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "app://other-host/index.html"));
-    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://trusted.example.evil/path"));
-    assert(!neo_bridge_origin_allowed_for(custom_schemes, bridge_origins, "https://untrusted.example/"));
-    assert(neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "1234", "app://neowebview"));
-    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "12345", "app://neowebview"));
-    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, true, "1", "app://neowebview"));
-    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, 4, false, "1", "app://other-host"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_DISABLED, "app://neowebview/index.html"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, {}, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "app://neowebview/index.html"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "app://neowebview/index.html"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "APP://NEOWEBVIEW/index.html"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "https://trusted.example/path?q=1"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "CUSTOM://HOST/resource"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "assets://neowebview/index.html"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "app://other-host/index.html"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "https://trusted.example.evil/path"));
+    assert(!neo_bridge_access_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, "https://untrusted.example/"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, {}, NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW, "https://untrusted.example/"));
+    assert(neo_bridge_access_allowed_for(custom_schemes, {}, NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW, ""));
+    assert(neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, 4, false, "1234", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, 4, false, "12345", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, 4, true, "1", "app://neowebview"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS, 4, false, "1", "app://other-host"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEO_WEBVIEW_BRIDGE_DISABLED, 4, false, "1", "app://neowebview"));
+    assert(neo_bridge_message_allowed_for(custom_schemes, {}, NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW, 4, false, "1", ""));
 }
 
 } // namespace

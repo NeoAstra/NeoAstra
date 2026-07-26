@@ -81,6 +81,40 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void BridgePolicy_RejectsAmbiguousOrUnsafeConfiguration()
+    {
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoWebViewOptions { BridgePolicy = NeoBridgePolicy.TrustedOrigins }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoWebViewOptions { BridgeOrigins = ["https://trusted.example"] }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoWebViewOptions
+            {
+                BridgePolicy = NeoBridgePolicy.TrustedOrigins,
+                BridgeOrigins = ["https://trusted.example/path"],
+            }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoWebViewOptions
+            {
+                BridgePolicy = NeoBridgePolicy.TrustEntireView,
+                BridgeOrigins = ["https://trusted.example"],
+            }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoWebViewOptions { BridgePolicy = (NeoBridgePolicy)int.MaxValue }.Validate(null!));
+    }
+
+    [TestMethod]
+    public void BridgePolicy_DefaultsToDisabledAndTrustEntireViewNeedsNoOrigins()
+    {
+        var defaults = new NeoWebViewOptions();
+        Assert.AreEqual(NeoBridgePolicy.Disabled, defaults.BridgePolicy);
+        Assert.HasCount(0, defaults.BridgeOrigins);
+        defaults.Validate(null!);
+
+        new NeoWebViewOptions { BridgePolicy = NeoBridgePolicy.TrustEntireView }.Validate(null!);
+    }
+
+    [TestMethod]
     public void CustomScheme_ApplicationDefaultsAndResponseShapesMatchPortableContract()
     {
         var provider = new NullResourceProvider();
@@ -137,7 +171,9 @@ public sealed class ManagedApiTests
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_finish_with_response");
         StringAssert.Contains(gtk, "native_headers.release()");
         StringAssert.Contains(gtk, "neo_resource_response_release_guard");
+        StringAssert.Contains(gtk, "const std::string origin;neo_emit_bridge_message(view,message,origin,false)");
         StringAssert.Contains(gtk, "neo_emit_bridge_message(view,message,origin,false)");
+        StringAssert.Contains(gtk, "view->bridge_policy==NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS");
         StringAssert.Contains(windows, "neo_valid_resource_response(response)");
         StringAssert.Contains(windows, "neo_emit_bridge_message(view, message_utf8, source_utf8, true)");
         StringAssert.Contains(windows, "WebView2 web-message handling failed");
@@ -611,7 +647,12 @@ public sealed class ManagedApiTests
                     await using var profile = await environment.CreateProfileAsync(new NeoProfileOptions { Name = "smoke-profile", IsEphemeral = true });
                     await using var webView = await environment.CreateWebViewAsync(
                         NeoWebViewHost.FillWindow(window),
-                        new NeoWebViewOptions { Profile = profile, BridgeOrigins = ["app://neowebview"] });
+                        new NeoWebViewOptions
+                        {
+                            Profile = profile,
+                            BridgePolicy = NeoBridgePolicy.TrustedOrigins,
+                            BridgeOrigins = ["app://neowebview"],
+                        });
                     webView.ZoomFactor = 1.25;
                     Assert.AreEqual(1.25, webView.ZoomFactor, 0.001);
                     webView.ResetZoom();

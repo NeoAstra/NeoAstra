@@ -55,7 +55,7 @@ return NeoApplication.Run(
 
 NeoWebView application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
-Register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based and marked secure. Bridge access is separate and default-denied: explicitly trust the one application origin that needs it rather than every host under the scheme:
+Register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based and marked secure. Bridge access is separate and default-denied. For a cross-platform, locked-down local view, explicitly opt into whole-view trust only when every document, frame, script, asset, and navigation is controlled:
 
 ```csharp
 var assets = new NeoDirectoryResourceProvider(Path.Combine(AppContext.BaseDirectory, "assets"));
@@ -63,9 +63,10 @@ await using var environment = await app.CreateEnvironmentAsync(new NeoEnvironmen
 {
     CustomSchemes = [NeoCustomScheme.Application("app", assets)],
 });
-var viewOptions = new NeoWebViewOptions();
-if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
-    viewOptions.BridgeOrigins = ["app://neowebview"];
+var viewOptions = new NeoWebViewOptions
+{
+    BridgePolicy = NeoBridgePolicy.TrustEntireView,
+};
 await using var webView = await environment.CreateWebViewAsync(
     NeoWebViewHost.FillWindow(window),
     viewOptions);
@@ -74,7 +75,9 @@ await webView.NavigateAsync(new Uri("app://neowebview/index.html"));
 
 Custom resource-provider callbacks currently remain synchronous on all three backends: WebView2 requests its response synchronously, WKWebView completes the scheme task directly from `startURLSchemeTask`, and WebKitGTK completes `WebKitURISchemeRequest` from its registered callback. Return `null` for a standard `404`, use `NeoResourceResponse.FromBytes` for generated content up to the 64 MiB buffered-body limit, or `NeoResourceResponse.FromFile`/`NeoDirectoryResourceProvider` to avoid copying larger local files into managed memory. Windows uses a native file stream, macOS uses native `NSData` with mapped-if-safe file access, and Linux opens a `GFileInputStream`; byte responses are copied into backend-owned memory before the managed response lease is released. Provider exceptions are contained at the ABI boundary and the request fails rather than unwinding into native code.
 
-WebKitGTK exposes URI, method, headers, and a synchronously buffered request body (limited to 64 MiB), but not trustworthy initiating-origin, frame, or resource-kind metadata for these requests; those fields are reported as unknown. Linux honors secure and CORS-enabled scheme flags, but has no equivalent authority or per-origin CORS registration switches and rejects service-worker descriptors, so custom-scheme capability is reported as limited. WebKitGTK 4.1 script-message callbacks also omit trustworthy source-origin data. NeoWebView therefore does not infer trust from the current top-level URI: its Linux message bridge is default-denied, explicit `BridgeOrigins` remain unsupported, and message-origin capability is unavailable.
+`TrustEntireView` trusts every script that can reach the registered handler. Remote navigation, iframes, remote script dependencies, mutable assets, injection flaws, or an ineffective CSP can therefore expose bridge authority. On Windows and macOS, applications that permit navigation outside fully controlled content should instead set `BridgePolicy = NeoBridgePolicy.TrustedOrigins` with a non-empty exact `BridgeOrigins` allowlist. An empty list never means allow-all.
+
+WebKitGTK exposes URI, method, headers, and a synchronously buffered request body (limited to 64 MiB), but not trustworthy initiating-origin, frame, or resource-kind metadata for these requests; those fields are reported as unknown. Linux honors secure and CORS-enabled scheme flags, but has no equivalent authority or per-origin CORS registration switches and rejects service-worker descriptors, so custom-scheme capability is reported as limited. WebKitGTK 4.1 script-message callbacks also omit trustworthy source-origin data. NeoWebView therefore does not infer trust from the current top-level URI: `TrustedOrigins` is rejected on Linux, `TrustEntireView` delivers messages with `SourceOrigin == null`, and message-origin capability remains unavailable.
 
 See [the security and resource-limit review](doc/security-review.md) for the verified controls, trust assumptions, and backend limitations.
 

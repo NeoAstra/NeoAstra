@@ -64,7 +64,8 @@ static_assert(NEO_WEBVIEW_LOG_CRITICAL == 5);
 static_assert((NEO_WEBVIEW_PROCESS_FAILURE_KIND_MASK & NEO_WEBVIEW_PROCESS_FAILURE_CRASHED) == 0);
 static_assert(NEO_WEBVIEW_RESOURCE_MANIFEST == 12);
 static_assert(NEO_WEBVIEW_RESOURCE_BODY_FILE == 2);
-static_assert(sizeof(void*) == 8, "ABI 1.7 targets the current 64-bit primary platforms");
+static_assert(NEO_WEBVIEW_BRIDGE_DISABLED == 0 && NEO_WEBVIEW_BRIDGE_TRUSTED_ORIGINS == 1 && NEO_WEBVIEW_BRIDGE_TRUST_ENTIRE_VIEW == 2);
+static_assert(sizeof(void*) == 8, "ABI 1.8 targets the current 64-bit primary platforms");
 static_assert(sizeof(neo_webview_struct_header_t) == 8);
 static_assert(sizeof(neo_webview_string_view_t) == 16);
 static_assert(sizeof(neo_webview_point_t) == 8);
@@ -80,7 +81,7 @@ static_assert(sizeof(neo_webview_app_options_t) == 56 && offsetof(neo_webview_ap
 static_assert(sizeof(neo_webview_environment_options_t) == 96 && offsetof(neo_webview_environment_options_t, custom_scheme_stride) == 88);
 static_assert(sizeof(neo_webview_profile_options_t) == 32 && offsetof(neo_webview_profile_options_t, ephemeral) == 24);
 static_assert(sizeof(neo_webview_window_options_t) == 80 && offsetof(neo_webview_window_options_t, background_color) == 72);
-static_assert(sizeof(neo_webview_view_options_t) == 104 && offsetof(neo_webview_view_options_t, bridge_origins) == 96);
+static_assert(sizeof(neo_webview_view_options_t) == 104 && offsetof(neo_webview_view_options_t, bridge_policy) == 92 && offsetof(neo_webview_view_options_t, bridge_origins) == 96);
 static_assert(sizeof(neo_webview_script_options_t) == 40 && offsetof(neo_webview_script_options_t, world_name) == 24);
 static_assert(sizeof(neo_webview_decision_response_t) == 80 && offsetof(neo_webview_decision_response_t, target_view) == 64);
 static_assert(sizeof(neo_webview_download_info_t) == 88 && offsetof(neo_webview_download_info_t, failure_reason) == 72);

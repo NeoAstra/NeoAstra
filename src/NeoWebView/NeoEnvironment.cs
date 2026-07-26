@@ -140,6 +140,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
             popup_request = new NativeMethods.neo_webview_decision_t(popupRequest),
             bridge_origin_count = bridgeOrigins.Count,
+            bridge_policy = (NativeMethods.neo_webview_bridge_policy)options.BridgePolicy,
             bridge_origins = bridgeOrigins.Views,
         };
         var nativeOptions = new NativeMethods.neo_webview_view_options_t(raw);

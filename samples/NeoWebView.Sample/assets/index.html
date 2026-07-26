@@ -15,11 +15,16 @@
   <button id="send" type="button">Send another message to C#</button>
   <code id="received">Waiting for C#…</code>
   <script>
-    const bridge = window.chrome.webview;
+    const bridge = window.chrome?.webview ?? window.webkit?.messageHandlers?.neowebview;
     window.neoWebView = { postMessage: value => bridge.postMessage(value) };
-    bridge.addEventListener('message', event => {
-      document.querySelector('#received').textContent = JSON.stringify(event.data, null, 2);
-    });
+    const receive = value => {
+      document.querySelector('#received').textContent = JSON.stringify(value, null, 2);
+    };
+    if (window.chrome?.webview) {
+      bridge.addEventListener('message', event => receive(event.data));
+    } else {
+      window.addEventListener('neowebviewmessage', event => receive(event.detail));
+    }
     const send = () => window.neoWebView.postMessage({ from: 'JavaScript', message: 'Hello from app://neowebview' });
     document.querySelector('#send').addEventListener('click', send);
     send();

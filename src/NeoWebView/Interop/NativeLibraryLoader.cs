@@ -10,7 +10,7 @@ namespace NeoWebView.Interop;
 internal static class NativeLibraryLoader
 {
     private const uint ExpectedAbiMajor = 1;
-    private const uint ExpectedAbiMinor = 7;
+    private const uint ExpectedAbiMinor = 8;
     private static readonly object Sync = new();
     private static readonly List<string> AttemptedPaths = [];
     private static nint _loadedHandle;
