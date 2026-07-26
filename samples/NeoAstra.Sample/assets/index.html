@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeoAstra local application</title>
+  <style>
+    body { color-scheme: light dark; font: 16px system-ui; margin: 3rem; }
+    code { display: block; margin-top: 1rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>NeoAstra local application</h1>
+  <p>This page is served from <strong>app://neoastra</strong>, without localhost.</p>
+  <button id="send" type="button">Send another message to C#</button>
+  <code id="received">Waiting for C#…</code>
+  <script>
+    const bridge = window.chrome?.webview ?? window.webkit?.messageHandlers?.neoastra;
+    window.neoAstra = { postMessage: value => bridge.postMessage(value) };
+    const receive = value => {
+      document.querySelector('#received').textContent = JSON.stringify(value, null, 2);
+    };
+    if (window.chrome?.webview) {
+      bridge.addEventListener('message', event => receive(event.data));
+    } else {
+      window.addEventListener('neoastramessage', event => receive(event.detail));
+    }
+    const send = () => window.neoAstra.postMessage({ from: 'JavaScript', message: 'Hello from app://neoastra' });
+    document.querySelector('#send').addEventListener('click', send);
+    send();
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble and verify NeoWebView release-readiness artifacts."""
+"""Assemble and verify NeoAstra release-readiness artifacts."""
 
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORTED_RIDS = {
-    "win-x64": "neowebview_native.dll",
-    "win-arm64": "neowebview_native.dll",
-    "osx-x64": "libneowebview_native.dylib",
-    "osx-arm64": "libneowebview_native.dylib",
-    "linux-x64": "libneowebview_native.so",
-    "linux-arm64": "libneowebview_native.so",
+    "win-x64": "neoastra_native.dll",
+    "win-arm64": "neoastra_native.dll",
+    "osx-x64": "libneoastra_native.dylib",
+    "osx-arm64": "libneoastra_native.dylib",
+    "linux-x64": "libneoastra_native.so",
+    "linux-arm64": "libneoastra_native.so",
 }
-HEADER = ROOT / "native" / "include" / "neowebview.h"
-VERSION_HEADER = ROOT / "native" / "include" / "neowebview_version.h"
+HEADER = ROOT / "native" / "include" / "neoastra.h"
+VERSION_HEADER = ROOT / "native" / "include" / "neoastra_version.h"
 FROZEN_EXPORTS = ROOT / "native" / "tests" / "abi_1_7_exports.inc"
 
 
@@ -66,26 +66,26 @@ def run(arguments: list[str]) -> None:
 def parse_header_exports(text: str) -> set[str]:
     exports = set(
         re.findall(
-            r"NEO_WEBVIEW_API\s+[^;#]*?\b(neo_webview_[a-z0-9_]+)\s*\(",
+            r"NEOASTRA_API\s+[^;#]*?\b(neoastra_[a-z0-9_]+)\s*\(",
             text,
             flags=re.IGNORECASE,
         )
     )
-    lifetime_types = re.findall(r"NEO_WEBVIEW_DECLARE_LIFETIME\(([a-z0-9_]+)\)\s*;", text)
+    lifetime_types = re.findall(r"NEOASTRA_DECLARE_LIFETIME\(([a-z0-9_]+)\)\s*;", text)
     for lifetime_type in lifetime_types:
-        exports.add(f"neo_webview_{lifetime_type}_retain")
-        exports.add(f"neo_webview_{lifetime_type}_release")
+        exports.add(f"neoastra_{lifetime_type}_retain")
+        exports.add(f"neoastra_{lifetime_type}_release")
     return exports
 
 
 def parse_frozen_exports(text: str) -> set[str]:
-    return set(re.findall(r"^\s*NEO_ABI_1_7_EXPORT\((neo_webview_[a-z0-9_]+)\)", text, re.MULTILINE))
+    return set(re.findall(r"^\s*NEO_ABI_1_7_EXPORT\((neoastra_[a-z0-9_]+)\)", text, re.MULTILINE))
 
 
 def parse_version(text: str) -> dict[str, int]:
     version: dict[str, int] = {}
     for component in ("MAJOR", "MINOR"):
-        match = re.search(rf"^#define NEO_WEBVIEW_ABI_VERSION_{component}\s+(\d+)\s*$", text, re.MULTILINE)
+        match = re.search(rf"^#define NEOASTRA_ABI_VERSION_{component}\s+(\d+)\s*$", text, re.MULTILINE)
         if match is None:
             raise ValueError(f"ABI {component.lower()} version was not found in {VERSION_HEADER}")
         version[component.lower()] = int(match.group(1))
@@ -97,25 +97,25 @@ def inspect_binary_exports(rid: str, binary: Path) -> tuple[set[str], str]:
         llvm_readobj = shutil.which("llvm-readobj")
         if llvm_readobj:
             output = run_capture([llvm_readobj, "--coff-exports", str(binary)])
-            exports = set(re.findall(r"^\s*Name:\s+(neo_webview_[a-z0-9_]+)\s*$", output, re.MULTILINE))
+            exports = set(re.findall(r"^\s*Name:\s+(neoastra_[a-z0-9_]+)\s*$", output, re.MULTILINE))
             tool = "llvm-readobj --coff-exports"
         else:
             dumpbin = find_tool("dumpbin")
             output = run_capture([dumpbin, "/nologo", "/exports", str(binary)])
-            exports = set(re.findall(r"\b(neo_webview_[a-z0-9_]+)\b", output))
+            exports = set(re.findall(r"\b(neoastra_[a-z0-9_]+)\b", output))
             tool = "dumpbin /exports"
     elif rid.startswith("osx-"):
         nm = find_tool("nm")
         output = run_capture([nm, "-gU", str(binary)])
-        exports = {name.removeprefix("_") for name in re.findall(r"\b_?(neo_webview_[a-z0-9_]+)\s*$", output, re.MULTILINE)}
+        exports = {name.removeprefix("_") for name in re.findall(r"\b_?(neoastra_[a-z0-9_]+)\s*$", output, re.MULTILINE)}
         tool = "nm -gU"
     else:
         nm = find_tool("llvm-nm", "nm")
         output = run_capture([nm, "-D", "--defined-only", str(binary)])
-        exports = set(re.findall(r"\b(neo_webview_[a-z0-9_]+)(?:@@?\S+)?\s*$", output, re.MULTILINE))
+        exports = set(re.findall(r"\b(neoastra_[a-z0-9_]+)(?:@@?\S+)?\s*$", output, re.MULTILINE))
         tool = f"{Path(nm).name} -D --defined-only"
     if not exports:
-        raise RuntimeError(f"Export inspection found no neo_webview_ symbols in {binary} using {tool}")
+        raise RuntimeError(f"Export inspection found no neoastra_ symbols in {binary} using {tool}")
     return exports, tool
 
 

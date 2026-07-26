@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, test, and stage one NeoWebView native RID."""
+"""Build, test, and stage one NeoAstra native RID."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RIDS = {
-    "win-x64": ("windows-x64-release", "neowebview_native.dll"),
-    "win-arm64": ("windows-arm64-release", "neowebview_native.dll"),
-    "osx-x64": ("macos-x64-release", "libneowebview_native.dylib"),
-    "osx-arm64": ("macos-arm64-release", "libneowebview_native.dylib"),
-    "linux-x64": ("linux-x64-release", "libneowebview_native.so"),
-    "linux-arm64": ("linux-arm64-release", "libneowebview_native.so"),
+    "win-x64": ("windows-x64-release", "neoastra_native.dll"),
+    "win-arm64": ("windows-arm64-release", "neoastra_native.dll"),
+    "osx-x64": ("macos-x64-release", "libneoastra_native.dylib"),
+    "osx-arm64": ("macos-arm64-release", "libneoastra_native.dylib"),
+    "linux-x64": ("linux-x64-release", "libneoastra_native.so"),
+    "linux-arm64": ("linux-arm64-release", "libneoastra_native.so"),
 }
 
 
@@ -44,7 +44,7 @@ def initialize_windows_toolchain(rid: str) -> None:
     developer_command = Path(installation) / "Common7" / "Tools" / "VsDevCmd.bat"
     architecture = "arm64" if rid == "win-arm64" else "x64"
     with tempfile.TemporaryDirectory() as temporary_directory:
-        script = Path(temporary_directory) / "neowebview-vsdevcmd.cmd"
+        script = Path(temporary_directory) / "neoastra-vsdevcmd.cmd"
         script.write_text(
             f'@call "{developer_command}" -no_logo -host_arch=x64 -arch={architecture} >nul\n@set\n',
             encoding="utf-8",
@@ -66,7 +66,7 @@ def main() -> int:
     preset, library_name = RIDS[args.rid]
     initialize_windows_toolchain(args.rid)
     build_directory = ROOT / "artifacts" / "native" / args.rid
-    runtime_directory = ROOT / "src" / "NeoWebView" / "runtimes" / args.rid / "native"
+    runtime_directory = ROOT / "src" / "NeoAstra" / "runtimes" / args.rid / "native"
     if args.clean:
         shutil.rmtree(build_directory, ignore_errors=True)
 

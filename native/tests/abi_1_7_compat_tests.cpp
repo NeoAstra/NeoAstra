@@ -1,4 +1,4 @@
-// This fixture deliberately does not include neowebview.h. It models an ABI 1.7
+// This fixture deliberately does not include neoastra.h. It models an ABI 1.7
 // consumer so later header edits cannot silently update the compatibility test.
 #ifdef NDEBUG
 #undef NDEBUG
@@ -126,13 +126,13 @@ int main(int argc, char** argv) {
     using app_detach = int32_t (NEO_ABI_1_7_CALL *)(abi_1_7::app*, abi_1_7::error**);
     using app_release = void (NEO_ABI_1_7_CALL *)(abi_1_7::app*);
 
-    const auto major = library.load<get_version_number>("neo_webview_get_abi_version_major");
-    const auto minor = library.load<get_version_number>("neo_webview_get_abi_version_minor");
-    const auto version = library.load<get_version>("neo_webview_get_version");
-    const auto runtime = library.load<get_runtime_info>("neo_webview_get_runtime_info");
-    const auto attach = library.load<app_attach>("neo_webview_app_attach");
-    const auto detach = library.load<app_detach>("neo_webview_app_detach");
-    const auto release = library.load<app_release>("neo_webview_app_release");
+    const auto major = library.load<get_version_number>("neoastra_get_abi_version_major");
+    const auto minor = library.load<get_version_number>("neoastra_get_abi_version_minor");
+    const auto version = library.load<get_version>("neoastra_get_version");
+    const auto runtime = library.load<get_runtime_info>("neoastra_get_runtime_info");
+    const auto attach = library.load<app_attach>("neoastra_app_attach");
+    const auto detach = library.load<app_detach>("neoastra_app_detach");
+    const auto release = library.load<app_release>("neoastra_app_release");
     assert(major && minor && version && runtime && attach && detach && release);
 
     assert(major() == 1);
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
     abi_1_7::app_options options{};
     options.size = sizeof(options);
     options.version = 1;
-    options.shutdown_mode = 0; // NEO_WEBVIEW_APP_SHUTDOWN_EXPLICIT
+    options.shutdown_mode = 0; // NEOASTRA_APP_SHUTDOWN_EXPLICIT
     abi_1_7::app* application{};
     assert(attach(&options, &application, &error) == 0);
     assert(application != nullptr && error == nullptr);

@@ -1,16 +1,16 @@
 # Third-party notices
 
-This file applies to NeoWebView release artifacts built from this repository. NeoWebView itself is
+This file applies to NeoAstra release artifacts built from this repository. NeoAstra itself is
 licensed under the BSD-2-Clause license in `license.txt`.
 
 The Windows native backend is built with Microsoft.Web.WebView2 SDK version 1.0.4078.44 and statically
-links its `WebView2LoaderStatic.lib` into `neowebview_native.dll`. The WebView2 browser runtime is an
-external system/runtime dependency and is not distributed by NeoWebView.
+links its `WebView2LoaderStatic.lib` into `neoastra_native.dll`. The WebView2 browser runtime is an
+external system/runtime dependency and is not distributed by NeoAstra.
 
 The macOS system frameworks (Cocoa, Security, and WebKit) and the Linux GTK 3, WebKitGTK 4.1,
 libsoup 3, and GLib runtime libraries are external platform dependencies and are not copied into
-NeoWebView release artifacts. Build-only and test-only .NET packages are not included in the
-NeoWebView runtime package.
+NeoAstra release artifacts. Build-only and test-only .NET packages are not included in the
+NeoAstra runtime package.
 
 The following license and notice text is reproduced from the pinned Microsoft.Web.WebView2 package.
 

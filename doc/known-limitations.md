@@ -1,6 +1,6 @@
 # Known limitations
 
-NeoWebView is pre-release software. Public APIs, the native ABI, packaging, and platform behavior may
+NeoAstra is pre-release software. Public APIs, the native ABI, packaging, and platform behavior may
 still change before v1. The [platform support page](platform-support.md) separates intended support,
 implemented source, configured workflow coverage, and actual runtime validation.
 
@@ -58,11 +58,11 @@ unbounded asynchronous deferral.
 
 ## Runtime and lifecycle constraints
 
-- NeoWebView does not bundle WebView2, WKWebView, WebKitGTK, GTK, or a .NET runtime. Missing or
+- NeoAstra does not bundle WebView2, WKWebView, WebKitGTK, GTK, or a .NET runtime. Missing or
   incompatible platform libraries can prevent the native library or browser backend from loading;
   install the dependencies described in [platform support](platform-support.md).
 - Application and browser operations begin on the platform UI thread. An attached host must continue
-  pumping that thread through asynchronous disposal; NeoWebView will not tear down COM, Cocoa, or GTK
+  pumping that thread through asynchronous disposal; NeoAstra will not tear down COM, Cocoa, or GTK
   objects on the wrong thread after the host loop has stopped.
 - Linux requires a working X11 or Wayland display. A headless build, native unit test, or NativeAOT
   publish does not prove that a WebKitGTK view can be created.
@@ -72,7 +72,7 @@ unbounded asynchronous deferral.
 
 ## Portable behavior is intentionally bounded
 
-NeoWebView does not provide portable arbitrary HTTP/HTTPS subresource replacement, Chrome DevTools
+NeoAstra does not provide portable arbitrary HTTP/HTTPS subresource replacement, Chrome DevTools
 Protocol support, offscreen rendering, mobile support, a DOM API, automatic updates, or a general
 native widget framework. Native menus, tray icons, notifications, and installer generation are
 outside the initial core scope.

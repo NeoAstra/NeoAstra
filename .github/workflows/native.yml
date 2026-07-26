@@ -105,7 +105,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.rid }}
-          path: src/NeoWebView/runtimes/${{ matrix.rid }}/native/*
+          path: src/NeoAstra/runtimes/${{ matrix.rid }}/native/*
           if-no-files-found: error
       - name: Upload native release-readiness evidence
         uses: actions/upload-artifact@v4

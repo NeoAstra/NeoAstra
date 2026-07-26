@@ -25,8 +25,8 @@ class ReleaseReadinessTests(unittest.TestCase):
 
         self.assertTrue(frozen_exports)
         self.assertTrue(frozen_exports <= header_exports)
-        self.assertIn("neo_webview_app_retain", header_exports)
-        self.assertIn("neo_webview_stream_release", header_exports)
+        self.assertIn("neoastra_app_retain", header_exports)
+        self.assertIn("neoastra_stream_release", header_exports)
 
     def test_version_is_read_from_public_version_header(self) -> None:
         version = release_readiness.parse_version(
@@ -76,9 +76,9 @@ class ReleaseReadinessTests(unittest.TestCase):
                     "--rid",
                     "win-x64",
                     "--binary",
-                    str(directory / "neowebview_native.dll"),
+                    str(directory / "neoastra_native.dll"),
                     "--runtime-binary",
-                    str(directory / "runtime" / "neowebview_native.dll"),
+                    str(directory / "runtime" / "neoastra_native.dll"),
                     "--output",
                     str(directory / "readiness"),
                 ],

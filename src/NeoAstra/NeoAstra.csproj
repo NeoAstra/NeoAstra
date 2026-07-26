@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+
+    <!-- Enable AOT analyzers -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Description>Build native desktop apps with web technologies.</Description>
+    <Copyright>Alexandre Mutel</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <Authors>Alexandre Mutel</Authors>
+    <PackageTags>webview;webapp</PackageTags>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageIcon>NeoAstra.png</PackageIcon>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageProjectUrl>https://github.com/xoofx/NeoAstra</PackageProjectUrl>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <!-- The .NET 10 SDK supplies the Git/GitHub Source Link targets. -->
+    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/platform-support.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/known-limitations.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra.h" Pack="true" PackagePath="build/native/include/" />
+    <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra_version.h" Pack="true" PackagePath="build/native/include/" />
+    <None Update="runtimes/**/*" Pack="true" PackagePath="%(Identity)" />
+    <!-- Keep the host native library beside development outputs while packing every downloaded RID asset. -->
+    <None Update="runtimes/$(NETCoreSdkPortableRuntimeIdentifier)/native/*"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

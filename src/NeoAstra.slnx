@@ -1,0 +1,24 @@
+<Solution>
+  <Folder Name="/doc/">
+    <File Path="../doc/readme.md" />
+  </Folder>
+  <Folder Name="/general/">
+    <File Path="../.editorconfig" />
+    <File Path="../.gitattributes" />
+    <File Path="../.github/workflows/ci.yml" />
+    <File Path="../.gitignore" />
+    <File Path="../AGENTS.md" />
+    <File Path="../license.txt" />
+    <File Path="../readme.md" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="dotnet-releaser.toml" />
+    <File Path="global.json" />
+  </Folder>
+  <Project Path="NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj" />
+  <Project Path="NeoAstra.Conformance/NeoAstra.Conformance.csproj" />
+  <Project Path="NeoAstra.Tests/NeoAstra.Tests.csproj" />
+  <Project Path="NeoAstra.CodeGen/NeoAstra.CodeGen.csproj" />
+  <Project Path="NeoAstra/NeoAstra.csproj" />
+  <Project Path="../samples/NeoAstra.Sample/NeoAstra.Sample.csproj" />
+</Solution>

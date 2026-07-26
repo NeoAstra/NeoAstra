@@ -1,6 +1,6 @@
 # Platforms and runtime dependencies
 
-NeoWebView is pre-release software. The platforms below are the intended v1 support targets, not a
+NeoAstra is pre-release software. The platforms below are the intended v1 support targets, not a
 claim that every target has passed release-level runtime validation. In this document:
 
 - **Implemented** means a native backend and RID packaging path exist in source.
@@ -22,8 +22,8 @@ claim that every target has passed release-level runtime validation. In this doc
 | Linux using musl | x64 or ARM64 | WebKitGTK | Not a v1 target | Unsupported. No musl RID assets, compatible dependency baseline, or musl runtime CI are present. |
 
 Thirty-two-bit architectures and RIDs other than those listed above are not supported. The NuGet
-project targets .NET 10 and is configured to pack one managed `NeoWebView.dll` plus the matching
-`neowebview_native` asset for the six listed RIDs. The packaging workflow assembles all six native
+project targets .NET 10 and is configured to pack one managed `NeoAstra.dll` plus the matching
+`neoastra_native` asset for the six listed RIDs. The packaging workflow assembles all six native
 assets; a workflow definition alone is not a release-validation record.
 
 ## Runtime requirements
@@ -31,7 +31,7 @@ assets; a workflow definition alone is not a release-validation record.
 All platforms require:
 
 - A .NET 10 runtime, unless the application is published self-contained or with NativeAOT.
-- A NeoWebView native asset matching the operating system and process architecture. Managed and
+- A NeoAstra native asset matching the operating system and process architecture. Managed and
   native assets are a paired release unit; the loader rejects an ABI major or minor mismatch.
 - A graphical desktop session and use of the platform UI thread. Headless build success does not
   establish that a browser view can be created.
@@ -40,14 +40,14 @@ All platforms require:
 
 - Windows 10 or Windows 11 on x64 or ARM64 is the v1 target.
 - The Microsoft Edge WebView2 Runtime must be installed for the process architecture, or the host
-  must explicitly provide a compatible fixed-version runtime path through NeoWebView environment
+  must explicitly provide a compatible fixed-version runtime path through NeoAstra environment
   options.
-- NeoWebView uses the statically linked WebView2 loader, but it does **not** bundle the WebView2
+- NeoAstra uses the statically linked WebView2 loader, but it does **not** bundle the WebView2
   browser runtime or another Chromium distribution.
 
 ### macOS
 
-- A system-provided Cocoa and WebKit/WKWebView implementation is required; NeoWebView does not
+- A system-provided Cocoa and WebKit/WKWebView implementation is required; NeoAstra does not
   bundle a browser engine.
 - Both x64 and ARM64 native assets are implemented. The repository does not yet declare a minimum
   supported macOS release, so a distributable application must set and validate its own deployment

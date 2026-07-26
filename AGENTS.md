@@ -1,4 +1,4 @@
-# NeoWebView — Codex Agent Instructions
+# NeoAstra — Codex Agent Instructions
 
 Build native desktop apps with web technologies..
 
@@ -8,8 +8,8 @@ Paths/commands below are relative to this directory.
 
 ## Orientation
 
-- Library: `src/NeoWebView/`
-- Tests: `src/NeoWebView.Tests/` (MSTest)
+- Library: `src/NeoAstra/`
+- Tests: `src/NeoAstra.Tests/` (MSTest)
 - Docs to keep in sync with behavior: `readme.md` and the docs under `doc/` (e.g., `doc/**/*.md`)
 
 ## Build & Test

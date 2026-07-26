@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $SymbolPackage -PathType Leaf)) {
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.Reflection.Metadata
 
-$pdbEntryName = 'lib/net10.0/NeoWebView.pdb'
+$pdbEntryName = 'lib/net10.0/NeoAstra.pdb'
 $sourceLinkKind = [Guid] 'cc110556-a091-4d38-9fec-25ab9a351a6a'
 $expectedUrl = "https://raw.githubusercontent.com/$Repository/$($Commit.ToLowerInvariant())/*"
 $archive = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $SymbolPackage))
