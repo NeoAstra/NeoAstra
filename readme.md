@@ -86,6 +86,8 @@ See [the security and resource-limit review](doc/security-review.md) for the ver
 See [the portable frontend transport and migration guide](doc/frontend-transport.md) before enabling
 v2 frontend messaging. Bridge-enabled views require a unique `ViewLabel`; application frontend code
 uses `@neoastra/client` and never selects backend browser globals.
+See [the typed RPC and generated bindings guide](doc/rpc-and-bindings.md) for explicit NativeAOT-safe
+commands, cancellation, events, channels, resources, deterministic artifacts, and test doubles.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neoastra_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoAstra intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

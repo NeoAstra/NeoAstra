@@ -4,6 +4,7 @@ import type {
   NeoAstraRuntimeInfo,
   NeoAstraTransportDiagnostic,
 } from "./index.js";
+import { NeoRpcClient, NeoRpcError, type NeoRpcErrorValue } from "./rpc.js";
 import {
   DEFAULT_MAXIMUM_FRAME_BYTES,
   NeoAstraClientError,
@@ -244,4 +245,106 @@ function makeRuntimeInfo(options: MockTransportOptions, id: string): NeoAstraRun
     backend: source.backend ?? "webview2",
     wholeViewTrust: source.wholeViewTrust ?? false,
   });
+}
+
+export interface MockRpcInvocation {
+  readonly command: string;
+  readonly args: unknown;
+  readonly signal: AbortSignal;
+}
+
+export type MockRpcHandler = (invocation: MockRpcInvocation) => unknown | Promise<unknown>;
+
+export interface MockRpcHarness {
+  readonly client: NeoRpcClient;
+  readonly outboundFrames: readonly Readonly<Record<string, unknown>>[];
+  register(command: string, handler: MockRpcHandler): () => void;
+  emit(event: string, value: unknown): void;
+  close(): void;
+}
+
+export function createMockRpcHarness(options: MockTransportOptions = {}): MockRpcHarness {
+  const handlers = new Map<string, MockRpcHandler>();
+  const subscriptions = new Map<string, { event: string; sequence: number }>();
+  const invocations = new Map<string, AbortController>();
+  const frames: Readonly<Record<string, unknown>>[] = [];
+  let receiver: ((frame: Readonly<Record<string, unknown>>) => void) | undefined;
+  const closed = new AbortController();
+  const runtimeInfo = makeRuntimeInfo(options, options.idFactory?.() ?? "mock-rpc-session");
+
+  const connection: NeoAstraConnection = {
+    runtimeInfo,
+    state: "connected",
+    closed: closed.signal,
+    hasFeature: feature => runtimeInfo.negotiatedFeatures.includes(feature),
+    setReceiveHandler(handler) {
+      if (receiver !== undefined) throw new NeoAstraClientError("internal_transport_error", "A receive handler is already registered.");
+      receiver = handler;
+      return () => { if (receiver === handler) receiver = undefined; };
+    },
+    send(frame) {
+      assertApplicationFrame(frame, options.maximumFrameBytes ?? DEFAULT_MAXIMUM_FRAME_BYTES, options.maximumJsonDepth ?? 32);
+      const value = Object.freeze({ ...(frame as Record<string, unknown>) });
+      frames.push(value);
+      queueMicrotask(() => dispatch(value));
+    },
+    close() { if (!closed.signal.aborted) closed.abort(); },
+  };
+  const client = new NeoRpcClient(connection, { idFactory: options.idFactory });
+
+  async function dispatch(frame: Readonly<Record<string, unknown>>): Promise<void> {
+    if (closed.signal.aborted || typeof frame.kind !== "string") return;
+    if (frame.kind === "invoke" && typeof frame.id === "string" && typeof frame.command === "string") {
+      const controller = new AbortController();
+      invocations.set(frame.id, controller);
+      const handler = handlers.get(frame.command);
+      if (handler === undefined) {
+        receiver?.(resultError(frame.id, { code: "command_not_found", message: "The mock command is not registered.", retryable: false }));
+        invocations.delete(frame.id);
+        return;
+      }
+      try {
+        const value = await handler({ command: frame.command, args: frame.args, signal: controller.signal });
+        if (!controller.signal.aborted) receiver?.(Object.freeze({ neoastra: 1, kind: "result", id: frame.id, ok: true, value }));
+      } catch (error) {
+        const mapped = error instanceof NeoRpcError
+          ? { code: error.code, message: error.message, retryable: error.retryable, correlationId: error.correlationId }
+          : { code: "internal_error", message: "The mock command failed.", retryable: false };
+        receiver?.(resultError(frame.id, mapped));
+      } finally { invocations.delete(frame.id); }
+    } else if (frame.kind === "cancel" && typeof frame.id === "string") {
+      invocations.get(frame.id)?.abort();
+    } else if (frame.kind === "subscribe" && typeof frame.id === "string" && typeof frame.event === "string") {
+      subscriptions.set(frame.id, { event: frame.event, sequence: 0 });
+      receiver?.(Object.freeze({ neoastra: 1, kind: "subscribed", id: frame.id }));
+    } else if (frame.kind === "unsubscribe" && typeof frame.id === "string") {
+      subscriptions.delete(frame.id);
+    }
+  }
+
+  return {
+    client,
+    outboundFrames: frames,
+    register(command, handler) {
+      if (typeof command !== "string" || command.length === 0) throw new TypeError("A command is required.");
+      if (typeof handler !== "function") throw new TypeError("A handler is required.");
+      if (handlers.has(command)) throw new TypeError("The mock command is already registered.");
+      handlers.set(command, handler);
+      return () => { if (handlers.get(command) === handler) handlers.delete(command); };
+    },
+    emit(event, value) {
+      for (const [id, subscription] of subscriptions) {
+        if (subscription.event !== event) continue;
+        receiver?.(Object.freeze({ neoastra: 1, kind: "event", subscription: id, sequence: ++subscription.sequence, value }));
+      }
+    },
+    close() {
+      for (const controller of invocations.values()) controller.abort();
+      invocations.clear(); subscriptions.clear(); connection.close(); client.close();
+    },
+  };
+}
+
+function resultError(id: string, error: NeoRpcErrorValue): Readonly<Record<string, unknown>> {
+  return Object.freeze({ neoastra: 1, kind: "result", id, ok: false, error: Object.freeze({ ...error }) });
 }

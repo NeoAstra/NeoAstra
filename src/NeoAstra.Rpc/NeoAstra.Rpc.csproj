@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Explicit, source-generated, NativeAOT-safe RPC for NeoAstra.</Description>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+    <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/rpc-and-bindings.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+</Project>

@@ -28,6 +28,7 @@ internal sealed class NeoTransportCoordinator
     private readonly Action<NeoTransportDiagnosticEventArgs> _diagnose;
     private readonly NeoDispatcher? _dispatcher;
     private readonly Func<string> _idFactory;
+    private readonly Action<NeoTransportSessionSnapshot?>? _sessionChanged;
     private readonly Queue<NeoTransportDiagnosticEventArgs> _diagnostics = [];
     // Renderer document IDs are untrusted correlation values. Retaining closed values for the view lifetime
     // prevents a previous document's queued frames from being rebound to the current navigation.
@@ -47,7 +48,8 @@ internal sealed class NeoTransportCoordinator
         Action<string> sendRaw,
         Action<NeoTransportDiagnosticEventArgs> diagnose,
         NeoDispatcher? dispatcher = null,
-        Func<string>? idFactory = null)
+        Func<string>? idFactory = null,
+        Action<NeoTransportSessionSnapshot?>? sessionChanged = null)
     {
         _viewOptions = new NeoAstraOptions
         {
@@ -66,6 +68,7 @@ internal sealed class NeoTransportCoordinator
         _diagnose = diagnose;
         _dispatcher = dispatcher;
         _idFactory = idFactory ?? (() => Guid.NewGuid().ToString("N"));
+        _sessionChanged = sessionChanged;
         HostViewBinding = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
         (_platform, _backend) = GetPlatformMetadata(runtimeInfo);
     }
@@ -76,6 +79,10 @@ internal sealed class NeoTransportCoordinator
     internal string HostViewBinding { get; }
 
     internal bool IsConnected => _active is not null && !_closed;
+
+    internal NeoTransportSessionSnapshot? CurrentSession => _active is { } active
+        ? new(active.DocumentSessionId, active.ProtocolMinor, active.Features, _viewOptions.BridgePolicy == NeoBridgePolicy.TrustEntireView)
+        : null;
 
     internal string CreateBootstrapScript(string source)
     {
@@ -320,6 +327,7 @@ internal sealed class NeoTransportCoordinator
     {
         if (_closed || hello.NavigationGeneration != _navigationGeneration || _closedRendererDocumentIdSet.Contains(hello.RendererDocumentId)) return;
         _active = new ActiveSession(hello.RendererDocumentId, hello.NavigationGeneration, _idFactory(), hello.ProtocolMinor, hello.Features);
+        _sessionChanged?.Invoke(new NeoTransportSessionSnapshot(_active.DocumentSessionId, _active.ProtocolMinor, _active.Features, _viewOptions.BridgePolicy == NeoBridgePolicy.TrustEntireView));
         SendHelloAck(_active);
     }
 
@@ -381,6 +389,7 @@ internal sealed class NeoTransportCoordinator
         }
         RememberClosedRendererDocumentId(active.RendererDocumentId);
         _active = null;
+        _sessionChanged?.Invoke(null);
     }
 
     private string BuildEnvelope(string rendererDocumentId, Action<Utf8JsonWriter> writeFrame)
@@ -447,3 +456,5 @@ internal sealed class NeoTransportCoordinator
     private readonly record struct PendingHello(string RendererDocumentId, long NavigationGeneration, int ProtocolMinor, string[] Features);
     private sealed record ActiveSession(string RendererDocumentId, long NavigationGeneration, string DocumentSessionId, int ProtocolMinor, string[] Features);
 }
+
+internal readonly record struct NeoTransportSessionSnapshot(string DocumentSessionId, int ProtocolMinor, IReadOnlyList<string> Features, bool WholeViewTrust);

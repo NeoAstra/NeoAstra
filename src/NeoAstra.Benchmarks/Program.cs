@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Text.Json.Serialization;
 using NeoAstra;
+using NeoAstra.Rpc;
 
 internal static class Program
 {
@@ -104,6 +106,7 @@ internal static class Program
             {
                 await WarmUpViewAsync(environment, window, bridgeMode);
                 await MeasureDispatcherAsync();
+                await MeasureRpcDispatchAsync();
                 await MeasureViewCreationAsync(environment, window);
 
                 await using var view = await environment.CreateWebViewAsync(
@@ -168,6 +171,38 @@ internal static class Program
                 "us/op",
                 options.Iterations,
                 "background managed thread -> native UI dispatch -> managed callback completion");
+        }
+
+        private async ValueTask MeasureRpcDispatchAsync()
+        {
+            var count = Math.Max(10, options.Iterations);
+            var builder = new NeoRpcBuilder(new NeoRpcOptions
+            {
+                MaximumRetainedRequestIds = count + 16,
+                MaximumConcurrentInvocations = 1,
+                MaximumConcurrentInvocationsPerSession = 1,
+            });
+            builder.AddCommand<RpcEchoRequest, RpcEchoResponse>(
+                "benchmark.echo",
+                static (request, _, _) => ValueTask.FromResult(new RpcEchoResponse(request.Value)),
+                BenchmarkRpcJsonContext.Default.RpcEchoRequest,
+                BenchmarkRpcJsonContext.Default.RpcEchoResponse);
+            await using var host = builder.Build();
+            var completed = 0;
+            await using var session = host.OpenSession(
+                new NeoRpcSessionIdentity("benchmark", "benchmark-document"),
+                (_, _) => { completed++; return ValueTask.CompletedTask; });
+
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"warmup\",\"command\":\"benchmark.echo\",\"args\":{\"value\":1}}");
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            var stopwatch = Stopwatch.StartNew();
+            for (var index = 0; index < count; index++)
+                await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"rpc-{index}\",\"command\":\"benchmark.echo\",\"args\":{{\"value\":{index}}}}}");
+            stopwatch.Stop();
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+            if (completed != count + 1) throw new InvalidOperationException("The RPC benchmark lost a terminal result.");
+            Reporter.Measurement("rpc small invoke round-trip", MicrosecondsPerOperation(stopwatch.Elapsed, count), "us/op", count, "JSON parse + source-generated metadata dispatch + serialization + in-memory send");
+            Reporter.Measurement("rpc small invoke allocation", allocated / (double)count, "B/op", count, "managed current-thread allocation; excludes browser and native transport");
         }
 
         private async ValueTask MeasureManagedNativeCallsAsync(
@@ -663,3 +698,11 @@ internal static class Program
         }
     }
 }
+
+internal sealed record RpcEchoRequest(int Value);
+internal sealed record RpcEchoResponse(int Value);
+
+[JsonSerializable(typeof(RpcEchoRequest))]
+[JsonSerializable(typeof(RpcEchoResponse))]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+internal sealed partial class BenchmarkRpcJsonContext : JsonSerializerContext;

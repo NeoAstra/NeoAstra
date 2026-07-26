@@ -339,4 +339,5 @@ function emitHostDiagnostic(value) {
         return;
     emitDiagnostic({ level, code: value.code, message: value.message, correlationId: typeof value.correlationId === "string" ? value.correlationId : undefined });
 }
+export { NeoRpcClient, NeoRpcError, invoke, invokeChannel, rpcClient, subscribe, } from "./rpc.js";
 //# sourceMappingURL=index.js.map

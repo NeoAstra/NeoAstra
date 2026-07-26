@@ -134,6 +134,8 @@ const result = await documents.open(request, { signal });
 
 A signal already aborted MUST reject without sending invoke. Navigation, session close, view disposal, and application shutdown cancel all outstanding invocations.
 
+The shared frontend call timeout also bounds pending subscription acknowledgement. If that timeout wins, the client MUST remove the pending subscription exactly once, send an idempotent `unsubscribe`, and reject with `timeout`; a late `subscribed` frame cannot restore client state.
+
 ### 4.4 Events
 
 Subscriptions are explicit:
@@ -145,7 +147,7 @@ Subscriptions are explicit:
 { "neoastra": 1, "kind": "unsubscribe", "id": "sub-1" }
 ```
 
-Events MUST be ordered per subscription. Each subscription has bounded buffering and a declared overflow behavior (`drop_oldest`, `drop_newest`, `coalesce`, or `fail`) selected by the backend event declaration, not by an untrusted caller. Session teardown unsubscribes automatically. Global broadcast APIs MUST resolve recipients against capability grants before enqueueing.
+Events MUST be ordered per subscription. Pending authorization and active subscriptions share the same bounded ID/slot lifecycle; an unsubscribe or session teardown that wins its terminal transition cannot be reversed by a late authorization result. Each subscription has bounded buffering and a declared overflow behavior (`drop_oldest`, `drop_newest`, `coalesce`, or `fail`) selected by the backend event declaration, not by an untrusted caller. Session teardown unsubscribes automatically. Global broadcast APIs MUST resolve recipients against capability grants before enqueueing.
 
 ### 4.5 Channels and resources
 
@@ -170,24 +172,28 @@ Stable framework codes include:
 - `operation_canceled`, `connection_closed`, `protocol_mismatch`;
 - `serialization_failed`, `internal_error`.
 
+Request deserialization (including rejection of a JSON `null` required DTO), application execution, and response serialization are distinct phases. `invalid_request` applies only to malformed requests, application exceptions use the mapping order above even when their CLR type is serialization-related, and a failure to serialize a successful application result uses `serialization_failed`.
+
 Release responses MUST omit exception type, stack, paths, connection strings, and nested exception text. The backend logs full diagnostic data according to application logging policy and returns a correlation ID. Development details require an explicit development profile and MUST remain bounded.
 
 ## 6. Serialization and supported contract types
 
 The generator MUST emit `System.Text.Json` source-generation metadata for every reachable request, response, event, channel, and structured error type. Runtime reflection fallback is forbidden in the standard path.
 
+Serialization viability is direction-sensitive across the complete reachable graph: request DTOs require deserialization construction/setter capability, while response, event, and channel DTOs require public serialization getters. A type reachable in both directions MUST satisfy both sets of requirements; inherited and nested members retain the direction of the root that reaches them.
+
 Supported initial types:
 
 - Boolean, string, numeric primitives with explicitly supported ranges;
 - `Guid`, `DateTime`, `DateTimeOffset`, and `TimeSpan` with documented invariant wire formats;
 - nullable value/reference types;
-- enums with explicit string or numeric policy fixed per contract;
+- enums using the Step 2 string-name policy, with `UseStringEnumConverter = true` on the selected source-generated context;
 - arrays, `List<T>`, `IReadOnlyList<T>`, and dictionaries with string keys;
 - records/classes/struct DTOs composed only of supported types;
 - explicitly annotated discriminated unions using a stable discriminator;
 - byte data only up to a low documented JSON threshold; larger binary data uses resources.
 
-Unsupported or ambiguous constructs MUST produce compile-time diagnostics, including polymorphism without an explicit discriminator, object-typed members, unsupported dictionary keys, cycles, duplicated JSON names, non-public required constructors/members, and platform-width integers with unclear TypeScript range. `long`/`ulong` policy MUST prevent silent JavaScript precision loss, for example through string encoding or generated `bigint` mode selected explicitly.
+Unsupported or ambiguous constructs MUST produce compile-time diagnostics, including polymorphism without an explicit discriminator, object-typed members, unsupported dictionary keys, cycles, duplicated or hidden JSON names, indexers and non-serializable accessors, non-public required constructors/members, omission/nullability contradictions, collisions among generated TypeScript service/event members or C# event registration methods, and platform-width integers with unclear TypeScript range. Step 2 supports only canonical decimal-string `long`/`ulong`, declared with `[NeoRpcInt64(NeoRpcInt64Policy.String)]` and the matching signed/unsigned NeoAstra JSON converter; generated `bigint` adapters are not part of this frozen policy.
 
 Nullability maps as follows:
 
@@ -227,7 +233,9 @@ At minimum diagnose:
 - conflicting TypeScript symbol/file names;
 - accidental contract deletion/change against an optional baseline manifest;
 - inaccessible service construction path;
-- invalid cancellation/context parameter placement or duplication.
+- invalid cancellation/context parameter placement or duplication;
+- indexers, inaccessible serializer constructors/accessors, hidden JSON properties, and contradictory null/default/omission metadata;
+- collisions after generated TypeScript method/event normalization or generated C# event-registration naming.
 
 Warnings about likely breaking contract changes MUST explain how to assign a new wire version or retain an alias. The generator MUST NOT silently generate a different command.
 
@@ -237,6 +245,7 @@ Warnings about likely breaking contract changes MUST explain how to assign a new
 - Authorization and service dispatch use a documented scheduler. A service MAY declare UI-thread dispatch; otherwise it SHOULD execute without blocking the UI thread.
 - UI-bound commands use the existing NeoAstra dispatcher and remain cancellation-aware while queued.
 - No application callback is invoked while core/native locks are held.
+- Host shutdown snapshots lifecycle state under its lock, then signals cancellation after releasing that lock. A new document session is installed before prior-document teardown is awaited, while all prior teardown remains tracked by binding disposal.
 - Per-view and global concurrency limits are enforced before service dispatch.
 - Fairness prevents one view from starving others.
 - A timeout is policy-controlled and distinct from caller cancellation in logs, even if both map to canceled task semantics internally.
@@ -284,16 +293,16 @@ Disposing a view/session scope cancels its requests before disposing scoped serv
 
 ## 11. Implementation order
 
-- [ ] Freeze protocol frame kinds, ID rules, error codes, version negotiation, and race semantics.
-- [ ] Implement invoke/result/cancel state machines with in-memory transport tests.
-- [ ] Define C# attributes, builder, context, service lifetimes, and direct registration.
-- [ ] Implement generator command discovery, diagnostics, dispatcher, and serializer context.
-- [ ] Implement deterministic contract manifest and TypeScript emission pipeline.
-- [ ] Add typed event subscriptions and bounded queues.
-- [ ] Reserve and prototype channels/resource ownership.
-- [ ] Integrate UI-thread dispatch, timeouts, navigation/disposal cancellation, and logging correlation.
-- [ ] Add `@neoastra/client` invoke/event APIs and testing mocks.
-- [ ] Validate JIT, trimming, and NativeAOT in a multi-view fixture.
+- [x] Freeze protocol frame kinds, ID rules, error codes, version negotiation, and race semantics.
+- [x] Implement invoke/result/cancel state machines with in-memory transport tests.
+- [x] Define C# attributes, builder, context, service lifetimes, and direct registration.
+- [x] Implement generator command discovery, diagnostics, dispatcher, and serializer context.
+- [x] Implement deterministic contract manifest and TypeScript emission pipeline.
+- [x] Add typed event subscriptions and bounded queues.
+- [x] Reserve and prototype channels/resource ownership.
+- [x] Integrate UI-thread dispatch, timeouts, navigation/disposal cancellation, and logging correlation.
+- [x] Add `@neoastra/client` invoke/event APIs and testing mocks.
+- [x] Validate JIT, trimming, and NativeAOT in a multi-view fixture.
 
 ## 12. Verification
 
@@ -304,3 +313,18 @@ A benchmark suite SHOULD track handshake, small invoke round-trip, serialization
 ## 13. Exit criteria
 
 A C# contract change produces compiler/generator feedback and deterministic TypeScript. Vanilla/React/Vue code invokes a typed method, receives a typed event, and propagates cancellation to C#. Unknown or malformed commands never reach application code. The complete standard path passes NativeAOT with no reflection fallback and closes all request/subscription state on navigation and disposal.
+
+## 14. Implementation status (2026-07-26)
+
+All checklist items above have corresponding production source, bounded runtime paths, generated artifacts,
+tests/fixtures, documentation, and CI wiring. The implementation is split between `NeoAstra.Rpc`,
+`NeoAstra.Rpc.Generator`, `@neoastra/client`, and the common Step 1 view binding. Checked status records
+implemented source rather than claiming that every platform was exercised on one machine.
+
+The in-memory .NET/runtime, generator, TypeScript, deterministic artifact, and NativeAOT fixture paths are
+portable. Browser-backed execution remains conditional on the backend runtime installed on each CI host.
+A Windows development host cannot run WKWebView or WebKitGTK integration. WebKitGTK 4.1 does not provide
+authenticated sender-origin data, so Linux reports an unknown source origin and requires an
+application-controlled whole-view trust policy; NeoAstra never substitutes the mutable current URL.
+See [`../rpc-and-bindings.md`](../rpc-and-bindings.md) for setup, security, wire-format, teardown, mocking,
+and migration details.

@@ -395,3 +395,19 @@ function emitHostDiagnostic(value: Record<string, unknown>): void {
       typeof value.code !== "string" || typeof value.message !== "string") return;
   emitDiagnostic({ level, code: value.code, message: value.message, correlationId: typeof value.correlationId === "string" ? value.correlationId : undefined });
 }
+
+export {
+  NeoRpcClient,
+  NeoRpcError,
+  invoke,
+  invokeChannel,
+  rpcClient,
+  subscribe,
+} from "./rpc.js";
+export type {
+  NeoRpcCallOptions,
+  NeoRpcClientOptions,
+  NeoRpcErrorValue,
+  NeoRpcEventHandler,
+  NeoRpcUnsubscribe,
+} from "./rpc.js";

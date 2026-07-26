@@ -44,7 +44,8 @@ public sealed class NeoAstra : IAsyncDisposable
                 environment.RuntimeInfo,
                 SendRawMessage,
                 RaiseTransportDiagnostic,
-                environment.Application.Dispatcher);
+                environment.Application.Dispatcher,
+                sessionChanged: OnTransportSessionChanged);
         }
         environment.Application.RegisterView(this);
     }
@@ -384,6 +385,14 @@ public sealed class NeoAstra : IAsyncDisposable
 
     internal string? ViewLabel => _viewLabel;
 
+    internal NeoWindow? OwnedWindow => _host.Window;
+
+    internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
+
+    internal event Action<NeoTransportApplicationMessage>? TransportApplicationMessageReceived;
+
+    internal event Action<NeoTransportSessionSnapshot?>? TransportSessionChanged;
+
     internal async ValueTask InitializeTransportAsync(CancellationToken cancellationToken)
     {
         if (_transport is null) return;
@@ -507,7 +516,24 @@ public sealed class NeoAstra : IAsyncDisposable
         var result = _transport?.Receive(json) ?? new NeoTransportReceiveResult(NeoTransportReceiveKind.Legacy);
         if (result.Kind == NeoTransportReceiveKind.Consumed) return;
         var deliveredJson = result.Kind == NeoTransportReceiveKind.Application ? result.ApplicationJson! : json;
+        if (result.Kind == NeoTransportReceiveKind.Application && _transport?.CurrentSession is { } session)
+        {
+            try
+            {
+                TransportApplicationMessageReceived?.Invoke(new NeoTransportApplicationMessage(
+                    deliveredJson, session, sourceOrigin, isMainFrame));
+            }
+            catch
+            {
+                // Internal protocol consumers are isolated from the native callback boundary.
+            }
+        }
         try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(deliveredJson, sourceOrigin, isMainFrame)); } catch { }
+    }
+
+    private void OnTransportSessionChanged(NeoTransportSessionSnapshot? session)
+    {
+        try { TransportSessionChanged?.Invoke(session); } catch { }
     }
 
     private unsafe void SendRawMessage(string json)
@@ -936,3 +962,9 @@ public sealed class NeoAstra : IAsyncDisposable
         NeoAstra? TargetView = null,
         int SelectedIndex = -1);
 }
+
+internal readonly record struct NeoTransportApplicationMessage(
+    string Json,
+    NeoTransportSessionSnapshot Session,
+    Uri? SourceOrigin,
+    bool IsMainFrame);

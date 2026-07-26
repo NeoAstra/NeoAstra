@@ -58,6 +58,13 @@ jobs:
           dotnet run --project src/NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj -c Release --no-build
       - name: Test
         run: dotnet test src/NeoAstra.slnx -c Release --no-build
+      - name: Publish and execute RPC NativeAOT fixture
+        shell: bash
+        run: |
+          dotnet publish src/NeoAstra.Rpc.NativeAotFixture/NeoAstra.Rpc.NativeAotFixture.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/rpc-nativeaot
+          ./artifacts/rpc-nativeaot/NeoAstra.Rpc.NativeAotFixture${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          git diff --exit-code -- src/NeoAstra.Rpc.NativeAotFixture/generated
+          cmp src/NeoAstra.Rpc.NativeAotFixture/generated/neoastra.ts frontend/fixtures/generated/neoastra.ts
       - name: Publish NativeAOT sample
         run: dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
 
@@ -106,13 +113,15 @@ jobs:
           dotnet restore src/NeoAstra.slnx
           dotnet build src/NeoAstra.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
           dotnet pack src/NeoAstra/NeoAstra.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Rpc/NeoAstra.Rpc.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj -c Release --no-build -o artifacts/packages
           dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
           & artifacts/nativeaot/NeoAstra.Sample.exe --validate-native-library
       - name: Verify native package assets
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $package = Get-ChildItem artifacts/packages/*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          $package = Get-ChildItem artifacts/packages/NeoAstra.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Rpc*' } | Select-Object -First 1
           $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
           $entries = $archive.Entries.FullName
           $archive.Dispose()
@@ -122,6 +131,7 @@ jobs:
             'docs/platform-support.md',
             'docs/known-limitations.md',
              'docs/frontend-transport.md',
+             'docs/rpc-and-bindings.md',
             'build/native/include/neoastra.h',
             'build/native/include/neoastra_version.h',
             'runtimes/win-x64/native/neoastra_native.dll',
@@ -137,6 +147,16 @@ jobs:
           $symbolEntries = $symbolArchive.Entries.FullName
           $symbolArchive.Dispose()
           if ('lib/net10.0/NeoAstra.pdb' -notin $symbolEntries) { throw 'Missing managed symbols' }
+          $rpcPackage = Get-ChildItem artifacts/packages/NeoAstra.Rpc.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Rpc.Generator*' } | Select-Object -First 1
+          $rpcArchive = [IO.Compression.ZipFile]::OpenRead($rpcPackage.FullName)
+          $rpcEntries = $rpcArchive.Entries.FullName
+          $rpcArchive.Dispose()
+          @('lib/net10.0/NeoAstra.Rpc.dll', 'docs/rpc-and-bindings.md') | ForEach-Object { if ($_ -notin $rpcEntries) { throw "Missing RPC package asset: $_" } }
+          $generatorPackage = Get-ChildItem artifacts/packages/NeoAstra.Rpc.Generator.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          $generatorArchive = [IO.Compression.ZipFile]::OpenRead($generatorPackage.FullName)
+          $generatorEntries = $generatorArchive.Entries.FullName
+          $generatorArchive.Dispose()
+          @('analyzers/dotnet/cs/NeoAstra.Rpc.Generator.dll', 'buildTransitive/NeoAstra.Rpc.Generator.targets') | ForEach-Object { if ($_ -notin $generatorEntries) { throw "Missing generator package asset: $_" } }
       - name: Verify managed Source Link
         shell: pwsh
         run: |

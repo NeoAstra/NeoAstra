@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <ProjectReference Include="..\NeoAstra.Rpc\NeoAstra.Rpc.csproj" />
+    <ProjectReference Include="..\NeoAstra.Rpc.Generator\NeoAstra.Rpc.Generator.csproj" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
 </Project>
