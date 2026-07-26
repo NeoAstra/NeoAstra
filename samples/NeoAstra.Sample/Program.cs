@@ -37,14 +37,14 @@ internal static class Program
                     CustomSchemes = [NeoCustomScheme.Application("app", assets)],
                 });
                 // Safe here only because this sample loads controlled local assets with no remote dependencies.
-                var viewOptions = new NeoAstraOptions { BridgePolicy = NeoBridgePolicy.TrustEntireView };
+                var viewOptions = new NeoAstraOptions { ViewLabel = "main", BridgePolicy = NeoBridgePolicy.TrustEntireView };
                 await using var webView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions);
                 webView.NavigationCompleted += (_, navigation) =>
                     Console.WriteLine($"Navigation to {navigation.Uri} succeeded: {navigation.IsSuccess}");
                 webView.MessageReceived += async (_, message) =>
                 {
                     Console.WriteLine($"JavaScript ({message.SourceOrigin}): {message.Json}");
-                    try { await webView.PostMessageAsync("{\"from\":\"C#\",\"message\":\"Hello from NeoAstra\"}"); }
+                    try { await webView.PostMessageAsync("{\"neoastra\":1,\"kind\":\"sample_result\",\"from\":\"C#\",\"message\":\"Hello from NeoAstra\"}"); }
                     catch (Exception exception) { Console.Error.WriteLine(exception.Message); }
                 };
 

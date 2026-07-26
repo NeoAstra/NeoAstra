@@ -8,6 +8,23 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    name: Frontend package and fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run check
+        working-directory: frontend
+      - name: Verify generated embedded client assets
+        run: git diff --exit-code -- samples/NeoAstra.Sample/assets/neoastra-client src/NeoAstra.Conformance/assets/neoastra-client src/NeoAstra.Benchmarks/assets/neoastra-client
+
   managed:
     name: Managed (${{ matrix.os }})
     strategy:
@@ -104,6 +121,7 @@ jobs:
             'THIRD-PARTY-NOTICES.md',
             'docs/platform-support.md',
             'docs/known-limitations.md',
+             'docs/frontend-transport.md',
             'build/native/include/neoastra.h',
             'build/native/include/neoastra_version.h',
             'runtimes/win-x64/native/neoastra_native.dll',

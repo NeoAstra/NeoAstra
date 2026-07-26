@@ -38,6 +38,30 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void TransportDiagnostic_ValidatesPublicConstructorArguments()
+    {
+        var diagnostic = new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, "late_frame", "A late frame was ignored.", "request-1");
+
+        Assert.AreEqual(NeoTransportDiagnosticLevel.Warning, diagnostic.Level);
+        Assert.AreEqual("late_frame", diagnostic.Code);
+        Assert.AreEqual("A late frame was ignored.", diagnostic.Message);
+        Assert.AreEqual("request-1", diagnostic.CorrelationId);
+        Assert.IsNull(new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Debug, "code", "message").CorrelationId);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoTransportDiagnosticEventArgs((NeoTransportDiagnosticLevel)int.MaxValue, "code", "message"));
+        Assert.ThrowsExactly<ArgumentNullException>(() =>
+            new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, null!, "message"));
+        Assert.ThrowsExactly<ArgumentNullException>(() =>
+            new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, "code", null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, " ", "message"));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, "code", " "));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel.Warning, "code", "message", " "));
+    }
+
+    [TestMethod]
     public void EnvironmentOptions_RejectDuplicateSchemesAndInvalidOrigins()
     {
         var provider = new NullResourceProvider();
@@ -63,6 +87,16 @@ public sealed class ManagedApiTests
 
         var viewOptions = new NeoAstraOptions { MaximumMessageSize = 0 };
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => viewOptions.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoAstraOptions { MaximumMessageSize = NeoTransportOptions.HardMaximumFrameBytes + 1 }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoAstraOptions { Transport = new NeoTransportOptions { MaximumJsonDepth = 0 } }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoAstraOptions { Transport = new NeoTransportOptions { MaximumHandshakeAttempts = 0 } }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoAstraOptions { Transport = new NeoTransportOptions { MaximumDiagnosticQueue = 0 } }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new NeoAstraOptions { Transport = new NeoTransportOptions { HandshakeTimeout = TimeSpan.Zero } }.Validate(null!));
 
         var provider = new NullResourceProvider();
         var scheme = NeoCustomScheme.Application("app", provider);
@@ -101,6 +135,10 @@ public sealed class ManagedApiTests
             }.Validate(null!));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
             new NeoAstraOptions { BridgePolicy = (NeoBridgePolicy)int.MaxValue }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoAstraOptions { BridgePolicy = NeoBridgePolicy.TrustEntireView }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentException>(() =>
+            new NeoAstraOptions { ViewLabel = "bad\nlabel", BridgePolicy = NeoBridgePolicy.TrustEntireView }.Validate(null!));
     }
 
     [TestMethod]
@@ -111,7 +149,7 @@ public sealed class ManagedApiTests
         Assert.HasCount(0, defaults.BridgeOrigins);
         defaults.Validate(null!);
 
-        new NeoAstraOptions { BridgePolicy = NeoBridgePolicy.TrustEntireView }.Validate(null!);
+        new NeoAstraOptions { ViewLabel = "main", BridgePolicy = NeoBridgePolicy.TrustEntireView }.Validate(null!);
     }
 
     [TestMethod]
@@ -152,6 +190,8 @@ public sealed class ManagedApiTests
         var windows = File.ReadAllText(FindRepositoryFile("native", "src", "windows", "windows_backend.cpp"));
         var common = File.ReadAllText(FindRepositoryFile("native", "src", "common", "neoastra.cpp"));
         var managed = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoEnvironment.cs"));
+        var managedView = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoAstra.cs"));
+        var managedApplication = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoApplication.cs"));
 
         StringAssert.Contains(cocoa, "NSObject<WKURLSchemeHandler>");
         StringAssert.Contains(cocoa, "startURLSchemeTask:");
@@ -161,6 +201,9 @@ public sealed class ManagedApiTests
         StringAssert.Contains(cocoa, "neo_emit_bridge_message(view,text,uri,message.frameInfo.mainFrame)");
         StringAssert.Contains(cocoa, "NSJSONWritingFragmentsAllowed");
         StringAssert.Contains(cocoa, "message.frameInfo.mainFrame);");
+        StringAssert.Contains(cocoa, "_neoastra_transport_v1");
+        StringAssert.Contains(cocoa, "view->bridge_policy != NEOASTRA_BRIDGE_DISABLED");
+        StringAssert.Contains(cocoa, "removeScriptMessageHandlerForName:@\"_neoastra_transport_v1\"");
         StringAssert.Contains(cocoa, "neo_valid_resource_response(response)");
         StringAssert.Contains(gtk, "webkit_web_context_register_uri_scheme");
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_get_http_method");
@@ -172,14 +215,22 @@ public sealed class ManagedApiTests
         StringAssert.Contains(gtk, "native_headers.release()");
         StringAssert.Contains(gtk, "neo_resource_response_release_guard");
         StringAssert.Contains(gtk, "const std::string origin;neo_emit_bridge_message(view,message,origin,false)");
+        StringAssert.Contains(gtk, "script-message-received::_neoastra_transport_v1");
+        StringAssert.Contains(gtk, "webkit_user_content_manager_unregister_script_message_handler");
+        StringAssert.Contains(gtk, "view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED");
         StringAssert.Contains(gtk, "neo_emit_bridge_message(view,message,origin,false)");
         StringAssert.Contains(gtk, "view->bridge_policy==NEOASTRA_BRIDGE_TRUSTED_ORIGINS");
         StringAssert.Contains(windows, "neo_valid_resource_response(response)");
         StringAssert.Contains(windows, "neo_emit_bridge_message(view, message_utf8, source_utf8, true)");
         StringAssert.Contains(windows, "WebView2 web-message handling failed");
+        StringAssert.Contains(windows, "view->bridge_policy != NEOASTRA_BRIDGE_DISABLED");
+        StringAssert.Contains(windows, "if (state->message_registered) state->core->remove_WebMessageReceived");
         StringAssert.Contains(gtk, "WebKitGTK custom schemes do not support service workers");
         StringAssert.Contains(common, "WebKitGTK 4.1 script messages do not expose trustworthy source-origin data");
         StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
+        StringAssert.Contains(managedView, "_transport?.Close(\"renderer_lost\")");
+        StringAssert.Contains(managedView, "_transport?.Close(\"view_disposed\")");
+        StringAssert.Contains(managedApplication, "NotifyViewsOfShutdown()");
     }
 
     [TestMethod]
@@ -649,6 +700,7 @@ public sealed class ManagedApiTests
                         NeoAstraHost.FillWindow(window),
                         new NeoAstraOptions
                         {
+                            ViewLabel = "smoke",
                             Profile = profile,
                             BridgePolicy = NeoBridgePolicy.TrustedOrigins,
                             BridgeOrigins = ["app://neoastra"],

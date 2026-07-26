@@ -9,6 +9,7 @@ internal static class Program
     private static readonly Uri SecondUri = new("conformance://fixture/second.html");
     private static readonly Uri RedirectUri = new("conformance://fixture/redirect.html");
     private static readonly Uri RedirectedUri = new("conformance://fixture/redirected.html");
+    private static int _nextViewLabel;
 
     [STAThread]
     private static int Main(string[] args)
@@ -268,6 +269,9 @@ internal static class Program
                 {
                     await RunCaseAsync("small and large bidirectional JSON messaging with ABI 1.8 trust policy", async () =>
                     {
+                        await WaitUntilScriptAsync(view,
+                            "globalThis.__fixtureTransportConnected === true",
+                            "The @neoastra/client handshake did not complete.", options.Timeout);
                         var incoming = await WaitForMessageAsync(view, "fixture", async () =>
                         {
                             _ = await view.EvaluateScriptAsync(
@@ -291,7 +295,7 @@ internal static class Program
                                 "Linux TrustEntireView must report the unavailable sender origin as null, not as verified.");
                         }
 
-                        await view.PostMessageAsync("{\"kind\":\"host\",\"value\":17}");
+                        await view.PostMessageAsync("{\"neoastra\":1,\"kind\":\"host\",\"value\":17}");
                         await WaitUntilScriptAsync(view,
                             "globalThis.__fixtureHostMessages.some(value => value.kind === 'host' && value.value === 17)",
                             "The page did not receive host JSON.", options.Timeout);
@@ -597,7 +601,12 @@ internal static class Program
 
     private static NeoAstraOptions CreateViewOptions(NeoProfile? profile, BridgeMode bridgeMode)
     {
-        var options = new NeoAstraOptions { Profile = profile, MaximumMessageSize = 1024 * 1024 };
+        var options = new NeoAstraOptions
+        {
+            Profile = profile,
+            MaximumMessageSize = 1024 * 1024,
+            ViewLabel = $"conformance-{Interlocked.Increment(ref _nextViewLabel)}",
+        };
         if (bridgeMode == BridgeMode.TrustedOrigins)
         {
             options.BridgePolicy = NeoBridgePolicy.TrustedOrigins;

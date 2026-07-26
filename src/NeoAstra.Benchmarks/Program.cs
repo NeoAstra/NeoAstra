@@ -3,6 +3,7 @@ using NeoAstra;
 
 internal static class Program
 {
+    private static int _nextViewLabel;
     private static readonly Uri FixtureUri = new("benchmark://fixture/index.html");
 
     [STAThread]
@@ -291,6 +292,18 @@ internal static class Program
                 return;
             }
 
+            var readyDeadline = Stopwatch.StartNew();
+            while (readyDeadline.Elapsed < options.Timeout)
+            {
+                var ready = await view.EvaluateScriptAsync("globalThis.__benchmarkTransportConnected === true");
+                if (string.Equals(ready, "true", StringComparison.Ordinal)) break;
+                await Task.Delay(10);
+            }
+            if (readyDeadline.Elapsed >= options.Timeout)
+            {
+                throw new TimeoutException("The @neoastra/client benchmark handshake did not complete.");
+            }
+
             _ = await MeasureMessageBurstAsync(view, 5, 16);
 
             var smallCount = options.Quick ? Math.Min(100, options.Iterations * 5) : Math.Max(500, options.Iterations * 10);
@@ -517,7 +530,11 @@ internal static class Program
 
     private static NeoAstraOptions CreateViewOptions(BridgeMode bridgeMode)
     {
-        var options = new NeoAstraOptions { MaximumMessageSize = 1024 * 1024 };
+        var options = new NeoAstraOptions
+        {
+            MaximumMessageSize = 1024 * 1024,
+            ViewLabel = $"benchmark-{Interlocked.Increment(ref _nextViewLabel)}",
+        };
         if (bridgeMode == BridgeMode.TrustedOrigins)
         {
             options.BridgePolicy = NeoBridgePolicy.TrustedOrigins;

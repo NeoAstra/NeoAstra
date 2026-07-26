@@ -12,6 +12,11 @@ libsoup 3, and GLib runtime libraries are external platform dependencies and are
 NeoAstra release artifacts. Build-only and test-only .NET packages are not included in the
 NeoAstra runtime package.
 
+The `@neoastra/client` npm package is BSD-2-Clause licensed and has no runtime dependencies. React,
+Vue, Vite, TypeScript, and their locked transitive packages are build/test-only development
+dependencies and are not included in the published client package; every locked package's declared
+SPDX license is checked by `frontend/tools/check-licenses.mjs`.
+
 The following license and notice text is reproduced from the pinned Microsoft.Web.WebView2 package.
 
 ## Microsoft.Web.WebView2 1.0.4078.44

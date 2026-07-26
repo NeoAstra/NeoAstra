@@ -294,6 +294,10 @@ public sealed class NeoWindowOptions
 /// <summary>Configures a browser view.</summary>
 public sealed class NeoAstraOptions
 {
+    /// <summary>Gets or sets the immutable application-assigned label used to identify this view.</summary>
+    /// <remarks>A non-empty label unique within the application is required when the bridge is enabled.</remarks>
+    public string? ViewLabel { get; set; }
+
     /// <summary>Gets or sets the profile used by the view.</summary>
     public NeoProfile? Profile { get; set; }
 
@@ -322,6 +326,9 @@ public sealed class NeoAstraOptions
     /// </summary>
     public IReadOnlyList<string> BridgeOrigins { get; set; } = Array.Empty<string>();
 
+    /// <summary>Gets or sets the portable frontend transport limits and handshake policy.</summary>
+    public NeoTransportOptions Transport { get; set; } = new();
+
     internal void Validate(NeoEnvironment environment)
     {
         if (Profile is not null && !ReferenceEquals(Profile.Environment, environment))
@@ -339,9 +346,9 @@ public sealed class NeoAstraOptions
             throw new ArgumentOutOfRangeException(nameof(DecisionTimeout), "The decision timeout must be between zero and ten minutes.");
         }
 
-        if (MaximumMessageSize == 0)
+        if (MaximumMessageSize == 0 || MaximumMessageSize > NeoTransportOptions.HardMaximumFrameBytes)
         {
-            throw new ArgumentOutOfRangeException(nameof(MaximumMessageSize), "The web-message size limit must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(MaximumMessageSize), $"The web-message size limit must be between 1 and {NeoTransportOptions.HardMaximumFrameBytes} bytes.");
         }
 
         if (!Enum.IsDefined(BridgePolicy))
@@ -350,6 +357,15 @@ public sealed class NeoAstraOptions
         }
 
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
+        ArgumentNullException.ThrowIfNull(Transport);
+        Transport.Validate();
+        if (BridgePolicy != NeoBridgePolicy.Disabled)
+        {
+            if (string.IsNullOrWhiteSpace(ViewLabel) || ViewLabel.Length > 128 || ViewLabel.Any(char.IsControl))
+            {
+                throw new ArgumentException("A bridge-enabled view requires a non-empty application label of at most 128 characters.", nameof(ViewLabel));
+            }
+        }
         if (BridgePolicy == NeoBridgePolicy.TrustedOrigins && BridgeOrigins.Count == 0)
         {
             throw new ArgumentException("TrustedOrigins requires at least one bridge origin.", nameof(BridgeOrigins));
@@ -373,6 +389,35 @@ public sealed class NeoAstraOptions
         {
             throw new PlatformNotSupportedException("WebKitGTK 4.1 does not expose trustworthy script-message sender origins. Use Disabled or explicitly opt into TrustEntireView.");
         }
+    }
+}
+
+/// <summary>Configures bounded protocol handling for the portable frontend transport.</summary>
+public sealed class NeoTransportOptions
+{
+    internal const uint HardMaximumFrameBytes = 16 * 1024 * 1024;
+
+    /// <summary>Gets or sets the maximum JSON nesting depth accepted by the host.</summary>
+    public int MaximumJsonDepth { get; set; } = 32;
+
+    /// <summary>Gets or sets the maximum hello attempts accepted in one document.</summary>
+    public int MaximumHandshakeAttempts { get; set; } = 3;
+
+    /// <summary>Gets or sets the maximum number of retained transport diagnostics.</summary>
+    public int MaximumDiagnosticQueue { get; set; } = 100;
+
+    /// <summary>Gets or sets the host handshake timeout.</summary>
+    public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Gets the number of application frames accepted before a handshake.</summary>
+    public int MaximumPreHandshakeFrames => 0;
+
+    internal void Validate()
+    {
+        if (MaximumJsonDepth is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(MaximumJsonDepth));
+        if (MaximumHandshakeAttempts is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(MaximumHandshakeAttempts));
+        if (MaximumDiagnosticQueue is < 1 or > 10_000) throw new ArgumentOutOfRangeException(nameof(MaximumDiagnosticQueue));
+        if (HandshakeTimeout <= TimeSpan.Zero || HandshakeTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(HandshakeTimeout));
     }
 }
 

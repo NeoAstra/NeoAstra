@@ -211,6 +211,19 @@ public enum NeoBridgePolicy : uint
     TrustEntireView = 2,
 }
 
+/// <summary>Identifies the severity of a portable transport diagnostic.</summary>
+public enum NeoTransportDiagnosticLevel
+{
+    /// <summary>Verbose development information.</summary>
+    Debug,
+    /// <summary>Normal lifecycle information.</summary>
+    Information,
+    /// <summary>A recoverable protocol or lifecycle problem.</summary>
+    Warning,
+    /// <summary>A transport operation failed.</summary>
+    Error,
+}
+
 /// <summary>Identifies a browser permission.</summary>
 public enum NeoPermissionKind
 {

@@ -19,6 +19,7 @@ See [platform support and runtime dependencies](doc/platform-support.md) for the
 - JavaScript evaluation and persistent document scripts
 - Portable page zoom control
 - JSON web/native messaging
+- Framework-neutral `@neoastra/client` ESM transport with version negotiation, document-session teardown, diagnostics, and deterministic mocks
 - Cross-platform custom schemes and directory-backed local application assets without a localhost server
 - Deferred browser decisions with timeout-safe defaults, including navigation, permissions, dialogs, authentication, certificates, and fullscreen where supported
 - Tracked opener-compatible popup views hosted by normal application windows or borrowed parents
@@ -82,6 +83,9 @@ Custom resource-provider callbacks currently remain synchronous on all three bac
 WebKitGTK exposes URI, method, headers, and a synchronously buffered request body (limited to 64 MiB), but not trustworthy initiating-origin, frame, or resource-kind metadata for these requests; those fields are reported as unknown. Linux honors secure and CORS-enabled scheme flags, but has no equivalent authority or per-origin CORS registration switches and rejects service-worker descriptors, so custom-scheme capability is reported as limited. WebKitGTK 4.1 script-message callbacks also omit trustworthy source-origin data. NeoAstra therefore does not infer trust from the current top-level URI: `TrustedOrigins` is rejected on Linux, `TrustEntireView` delivers messages with `SourceOrigin == null`, and message-origin capability remains unavailable.
 
 See [the security and resource-limit review](doc/security-review.md) for the verified controls, trust assumptions, and backend limitations.
+See [the portable frontend transport and migration guide](doc/frontend-transport.md) before enabling
+v2 frontend messaging. Bridge-enabled views require a unique `ViewLabel`; application frontend code
+uses `@neoastra/client` and never selects backend browser globals.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neoastra_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoAstra intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 
@@ -111,6 +115,15 @@ The native library uses CMake presets and Clang. The build helper selects a .NET
 
 ```sh
 python eng/build_native.py --rid win-x64 --clean
+```
+
+Build and verify the frontend package, CSP/bootstrap fixtures, framework consumers, size budget,
+licenses, provenance, and publish contents with:
+
+```sh
+cd frontend
+npm ci
+npm run check
 ```
 
 The managed project directly copies the staged library for the current host RID beside its development output, so local applications and tests use the latest native build without creating or installing a NuGet package. Rerun the helper after native changes. The same command accepts `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`; use `--skip-tests` when cross-compiling a binary that cannot run on the build host.

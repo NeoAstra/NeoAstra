@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "neoastra_version.h"
 
+/** Hard upper bound accepted for a view's incoming or outgoing message size. */
+#define NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE (16u * 1024u * 1024u)
+
 #if defined(_WIN32)
 # if defined(NEOASTRA_BUILD)
 #  define NEOASTRA_API __declspec(dllexport)

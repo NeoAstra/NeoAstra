@@ -15,6 +15,8 @@ public sealed class NeoApplication : IAsyncDisposable
     private readonly object _sync = new();
     private readonly SafeAppHandle _handle;
     private readonly Dictionary<ulong, NeoWindow> _windows = [];
+    private readonly HashSet<NeoAstra> _views = [];
+    private readonly HashSet<string> _viewLabels = new(StringComparer.Ordinal);
     private GCHandle _eventRoot;
     private GCHandle _logRoot;
     private NeoWindow? _mainWindow;
@@ -328,6 +330,32 @@ public sealed class NeoApplication : IAsyncDisposable
 
     internal NativeMethods.neoastra_app_t DangerousNativeHandle => new(_handle.DangerousGetHandle());
 
+    internal void ReserveViewLabel(string? label)
+    {
+        if (label is null) return;
+        lock (_sync)
+        {
+            if (!_viewLabels.Add(label)) throw new ArgumentException($"The view label '{label}' is already in use by this application.", nameof(label));
+        }
+    }
+
+    internal void ReleaseViewLabel(string? label)
+    {
+        if (label is null) return;
+        lock (_sync) _viewLabels.Remove(label);
+    }
+
+    internal void RegisterView(NeoAstra view)
+    {
+        lock (_sync) _views.Add(view);
+    }
+
+    internal void UnregisterView(NeoAstra view)
+    {
+        lock (_sync) _views.Remove(view);
+        ReleaseViewLabel(view.ViewLabel);
+    }
+
     private async Task DisposeOnDispatcherAsync()
     {
         try
@@ -358,6 +386,7 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private unsafe void DisposeCore()
     {
+        NotifyViewsOfShutdown();
         Dispatcher.MarkShutdown();
         UnregisterEventCallback();
         DisposeManagedWindows();
@@ -388,12 +417,25 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private void ReleaseWithoutDetach()
     {
+        NotifyViewsOfShutdown();
         Dispatcher.MarkShutdown();
         UnregisterEventCallback();
         ReleaseLogCallback(canFree: false);
         DisposeManagedWindows();
         _handle.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void NotifyViewsOfShutdown()
+    {
+        NeoAstra[] views;
+        lock (_sync)
+        {
+            views = _views.ToArray();
+            _views.Clear();
+            _viewLabels.Clear();
+        }
+        foreach (var view in views) view.NotifyApplicationShutdown();
     }
 
     private unsafe void UnregisterEventCallback()

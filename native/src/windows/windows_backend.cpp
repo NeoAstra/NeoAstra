@@ -48,6 +48,7 @@ struct windows_view {
     EventRegistrationToken title_changed{};
     EventRegistrationToken history_changed{};
     EventRegistrationToken message_received{};
+    bool message_registered{};
     EventRegistrationToken web_resource_requested{};
     EventRegistrationToken permission_requested{};
     EventRegistrationToken new_window_requested{};
@@ -265,7 +266,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_SourceChanged(state->source_changed);
     state->core->remove_DocumentTitleChanged(state->title_changed);
     state->core->remove_HistoryChanged(state->history_changed);
-    state->core->remove_WebMessageReceived(state->message_received);
+    if (state->message_registered) state->core->remove_WebMessageReceived(state->message_received);
     state->core->remove_WebResourceRequested(state->web_resource_requested);
     state->core->remove_PermissionRequested(state->permission_requested);
     state->core->remove_NewWindowRequested(state->new_window_requested);
@@ -615,6 +616,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
         }).Get(), &state->web_resource_requested);
     if (FAILED(result)) return result;
 
+    if (view->bridge_policy != NEOASTRA_BRIDGE_DISABLED) {
     result = state->core->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>([view](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             LPWSTR source{};
@@ -642,6 +644,8 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             return S_OK;
         }).Get(), &state->message_received);
     if (FAILED(result)) return result;
+    state->message_registered = true;
+    }
 
     result = state->core->add_PermissionRequested(
         Callback<ICoreWebView2PermissionRequestedEventHandler>([view](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {

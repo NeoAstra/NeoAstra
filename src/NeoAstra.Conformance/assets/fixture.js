@@ -1,23 +1,20 @@
-(() => {
-  globalThis.__fixtureExternalAsset = "loaded";
-  globalThis.__fixtureSawDocumentStartScript = globalThis.__neoDocumentStart === "injected";
-  globalThis.__fixtureHostMessages = [];
+import { connect } from "./neoastra-client/index.js";
 
-  const receive = value => globalThis.__fixtureHostMessages.push(value);
-  if (globalThis.chrome?.webview) {
-    globalThis.chrome.webview.addEventListener("message", event => receive(event.data));
-  }
-  globalThis.addEventListener("neoastramessage", event => receive(event.detail));
+globalThis.__fixtureExternalAsset = "loaded";
+globalThis.__fixtureSawDocumentStartScript = globalThis.__neoDocumentStart === "injected";
+globalThis.__fixtureHostMessages = [];
 
-  globalThis.__fixturePostMessage = value => {
-    if (globalThis.chrome?.webview) {
-      globalThis.chrome.webview.postMessage(value);
-      return;
-    }
-    if (globalThis.webkit?.messageHandlers?.neoastra) {
-      globalThis.webkit.messageHandlers.neoastra.postMessage(value);
-      return;
-    }
-    throw new Error("The NeoAstra message bridge is unavailable.");
-  };
-})();
+let connection;
+const pending = [];
+globalThis.__fixturePostMessage = value => {
+  const frame = { neoastra: 1, ...value };
+  if (connection) connection.send(frame);
+  else pending.push(frame);
+};
+
+globalThis.__fixtureTransportReady = connect().then(value => {
+  connection = value;
+  connection.setReceiveHandler(frame => globalThis.__fixtureHostMessages.push(frame));
+  for (const frame of pending.splice(0)) connection.send(frame);
+  globalThis.__fixtureTransportConnected = true;
+});

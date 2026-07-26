@@ -1,5 +1,7 @@
 #include "neoastra.h"
 
+static_assert(NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE == 16u * 1024u * 1024u);
+
 #ifdef NDEBUG
 #undef NDEBUG
 #endif

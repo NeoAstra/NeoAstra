@@ -3,6 +3,7 @@
 
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using NeoAstra.Interop;
 using NeoAstra.Interop.Generated;
@@ -15,8 +16,11 @@ public sealed class NeoAstra : IAsyncDisposable
     private readonly SafeViewHandle _handle;
     private readonly NeoAstraHost _host;
     private readonly TimeSpan _decisionTimeout;
+    private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
+    private readonly NeoTransportCoordinator? _transport;
     private GCHandle _eventRoot;
+    private NeoUserScript? _transportScript;
     private Uri? _source;
     private string _title = string.Empty;
     private bool _isLoading;
@@ -30,8 +34,19 @@ public sealed class NeoAstra : IAsyncDisposable
         _handle = handle;
         _host = host;
         _decisionTimeout = options.DecisionTimeout;
+        _viewLabel = options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel;
         Profile = options.Profile;
         RegisterEventCallback();
+        if (options.BridgePolicy != NeoBridgePolicy.Disabled)
+        {
+            _transport = new NeoTransportCoordinator(
+                options,
+                environment.RuntimeInfo,
+                SendRawMessage,
+                RaiseTransportDiagnostic,
+                environment.Application.Dispatcher);
+        }
+        environment.Application.RegisterView(this);
     }
 
     /// <summary>Gets the last source URI reported by the backend.</summary>
@@ -107,6 +122,9 @@ public sealed class NeoAstra : IAsyncDisposable
 
     /// <summary>Occurs when web content sends a bridge message.</summary>
     public event EventHandler<NeoWebMessageReceivedEventArgs>? MessageReceived;
+
+    /// <summary>Occurs when bounded frontend transport lifecycle or validation information is available.</summary>
+    public event EventHandler<NeoTransportDiagnosticEventArgs>? TransportDiagnostic;
 
     /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
     public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
@@ -275,7 +293,8 @@ public sealed class NeoAstra : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(json);
         cancellationToken.ThrowIfCancellationRequested();
         using (JsonDocument.Parse(json)) { }
-        using var nativeJson = new Utf8String(json);
+        var outbound = _transport?.WrapOutbound(json) ?? json;
+        using var nativeJson = new Utf8String(outbound);
         NativeMethods.neoastra_error_t error = default;
         var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
         NativeError.ThrowIfFailed(result, error, "post web message", cancellationToken);
@@ -343,6 +362,8 @@ public sealed class NeoAstra : IAsyncDisposable
             return ValueTask.CompletedTask;
         }
 
+        _transport?.Close("view_disposed");
+        Environment.Application.UnregisterView(this);
         try
         {
             NativeMethods.neoastra_view_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
@@ -360,6 +381,21 @@ public sealed class NeoAstra : IAsyncDisposable
     internal NeoEnvironment Environment { get; }
 
     internal NeoProfile? Profile { get; }
+
+    internal string? ViewLabel => _viewLabel;
+
+    internal async ValueTask InitializeTransportAsync(CancellationToken cancellationToken)
+    {
+        if (_transport is null) return;
+        using var stream = typeof(NeoAstra).Assembly.GetManifestResourceStream("NeoAstra.Transport.transport-bootstrap.js")
+            ?? throw new InvalidOperationException("The NeoAstra transport bootstrap resource is missing.");
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        cancellationToken.ThrowIfCancellationRequested();
+        var source = reader.ReadToEnd();
+        _transportScript = await AddScriptAsync(_transport.CreateBootstrapScript(source), new NeoScriptOptions { MainFrameOnly = false }, cancellationToken);
+    }
+
+    internal void NotifyApplicationShutdown() => _transport?.Close("application_shutdown");
 
     internal NativeMethods.neoastra_view_t NativeHandle
     {
@@ -431,16 +467,19 @@ public sealed class NeoAstra : IAsyncDisposable
                 RaiseDownloadEvent(value, DownloadCompleted, true);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_STARTED:
+                _transport?.NavigationStarted();
                 _source = uri ?? _source;
                 _isLoading = true;
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_COMPLETED:
                 _source = uri ?? _source;
                 _isLoading = false;
+                _transport?.NavigationCompleted(succeeded: true);
                 RaiseNavigationCompleted(new NeoNavigationCompletedEventArgs(_source, true, NeoErrorCode.Success, value.native_code, value.header.Value.sequence));
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_FAILED:
                 _isLoading = false;
+                _transport?.NavigationCompleted(succeeded: false);
                 RaiseNavigationCompleted(new NeoNavigationCompletedEventArgs(uri ?? _source, false, (NeoErrorCode)(int)value.value, value.native_code, value.header.Value.sequence));
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_SOURCE_CHANGED:
@@ -454,12 +493,34 @@ public sealed class NeoAstra : IAsyncDisposable
                 _canGoForward = (value.value & 2) != 0;
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_MESSAGE_RECEIVED:
-                try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(Utf8String.Decode(value.text), uri, (value.value & 1) != 0)); } catch { }
+                DispatchWebMessage(Utf8String.Decode(value.text), uri, (value.value & 1) != 0);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
+                _transport?.Close("renderer_lost");
                 try { ProcessFailed?.Invoke(this, DecodeProcessFailure(value.value, value.native_code, Utf8String.Decode(value.text))); } catch { }
                 break;
         }
+    }
+
+    private void DispatchWebMessage(string json, Uri? sourceOrigin, bool isMainFrame)
+    {
+        var result = _transport?.Receive(json) ?? new NeoTransportReceiveResult(NeoTransportReceiveKind.Legacy);
+        if (result.Kind == NeoTransportReceiveKind.Consumed) return;
+        var deliveredJson = result.Kind == NeoTransportReceiveKind.Application ? result.ApplicationJson! : json;
+        try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(deliveredJson, sourceOrigin, isMainFrame)); } catch { }
+    }
+
+    private unsafe void SendRawMessage(string json)
+    {
+        using var nativeJson = new Utf8String(json);
+        NativeMethods.neoastra_error_t error = default;
+        var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
+        NativeError.ThrowIfFailed(result, error, "post transport message");
+    }
+
+    private void RaiseTransportDiagnostic(NeoTransportDiagnosticEventArgs value)
+    {
+        try { TransportDiagnostic?.Invoke(this, value); } catch { }
     }
 
     internal static NeoProcessFailedEventArgs DecodeProcessFailure(ulong value, long nativeCode, string? description)

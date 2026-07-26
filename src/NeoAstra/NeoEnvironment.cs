@@ -81,17 +81,16 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     /// <returns>The created browser view.</returns>
     /// <exception cref="PlatformNotSupportedException">Explicit bridge origins were supplied on Linux, which does not implement them.</exception>
     public ValueTask<NeoAstra> CreateWebViewAsync(NeoAstraHost host, NeoAstraOptions? options = null, CancellationToken cancellationToken = default)
-        => CreateWebViewCoreAsync(host, options, 0, cancellationToken);
+        => NeoTransportViewInitializer.CreateAsync(this, host, options, 0, cancellationToken);
 
     internal ValueTask<NeoAstra> CreatePopupWebViewAsync(NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, CancellationToken cancellationToken)
-        => CreateWebViewCoreAsync(host, options, popupRequest, cancellationToken);
+        => NeoTransportViewInitializer.CreateAsync(this, host, options, popupRequest, cancellationToken);
 
-    private ValueTask<NeoAstra> CreateWebViewCoreAsync(NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, CancellationToken cancellationToken)
+    internal ValueTask<NeoAstra> CreateWebViewCoreAsync(NeoAstraHost host, NeoAstraOptions options, nint popupRequest, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(host);
         cancellationToken.ThrowIfCancellationRequested();
-        options ??= new NeoAstraOptions();
         options.Validate(this);
         if (host.Window is not null && !ReferenceEquals(host.Window.Application, Application))
         {
@@ -312,4 +311,27 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
 
     private sealed record ProfileCreation(NeoEnvironment Environment, bool IsEphemeral);
     private sealed record ViewCreation(NeoEnvironment Environment, NeoAstraHost Host, NeoAstraOptions Options);
+}
+
+internal static class NeoTransportViewInitializer
+{
+    internal static async ValueTask<NeoAstra> CreateAsync(NeoEnvironment environment, NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, CancellationToken cancellationToken)
+    {
+        options ??= new NeoAstraOptions();
+        options.Validate(environment);
+        environment.Application.ReserveViewLabel(options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel);
+        NeoAstra? view = null;
+        try
+        {
+            view = await environment.CreateWebViewCoreAsync(host, options, popupRequest, cancellationToken);
+            await view.InitializeTransportAsync(cancellationToken);
+            return view;
+        }
+        catch
+        {
+            if (view is not null) await view.DisposeAsync();
+            else environment.Application.ReleaseViewLabel(options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel);
+            throw;
+        }
+    }
 }

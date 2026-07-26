@@ -6,6 +6,59 @@ using NeoAstra.Interop.Generated;
 
 namespace NeoAstra;
 
+/// <summary>Provides bounded, non-sensitive frontend transport diagnostic information.</summary>
+public sealed class NeoTransportDiagnosticEventArgs : EventArgs
+{
+    /// <summary>Initializes a transport diagnostic without a correlation identifier.</summary>
+    /// <param name="level">Diagnostic severity.</param>
+    /// <param name="code">Stable machine-readable code.</param>
+    /// <param name="message">Non-sensitive human-readable description.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="code"/> or <paramref name="message"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="code"/> or <paramref name="message"/> is empty or consists only of white-space characters.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="level"/> is not a defined <see cref="NeoTransportDiagnosticLevel"/> value.</exception>
+    public NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel level, string code, string message)
+        : this(level, code, message, null)
+    {
+    }
+
+    /// <summary>Initializes a transport diagnostic with an optional correlation identifier.</summary>
+    /// <param name="level">Diagnostic severity.</param>
+    /// <param name="code">Stable machine-readable code.</param>
+    /// <param name="message">Non-sensitive human-readable description.</param>
+    /// <param name="correlationId">Optional opaque correlation identifier.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="code"/> or <paramref name="message"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="code"/>, <paramref name="message"/>, or a non-null <paramref name="correlationId"/> is empty or consists only of white-space characters.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="level"/> is not a defined <see cref="NeoTransportDiagnosticLevel"/> value.</exception>
+    public NeoTransportDiagnosticEventArgs(NeoTransportDiagnosticLevel level, string code, string message, string? correlationId)
+    {
+        if (!Enum.IsDefined(level)) throw new ArgumentOutOfRangeException(nameof(level));
+        ArgumentNullException.ThrowIfNull(code);
+        ArgumentNullException.ThrowIfNull(message);
+        if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("A diagnostic code is required.", nameof(code));
+        if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("A diagnostic message is required.", nameof(message));
+        if (correlationId is not null && string.IsNullOrWhiteSpace(correlationId))
+        {
+            throw new ArgumentException("A nonempty correlation identifier is required when one is supplied.", nameof(correlationId));
+        }
+        Level = level;
+        Code = code;
+        Message = message;
+        CorrelationId = correlationId;
+    }
+
+    /// <summary>Gets the diagnostic severity.</summary>
+    public NeoTransportDiagnosticLevel Level { get; }
+
+    /// <summary>Gets the stable machine-readable code.</summary>
+    public string Code { get; }
+
+    /// <summary>Gets the non-sensitive human-readable description.</summary>
+    public string Message { get; }
+
+    /// <summary>Gets the optional opaque correlation identifier.</summary>
+    public string? CorrelationId { get; }
+}
+
 /// <summary>Represents a browser cookie.</summary>
 public sealed class NeoCookie
 {

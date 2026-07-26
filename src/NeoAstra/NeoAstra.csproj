@@ -30,12 +30,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Transport/transport-bootstrap.js" LogicalName="NeoAstra.Transport.transport-bootstrap.js" />
     <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/platform-support.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/known-limitations.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-transport.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra.h" Pack="true" PackagePath="build/native/include/" />
     <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra_version.h" Pack="true" PackagePath="build/native/include/" />
     <None Update="runtimes/**/*" Pack="true" PackagePath="%(Identity)" />
