@@ -40,7 +40,18 @@ if (args is ["--validate-reference"])
     Console.WriteLine($"NeoAstra v2 reference module graph, release main grant/preview denial, and generated contract {NeoRpcGeneratedContract.Hash} validated."); return 0;
 }
 
-return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra v2 Reference", ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed }, async app =>
+if (OperatingSystem.IsWindows() && Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
+{
+    var result = -1; Exception? failure = null;
+    var thread = new Thread(() => { try { result = RunApplication(args); } catch (Exception exception) { failure = exception; } });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+    if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    return result;
+}
+
+return RunApplication(args);
+
+static int RunApplication(string[] args) => NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra v2 Reference", ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed }, async app =>
 {
     var routedLaunch = new NeoLaunchEvent(NeoLaunchReason.SecondInstance, args, Environment.CurrentDirectory);
     await using var singleInstance = await NeoSingleInstance.AcquireAsync(app, new NeoSingleInstanceOptions

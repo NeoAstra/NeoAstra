@@ -14,8 +14,11 @@
     <ProjectReference Include="../../src/NeoAstra.Desktop/NeoAstra.Desktop.csproj" />
     <ProjectReference Include="../../src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />
     <ProjectReference Include="../../src/NeoAstra.Tool/NeoAstra.Tool.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />
-    <None Include="capabilities/*.json" CopyToPublishDirectory="PreserveNewest" Link="capabilities/%(Filename)%(Extension)" />
+    <None Include="capabilities/*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="capabilities/%(Filename)%(Extension)" />
   </ItemGroup>
   <Import Project="../../src/NeoAstra.Sdk/buildTransitive/NeoAstra.Sdk.props" />
   <Import Project="../../src/NeoAstra.Sdk/buildTransitive/NeoAstra.Sdk.targets" />
+  <Target Name="NeoAstraCopyReferenceFrontend" AfterTargets="Build" DependsOnTargets="NeoAstraPrepareFrontend">
+    <Copy SourceFiles="@(_NeoAstraAssetFile)" DestinationFiles="@(_NeoAstraAssetFile-&gt;'$(OutDir)assets/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
