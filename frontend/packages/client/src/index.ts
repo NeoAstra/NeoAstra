@@ -411,3 +411,23 @@ export type {
   NeoRpcEventHandler,
   NeoRpcUnsubscribe,
 } from "./rpc.js";
+
+export { createDesktopClient, desktopCommands } from "./desktop.js";
+export type {
+  DesktopBytesResult,
+  DesktopDialogFilter,
+  DesktopFileDialogRequest,
+  DesktopMenuItem,
+  DesktopMessageRequest,
+  DesktopNotificationRequest,
+  DesktopOutboundDragItem,
+  DesktopPathResult,
+  DesktopPathsResult,
+  DesktopResult,
+  DesktopRpc,
+  DesktopScopedPath,
+  DesktopStatus,
+  DesktopTrayRequest,
+  DesktopValueResult,
+  NeoDesktopClient,
+} from "./desktop.js";

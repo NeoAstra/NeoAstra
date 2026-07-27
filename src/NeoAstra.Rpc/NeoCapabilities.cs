@@ -52,6 +52,8 @@ public enum NeoScopeFamily
     Network,
     /// <summary>Remembered grant identity and duration.</summary>
     Persistence,
+    /// <summary>Exact normalized global keyboard accelerators.</summary>
+    Shortcuts,
 }
 
 /// <summary>Controls how exact scope values appear in support diagnostics.</summary>

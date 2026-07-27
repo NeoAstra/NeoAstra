@@ -29,6 +29,8 @@
   <Project Path="NeoAstra.Tests/NeoAstra.Tests.csproj" />
   <Project Path="NeoAstra.CodeGen/NeoAstra.CodeGen.csproj" />
   <Project Path="NeoAstra.Hosting/NeoAstra.Hosting.csproj" />
+  <Project Path="NeoAstra.Desktop/NeoAstra.Desktop.csproj" />
+  <Project Path="NeoAstra.Desktop.NativeAotFixture/NeoAstra.Desktop.NativeAotFixture.csproj" />
   <Project Path="NeoAstra/NeoAstra.csproj" />
   <Project Path="../samples/NeoAstra.Sample/NeoAstra.Sample.csproj" />
   <Project Path="../samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj" />

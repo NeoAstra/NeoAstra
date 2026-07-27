@@ -35,6 +35,9 @@ struct windows_window {
     DWORD restored_style{};
     WINDOWPLACEMENT restored_placement{};
     neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL};
+    uint32_t modal_children{};
+    bool modal_active{};
+    bool modal{};
     windows_window() { restored_placement.length = sizeof(restored_placement); }
 };
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; };
@@ -60,6 +63,9 @@ struct windows_view {
     EventRegistrationToken client_certificate{};
     EventRegistrationToken server_certificate_error{};
     bool events_registered{};
+    HWND drop_window{};
+    class view_drop_target* drop_registration{};
+    ComPtr<IDropTarget> drop_target;
 };
 
 struct windows_download {
@@ -87,6 +93,39 @@ std::string narrow(const wchar_t* value) {
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length, result.data(), count, nullptr, nullptr);
     return result;
 }
+
+class view_drop_target final : public IDropTarget {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** value) override {if(!value)return E_POINTER;*value=nullptr;if(iid==IID_IUnknown||iid==IID_IDropTarget){*value=static_cast<IDropTarget*>(this);AddRef();return S_OK;}return E_NOINTERFACE;}
+    ULONG STDMETHODCALLTYPE AddRef() override {return static_cast<ULONG>(InterlockedIncrement(&references_));}
+    ULONG STDMETHODCALLTYPE Release() override {const auto value=static_cast<ULONG>(InterlockedDecrement(&references_));if(value==0)delete this;return value;}
+    void initialize(neoastra_view_t* view,HWND window) {window_=window;views_.push_back(view);}
+    void add(neoastra_view_t* view){views_.push_back(view);}
+    bool remove(neoastra_view_t* view){views_.erase(std::remove(views_.begin(),views_.end(),view),views_.end());return views_.empty();}
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data,DWORD,POINTL,DWORD* effect) override {if(!effect)return E_POINTER;FORMATETC files{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL},text{CF_UNICODETEXT,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL},url{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")),nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};*effect=data&&(SUCCEEDED(data->QueryGetData(&files))||SUCCEEDED(data->QueryGetData(&text))||SUCCEEDED(data->QueryGetData(&url)))?(*effect&DROPEFFECT_COPY):DROPEFFECT_NONE;return S_OK;}
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD,POINTL,DWORD* effect) override {if(!effect)return E_POINTER;*effect&=DROPEFFECT_COPY;return S_OK;}
+    HRESULT STDMETHODCALLTYPE DragLeave() override {return S_OK;}
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data,DWORD,POINTL point,DWORD* effect) override {
+        if(!data||!effect)return E_POINTER;if((*effect&DROPEFFECT_COPY)==0){*effect=DROPEFFECT_NONE;return S_OK;}*effect=DROPEFFECT_NONE;
+        FORMATETC format{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};STGMEDIUM medium{};bool files=true;
+        bool url_format=false;if(FAILED(data->GetData(&format,&medium))){files=false;format.cfFormat=static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW"));if(SUCCEEDED(data->GetData(&format,&medium)))url_format=true;else{format.cfFormat=CF_UNICODETEXT;if(FAILED(data->GetData(&format,&medium)))return S_OK;}}
+        try{
+            if(!files){const auto bytes=GlobalSize(medium.hGlobal);auto* value=static_cast<const wchar_t*>(GlobalLock(medium.hGlobal));try{if(value&&bytes>=sizeof(wchar_t)&&bytes<=65536){const auto maximum=bytes/sizeof(wchar_t);const auto length=wcsnlen(value,maximum);if(length>0&&length<maximum){auto text=narrow(std::wstring(value,length).c_str());POINT client{point.x,point.y};ScreenToClient(window_,&client);auto* target=target_at(client);if(target&&!text.empty()&&text.size()<=32768){const uint64_t kind=url_format||_wcsnicmp(value,L"https://",8)==0||_wcsnicmp(value,L"http://",7)==0||_wcsnicmp(value,L"ftp://",6)==0?1:0;neo_event_details details{};details.bounds={static_cast<int32_t>(client.x),static_cast<int32_t>(client.y),0,0};neo_emit_view_detailed(target,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&text,nullptr,(UINT64_C(1)<<63)|(kind<<56)|1,0,nullptr,details);*effect=DROPEFFECT_COPY;}}}}catch(...){if(value)GlobalUnlock(medium.hGlobal);throw;}if(value)GlobalUnlock(medium.hGlobal);ReleaseStgMedium(&medium);return S_OK;}
+            auto drop=static_cast<HDROP>(medium.hGlobal);const auto count=DragQueryFileW(drop,UINT_MAX,nullptr,0);
+            if(count==0||count>256){ReleaseStgMedium(&medium);return S_OK;}
+            std::string paths;
+            for(UINT index=0;index<count;++index){
+                const auto length=DragQueryFileW(drop,index,nullptr,0);if(length==0||length>32768)throw std::invalid_argument("drop path limit");
+                std::wstring path(static_cast<size_t>(length)+1,L'\0');if(DragQueryFileW(drop,index,path.data(),length+1)!=length)throw std::invalid_argument("drop path read");path.resize(length);
+                std::wstring canonical(32768,L'\0');const auto canonical_length=GetFullPathNameW(path.c_str(),static_cast<DWORD>(canonical.size()),canonical.data(),nullptr);if(canonical_length==0||canonical_length>=canonical.size())throw std::invalid_argument("drop path canonicalization");canonical.resize(canonical_length);
+                auto utf8=narrow(canonical.c_str());if(paths.size()+utf8.size()+1>1024*1024)throw std::invalid_argument("drop metadata limit");if(!paths.empty())paths.push_back('\0');paths+=utf8;
+            }
+            POINT client{point.x,point.y};ScreenToClient(window_,&client);auto* target=target_at(client);if(target){neo_event_details details{};details.bounds={static_cast<int32_t>(client.x),static_cast<int32_t>(client.y),0,0};neo_emit_view_detailed(target,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&paths,nullptr,(UINT64_C(1)<<63)|(UINT64_C(2)<<56)|count,0,nullptr,details);*effect=DROPEFFECT_COPY;}
+        }catch(...){if(!views_.empty())neo_log(views_.front()->environment->app,NEOASTRA_LOG_WARNING,"drag-drop","WebView2 native drop decoding failed");}
+        ReleaseStgMedium(&medium);return S_OK;
+    }
+private: neoastra_view_t* target_at(POINT point) noexcept {for(auto* view:views_){const auto bounds=view->bounds;if(view->fill_parent||(point.x>=bounds.x&&point.x<bounds.x+bounds.width&&point.y>=bounds.y&&point.y<bounds.y+bounds.height))return view;}return views_.empty()?nullptr:views_.front();}~view_drop_target()=default;volatile LONG references_{1};HWND window_{};std::vector<neoastra_view_t*> views_;
+};
 
 std::string take_string(LPWSTR value) {
     const auto result = narrow(value);
@@ -872,7 +911,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             }
             return 0;
         case WM_DESTROY:
-            static_cast<windows_window*>(window->platform)->hwnd = nullptr;
+            {auto* state=static_cast<windows_window*>(window->platform);if(state&&state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}state->modal_active=false;}if(state)state->hwnd=nullptr;}
             neo_window_closed(window);
             return 0;
         case WM_MOVE:
@@ -1062,13 +1101,13 @@ void NEOASTRA_CALL finish_script(void* pointer) {
 bool neo_platform_initialize(neoastra_app_t* app, neoastra_error_t** error) noexcept {
     try {
         auto* state = new windows_app;
-        const auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const auto hr = OleInitialize(nullptr);
         if (SUCCEEDED(hr)) state->owns_com = true;
         else if (hr != S_FALSE) { delete state; neo_fail(error, hr == RPC_E_CHANGED_MODE ? NEOASTRA_ERROR_WRONG_THREAD : NEOASTRA_ERROR_NATIVE_FAILURE, "COM STA initialization failed", hr, "com"); return false; }
-        if (!register_class(dispatch_class, dispatcher_proc) || !register_class(window_class, window_proc)) { const auto code=GetLastError(); if(state->owns_com)CoUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window class registration failed",code,"win32");return false; }
+        if (!register_class(dispatch_class, dispatcher_proc) || !register_class(window_class, window_proc)) { const auto code=GetLastError(); if(state->owns_com)OleUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window class registration failed",code,"win32");return false; }
         // A hidden top-level window, rather than HWND_MESSAGE, is required to receive session-end broadcasts.
         state->dispatcher = CreateWindowExW(0, dispatch_class, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, GetModuleHandleW(nullptr), app);
-        if (!state->dispatcher) { const auto code=GetLastError();if(state->owns_com)CoUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 dispatcher creation failed",code,"win32");return false; }
+        if (!state->dispatcher) { const auto code=GetLastError();if(state->owns_com)OleUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 dispatcher creation failed",code,"win32");return false; }
         app->platform = state; return true;
     } catch (...) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Windows backend initialization failed"); return false; }
 }
@@ -1078,7 +1117,7 @@ void neo_platform_shutdown(neoastra_app_t* app) noexcept {
     for (auto* decision : state->decision_timers) { KillTimer(state->dispatcher, reinterpret_cast<UINT_PTR>(decision)); decision->abandon(); decision->release(); }
     state->decision_timers.clear();
     if (state->dispatcher && IsWindow(state->dispatcher)) DestroyWindow(state->dispatcher);
-    if (state->owns_com && app->ui_thread == std::this_thread::get_id()) CoUninitialize();
+    if (state->owns_com && app->ui_thread == std::this_thread::get_id()) OleUninitialize();
     delete state; app->platform = nullptr;
 }
 
@@ -1101,14 +1140,18 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         if ((options->flags & 2u) == 0) style = WS_POPUP;
         const auto title=widen(window->title);
         DWORD extended=(options->flags&8u)?WS_EX_TOPMOST:0;if((options->flags&16u)==0)extended|=WS_EX_TOOLWINDOW;
-        state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,window->bounds.x,window->bounds.y,std::max(window->bounds.width,1),std::max(window->bounds.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
+        const auto x=(options->flags&32u)?CW_USEDEFAULT:window->bounds.x;
+        const auto y=(options->flags&32u)?CW_USEDEFAULT:window->bounds.y;
+        state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(window->bounds.width,1),std::max(window->bounds.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
         if(!state->hwnd){const auto code=GetLastError();delete state;window->platform=nullptr;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window creation failed",code,"win32");return false;}
+        if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}const auto width=std::max(window->bounds.width,1),height=std::max(window->bounds.height,1);SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-width)/2,area.top+((area.bottom-area.top)-height)/2,width,height,SWP_NOZORDER|SWP_NOACTIVATE);}
+        state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);state->modal_active=true;}}
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
         return true;
     } catch(const std::exception& ex){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
-void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
-neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);return NEOASTRA_OK;}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}}if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
+neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetForegroundWindow(s->hwnd)?NEOASTRA_OK:NEOASTRA_ERROR_INVALID_STATE;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
@@ -1379,6 +1422,19 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             state->controller = controller;
             result = controller->get_CoreWebView2(&state->core);
             if (SUCCEEDED(result)) result = controller->put_Bounds(view_bounds(view));
+            ComPtr<ICoreWebView2Controller4> controller4;
+            if (SUCCEEDED(result)) result=state->controller.As(&controller4);
+            if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);
+            if (SUCCEEDED(result)) {
+                state->drop_window=view_parent(view);auto* target=static_cast<view_drop_target*>(GetPropW(state->drop_window,L"NeoAstra.DropTarget"));
+                if(target&&view->window){target->add(view);target->AddRef();state->drop_target.Attach(target);state->drop_registration=target;}
+                else {target=new view_drop_target();if(target){target->initialize(view,state->drop_window);state->drop_target.Attach(target);state->drop_registration=target;}}
+                // An owned NeoAstra window dedicates its content HWND to this view. Never revoke a target
+                // installed by an embedded host on a borrowed HWND.
+                if(view->window&&!GetPropW(state->drop_window,L"NeoAstra.DropTarget")){const auto revoked=RevokeDragDrop(state->drop_window);if(FAILED(revoked)&&revoked!=DRAGDROP_E_NOTREGISTERED)result=revoked;if(SUCCEEDED(result))result=state->drop_target?RegisterDragDrop(state->drop_window,state->drop_target.Get()):E_OUTOFMEMORY;if(SUCCEEDED(result)&&!SetPropW(state->drop_window,L"NeoAstra.DropTarget",target))result=HRESULT_FROM_WIN32(GetLastError());}
+                else if(!view->window&&SUCCEEDED(result))result=state->drop_target?RegisterDragDrop(state->drop_window,state->drop_target.Get()):E_OUTOFMEMORY;
+                if(FAILED(result)&&!view->window){controller4->put_AllowExternalDrop(TRUE);state->drop_window=nullptr;state->drop_registration=nullptr;state->drop_target.Reset();result=S_OK;}
+            }
             if (SUCCEEDED(result)) result = register_view_events(view, state);
             if (SUCCEEDED(result) && view->profile) {
                 auto* profile = static_cast<windows_profile*>(view->profile->platform);
@@ -1388,7 +1444,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                     core13->get_CookieManager(&profile->cookies);
                 }
             }
-            if (FAILED(result)) callback(context, make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 view initialization failed", result));
+            if (FAILED(result)) { char message[96]{}; std::snprintf(message,sizeof(message),"WebView2 view initialization failed (0x%08lx)",static_cast<unsigned long>(result)); callback(context, make_error(NEOASTRA_ERROR_NATIVE_FAILURE, message, result)); }
             else callback(context, nullptr);
             return S_OK;
         });
@@ -1410,7 +1466,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     if (FAILED(result)) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 controller creation could not be started", result, "webview2"); return false; }
     return true;
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;remove_view_events(state);if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;remove_view_events(state);if(state->drop_window&&state->drop_registration){if(state->drop_registration->remove(view)){RemovePropW(state->drop_window,L"NeoAstra.DropTarget");RevokeDragDrop(state->drop_window);}state->drop_window=nullptr;state->drop_registration=nullptr;state->drop_target.Reset();}if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_Bounds(view_bounds(view)))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(uri);const auto result=state->core->Navigate(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);auto* environment=static_cast<windows_environment*>(view->environment->platform);if(!state||!state->core||!environment||!environment->value)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(method.empty()||body_length>ULONG_MAX)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WebView2 request method or body length");ComPtr<IStream> content;if(body_length){HRESULT result=CreateStreamOnHGlobal(nullptr,TRUE,&content);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WebView2 request body",result,"webview2");ULONG written{};result=content->Write(body,static_cast<ULONG>(body_length),&written);LARGE_INTEGER start{};if(SUCCEEDED(result)&&written==body_length)result=content->Seek(start,STREAM_SEEK_SET,nullptr);if(FAILED(result)||written!=body_length)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not write WebView2 request body",FAILED(result)?result:E_FAIL,"webview2");}ComPtr<ICoreWebView2Environment2> environment2;ComPtr<ICoreWebView2_2> core2;auto result=environment->value.As(&environment2);if(SUCCEEDED(result))result=state->core.As(&core2);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"This WebView2 runtime does not support request navigation",result,"webview2");ComPtr<ICoreWebView2WebResourceRequest> request;result=environment2->CreateWebResourceRequest(widen(uri).c_str(),widen(method).c_str(),content.Get(),widen(headers).c_str(),&request);if(SUCCEEDED(result))result=core2->NavigateWithWebResourceRequest(request.Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 request navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}

@@ -15,6 +15,7 @@
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <ProjectReference Include="..\NeoAstra.SingleInstanceHelper\NeoAstra.SingleInstanceHelper.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\NeoAstra.Hosting\NeoAstra.Hosting.csproj" />
+    <ProjectReference Include="..\NeoAstra.Desktop\NeoAstra.Desktop.csproj" />
     <ProjectReference Include="..\NeoAstra.Rpc\NeoAstra.Rpc.csproj" />
     <ProjectReference Include="..\NeoAstra.Rpc.Generator\NeoAstra.Rpc.Generator.csproj" />
     <ProjectReference Include="..\NeoAstra.Tooling\NeoAstra.Tooling.csproj" />

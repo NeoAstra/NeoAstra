@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neoastra.dev/schemas/desktop/url.scope.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemes", "hosts"],
+  "properties": {
+    "schemes": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["http", "https"] } },
+    "hosts": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "maxLength": 253 } },
+    "ports": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
+    "pathPrefixes": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "pattern": "^/", "maxLength": 2048 } }
+  }
+}

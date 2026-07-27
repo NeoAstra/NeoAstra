@@ -33,7 +33,7 @@ public sealed class NeoFileSystemScope : NeoCapabilityScope
     public override string Summary => $"filesystem:roots={_roots.Count},operations={_operations.Count},links={(_allowLinks ? "reviewed" : "denied")}";
 
     /// <summary>Validates a root token, canonical relative path, and operation.</summary>
-    /// <param name="rootToken">Predeclared root token.</param><param name="relativePath">Relative path that never uses ambient current directory.</param><param name="operation">read, write, create, or delete.</param>
+    /// <param name="rootToken">Predeclared root token.</param><param name="relativePath">Relative path that never uses ambient current directory.</param><param name="operation">read, write, create, delete, open, or reveal.</param>
     /// <param name="canonicalPath">Receives a canonical absolute path only after validation.</param><returns>Whether access is in scope.</returns>
     public bool TryResolve(string rootToken, string relativePath, string operation, out string? canonicalPath)
     {
@@ -176,6 +176,21 @@ public sealed class NeoDialogScope : NeoCapabilityScope
     internal override void WriteCanonical(Utf8JsonWriter writer) { writer.WriteStartObject(); ScopeCanonical.WriteStrings(writer, "kinds", _kinds); ScopeCanonical.WriteStrings(writer, "initialLocations", _locations); ScopeCanonical.WriteStrings(writer, "extensions", _extensions); writer.WriteEndObject(); }
 }
 
+/// <summary>Represents an exact set of normalized global keyboard accelerators.</summary>
+public sealed class NeoShortcutScope : NeoCapabilityScope
+{
+    private readonly IReadOnlySet<string> _accelerators;
+    internal NeoShortcutScope(IReadOnlySet<string> accelerators) => _accelerators = accelerators;
+    /// <inheritdoc />
+    public override NeoScopeFamily Family => NeoScopeFamily.Shortcuts;
+    /// <inheritdoc />
+    public override string Summary => $"shortcuts:accelerators={_accelerators.Count}";
+    /// <summary>Checks one exact normalized accelerator.</summary>
+    public bool Allows(string accelerator) => _accelerators.Contains(accelerator);
+    internal override bool Allows(JsonElement arguments, out string safeReason) { safeReason = "shortcut_out_of_scope"; return ScopeValidation.TryString(arguments, "accelerator", out var accelerator) && Allows(accelerator); }
+    internal override void WriteCanonical(Utf8JsonWriter writer) { writer.WriteStartObject(); ScopeCanonical.WriteStrings(writer, "accelerators", _accelerators); writer.WriteEndObject(); }
+}
+
 /// <summary>Represents constrained network requests and redirect/body/response policy.</summary>
 public sealed class NeoNetworkScope : NeoCapabilityScope
 {
@@ -235,6 +250,7 @@ internal static class NeoScopeParser
         {
             NeoScopeFamily.Filesystem => FileSystem(scope, platform), NeoScopeFamily.Url => Url(scope), NeoScopeFamily.Process => Process(scope, platform), NeoScopeFamily.Clipboard => Clipboard(scope),
             NeoScopeFamily.Notifications => Notifications(scope), NeoScopeFamily.Dialogs => Dialogs(scope), NeoScopeFamily.Network => Network(scope), NeoScopeFamily.Persistence => Persistence(scope),
+            NeoScopeFamily.Shortcuts => Shortcuts(scope),
             _ => throw Invalid("The scope family is unsupported."),
         };
     }
@@ -249,7 +265,7 @@ internal static class NeoScopeParser
             if (!Path.IsPathFullyQualified(path) || ScopeValidation.HasUnsafeUnicode(path) || ScopeValidation.HasDeviceOrAlternateStream(path, platform)) throw Invalid("A filesystem root is not a safe absolute path.");
             path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); if (!roots.TryAdd(token, path)) throw Invalid("A filesystem root token is duplicated.");
         }
-        var operations = Set(value, "operations", 4, "read", "write", "create", "delete"); var links = OptionalBool(value, "allowSymlinks");
+        var operations = Set(value, "operations", 6, "read", "write", "create", "delete", "open", "reveal"); var links = OptionalBool(value, "allowSymlinks");
         return new(roots, operations, links, platform);
     }
 
@@ -298,6 +314,13 @@ internal static class NeoScopeParser
         using var doc = JsonDocument.Parse(stream.ToArray()); return Url(doc.RootElement);
     }
     private static NeoPersistenceScope Persistence(JsonElement value) { Fields(value, "identities", "kinds", "maximumDurationSeconds"); return new(IdentifierSet(value, "identities", 64), Set(value, "kinds", 8, "browserPermission", "nativeGrant", "applicationGrant"), TimeSpan.FromSeconds(Integer(value, "maximumDurationSeconds", 0, 365 * 24 * 60 * 60))); }
+    private static NeoShortcutScope Shortcuts(JsonElement value)
+    {
+        Fields(value, "accelerators");
+        var accelerators = Set(value, "accelerators", 128, allowAny: true);
+        if (accelerators.Any(static accelerator => !ScopeValidation.IsNormalizedAccelerator(accelerator))) throw Invalid("Shortcut accelerators must use normalized portable syntax.");
+        return new(accelerators);
+    }
 
     private static void Fields(JsonElement value, params string[] allowed)
     {
@@ -352,4 +375,14 @@ internal static class ScopeValidation
     internal static int Utf8PropertyBytes(JsonElement args, string name) => args.TryGetProperty(name, out var value) ? System.Text.Encoding.UTF8.GetByteCount(value.GetRawText()) : 0;
     internal static bool IsAsciiIdentifier(string value) => value.Length is > 0 and <= 128 && value.All(static c => c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_');
     internal static bool IsHttpToken(string value) => value.Length is > 0 and <= 128 && value.All(static c => char.IsAsciiLetterOrDigit(c) || c is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~');
+    internal static bool IsNormalizedAccelerator(string value)
+    {
+        if (value.Length is < 1 or > 64 || value.Any(char.IsControl)) return false;
+        var parts = value.Split('+'); if (parts.Length is < 1 or > 5 || parts.Any(static part => part.Length == 0)) return false;
+        var expected = new[] { "Ctrl", "Alt", "Shift", "Meta" }; var previous = -1;
+        for (var index = 0; index < parts.Length - 1; index++) { var position = Array.IndexOf(expected, parts[index]); if (position <= previous) return false; previous = position; }
+        var key = parts[^1];
+        if (key.Length > 16 || key.Any(static c => !(char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))) return false;
+        return value is not ("Alt+F4" or "Ctrl+Alt+Delete" or "Meta+L" or "Meta+Tab");
+    }
 }

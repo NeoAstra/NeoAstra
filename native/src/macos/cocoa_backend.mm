@@ -39,8 +39,43 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 @property(nonatomic,assign) neoastra_view_t* nativeView;
 @end
 
+@interface NeoAstraWebView : WKWebView
+@property(nonatomic,assign) neoastra_view_t* nativeView;
+@end
+
+@implementation NeoAstraWebView
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    BOOL handled=[super performDragOperation:sender];
+    auto* view=self.nativeView;
+    if(!view)return handled;
+    @try {
+        NSPasteboard* pasteboard=sender.draggingPasteboard;
+        NSArray<NSURL*>* urls=[pasteboard readObjectsForClasses:@[[NSURL class]] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
+        if(urls.count>256)return handled;
+        NSPoint point=[self convertPoint:sender.draggingLocation fromView:nil];if(!self.isFlipped)point.y=self.bounds.size.height-point.y;
+        neo_event_details details{};details.bounds={static_cast<int32_t>(point.x),static_cast<int32_t>(point.y),0,0};
+        std::string paths;uint64_t path_count=0;
+        for(NSURL* url in urls){
+            const char* value=url.standardizedFileURL.fileSystemRepresentation;
+            if(!value||!*value)continue;
+            const size_t length=strlen(value);
+            if(length>32768||paths.size()+length+1>1024*1024)return handled;
+            if(!paths.empty())paths.push_back('\0');
+            paths.append(value,length);++path_count;
+        }
+        if(!paths.empty()){neo_emit_view_detailed(view,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&paths,nullptr,(UINT64_C(1)<<63)|(UINT64_C(2)<<56)|path_count,0,nullptr,details);handled=YES;}
+        else {
+            NSString* value=[pasteboard stringForType:NSPasteboardTypeURL];uint64_t kind=1;
+            if(!value){value=[pasteboard stringForType:NSPasteboardTypeString];kind=0;}
+            std::string text;if(value&&[value lengthOfBytesUsingEncoding:NSUTF8StringEncoding]<=32768)text=utf8(value);if(!text.empty()){neo_emit_view_detailed(view,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&text,nullptr,(UINT64_C(1)<<63)|(kind<<56)|1,0,nullptr,details);handled=YES;}
+        }
+    } @catch(NSException*) { neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"drag-drop","WKWebView native drop decoding failed"); }
+    return handled;
+}
+@end
+
 namespace {
-struct cocoa_window { NSWindow* window; NeoWindowDelegate* delegate; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; };
+struct cocoa_window { NSWindow* window; NeoWindowDelegate* delegate; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; bool modal{}; bool modal_active{}; };
 struct cocoa_view {
     WKWebView* webview;
     NeoAstraDelegate* delegate;
@@ -216,7 +251,7 @@ void report_window_state(neoastra_window_t* value,neoastra_window_state_t state)
 
 @implementation NeoWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow*)sender { (void)sender;auto* value=self.nativeWindow;if(!value)return YES;if(value->force_closing){value->force_closing=false;return YES;}neo_window_request_close(value,NEOASTRA_WINDOW_CLOSE_USER,true);return NO; }
-- (void)windowWillClose:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;if(value){auto* state=static_cast<cocoa_window*>(value->platform);if(state)state->window=nil;neo_window_closed(value);} }
+- (void)windowWillClose:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;if(value){auto* state=static_cast<cocoa_window*>(value->platform);if(state&&state->modal_active&&state->window.sheetParent){[state->window.sheetParent endSheet:state->window];state->modal_active=false;}if(state)state->window=nil;neo_window_closed(value);} }
 - (void)windowDidResize:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;if(!value)return;NSWindow* window=static_cast<cocoa_window*>(value->platform)->window;NSRect frame=[window contentRectForFrameRect:window.frame];{std::lock_guard lock(value->state_mutex);value->bounds.width=(int32_t)frame.size.width;value->bounds.height=(int32_t)frame.size.height;}neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_RESIZED,value->id);if((window.styleMask&NSWindowStyleMaskFullScreen)!=0)report_window_state(value,NEOASTRA_WINDOW_FULLSCREEN);else if(window.miniaturized)report_window_state(value,NEOASTRA_WINDOW_MINIMIZED);else report_window_state(value,window.zoomed?NEOASTRA_WINDOW_MAXIMIZED:NEOASTRA_WINDOW_NORMAL); }
 - (void)windowDidMove:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;if(value)neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_MOVED,value->id); }
 - (void)windowDidBecomeKey:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;if(value)neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,value->id,nullptr,nullptr,1); }
@@ -279,9 +314,9 @@ void neo_platform_quit(neoastra_app_t*) noexcept {dispatch_async(dispatch_get_ma
 void neo_platform_wake(neoastra_app_t* app) noexcept {app->retain();dispatch_async(dispatch_get_main_queue(),^{neo_drain_dispatch(app);app->release();});}
 bool neo_platform_schedule_decision_timeout(neoastra_app_t*,neoastra_decision_t* decision) noexcept {const auto remaining=std::chrono::duration_cast<std::chrono::nanoseconds>(decision->deadline-std::chrono::steady_clock::now()).count();decision->retain();dispatch_after(dispatch_time(DISPATCH_TIME_NOW,std::max<int64_t>(remaining,1)),dispatch_get_main_queue(),^{decision->expire();decision->release();});return true;}
 
-bool neo_platform_window_create(neoastra_window_t* window,const neoastra_window_options_t* options,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=new cocoa_window{};window->platform=state;NSWindowStyleMask style=NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;if(options->flags&2u)style|=NSWindowStyleMaskTitled;if(options->flags&1u)style|=NSWindowStyleMaskResizable;state->window=[[NSWindow alloc]initWithContentRect:NSMakeRect(window->bounds.x,window->bounds.y,window->bounds.width,window->bounds.height) styleMask:style backing:NSBackingStoreBuffered defer:NO];state->delegate=[NeoWindowDelegate new];state->delegate.nativeWindow=window;state->window.delegate=state->delegate;state->window.title=ns_string(window->title);state->window.releasedWhenClosed=NO;if(options->minimum_size.width>0||options->minimum_size.height>0)state->window.contentMinSize=NSMakeSize(std::max(options->minimum_size.width,0),std::max(options->minimum_size.height,0));if(options->maximum_size.width>0||options->maximum_size.height>0)state->window.contentMaxSize=NSMakeSize(options->maximum_size.width>0?options->maximum_size.width:CGFLOAT_MAX,options->maximum_size.height>0?options->maximum_size.height:CGFLOAT_MAX);if(options->flags&8u)state->window.level=NSFloatingWindowLevel;if(options->flags&4u){[state->window makeKeyAndOrderFront:nil];if(options->state==NEOASTRA_WINDOW_MINIMIZED)[state->window miniaturize:nil];else if(options->state==NEOASTRA_WINDOW_MAXIMIZED)[state->window zoom:nil];else if(options->state==NEOASTRA_WINDOW_FULLSCREEN)[state->window toggleFullScreen:nil];}[NSApp activateIgnoringOtherApps:YES];return true;}}
-void neo_platform_window_destroy(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state)return;state->delegate.nativeWindow=nullptr;state->window.delegate=nil;if(state->window)[state->window close];delete state;window->platform=nullptr;}}
-neoastra_result_t neo_platform_window_show(neoastra_window_t* window,bool visible) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;if(!visible){[state->window orderOut:nil];return NEOASTRA_OK;}neoastra_window_state_t desired{};{std::lock_guard lock(window->state_mutex);desired=window->state;}[state->window orderFront:nil];{std::lock_guard lock(window->state_mutex);window->state=desired;}return neo_platform_window_set_state(window);}
+bool neo_platform_window_create(neoastra_window_t* window,const neoastra_window_options_t* options,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=new cocoa_window{};window->platform=state;NSWindowStyleMask style=NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;if(options->flags&2u)style|=NSWindowStyleMaskTitled;if(options->flags&1u)style|=NSWindowStyleMaskResizable;state->window=[[NSWindow alloc]initWithContentRect:NSMakeRect(window->bounds.x,window->bounds.y,window->bounds.width,window->bounds.height) styleMask:style backing:NSBackingStoreBuffered defer:NO];state->delegate=[NeoWindowDelegate new];state->delegate.nativeWindow=window;state->window.delegate=state->delegate;state->window.title=ns_string(window->title);state->window.releasedWhenClosed=NO;if(options->minimum_size.width>0||options->minimum_size.height>0)state->window.contentMinSize=NSMakeSize(std::max(options->minimum_size.width,0),std::max(options->minimum_size.height,0));if(options->maximum_size.width>0||options->maximum_size.height>0)state->window.contentMaxSize=NSMakeSize(options->maximum_size.width>0?options->maximum_size.width:CGFLOAT_MAX,options->maximum_size.height>0?options->maximum_size.height:CGFLOAT_MAX);if(options->flags&8u)state->window.level=NSFloatingWindowLevel;if(options->flags&64u){if(window->owner){auto* owner=static_cast<cocoa_window*>(window->owner->platform);if(owner&&owner->window){const auto owner_frame=owner->window.frame,child_frame=state->window.frame;[state->window setFrameOrigin:NSMakePoint(NSMidX(owner_frame)-child_frame.size.width/2,NSMidY(owner_frame)-child_frame.size.height/2)];}else [state->window center];}else [state->window center];}else if(options->flags&32u)[state->window cascadeTopLeftFromPoint:NSMakePoint(20,20)];state->modal=(options->flags&128u)!=0;if(options->flags&4u){if(state->modal&&window->owner){auto* owner=static_cast<cocoa_window*>(window->owner->platform);if(!owner||!owner->window||owner->window.attachedSheet){delete state;window->platform=nullptr;return false;}[owner->window beginSheet:state->window completionHandler:nil];state->modal_active=true;}else [state->window makeKeyAndOrderFront:nil];if(options->state==NEOASTRA_WINDOW_MINIMIZED)[state->window miniaturize:nil];else if(options->state==NEOASTRA_WINDOW_MAXIMIZED)[state->window zoom:nil];else if(options->state==NEOASTRA_WINDOW_FULLSCREEN)[state->window toggleFullScreen:nil];}[NSApp activateIgnoringOtherApps:YES];return true;}}
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<cocoa_window*>(window->owner->platform);if(owner&&owner->window)[owner->window endSheet:state->window];state->modal_active=false;}state->delegate.nativeWindow=nullptr;state->window.delegate=nil;if(state->window)[state->window close];delete state;window->platform=nullptr;}}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* window,bool visible) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;if(!visible){if(state->modal_active&&window->owner){auto* owner=static_cast<cocoa_window*>(window->owner->platform);if(owner&&owner->window)[owner->window endSheet:state->window];state->modal_active=false;}[state->window orderOut:nil];return NEOASTRA_OK;}if(state->modal&&window->owner&&!state->modal_active){auto* owner=static_cast<cocoa_window*>(window->owner->platform);if(!owner||!owner->window||owner->window.attachedSheet)return NEOASTRA_ERROR_INVALID_STATE;[owner->window beginSheet:state->window completionHandler:nil];state->modal_active=true;}else if(!state->modal)[state->window orderFront:nil];neoastra_window_state_t desired{};{std::lock_guard lock(window->state_mutex);desired=window->state;}{std::lock_guard lock(window->state_mutex);window->state=desired;}return neo_platform_window_set_state(window);}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* window) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;[state->window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;[state->window performClose:nil];return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;state->window.title=ns_string(window->title);return NEOASTRA_OK;}
@@ -370,12 +405,13 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 }
                 if (view->bridge_policy != NEOASTRA_BRIDGE_DISABLED)
                     [configuration.userContentController addScriptMessageHandler:state->delegate name:@"_neoastra_transport_v1"];
-                state->webview=[[WKWebView alloc]initWithFrame:view_frame(view,parent) configuration:configuration];
+                state->webview=[[NeoAstraWebView alloc]initWithFrame:view_frame(view,parent) configuration:configuration];
                 if (!state->webview) {
                     neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView could not create the browser view",0,"wkwebview");
                     return false;
                 }
                 state->webview.navigationDelegate=state->delegate;
+                ((NeoAstraWebView*)state->webview).nativeView=view;
                 state->webview.UIDelegate=state->delegate;
                 state->webview.allowsMagnification=YES;
                 if (view->fill_parent) state->webview.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
@@ -395,7 +431,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
         }
     }
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];}@catch(NSException*){}state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view->fill_parent?(NSViewWidthSizable|NSViewHeightSizable):NSViewNotSizable;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation URI");[state->webview loadRequest:[NSURLRequest requestWithURL:url]];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url||method.empty()||body_length>NSUIntegerMax)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation request");NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];request.HTTPMethod=ns_string(method);if(body_length)request.HTTPBody=[NSData dataWithBytes:body length:(NSUInteger)body_length];for(NSString* line in [ns_string(headers) componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]){NSRange separator=[line rangeOfString:@":"];if(separator.location==NSNotFound)continue;NSString* name=[[line substringToIndex:separator.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];NSString* value=[[line substringFromIndex:separator.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];if(name.length)[request setValue:value forHTTPHeaderField:name];}[state->webview loadRequest:request];return NEOASTRA_OK;}}

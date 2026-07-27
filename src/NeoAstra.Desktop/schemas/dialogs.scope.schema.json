@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neoastra.dev/schemas/desktop/dialogs.scope.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kinds", "initialLocations"],
+  "properties": {
+    "kinds": { "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": { "enum": ["openFile", "saveFile", "openFolder", "message"] } },
+    "initialLocations": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" } },
+    "extensions": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9]{1,32}$" } }
+  }
+}

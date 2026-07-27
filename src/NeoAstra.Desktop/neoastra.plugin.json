@@ -1,0 +1,647 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.desktop.essentials",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Desktop.NeoDesktopEssentialsPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [
+    {
+      "name": "desktop.dialogs.open-file",
+      "permission": "dialogs:open-file",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/dialogs.scope.schema.json"
+    },
+    {
+      "name": "desktop.dialogs.save-file",
+      "permission": "dialogs:save-file",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/dialogs.scope.schema.json"
+    },
+    {
+      "name": "desktop.dialogs.open-folder",
+      "permission": "dialogs:open-folder",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/dialogs.scope.schema.json"
+    },
+    {
+      "name": "desktop.dialogs.message",
+      "permission": "dialogs:message",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.menus.activate",
+      "permission": "menus:activate",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.menus.set",
+      "permission": "menus:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.menus.popup",
+      "permission": "menus:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.tray.create",
+      "permission": "tray:create",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.tray.update",
+      "permission": "tray:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.tray.remove",
+      "permission": "tray:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.clipboard.read-text",
+      "permission": "clipboard:read-text",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/clipboard.scope.schema.json"
+    },
+    {
+      "name": "desktop.clipboard.write-text",
+      "permission": "clipboard:write-text",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/clipboard.scope.schema.json"
+    },
+    {
+      "name": "desktop.clipboard.read-rich",
+      "permission": "clipboard:read-rich",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/clipboard.scope.schema.json"
+    },
+    {
+      "name": "desktop.clipboard.write-rich",
+      "permission": "clipboard:write-rich",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/clipboard.scope.schema.json"
+    },
+    {
+      "name": "desktop.clipboard.clear",
+      "permission": "clipboard:clear",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.status",
+      "permission": "notifications:status",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.show",
+      "permission": "notifications:display",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/notifications.scope.schema.json"
+    },
+    {
+      "name": "desktop.notifications.remove",
+      "permission": "notifications:remove",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.shortcuts.register",
+      "permission": "shortcuts:register",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/shortcuts.scope.schema.json"
+    },
+    {
+      "name": "desktop.shortcuts.unregister",
+      "permission": "shortcuts:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.system.theme",
+      "permission": "system-info:theme",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.system.displays",
+      "permission": "system-info:displays",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.system.metadata",
+      "permission": "system-info:metadata",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.opener.url",
+      "permission": "opener:url",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/url.scope.schema.json"
+    },
+    {
+      "name": "desktop.opener.file",
+      "permission": "opener:file",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/filesystem.scope.schema.json"
+    },
+    {
+      "name": "desktop.opener.reveal",
+      "permission": "opener:reveal",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/filesystem.scope.schema.json"
+    },
+    {
+      "name": "desktop.drag-drop.outbound",
+      "permission": "drag-drop:outbound",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.drag-drop.resolve-file",
+      "permission": "drag-drop:receive-files",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.safe-storage.store",
+      "permission": "safe-storage:store",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.safe-storage.retrieve",
+      "permission": "safe-storage:retrieve",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.safe-storage.contains",
+      "permission": "safe-storage:retrieve",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.safe-storage.delete",
+      "permission": "safe-storage:delete",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-icon",
+      "permission": "window:files",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/filesystem.scope.schema.json"
+    },
+    {
+      "name": "desktop.window.set-represented-file",
+      "permission": "window:files",
+      "risk": "high",
+      "audited": true,
+      "scopeSchema": "schemas/filesystem.scope.schema.json"
+    },
+    {
+      "name": "desktop.window.request-attention",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-progress",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-badge",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-document-edited",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-content-protection",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-titlebar-theme",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    }
+  ],
+  "events": [
+    {
+      "name": "desktop.tray.activated",
+      "permission": "tray:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.activated",
+      "permission": "notifications:activation",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.shortcuts.activated",
+      "permission": "shortcuts:control",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.system.theme-changed",
+      "permission": "system-info:theme",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "desktop.system.displays-changed",
+      "permission": "system-info:displays",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.drag-drop.inbound",
+      "permission": "drag-drop:receive-files",
+      "risk": "high",
+      "audited": true
+    }
+  ],
+  "permissions": [
+    {
+      "id": "dialogs:open-file",
+      "revision": 1,
+      "operations": [
+        "desktop.dialogs.open-file"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "dialogs",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "dialogs:save-file",
+      "revision": 1,
+      "operations": [
+        "desktop.dialogs.save-file"
+      ],
+      "risk": "high",
+      "scopeFamily": "dialogs",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "dialogs:open-folder",
+      "revision": 1,
+      "operations": [
+        "desktop.dialogs.open-folder"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "dialogs",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "dialogs:message",
+      "revision": 1,
+      "operations": [
+        "desktop.dialogs.message"
+      ],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "menus:activate",
+      "revision": 1,
+      "operations": [
+        "desktop.menus.activate"
+      ],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "menus:control",
+      "revision": 1,
+      "operations": [
+         "desktop.menus.set",
+         "desktop.menus.popup"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "tray:create",
+      "revision": 1,
+      "operations": [
+        "desktop.tray.create"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "tray:control",
+      "revision": 1,
+      "operations": [
+        "desktop.tray.update",
+        "desktop.tray.remove",
+        "desktop.tray.activated"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "clipboard:read-text",
+      "revision": 1,
+      "operations": [
+        "desktop.clipboard.read-text"
+      ],
+      "risk": "high",
+      "scopeFamily": "clipboard",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "clipboard:write-text",
+      "revision": 1,
+      "operations": [
+        "desktop.clipboard.write-text"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "clipboard",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "clipboard:read-rich",
+      "revision": 1,
+      "operations": [
+        "desktop.clipboard.read-rich"
+      ],
+      "risk": "high",
+      "scopeFamily": "clipboard",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "clipboard:write-rich",
+      "revision": 1,
+      "operations": [
+        "desktop.clipboard.write-rich"
+      ],
+      "risk": "high",
+      "scopeFamily": "clipboard",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "clipboard:clear",
+      "revision": 1,
+      "operations": [
+        "desktop.clipboard.clear"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:status",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.status"
+      ],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:display",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.show"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "notifications",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "notifications:remove",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.remove"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:activation",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.activated"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "system-info:theme",
+      "revision": 1,
+      "operations": [
+        "desktop.system.theme",
+        "desktop.system.theme-changed"
+      ],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "system-info:displays",
+      "revision": 1,
+      "operations": [
+        "desktop.system.displays",
+        "desktop.system.displays-changed"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "system-info:metadata",
+      "revision": 1,
+      "operations": [
+        "desktop.system.metadata"
+      ],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "opener:url",
+      "revision": 1,
+      "operations": [
+        "desktop.opener.url"
+      ],
+      "risk": "high",
+      "scopeFamily": "url",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "opener:file",
+      "revision": 1,
+      "operations": [
+        "desktop.opener.file"
+      ],
+      "risk": "high",
+      "scopeFamily": "filesystem",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "opener:reveal",
+      "revision": 1,
+      "operations": [
+        "desktop.opener.reveal"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "filesystem",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "drag-drop:outbound",
+      "revision": 1,
+      "operations": [
+        "desktop.drag-drop.outbound"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "drag-drop:receive-files",
+      "revision": 1,
+      "operations": [
+        "desktop.drag-drop.inbound",
+        "desktop.drag-drop.resolve-file"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "safe-storage:store",
+      "revision": 1,
+      "operations": [
+        "desktop.safe-storage.store"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "safe-storage:retrieve",
+      "revision": 1,
+      "operations": [
+        "desktop.safe-storage.retrieve",
+        "desktop.safe-storage.contains"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "safe-storage:delete",
+      "revision": 1,
+      "operations": [
+        "desktop.safe-storage.delete"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "shortcuts:register",
+      "revision": 1,
+      "operations": [
+        "desktop.shortcuts.register"
+      ],
+      "risk": "high",
+      "scopeFamily": "shortcuts",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "shortcuts:control",
+      "revision": 1,
+      "operations": [
+        "desktop.shortcuts.unregister",
+        "desktop.shortcuts.activated"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    }
+  ]
+}

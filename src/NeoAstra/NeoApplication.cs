@@ -300,7 +300,10 @@ public sealed class NeoApplication : IAsyncDisposable
                     (options.HasDecorations ? 2u : 0u) |
                     (options.IsVisible ? 4u : 0u) |
                     (options.IsAlwaysOnTop ? 8u : 0u) |
-                    (options.ShowInTaskbar ? 16u : 0u);
+                    (options.ShowInTaskbar ? 16u : 0u) |
+                    (options.StartupLocation == NeoWindowStartupLocation.Default ? 32u : 0u) |
+                    (options.StartupLocation == NeoWindowStartupLocation.Center ? 64u : 0u) |
+                    (options.IsModal ? 128u : 0u);
         var raw = new NativeMethods.neoastra_window_options
         {
             size = (uint)sizeof(NativeMethods.neoastra_window_options),
@@ -705,7 +708,12 @@ public sealed class NeoApplication : IAsyncDisposable
             _views.Add(view);
             if (view.ViewLabel is not null) _viewsByLabel.Add(view.ViewLabel, view);
         }
+        try { ViewRegistered?.Invoke(view); } catch { }
     }
+
+    internal event Action<NeoAstra>? ViewRegistered;
+
+    internal NeoAstra[] GetRegisteredViews() { lock (_sync) return _views.ToArray(); }
 
     internal void UnregisterView(NeoAstra view)
     {

@@ -11,6 +11,7 @@
     <CompilerVisibleProperty Include="NeoRpcTypeScriptOutput" /><CompilerVisibleProperty Include="NeoRpcManifestOutput" /><CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../src/NeoAstra.Rpc/NeoAstra.Rpc.csproj" />
+    <ProjectReference Include="../../src/NeoAstra.Desktop/NeoAstra.Desktop.csproj" />
     <ProjectReference Include="../../src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />
     <ProjectReference Include="../../src/NeoAstra.Tool/NeoAstra.Tool.csproj" ReferenceOutputAssembly="false" Private="false" GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />
     <None Include="capabilities/*.json" CopyToPublishDirectory="PreserveNewest" Link="capabilities/%(Filename)%(Extension)" />

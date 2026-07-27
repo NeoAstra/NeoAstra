@@ -224,6 +224,9 @@ public sealed class NeoWindowOptions
     /// <summary>Gets or sets the owner window.</summary>
     public NeoWindow? Owner { get; set; }
 
+    /// <summary>Gets or sets whether this owned window blocks input to its owner without starting a nested application loop.</summary>
+    public bool IsModal { get; set; }
+
     /// <summary>Gets or sets the initial title.</summary>
     public string Title { get; set; } = "NeoAstra";
 
@@ -298,6 +301,7 @@ public sealed class NeoWindowOptions
         {
             throw new ArgumentException("A window owner must belong to the same application.", nameof(Owner));
         }
+        if (IsModal && Owner is null) throw new ArgumentException("A modal window requires an explicit owner.", nameof(IsModal));
     }
 
     private static void ValidateSize(NeoSize value, string parameterName)

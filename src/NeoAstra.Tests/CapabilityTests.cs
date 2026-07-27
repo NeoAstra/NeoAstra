@@ -82,11 +82,12 @@ public sealed class CapabilityTests
             ["dialogs:open"] = """{"kinds":["openFile"],"initialLocations":["documents"],"extensions":["txt"]}""",
             ["network:request"] = """{"schemes":["https"],"hosts":["api.example"],"methods":["GET"],"headers":["accept"],"maximumBodyBytes":0,"maximumResponseBytes":4096}""",
             ["persistence:remember"] = """{"identities":["main"],"kinds":["nativeGrant"],"maximumDurationSeconds":3600}""",
+            ["shortcuts:register"] = """{"accelerators":["Ctrl+Shift+P"]}""",
         };
         var permissions = string.Join(',', scopes.Select(pair => $$"""{"id":"{{pair.Key}}","scope":{{pair.Value}}}"""));
         var json = $$"""{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"all","views":["main"],"permissions":[{{permissions}}]}]}""";
         var manifest = Resolve(json, Catalog(includeScopes: true), CurrentPlatform());
-        Assert.AreEqual(8, manifest.GrantSummaries.Single().Contains("permissions=8", StringComparison.Ordinal) ? 8 : 0);
+        Assert.AreEqual(9, manifest.GrantSummaries.Single().Contains("permissions=9", StringComparison.Ordinal) ? 9 : 0);
         AssertCode("scope_invalid", json.Replace("\"operations\":[\"read\"]", "\"operations\":[\"read\"],\"ambientCurrentDirectory\":true"), Catalog(includeScopes: true), CurrentPlatform());
         AssertCode("scope_invalid", json.Replace("\"schemes\":[\"https\"]", "\"schemes\":[\"javascript\"]"), Catalog(includeScopes: true), CurrentPlatform());
     }
@@ -254,6 +255,7 @@ public sealed class CapabilityTests
         Assert.IsFalse(dialog.GetProperty("required").EnumerateArray().Any(static value => value.GetString() == "extensions"));
         Assert.IsFalse(dialog.GetProperty("properties").GetProperty("extensions").TryGetProperty("minItems", out _));
         Assert.AreEqual(1, definitions.GetProperty("processScope").GetProperty("properties").GetProperty("executables").GetProperty("items").GetProperty("properties").GetProperty("path").GetProperty("minLength").GetInt32());
+        Assert.AreEqual(128, definitions.GetProperty("shortcutScope").GetProperty("properties").GetProperty("accelerators").GetProperty("maxItems").GetInt32());
 
         var tooLongId = new string('a', 129);
         const string basic = "{\"$schema\":\"neoastra-capabilities-v1.schema.json\",\"version\":1,\"capabilities\":[{\"id\":\"ID\",\"views\":[\"main\"],\"permissions\":[\"documents:open\"]}]}";
@@ -332,7 +334,7 @@ public sealed class CapabilityTests
         {
             builder.Add(Scoped("files:read", "files.read", NeoScopeFamily.Filesystem)); builder.Add(Scoped("process:run", "process.run", NeoScopeFamily.Process));
             builder.Add(Scoped("clipboard:use", "clipboard.use", NeoScopeFamily.Clipboard)); builder.Add(Scoped("notifications:show", "notifications.show", NeoScopeFamily.Notifications));
-            builder.Add(Scoped("dialogs:open", "dialogs.open", NeoScopeFamily.Dialogs)); builder.Add(Scoped("network:request", "network.request", NeoScopeFamily.Network)); builder.Add(Scoped("persistence:remember", "persistence.remember", NeoScopeFamily.Persistence));
+            builder.Add(Scoped("dialogs:open", "dialogs.open", NeoScopeFamily.Dialogs)); builder.Add(Scoped("network:request", "network.request", NeoScopeFamily.Network)); builder.Add(Scoped("persistence:remember", "persistence.remember", NeoScopeFamily.Persistence)); builder.Add(Scoped("shortcuts:register", "shortcuts.register", NeoScopeFamily.Shortcuts));
         }
         return builder.Build();
         static NeoPermissionDeclaration Scoped(string id, string command, NeoScopeFamily family) => new(id, 1, [command], NeoPermissionRisk.High, family) { ScopeRequired = true, UnionSafe = true };

@@ -5,6 +5,7 @@ import type {
   NeoAstraTransportDiagnostic,
 } from "./index.js";
 import { NeoRpcClient, NeoRpcError, type NeoRpcErrorValue } from "./rpc.js";
+import { createDesktopClient, type DesktopRpc } from "./desktop.js";
 import {
   DEFAULT_MAXIMUM_FRAME_BYTES,
   NeoAstraClientError,
@@ -251,6 +252,38 @@ export interface MockRpcInvocation {
   readonly command: string;
   readonly args: unknown;
   readonly signal: AbortSignal;
+}
+
+/** A small capability-neutral desktop mock. Applications must opt in each command result explicitly. */
+export interface MockDesktopHarness {
+  readonly client: ReturnType<typeof createDesktopClient>;
+  readonly invocations: readonly { readonly command: string; readonly args: unknown }[];
+  setResult(command: string, result: unknown): void;
+  emit(event: string, value: unknown): void;
+}
+
+export function createMockDesktop(): MockDesktopHarness {
+  const results = new Map<string, unknown>();
+  const invocations: { command: string; args: unknown }[] = [];
+  const subscriptions = new Map<string, Set<(value: unknown) => void>>();
+  const rpc: DesktopRpc = {
+    invoke: async <TRequest, TResult>(command: string, args: TRequest): Promise<TResult> => {
+      invocations.push(Object.freeze({ command, args }));
+      if (!results.has(command)) throw new NeoRpcError({ code: "permission_denied", message: "The mock command has no explicit result.", retryable: false });
+      return results.get(command) as TResult;
+    },
+    subscribe: async <T>(event: string, handler: (value: T) => void) => {
+      let values = subscriptions.get(event); if (values === undefined) { values = new Set(); subscriptions.set(event, values); }
+      const untyped = handler as (value: unknown) => void; values.add(untyped);
+      return async () => { values!.delete(untyped); };
+    },
+  };
+  return {
+    client: createDesktopClient(rpc),
+    invocations,
+    setResult: (command, result) => results.set(command, result),
+    emit: (event, value) => { for (const handler of subscriptions.get(event) ?? []) { try { handler(value); } catch { } } },
+  };
 }
 
 export type MockRpcHandler = (invocation: MockRpcInvocation) => unknown | Promise<unknown>;

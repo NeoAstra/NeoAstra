@@ -28,6 +28,7 @@ public sealed class NeoWindow : IAsyncDisposable
         Application = application;
         _handle = handle;
         _owner = options.Owner;
+        IsModal = options.IsModal;
         Label = options.Label;
         _bounds = new NeoRect(options.X, options.Y, options.Width, options.Height);
         _minimumClientSize = options.MinimumClientSize;
@@ -150,6 +151,9 @@ public sealed class NeoWindow : IAsyncDisposable
     /// <summary>Gets whether the window currently has keyboard focus.</summary>
     public bool IsFocused => _isFocused;
 
+    /// <summary>Gets whether native closure or disposal has completed for this window.</summary>
+    public bool IsClosed => Volatile.Read(ref _closed) != 0 || Volatile.Read(ref _disposed) != 0;
+
     /// <summary>Gets the current logical-to-physical scale factor.</summary>
     public double ScaleFactor => _scaleFactor;
 
@@ -162,8 +166,7 @@ public sealed class NeoWindow : IAsyncDisposable
             ThrowIfDisposed();
             NativeMethods.neoastra_window_state_t native;
             NativeError.ThrowIfFailed(NativeMethods.neoastra_window_get_state(NativeHandle, &native), default, "get window state");
-            _state = (NeoWindowState)native.Value;
-            return _state;
+            return (NeoWindowState)native.Value;
         }
         set
         {
@@ -174,12 +177,14 @@ public sealed class NeoWindow : IAsyncDisposable
 
             ThrowIfDisposed();
             NativeError.ThrowIfFailed(NativeMethods.neoastra_window_set_state(NativeHandle, (NativeMethods.neoastra_window_state)value), default, "set window state");
-            _state = value;
         }
     }
 
     /// <summary>Gets the owner window, if any.</summary>
     public NeoWindow? Owner => _owner;
+
+    /// <summary>Gets whether this window uses owner-modal input semantics without a nested application loop.</summary>
+    public bool IsModal { get; }
 
     internal int OwnerDepth
     {
@@ -208,6 +213,9 @@ public sealed class NeoWindow : IAsyncDisposable
 
     /// <summary>Occurs when keyboard focus changes.</summary>
     public event EventHandler? FocusChanged;
+
+    /// <summary>Occurs when the effective native presentation state changes.</summary>
+    public event EventHandler<NeoWindowStateChangedEventArgs>? StateChanged;
 
     /// <summary>Shows the window.</summary>
     public void Show()
@@ -432,7 +440,13 @@ public sealed class NeoWindow : IAsyncDisposable
         try { ScaleFactorChanged?.Invoke(this, new NeoWindowScaleFactorChangedEventArgs(old, scaleFactor)); } catch { }
     }
 
-    internal void OnStateChanged(NeoWindowState state) => _state = state;
+    internal void OnStateChanged(NeoWindowState state)
+    {
+        var previous = _state;
+        _state = state;
+        if (previous == state) return;
+        try { StateChanged?.Invoke(this, new(previous, state)); } catch { }
+    }
 
     private unsafe NeoRect GetBounds()
     {

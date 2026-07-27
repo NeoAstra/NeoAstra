@@ -364,6 +364,10 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         _transport?.Close("view_disposed");
+        try { Disposing?.Invoke(); } catch { }
+        NativeDropReceived = null;
+        NativeNavigationStarted = null;
+        Disposing = null;
         Environment.Application.UnregisterView(this);
         try
         {
@@ -395,6 +399,12 @@ public sealed class NeoAstra : IAsyncDisposable
     internal event Action<NeoTransportApplicationMessage>? TransportApplicationMessageReceived;
 
     internal event Action<NeoTransportSessionSnapshot?>? TransportSessionChanged;
+
+    internal event Action<int, IReadOnlyList<string>, NeoPoint>? NativeDropReceived;
+
+    internal event Action? NativeNavigationStarted;
+
+    internal event Action? Disposing;
 
     internal async ValueTask InitializeTransportAsync(CancellationToken cancellationToken)
     {
@@ -480,6 +490,7 @@ public sealed class NeoAstra : IAsyncDisposable
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_STARTED:
                 _transport?.NavigationStarted();
+                NotifyNativeNavigationStarted();
                 _source = uri ?? _source;
                 _isLoading = true;
                 break;
@@ -505,7 +516,15 @@ public sealed class NeoAstra : IAsyncDisposable
                 _canGoForward = (value.value & 2) != 0;
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_MESSAGE_RECEIVED:
-                DispatchWebMessage(Utf8String.Decode(value.text), uri, (value.value & 1) != 0);
+                if ((value.value & (1UL << 63)) != 0)
+                {
+                    var count = value.value & 0x00ff_ffff_ffff_ffffUL;
+                    if (count is < 1 or > 256 || value.text.Value.length is 0 or > 1024 * 1024) break;
+                    var nativePaths = Utf8String.Decode(value.text).Split('\0', StringSplitOptions.RemoveEmptyEntries);
+                    if ((ulong)nativePaths.Length != count || nativePaths.Any(static path => Encoding.UTF8.GetByteCount(path) > 32768)) break;
+                    DispatchNativeDrop((int)((value.value >> 56) & 0x7f), nativePaths, new NeoPoint(value.bounds.Value.x, value.bounds.Value.y));
+                }
+                else DispatchWebMessage(Utf8String.Decode(value.text), uri, (value.value & 1) != 0);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
                 _transport?.Close("renderer_lost");
@@ -513,6 +532,16 @@ public sealed class NeoAstra : IAsyncDisposable
                 break;
         }
     }
+
+    internal void DispatchNativeFileDrop(IReadOnlyList<string> paths, NeoPoint position) => DispatchNativeDrop(2, paths, position);
+
+    internal void DispatchNativeDrop(int kind, IReadOnlyList<string> values, NeoPoint position)
+    {
+        if (kind is < 0 or > 2 || values.Count is < 1 or > 256) return;
+        try { NativeDropReceived?.Invoke(kind, values, position); } catch { }
+    }
+
+    internal void NotifyNativeNavigationStarted() { try { NativeNavigationStarted?.Invoke(); } catch { } }
 
     private void DispatchWebMessage(string json, Uri? sourceOrigin, bool isMainFrame)
     {

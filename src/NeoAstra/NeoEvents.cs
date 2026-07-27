@@ -158,6 +158,17 @@ public sealed class NeoWindowScaleFactorChangedEventArgs(double oldScaleFactor, 
     public double NewScaleFactor { get; } = newScaleFactor;
 }
 
+/// <summary>Provides data when a window's effective presentation state changes.</summary>
+/// <param name="oldState">The previous state.</param>
+/// <param name="newState">The effective native state.</param>
+public sealed class NeoWindowStateChangedEventArgs(NeoWindowState oldState, NeoWindowState newState) : EventArgs
+{
+    /// <summary>Gets the previous state.</summary>
+    public NeoWindowState OldState { get; } = oldState;
+    /// <summary>Gets the effective native state.</summary>
+    public NeoWindowState NewState { get; } = newState;
+}
+
 /// <summary>Describes a navigation policy request.</summary>
 /// <param name="Uri">The target URI.</param>
 /// <param name="IsMainFrame">Whether the request targets the main frame.</param>

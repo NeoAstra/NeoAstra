@@ -1,0 +1,62 @@
+# Plugins and desktop services
+
+`NeoAstra.Desktop` is the statically composed Step 6 desktop-services package. It depends on `NeoAstra` and `NeoAstra.Rpc`, is marked AOT-compatible, and does not scan assemblies, load adapters dynamically, or use runtime reflection.
+
+## Security model
+
+Adding a plugin, service object, permission catalog, or renderer command declaration grants no authority. `AddNeoAstraDesktopPermissions` only adds declarations to capability tooling. Applications must separately register RPC handlers and grant the exact permissions/scopes needed by each trusted view. The official declarations use `desktop.*` command names and sensitive/high risk for clipboard reads, opener operations, native UI mutation, shortcuts, outbound drag, and safe storage. File, URL, clipboard, dialog, and notification operations requiring argument policy declare their scope family.
+
+Service inputs and retained resources are bounded. File paths are canonicalized beneath explicit roots, URL origins are exact scheme/IDN-host/effective-port allowlists, opener APIs expose fixed intents rather than arbitrary executables or verbs, command arguments use `ProcessStartInfo.ArgumentList`, and helper processes have deadlines, bounded output, and process-tree termination. Clipboard and secret bytes are copied; safe-storage enumeration is intentionally absent. Drag file paths become document-session-scoped opaque tokens. Trusted C# outbound calls consume explicit short-lived one-shot tokens; renderer outbound calls expose no token and instead consume a current native pointer gesture bound by the host to the source view and active document session.
+
+Canonical path checks prevent lexical traversal and resolve existing links before authorization, but a pathname handed to an external OS application cannot be held open atomically across handler launch. Applications must therefore use roots that an untrusted renderer cannot rename or replace; this is an OS pathname TOCTOU boundary, not a substitute for handle-based file I/O. Creatable save paths authorize the resolved parent and leaf separately and must be revalidated by any later privileged consumer.
+
+Desktop APIs are backend APIs by default. They are not automatically exposed to renderer JavaScript. Menus and tray descriptors route stable command IDs to backend handlers rather than evaluating JavaScript strings.
+
+## Composition and lifecycle
+
+Register plugins with explicit factories:
+
+```csharp
+var plugins = new NeoPluginBuilder()
+    .AddNeoAstraDesktop(services)
+    .Build();
+```
+
+Plugin IDs and dependencies are validated and topologically sorted with ordinal tie-breaking. The host configures plugins, creates one explicit adapter per plugin, attaches adapters on the UI dispatcher, and transitions to ready in deterministic order. Stop revokes plugin work first, disposes tracked view/window/session resources in reverse ownership order, detaches adapters, and disposes plugin service graphs. Startup failure rolls back already-created resources. Disposal is idempotent and aggregates teardown failures.
+
+`NeoPluginOwner` identifies application, window, view, session, or resource ownership. Track native registrations through `NeoPluginContext.TrackAsync` so shortcuts, tray items, callbacks, and broker tokens cannot outlive their owner.
+
+## Platform support
+
+Support is reported per service through `NeoCapabilityInfo`; callers must not infer support from OS name. `None` and `Limited` are expected outcomes and never cause an insecure plaintext or unrestricted fallback.
+
+| Service | Windows | macOS | Linux |
+|---|---|---|---|
+| Dialogs | Native Win32 common file/folder dialogs and `TaskDialogIndirect`, UI-thread owner binding, and owner-close cancellation (`Limited`: folder multi-select is unavailable) | Fixed `osascript` native dialogs; process cancellation is bounded, but sheet-level owner attachment is unavailable (`Limited`) | Trusted `zenity` native dialogs when installed; process cancellation is bounded, but desktop/headless and owner attachment vary (`Limited`) |
+| Menus/tray | Native Win32 menu bars/context menus and notification-area icons, immutable replacement, local accelerators, roles, callbacks, and deterministic HWND ownership (`Limited`: one menu bar per HWND; application-localized role labels required; tray bounds/attention unavailable) | Native AppKit application/window/context menus and `NSStatusItem` presenters with responder roles, key equivalents, callbacks, replacement, and teardown (`Limited`: AppKit selectors provide behavior but application-localized role labels are required; status-item bounds/attention are limited) | Native GTK3 menu bars/context menus and status icons with callbacks, accelerators, replacement, and teardown (`Limited`: GTK3 stock resources localize edit/Close/Quit roles; Minimize requires an application-localized label; compositor-controlled popup/status-area behavior, especially on Wayland) |
+| Clipboard | Native copied Unicode text, CF_HTML, PNG, and HDROP; open/use/close stays on one UI/STA dispatch | Native `NSPasteboard` copied text, HTML, PNG, and file-list data | Wayland `wl-copy`/`wl-paste` or X11 `xclip` MIME targets for text, HTML, PNG, and URI file lists when trusted helpers exist (`Limited`) |
+| Notifications | Native notification-area balloons with transactional generation replacement/rollback, remove, click/dismiss activation, and launch-queue routing; packaged toast actions/persistence are unavailable and any request containing actions returns `Unsupported` without showing a degraded balloon (`Limited`) | Modern `UNUserNotificationCenter` authorization, actions, default click, custom dismissal, generation replacement, explicit pending/delivered removal, and process-global delegate/category ownership (`Native`) | Freedesktop Notifications D-Bus replacement/removal, application identity, actions, ordered single-completion activation/dismissal signals, launch-queue routing, and subscription teardown when the desktop service and trusted `gdbus` client are available (`Native`; otherwise `None` at runtime) |
+| Global shortcuts | Native `RegisterHotKey` with hidden dispatch window | Native Carbon hot-key registration | X11 grabs when X11 is available; Wayland requires a desktop portal and reports `None` (`Limited`) |
+| Theme/displays | Win32/DWM/accessibility preferences and per-monitor topology/DPI snapshots | System appearance/accessibility queries and CoreGraphics topology (`Limited` where visible work area/accent is unavailable) | GNOME settings and XRandR snapshots when exposed (`Limited`, especially on Wayland) |
+| External opener | OS default handler with exact URL/file/reveal policy | `/usr/bin/open` with fixed argument intents | trusted absolute `xdg-open` with fixed argument intents |
+| Safe storage | Per-user DPAPI and atomic encrypted files | Binary-safe Keychain generic-password APIs with exact service/account lookup | Secret Service via trusted absolute `secret-tool` when available; no fallback (`Limited` because the keyring/helper may be unavailable or locked) |
+| Drag/drop | OLE/WebView inbound file/text/URL capture and Shell OLE outbound file/text/URL drags, with source-window pointer correlation | WKWebView/AppKit inbound file/text/URL capture and AppKit outbound typed dragging sessions bound to the current source-view event | WebKitGTK native inbound file/text/URL capture and GTK outbound typed drag contexts bound to a copied source-widget event; compositor support varies |
+
+Native inbound drops are routed only to the active trusted renderer document session for the target view. View/window labels remain metadata, while navigation, transport-session rotation, renderer teardown, view disposal, and window closure revoke the old session's file tokens. A renderer calls `dragDrop.outbound(viewLabel, items)` from its native drag-start handler; background calls or calls after the source gesture expires, is reused, targets another view/session, or is invalidated by navigation return `Denied`.
+| Window state/polish | Source-generated atomic persistence, topology/scale clamping, native icon/attention/taskbar progress/DWM title intent/capture affinity | Persistence plus app icon, attention, dock badge, represented document and sharing restriction; per-window icon/progress/title-only theme semantics are unavailable or limited | Persistence plus GTK icon/attention; generic taskbar progress/badge/title theme and capture exclusion have no reliable portable GTK/Wayland semantic |
+
+Headless Linux commonly reports clipboard, notification, shortcut, and credential services unavailable. Wayland/X11 helper availability is detected explicitly. macOS and Linux runtime conformance remains a CI responsibility; do not convert an unavailable runtime into a passing emulation.
+
+`NeoMenuItem.RoleItem(id, role)` requests a framework-localized standard label. The GTK3 presenter supports that form for Copy, Cut, Paste, Select All, Undo, Redo, Close, and Quit through GTK stock resources. Win32 and AppKit expose native role commands/selectors but no reliable complete localized label set, and GTK3 has no Minimize stock label; those cases reject the implicit form instead of displaying hard-coded English. Use `NeoMenuItem.RoleItem(id, role, localizedText)` with application-localized Unicode text on every platform for portable presentation. The label changes presentation only: activation remains a fixed native role command/selector and never evaluates arbitrary JavaScript. Linux edit roles select a live WebKit view by actual `OwnedWindow` identity; the ordinally smallest non-null view label wins, with native-handle ordering only for unlabeled ties. Missing, zero, replaced, or disposed handles disable the item or make activation a no-op before any GTK/WebKit call.
+
+## Persistence and secrets
+
+`NeoJsonWindowStateStore` accepts application-chosen bounded keys and writes one source-generated JSON record atomically. Restore validates finite scale values, rejects malformed display snapshots, chooses the saved or best-intersecting display, rescales logical dimensions, clamps to the work area, and normalizes minimized state unless explicitly requested.
+
+`NeoSafeStorage.CreateSystem` accepts a stable application namespace and an absolute private data directory. Windows persists only DPAPI-protected bytes and zeroes temporary protected/native buffers. macOS uses binary-safe Security.framework calls and zeroes Keychain-owned retrieved bytes before freeing them. Linux passes base64 secret bytes over redirected standard input to Secret Service and zeroes encoded/captured buffers. Retrieval returns an owned byte array; applications should zero it with `CryptographicOperations.ZeroMemory` as soon as possible.
+
+## Testing
+
+Use `NeoFakeDialogs`, `NeoFakeClipboard`, recording presenter adapters, and the test-emulated shortcut mode for deterministic tests. Focused tests cover static metadata/handler/permission/schema consistency, grant-free backend registration, command/disposal races, immutable menu/tray presenter replacement and callbacks, descriptor limits and accelerators, notification rollback, clipboard ownership, scope denial before opener launch, owner-scoped one-shot drag tokens, corrupt/off-screen window state, per-feature polish semantics, Windows DPAPI persistence, and bounded child-process output. The CI desktop-session fixture creates real native menus, context ownership, tray/status items, multiple WebViews with native drop registration, modal owner trees, state transitions, and cross-thread service updates on Windows, macOS, and Linux (Linux under Xvfb); it also verifies native-drop token release on navigation. Interactive outbound drag completion remains adapter-tested because unattended runners cannot supply a real pointer drag; runtime evidence otherwise depends on those target runners and available desktop services.
+
+Window file APIs are backend-trusted APIs. Renderer `desktop.window.set-icon` and `desktop.window.set-represented-file` additionally require `window:files` with a filesystem scope; all other window polish operations require `window:polish` and a live owner window. Capture protection is defense in depth only: it cannot stop cameras, privileged software, or every capture implementation.

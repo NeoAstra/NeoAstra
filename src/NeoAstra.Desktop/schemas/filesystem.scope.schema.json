@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neoastra.dev/schemas/desktop/filesystem.scope.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["roots", "operations"],
+  "properties": {
+    "roots": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["token", "path"],
+        "properties": {
+          "token": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$" },
+          "path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        }
+      }
+    },
+    "operations": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": { "enum": ["read", "write", "create", "delete", "open", "reveal"] } },
+    "allowSymlinks": { "type": "boolean", "default": false }
+  }
+}

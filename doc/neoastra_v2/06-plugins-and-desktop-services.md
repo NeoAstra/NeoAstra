@@ -87,7 +87,8 @@ Define immutable/diffable descriptors:
 NeoMenuItem.Command(id, text, commandId, accelerator, enabled, isChecked);
 NeoMenuItem.Submenu(id, text, children);
 NeoMenuItem.Separator(id);
-NeoMenuItem.Role(NeoMenuRole.Copy);
+NeoMenuItem.RoleItem(id, NeoMenuRole.Copy);
+NeoMenuItem.RoleItem(id, NeoMenuRole.Copy, localizedText);
 ```
 
 Requirements:
@@ -99,8 +100,10 @@ Requirements:
 - validated platform accelerator syntax and conflict diagnostics;
 - command activation routed through a shared backend command service, not arbitrary JavaScript;
 - optional targeted frontend event only after capability matching;
-- localized standard role labels through OS/framework resources;
+- localized standard role labels through reliable OS/framework resources, or explicit application-localized Unicode labels where no such complete resource exists;
 - menu updates marshaled to UI thread and safe during activation.
+
+GTK3 framework resources provide implicit labels for Copy, Cut, Paste, Select All, Undo, Redo, Close, and Quit. GTK3 Minimize, all Win32 roles, and all AppKit roles require the explicit `localizedText` overload because those presenters do not expose a reliable complete localized label source; the implicit overload is rejected rather than silently substituting English. AppKit selectors, Win32 commands, and GTK/WebKit commands still provide native behavior and never evaluate application JavaScript. Linux edit-role targets are selected by actual window ownership, then by ordinal view label (and native handle only for unlabeled ties); missing or stale native targets disable or safely ignore the role.
 
 macOS application-menu conventions, Windows accelerator behavior, and Linux desktop/global-menu differences are documented. Unsupported roles degrade only to explicit app commands, not silently wrong behavior.
 
@@ -197,22 +200,38 @@ Each renderer-facing plugin exports a focused package or `@neoastra/client/<plug
 
 Wave A (needed by most reference apps):
 
-- [ ] freeze plugin registration/lifecycle/metadata/permission contract;
-- [ ] dialogs;
-- [ ] menus/context menus and shared command routing;
-- [ ] tray/status items;
-- [ ] clipboard text;
-- [ ] theme/display/app metadata;
-- [ ] scoped opener.
+- [x] freeze plugin registration/lifecycle/metadata/permission contract;
+- [x] dialogs;
+- [x] menus/context menus and shared command routing;
+- [x] tray/status items;
+- [x] clipboard text;
+- [x] theme/display/app metadata;
+- [x] scoped opener.
 
 Wave B:
 
-- [ ] notifications and early activation routing;
-- [ ] global shortcuts;
-- [ ] clipboard HTML/image/files;
-- [ ] drag/drop broker;
-- [ ] safe storage;
-- [ ] window-state persistence and polish.
+- [x] notifications and early activation routing;
+- [x] global shortcuts;
+- [x] clipboard HTML/image/files;
+- [x] drag/drop broker;
+- [x] safe storage;
+- [x] window-state persistence and polish.
+
+> Step 6 implementation note (2026-07-27): explicit source-generated renderer handlers and DTO JSON,
+> static metadata/schemas, grant-free registration, TypeScript modules/mocks, owner/session cleanup,
+> Windows/macOS/Linux dialogs, multi-format clipboards, shortcuts, system snapshots, opener, Keychain/
+> DPAPI/Secret Service storage, package assets, NativeAOT fixtures, and cross-platform CI coverage are present.
+> Native menu/context-menu and tray/status presenters now cover Win32, AppKit, and GTK with immutable
+> replacement, command/role activation, ownership, and teardown. Notifications use transactional Win32
+> generations, modern `UNUserNotificationCenter`, and identity-bound Freedesktop D-Bus lifecycle handling.
+> Native inbound file/text/URL drops are captured at the WebView boundary on Win32/AppKit/GTK, then canonicalized
+> and routed only to the target view's active registered renderer document session. Tokens are revoked on
+> navigation, session rotation, renderer/view/window teardown, and cannot be resolved by another session. Trusted
+> C# outbound calls retain explicit one-shot tokens; renderer calls expose no authority token and instead consume
+> a current native gesture bound to the source view and document session. Shell OLE, AppKit, and GTK presenters
+> reject absent, expired, mismatched, reused, and navigation-invalidated gestures. Custom drag-image
+> presentation remains Limited. macOS/Linux runtime conformance executes only in the target CI
+> desktop-session jobs and is not claimed from a Windows development host.
 
 Every plugin proceeds contract -> fake adapter/tests -> Windows -> macOS -> Linux -> conformance/support docs -> renderer API/security tests. One platform implementation MUST NOT establish portable release support by itself.
 
