@@ -6,6 +6,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using NeoAstra.Desktop;
 using NeoAstra.Rpc;
 using NeoAstra.Tooling;
 
@@ -69,15 +70,24 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
-    public void ReferenceCapabilities_ResolveForReleaseAndDenyTheUngrantPreviewView()
+    public void ReferenceCapabilities_ResolveForReleaseAndRestrictThePreviewView()
     {
         var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.V2.Reference", "capabilities", "main.json"));
-        var catalog = new NeoPermissionCatalogBuilder().Add(new NeoPermissionDeclaration("notes:read", 1, ["notes.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None)).Build();
+        var catalog = new NeoPermissionCatalogBuilder()
+            .Add(new NeoPermissionDeclaration("tour:read", 1, ["tour.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None))
+            .Add(new NeoPermissionDeclaration("tour:control", 1, ["tour.delay", "tour.stream", "tour.setDirty", "tour.showPreview"], NeoPermissionRisk.Low, NeoScopeFamily.None))
+            .Add(new NeoPermissionDeclaration("tour:events", 1, ["tour.activity"], NeoPermissionRisk.Low, NeoScopeFamily.None))
+            .AddNeoAstraDesktopPermissions()
+            .Build();
         var platform = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
         var manifest = NeoCapabilityManifest.Resolve(bytes, catalog, new() { Platform = platform, Release = true, Profile = NeoSecurityProfile.ProductionLocalApp });
         NeoRpcContext Context(string view) => new(new NeoRpcSessionIdentity(view, "reference-session") { IsMainFrame = true, WholeViewTrust = true, Platform = platform }, "reference-correlation", default, null!);
-        var main = manifest.Match(new(Context("main"), "notes.hello", "notes:read", false, default)); var preview = manifest.Match(new(Context("preview"), "notes.hello", "notes:read", false, default));
-        Assert.IsTrue(main.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, main.Code); Assert.IsFalse(preview.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.NoMatchingCapability, preview.Code);
+        var main = manifest.Match(new(Context("main"), "tour.hello", "tour:read", false, default));
+        var preview = manifest.Match(new(Context("preview"), "tour.hello", "tour:read", false, default));
+        var deniedDesktop = manifest.Match(new(Context("preview"), "desktop.system.theme", "system-info:theme", false, default));
+        Assert.IsTrue(main.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, main.Code);
+        Assert.IsTrue(preview.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, preview.Code);
+        Assert.IsFalse(deniedDesktop.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.PermissionMissing, deniedDesktop.Code);
     }
 
     [TestMethod]

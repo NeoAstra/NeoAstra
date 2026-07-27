@@ -110,6 +110,11 @@ Use `NeoEnvironment.GetCapability` before enabling optional browser UX. WebView2
 
 The basic sample is configured for NativeAOT. Publish it for the current platform, for example with `dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained`. Passing `--validate-native-library` performs a non-interactive native load and dispatcher-detach smoke check without creating a browser view; CI runs that check against the freshly built Windows native asset.
 
+For a guided application-platform demonstration, run the
+[`NeoAstra.V2.Reference` feature tour](samples/NeoAstra.V2.Reference/readme.md). It combines a React/Vite
+view with generated typed RPC, cancellation, channels, events, differently authorized views, lifecycle
+negotiation, Generic Host background work, native desktop services, secure local assets, and NativeAOT.
+
 ## Building
 
 Managed projects target .NET 10:
