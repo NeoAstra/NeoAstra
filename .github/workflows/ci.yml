@@ -92,6 +92,10 @@ jobs:
   native:
     uses: ./.github/workflows/native.yml
 
+  delivery:
+    needs: native
+    uses: ./.github/workflows/delivery.yml
+
   desktop-conformance:
     name: Desktop-session conformance (${{ matrix.rid }})
     needs: native
@@ -236,12 +240,12 @@ jobs:
           $frontendToolArchive = [IO.Compression.ZipFile]::OpenRead($frontendToolPackage.FullName)
           $frontendToolEntries = $frontendToolArchive.Entries.FullName
           $frontendToolArchive.Dispose()
-          @('tools/net10.0/any/NeoAstra.Tool.dll', 'tools/net10.0/any/DotnetToolSettings.xml', 'schemas/neoastra-project-v1.schema.json') | ForEach-Object { if ($_ -notin $frontendToolEntries) { throw "Missing frontend tool package asset: $_" } }
+          @('tools/net10.0/any/NeoAstra.Tool.dll', 'tools/net10.0/any/DotnetToolSettings.xml', 'schemas/neoastra-project-v1.schema.json', 'schemas/neoastra-staging-manifest-v1.schema.json', 'schemas/neoastra-update-manifest-v1.schema.json', 'delivery-and-updates.md') | ForEach-Object { if ($_ -notin $frontendToolEntries) { throw "Missing frontend tool package asset: $_" } }
           $sdkPackage = Get-ChildItem artifacts/packages/NeoAstra.Sdk.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
           $sdkArchive = [IO.Compression.ZipFile]::OpenRead($sdkPackage.FullName)
           $sdkEntries = $sdkArchive.Entries.FullName
           $sdkArchive.Dispose()
-          @('buildTransitive/NeoAstra.Sdk.props', 'buildTransitive/NeoAstra.Sdk.targets', 'tools/net10.0/any/NeoAstra.Tool.dll', 'schemas/neoastra-project-v1.schema.json', 'docs/frontend-tooling-and-assets.md') | ForEach-Object { if ($_ -notin $sdkEntries) { throw "Missing SDK package asset: $_" } }
+          @('buildTransitive/NeoAstra.Sdk.props', 'buildTransitive/NeoAstra.Sdk.targets', 'tools/net10.0/any/NeoAstra.Tool.dll', 'schemas/neoastra-project-v1.schema.json', 'schemas/neoastra-staging-manifest-v1.schema.json', 'schemas/neoastra-update-manifest-v1.schema.json', 'docs/frontend-tooling-and-assets.md', 'docs/delivery-and-updates.md') | ForEach-Object { if ($_ -notin $sdkEntries) { throw "Missing SDK package asset: $_" } }
           $templatePackage = Get-ChildItem artifacts/packages/NeoAstra.Templates.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
           if ($null -eq $templatePackage) { throw 'Missing template package' }
           $templateArchive = [IO.Compression.ZipFile]::OpenRead($templatePackage.FullName)

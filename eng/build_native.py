@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -94,7 +97,23 @@ def main() -> int:
     )
     if not destination.is_file():
         raise FileNotFoundError(f"Readiness assembly did not stage {destination}")
+    version_header = (ROOT / "native" / "include" / "neoastra_version.h").read_text(encoding="utf-8")
+    major = re.search(r"^#define NEOASTRA_ABI_VERSION_MAJOR\s+(\d+)\s*$", version_header, re.MULTILINE)
+    minor = re.search(r"^#define NEOASTRA_ABI_VERSION_MINOR\s+(\d+)\s*$", version_header, re.MULTILINE)
+    if major is None or minor is None:
+        raise ValueError("Native ABI version was not found in neoastra_version.h")
+    identity = {
+        "schemaVersion": 1,
+        "rid": args.rid,
+        "file": library_name,
+        "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        "abiMajor": int(major.group(1)),
+        "abiMinor": int(minor.group(1)),
+    }
+    identity_path = runtime_directory / "neoastra-native.json"
+    identity_path.write_text(json.dumps(identity, separators=(",", ":")) + "\n", encoding="utf-8")
     print(f"Staged {destination.relative_to(ROOT)}", flush=True)
+    print(f"Staged {identity_path.relative_to(ROOT)}", flush=True)
     return 0
 
 

@@ -5,7 +5,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>neoastra</ToolCommandName>
     <PackageId>NeoAstra.Tool</PackageId>
-    <Description>Secure development, inspection, initialization, and asset tooling for NeoAstra applications.</Description>
+    <Description>Secure development, assets, inspectable delivery, and update metadata tooling for NeoAstra applications.</Description>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -16,6 +16,9 @@
     <PackageReference Include="MinVer" PrivateAssets="all" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-staging-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-update-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

@@ -10,5 +10,5 @@ for (const targetRoot of [
 ]) {
   const target = path.join(repository, targetRoot);
   await mkdir(target, { recursive: true });
-  for (const name of ["index.js", "shared.js"]) await copyFile(path.join(source, name), path.join(target, name));
+  for (const name of ["index.js", "shared.js", "rpc.js", "desktop.js", "updates.js"]) await copyFile(path.join(source, name), path.join(target, name));
 }

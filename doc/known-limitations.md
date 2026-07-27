@@ -73,6 +73,7 @@ unbounded asynchronous deferral.
 ## Portable behavior is intentionally bounded
 
 NeoAstra does not provide portable arbitrary HTTP/HTTPS subresource replacement, Chrome DevTools
-Protocol support, offscreen rendering, mobile support, a DOM API, automatic updates, or a general
-native widget framework. Native menus, tray icons, notifications, and installer generation are
-outside the initial core scope.
+Protocol support, offscreen rendering, mobile support, a DOM API, release-qualified automatic updates, or a general
+native widget framework. Deterministic portable bundles and inspectable installer inputs exist, but installers and the
+experimental updater remain unavailable as qualified release claims until artifact-specific target-host CI passes.
+Native menus, tray icons, and notifications are optional desktop-plugin services rather than core browser features.

@@ -22,6 +22,7 @@ static async Task<int> MainAsync(string[] args)
             "dev" => await DevAsync(args).ConfigureAwait(false),
             "assets" => await AssetsAsync(args).ConfigureAwait(false),
             "contract" => Contract(args),
+            "bundle" => Bundle(args),
             _ => throw new NeoToolException("unknown_command", "Unknown command. Run 'dotnet neoastra --help'."),
         };
     }
@@ -46,6 +47,13 @@ static int Doctor(string[] args)
     findings.Add(("lockfile", project.PackageManager == "none" || project.Lockfile is not null && File.Exists(project.Lockfile) ? "ok" : "error", "Configure and commit the package-manager lockfile; NeoAstra does not install packages."));
     findings.Add(("csp", project.ContentSecurityPolicy.Contains("http:", StringComparison.OrdinalIgnoreCase) || project.ContentSecurityPolicy.Contains("https:", StringComparison.OrdinalIgnoreCase) ? "warning" : "ok", "Production CSP should avoid remote scripts."));
     findings.Add(("service-workers", "info", "Custom-scheme service workers are not portable and are unsupported by WebKitGTK; templates do not register one."));
+    if (project.Bundle is { } bundle)
+    {
+        findings.Add(("bundle-identity", bundle.Identifier == project.Identifier && bundle.NotificationIdentity == project.Identifier ? "ok" : "error", "Bundle, single-instance, notification, data-directory, and update identity must remain identical."));
+        findings.Add(("launch-routing", bundle.FileAssociations.Count == 0 && bundle.UrlSchemes.Count == 0 ? "info" : "warning", bundle.FileAssociations.Count == 0 && bundle.UrlSchemes.Count == 0 ? "No external launch declarations are configured." : "File/protocol declarations require matching Step 5 OpenFiles/OpenUrls handlers and clean-host launch evidence."));
+        findings.Add(("update-mode", bundle.Update?.Mode is null or "disabled" ? "ok" : "warning", bundle.Update?.Mode is null or "disabled" ? "Self-update is unavailable." : "Updater is experimental/store-managed; it is not release-qualified until target-artifact negative, interruption, health, and rollback CI passes."));
+        foreach (var icon in bundle.Icons) findings.Add(("icon:" + Path.GetFileName(icon), File.Exists(icon) ? "ok" : "error", "Declared source icons are retained and platform conversion is offline and explicit."));
+    }
     if (OperatingSystem.IsWindows())
     {
         var webView2 = new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }.Where(static path => path.Length != 0).Any(path => Directory.Exists(Path.Combine(path, "Microsoft", "EdgeWebView", "Application")));
@@ -101,6 +109,18 @@ static int Contract(string[] args)
     var actual = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
     if (actual != hash) throw new NeoToolException("contract_stale", "Generated TypeScript and backend manifest contract hashes differ.");
     Console.WriteLine($"Generated RPC contract {hash} is current."); return 0;
+}
+
+static int Bundle(string[] args)
+{
+    var project = Load(args, 1);
+    var request = new NeoBundleRequest(Required(args, "--rid"), Required(args, "--publish"), Required(args, "--assets-manifest"), Required(args, "--output"),
+        args.Contains("--dry-run", StringComparer.Ordinal), args.Contains("--sign", StringComparer.Ordinal), Optional(args, "--signing-identity-env"), args.Contains("--execute-installer", StringComparer.Ordinal));
+    var result = NeoBundleOrchestrator.Run(project, request);
+    Console.WriteLine($"{(request.DryRun ? "Planned" : "Created")} {result.Artifact}");
+    Console.WriteLine($"Staging manifest: {result.StagingManifest}");
+    Console.WriteLine("Artifact is not target-host qualified; qualification requires separate recorded install/upgrade/repair/uninstall/launch smoke evidence.");
+    return 0;
 }
 
 static int Init(string[] args)
@@ -187,4 +207,4 @@ static void WriteFindings(List<(string Id, string Status, string Detail)> findin
 static string PackageCommand(string manager) => manager switch { "npm" => "npm install @neoastra/client --save", "pnpm" => "pnpm add @neoastra/client", "yarn" => "yarn add @neoastra/client", "bun" => "bun add @neoastra/client", "none" => "add @neoastra/client using your existing dependency workflow", _ => throw new NeoToolException("package_manager", "Unknown package manager.") };
 static string CreateConfiguration(string identifier, string name, string root, IReadOnlyList<string> dev, string devUrl, IReadOnlyList<string> build, string dist, string packageManager) { using var stream = new MemoryStream(); using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true })) { writer.WriteStartObject(); writer.WriteString("$schema", "neoastra-project-v1.schema.json"); writer.WriteNumber("version", 1); writer.WriteStartObject("app"); writer.WriteString("identifier", identifier); writer.WriteString("displayName", name); writer.WriteEndObject(); writer.WriteStartObject("frontend"); writer.WriteString("root", root); WriteArray(writer, "devCommand", dev); writer.WriteString("devUrl", devUrl); WriteArray(writer, "buildCommand", build); writer.WriteString("dist", dist); writer.WriteString("spaFallback", "index.html"); writer.WriteString("packageManager", packageManager); if (packageManager != "none") writer.WriteString("lockfile", Path.Combine(root, packageManager == "npm" ? "package-lock.json" : packageManager == "pnpm" ? "pnpm-lock.yaml" : packageManager == "yarn" ? "yarn.lock" : "bun.lock")); writer.WriteEndObject(); writer.WriteStartObject("assets"); writer.WriteString("origin", "app://neoastra"); writer.WriteBoolean("cacheHashedAssets", true); writer.WriteString("csp", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"); writer.WriteEndObject(); writer.WriteStartArray("capabilities"); writer.WriteEndArray(); writer.WriteEndObject(); } return Encoding.UTF8.GetString(stream.ToArray()); }
 static void WriteArray(Utf8JsonWriter writer, string name, IReadOnlyList<string> values) { writer.WriteStartArray(name); foreach (var value in values) writer.WriteStringValue(value); writer.WriteEndArray(); }
-static void Usage() => Console.WriteLine("NeoAstra tooling (no telemetry)\n  inspect|doctor|dev [--config neoastra.json] [--json]\n  assets --config <file> --manifest <file> [--copy <dir>] [--prebuilt <explicit-dist>]\n  contract check --typescript <file> --manifest <file>\n  init --dry-run --frontend-root <dir> --dev-command <arg>... --dev-url <url> --build-command <arg>... --dist <dir> --identifier <id> --display-name <name> --package-manager <npm|pnpm|yarn|bun|none>");
+static void Usage() => Console.WriteLine("NeoAstra tooling (no telemetry)\n  inspect|doctor|dev [--config neoastra.json] [--json]\n  assets --config <file> --manifest <file> [--copy <dir>] [--prebuilt <explicit-dist>]\n  bundle --config <file> --rid <rid> --publish <dir> --assets-manifest <file> --output <dir> [--dry-run] [--execute-installer] [--sign --signing-identity-env <name>]\n  contract check --typescript <file> --manifest <file>\n  init --dry-run --frontend-root <dir> --dev-command <arg>... --dev-url <url> --build-command <arg>... --dist <dir> --identifier <id> --display-name <name> --package-manager <npm|pnpm|yarn|bun|none>");

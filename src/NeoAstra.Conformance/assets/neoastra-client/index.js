@@ -341,4 +341,5 @@ function emitHostDiagnostic(value) {
 }
 export { NeoRpcClient, NeoRpcError, invoke, invokeChannel, rpcClient, subscribe, } from "./rpc.js";
 export { createDesktopClient, desktopCommands } from "./desktop.js";
+export { createUpdateClient, updateCommands } from "./updates.js";
 //# sourceMappingURL=index.js.map

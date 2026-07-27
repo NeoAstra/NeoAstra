@@ -8,3 +8,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("NeoAstra.Hosting")]
 [assembly: InternalsVisibleTo("NeoAstra.Desktop")]
 [assembly: InternalsVisibleTo("NeoAstra.Desktop.NativeAotFixture")]
+[assembly: InternalsVisibleTo("NeoAstra.Tooling")]

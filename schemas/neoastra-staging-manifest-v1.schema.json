@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neoastra.dev/schemas/neoastra-staging-manifest-v1.schema.json",
+  "title": "NeoAstra deterministic staging manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "applicationId", "version", "rid", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "applicationId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "rid": { "enum": ["win-x64", "win-arm64", "osx-x64", "osx-arm64", "linux-x64", "linux-arm64"] },
+    "files": {
+      "type": "array", "maxItems": 50000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "length", "sha256", "mode", "component"],
+        "properties": {
+          "path": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?/)[^\\\\:\\u0000]+$", "maxLength": 2048 },
+          "length": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "mode": { "enum": ["0644", "0755"] },
+          "component": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    }
+  }
+}

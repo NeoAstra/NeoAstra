@@ -55,7 +55,8 @@ internal sealed record NeoResolvedProject(
     long MaximumTotalBytes,
     IReadOnlyList<string> SpaRoutePrefixes,
     IReadOnlyList<string> ExcludedPrefixes,
-    IReadOnlyList<string> Capabilities)
+    IReadOnlyList<string> Capabilities,
+    NeoBundleConfiguration? Bundle)
 {
     internal string ToInspectJson(bool redactSecrets)
     {
@@ -66,7 +67,7 @@ internal sealed record NeoResolvedProject(
             writer.WriteStartObject(); writer.WriteNumber("version", 1); writer.WriteString("configurationPath", ConfigurationPath); writer.WriteString("projectDirectory", ProjectDirectory);
             writer.WriteStartObject("app"); writer.WriteString("identifier", Identifier); writer.WriteString("displayName", DisplayName); writer.WriteEndObject();
             writer.WriteStartObject("frontend"); writer.WriteString("root", FrontendRoot); WriteArray(writer, "devCommand", DevCommand.Arguments); WriteArray(writer, "backendCommand", BackendCommand.Arguments); WriteArray(writer, "contractCommand", ContractCommand.Arguments); writer.WriteString("devUrl", DevUrl.AbsoluteUri); WriteArray(writer, "buildCommand", BuildCommand.Arguments); writer.WriteString("dist", DistDirectory); writer.WriteString("spaFallback", SpaFallback); writer.WriteString("packageManager", PackageManager); WriteOptional(writer, "lockfile", Lockfile); WriteOptional(writer, "generatedContract", GeneratedContract); writer.WriteBoolean("allowRemoteDevServer", AllowRemoteDevServer); writer.WriteStartObject("environment"); foreach (var pair in environment) writer.WriteString(pair.Key, pair.Value); writer.WriteEndObject(); writer.WriteEndObject();
-            writer.WriteStartObject("assets"); writer.WriteString("origin", ProductionOrigin.AbsoluteUri.TrimEnd('/')); writer.WriteBoolean("cacheHashedAssets", CacheHashedAssets); writer.WriteString("csp", ContentSecurityPolicy); writer.WriteString("referrerPolicy", ReferrerPolicy); writer.WriteBoolean("includeSourceMaps", IncludeSourceMaps); writer.WriteNumber("maximumFiles", MaximumFiles); writer.WriteNumber("maximumFileBytes", MaximumFileBytes); writer.WriteNumber("maximumTotalBytes", MaximumTotalBytes); WriteArray(writer, "spaRoutePrefixes", SpaRoutePrefixes); WriteArray(writer, "excludedPrefixes", ExcludedPrefixes); writer.WriteEndObject(); WriteArray(writer, "capabilities", Capabilities); writer.WriteEndObject();
+            writer.WriteStartObject("assets"); writer.WriteString("origin", ProductionOrigin.AbsoluteUri.TrimEnd('/')); writer.WriteBoolean("cacheHashedAssets", CacheHashedAssets); writer.WriteString("csp", ContentSecurityPolicy); writer.WriteString("referrerPolicy", ReferrerPolicy); writer.WriteBoolean("includeSourceMaps", IncludeSourceMaps); writer.WriteNumber("maximumFiles", MaximumFiles); writer.WriteNumber("maximumFileBytes", MaximumFileBytes); writer.WriteNumber("maximumTotalBytes", MaximumTotalBytes); WriteArray(writer, "spaRoutePrefixes", SpaRoutePrefixes); WriteArray(writer, "excludedPrefixes", ExcludedPrefixes); writer.WriteEndObject(); WriteArray(writer, "capabilities", Capabilities); Bundle?.WriteInspect(writer); writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(stream.ToArray());
     }
@@ -107,7 +108,7 @@ internal static class NeoProjectConfiguration
             using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 32, CommentHandling = JsonCommentHandling.Disallow, AllowTrailingCommas = false });
             ValidateComplexity(document.RootElement);
             var root = document.RootElement;
-            Exact(root, "$schema", "version", "app", "frontend", "assets", "capabilities");
+            Exact(root, "$schema", "version", "app", "frontend", "assets", "capabilities", "bundle");
             if (String(root, "$schema") != "neoastra-project-v1.schema.json" || Integer(root, "version") != 1) throw Error("version", "Only neoastra project schema version 1 is supported.");
             var app = RequiredObject(root, "app"); Exact(app, "identifier", "displayName");
             var identifier = String(app, "identifier", 255); if (!IdentifierPattern.IsMatch(identifier)) throw Error("app.identifier", "The application identifier is invalid.");
@@ -140,7 +141,8 @@ internal static class NeoProjectConfiguration
                 OptionalString(assets, "referrerPolicy", 128) ?? "no-referrer", Boolean(assets, "includeSourceMaps", false),
                 BoundedInteger(assets, "maximumFiles", 10_000, 1, 50_000), BoundedLong(assets, "maximumFileBytes", 64L * 1024 * 1024, 1, 1024L * 1024 * 1024),
                 BoundedLong(assets, "maximumTotalBytes", 256L * 1024 * 1024, 1, 4L * 1024 * 1024 * 1024),
-                ReadRoutes(assets, "spaRoutePrefixes"), ReadRoutes(assets, "excludedPrefixes", ["/api", "/_neoastra"]), capabilities);
+                ReadRoutes(assets, "spaRoutePrefixes"), ReadRoutes(assets, "excludedPrefixes", ["/api", "/_neoastra"]), capabilities,
+                root.TryGetProperty("bundle", out var bundle) ? NeoBundleConfiguration.Parse(bundle, directory, identifier, displayName) : null);
         }
         catch (NeoToolException) { throw; }
         catch (JsonException exception) { throw new NeoToolException("invalid_json", $"neoastra.json is invalid JSON at byte {exception.BytePositionInLine}."); }

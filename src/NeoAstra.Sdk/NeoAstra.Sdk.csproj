@@ -17,7 +17,10 @@
     <None Include="buildTransitive/NeoAstra.Sdk.props" Pack="true" PackagePath="buildTransitive/" />
     <None Include="buildTransitive/NeoAstra.Sdk.targets" Pack="true" PackagePath="buildTransitive/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-staging-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-update-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../NeoAstra.Tool/bin/$(Configuration)/net10.0/*" Pack="true" PackagePath="tools/net10.0/any/" Exclude="**/*.pdb;**/*.xml;**/neoastra_native.*" />
   </ItemGroup>

@@ -6,6 +6,7 @@ import type {
 } from "./index.js";
 import { NeoRpcClient, NeoRpcError, type NeoRpcErrorValue } from "./rpc.js";
 import { createDesktopClient, type DesktopRpc } from "./desktop.js";
+import { createUpdateClient, type NeoUpdateRpc } from "./updates.js";
 import {
   DEFAULT_MAXIMUM_FRAME_BYTES,
   NeoAstraClientError,
@@ -283,6 +284,29 @@ export function createMockDesktop(): MockDesktopHarness {
     invocations,
     setResult: (command, result) => results.set(command, result),
     emit: (event, value) => { for (const handler of subscriptions.get(event) ?? []) { try { handler(value); } catch { } } },
+  };
+}
+
+/** Deny-by-default mock for the experimental safe update renderer surface. */
+export function createMockUpdates() {
+  const results = new Map<string, unknown>();
+  const invocations: { command: string; args: unknown }[] = [];
+  const subscriptions = new Map<string, Set<(value: unknown) => void>>();
+  const rpc: NeoUpdateRpc = {
+    invoke: async <TRequest, TResult>(command: string, args: TRequest): Promise<TResult> => {
+      invocations.push(Object.freeze({ command, args }));
+      if (!results.has(command)) throw new NeoRpcError({ code: "permission_denied", message: "The mock update command has no explicit result.", retryable: false });
+      return results.get(command) as TResult;
+    },
+    subscribe: async <T>(event: string, handler: (value: T) => void) => {
+      let values = subscriptions.get(event); if (values === undefined) { values = new Set(); subscriptions.set(event, values); }
+      const untyped = handler as (value: unknown) => void; values.add(untyped); return async () => { values!.delete(untyped); };
+    },
+  };
+  return {
+    client: createUpdateClient(rpc), invocations,
+    setResult: (command: string, result: unknown) => results.set(command, result),
+    emit: (event: string, value: unknown) => { for (const handler of subscriptions.get(event) ?? []) { try { handler(value); } catch { } } },
   };
 }
 

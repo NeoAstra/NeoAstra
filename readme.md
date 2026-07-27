@@ -99,6 +99,8 @@ Use [the application lifecycle and hosting guide](doc/application-lifecycle-and-
 deterministic quit ordering, early launch events, authenticated second-instance routing, explicit DI scopes, and platform session-end limitations.
 Use [the plugins and desktop services guide](doc/desktop-services.md) for static plugin composition, renderer authority boundaries,
 desktop support/degradation by platform, scoped open/drag operations, safe storage, and recoverable window-state persistence.
+Use [the delivery and authenticated update guide](doc/delivery-and-updates.md) for schema-validated deterministic bundles,
+inspectable host package inputs, signing adapters, SBOM/provenance, and the experimental fail-closed updater threat model.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neoastra_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoAstra intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

@@ -431,3 +431,6 @@ export type {
   DesktopValueResult,
   NeoDesktopClient,
 } from "./desktop.js";
+
+export { createUpdateClient, updateCommands } from "./updates.js";
+export type { NeoUpdateClient, NeoUpdateMode, NeoUpdatePhase, NeoUpdateRpc, NeoUpdateStatus } from "./updates.js";

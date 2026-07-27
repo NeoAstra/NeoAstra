@@ -184,23 +184,37 @@ Deep-link/file-association/autostart metadata integrates with Step 5 launch rout
 
 ## 13. Implementation order
 
-- [ ] Freeze bundle metadata schema and deterministic staging manifest.
-- [ ] Implement host/tool prerequisite checks, dry-run, inspectable commands, and redaction.
-- [ ] Implement raw portable bundles and package-content verification per OS.
-- [ ] Select and implement one installer path per claimed platform, with generated source retained.
-- [ ] Add signing/notarization and post-sign verification adapters.
-- [ ] Add icons/associations/entitlements/dependency metadata and `doctor` checks.
-- [ ] Emit checksums, SBOM/notices/provenance/symbol/support artifacts.
-- [ ] Build installer smoke-test CI on clean platform hosts.
-- [ ] Complete updater threat model and canonical signed manifest prototype.
-- [ ] Implement download/verify/handoff/atomic install/health/rollback separately per OS.
-- [ ] Add channel/staging/key-rotation/store restrictions only after core negative tests pass.
+- [x] Freeze bundle metadata schema and deterministic staging manifest.
+- [x] Implement host/tool prerequisite checks, dry-run, inspectable commands, and redaction.
+- [x] Implement raw portable bundles and package-content verification per OS.
+- [x] Select and implement one installer path per claimed platform, with generated source retained.
+- [x] Add signing/notarization and post-sign verification adapters.
+- [x] Add icons/associations/entitlements/dependency metadata and `doctor` checks.
+- [x] Emit checksums, SBOM/notices/provenance/symbol/support artifacts.
+- [x] Build installer smoke-test CI on clean platform hosts.
+- [x] Complete updater threat model and canonical signed manifest prototype.
+- [ ] Implement download/verify/handoff/atomic install/health/rollback separately per OS. (The bounded portable installer/state machine and native-package deferral are implemented and unit-tested; signed target-host interruption/rollback qualification remains required before this item can be checked.)
+- [x] Add channel/staging/key-rotation/store restrictions only after core negative tests pass.
+
+> Qualification remains intentionally separate from implementation: unsigned portable/package smoke runs on each
+> target host, while signed upgrade/downgrade, notarization, association delivery, updater interruption, and
+> artifact-specific rollback evidence remain unclaimed until those CI scenarios execute successfully.
 
 ## 14. Verification
 
-Bundle tests cover invalid identity/version/icon/path; undeclared/development files; wrong RID/native ABI; deterministic staging; quoting/Unicode/spaces; missing tools; dry-run; unsigned/signed labeling; signature verification failure; install/upgrade/repair/uninstall; URL/file association delivery; WebView/runtime dependency diagnostics; and clean-host launch.
+Repository bundle tests currently cover strict identity and declared-file policy, forbidden/colliding paths,
+wrong native ABI, deterministic staging/archive hashes, retained platform association/protocol input, metadata
+emission, and redaction boundaries. The target-host workflow is responsible for the unsigned NativeAOT
+portable/package build, structure inspection, install, upgrade, repair-equivalent reinstall, launch, and
+uninstall exercises; those jobs are not considered passed until they actually execute.
 
-Updater tests use hostile local servers/artifacts to cover invalid/unknown/replayed/downgrade/wrong-app/wrong-RID manifests, corrupt/truncated/oversized artifacts, redirect/TLS policy, key rotation, interrupted download/install, disk full, locked files, stale helper, app refusing quit, failed health check, successful rollback, rollback loop prevention, renderer scope denial, and store-disabled mode.
+Updater unit tests currently cover canonical signature failure, unknown/revoked/rotated keys,
+replay/downgrade/wrong-app/channel/RID, URL and manifest-size policy, deterministic rollout, store disablement,
+portable traversal and package-identity mismatch, atomic promotion, interrupted-switch recovery, health
+timeout, rollback, rollback-loop prevention, and renderer scope denial. Hostile-server redirects/truncation,
+disk-full/locked-file/app-refusing-quit, signed native-package interruption, restart health, and artifact-specific
+rollback remain required target-host qualification evidence; updater mode therefore remains unavailable or
+experimental rather than `available`.
 
 ## 15. Exit criteria
 

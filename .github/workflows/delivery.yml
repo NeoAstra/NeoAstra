@@ -1,0 +1,156 @@
+name: delivery
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-and-package-inputs:
+    name: Delivery smoke (${{ matrix.rid }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            executable: NeoAstra.V2.Reference.exe
+            native: neoastra_native.dll
+          - os: macos-latest
+            rid: osx-arm64
+            executable: NeoAstra.V2.Reference
+            native: libneoastra_native.dylib
+          - os: ubuntu-latest
+            rid: linux-x64
+            executable: NeoAstra.V2.Reference
+            native: libneoastra_native.so
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/global.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: src/NeoAstra/runtimes/${{ matrix.rid }}/native
+      - name: Restore locked repository dependencies
+        run: |
+          dotnet restore src/NeoAstra.slnx
+          dotnet restore samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -r ${{ matrix.rid }}
+      - name: Build tooling and run delivery security tests
+        run: |
+          dotnet build src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-restore
+          dotnet test src/NeoAstra.Tests/NeoAstra.Tests.csproj -c Release --no-restore --filter DeliveryTests
+      - name: Publish target NativeAOT reference
+        run: dotnet publish samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -c Release -r ${{ matrix.rid }} --self-contained --no-restore -o artifacts/delivery/publish
+      - name: Create host-specific reviewed fixture metadata
+        shell: pwsh
+        run: |
+          $icon = 'icon.png'
+          Copy-Item img/NeoAstra.png "artifacts/delivery/$icon"
+          Copy-Item THIRD-PARTY-NOTICES.md artifacts/delivery/NOTICE.txt
+          '{}' | Set-Content -NoNewline artifacts/delivery/assets.json
+          $config = Get-Content samples/NeoAstra.V2.Reference/neoastra.json -Raw | ConvertFrom-Json
+          $publishRoot = (Resolve-Path artifacts/delivery/publish).Path
+          $files = Get-ChildItem $publishRoot -File -Recurse | Where-Object Extension -notin @('.pdb','.xml') | ForEach-Object { [IO.Path]::GetRelativePath($publishRoot, $_.FullName).Replace('\','/') } | Sort-Object
+          $config | Add-Member bundle ([ordered]@{
+            identifier='dev.neoastra.reference'; displayName='NeoAstra v2 Reference'; version='0.1.0'; numericVersion='0.1.0.0'; publisher='CN=NeoAstra Development'; executable='NeoAstra.V2.Reference';
+            icons=@($icon); rids=@('${{ matrix.rid }}'); targets=@('portable','installer'); files=@($files); notices=@('NOTICE.txt');
+            minimumOsVersion='10.0'; runtimeDependencies=@($(if ('${{ runner.os }}' -eq 'Linux') { 'libgtk-3-0, libwebkit2gtk-4.1-0' } elseif ('${{ runner.os }}' -eq 'Windows') { 'Evergreen WebView2 Runtime' } else { 'system WKWebView' }));
+            notificationIdentity='dev.neoastra.reference'; fileAssociations=@([ordered]@{extension='.neoastra-reference';mimeType='application/x-neoastra-reference';role='viewer'}); urlSchemes=@('neoastra-reference'); includeSymbols=$false
+          })
+          $config | ConvertTo-Json -Depth 12 | Set-Content artifacts/delivery/neoastra.json
+      - name: Build deterministic portable and retained installer inputs
+        run: dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- bundle --config artifacts/delivery/neoastra.json --rid ${{ matrix.rid }} --publish artifacts/delivery/publish --assets-manifest artifacts/delivery/assets.json --output artifacts/delivery/output
+      - name: Portable clean-directory launch smoke
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory artifacts/delivery/extracted | Out-Null
+          if ('${{ runner.os }}' -eq 'Linux') { tar -xzf "artifacts/delivery/output/NeoAstra.V2.Reference-0.1.0-${{ matrix.rid }}.tar.gz" -C artifacts/delivery/extracted }
+          else { Expand-Archive "artifacts/delivery/output/NeoAstra.V2.Reference-0.1.0-${{ matrix.rid }}.zip" artifacts/delivery/extracted }
+          $app = Get-ChildItem artifacts/delivery/extracted -Recurse -File -Filter '${{ matrix.executable }}' | Select-Object -First 1
+          if ($null -eq $app) { throw 'Portable executable is missing' }
+          & $app.FullName --validate-reference
+          if ($LASTEXITCODE -ne 0) { throw "Portable launch failed: $LASTEXITCODE" }
+      - name: Generate installer package without signing or qualification claim
+        run: dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- bundle --config artifacts/delivery/neoastra.json --rid ${{ matrix.rid }} --publish artifacts/delivery/publish --assets-manifest artifacts/delivery/assets.json --output artifacts/delivery/installer --execute-installer
+      - name: Generate a higher-version package for upgrade smoke
+        shell: pwsh
+        run: |
+          $config = Get-Content artifacts/delivery/neoastra.json -Raw | ConvertFrom-Json
+          $config.bundle.version = '0.1.1'
+          $config.bundle.numericVersion = '0.1.1.0'
+          $config | ConvertTo-Json -Depth 12 | Set-Content artifacts/delivery/neoastra-upgrade.json
+          dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- bundle --config artifacts/delivery/neoastra-upgrade.json --rid ${{ matrix.rid }} --publish artifacts/delivery/publish --assets-manifest artifacts/delivery/assets.json --output artifacts/delivery/upgrade --execute-installer
+          if ($LASTEXITCODE -ne 0) { throw "Upgrade package generation failed: $LASTEXITCODE" }
+      - name: Inspect installer package structure
+        shell: pwsh
+        run: |
+          if ('${{ runner.os }}' -eq 'Windows') { makeappx unpack /p (Get-ChildItem artifacts/delivery/installer/*.msix).FullName /d artifacts/delivery/package-inspect /o }
+          elseif ('${{ runner.os }}' -eq 'macOS') { pkgutil --expand (Get-ChildItem artifacts/delivery/installer/*.pkg).FullName artifacts/delivery/package-inspect }
+          else { dpkg-deb --info (Get-ChildItem artifacts/delivery/installer/*.deb).FullName; dpkg-deb --extract (Get-ChildItem artifacts/delivery/installer/*.deb).FullName artifacts/delivery/package-inspect }
+      - name: Linux install, launch, reinstall-repair, and uninstall smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          package=$(find artifacts/delivery/installer -maxdepth 1 -name '*.deb' -print -quit)
+          sudo dpkg --install "$package"
+          /opt/dev.neoastra.reference/NeoAstra.V2.Reference --validate-reference
+          upgrade=$(find artifacts/delivery/upgrade -maxdepth 1 -name '*.deb' -print -quit)
+          sudo dpkg --install "$upgrade"
+          /opt/dev.neoastra.reference/NeoAstra.V2.Reference --validate-reference
+          sudo dpkg --install "$upgrade"
+          sudo dpkg --remove dev-neoastra-reference
+          test ! -e /opt/dev.neoastra.reference
+      - name: macOS install, launch, repair-equivalent reinstall, and uninstall smoke
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          package=$(find artifacts/delivery/installer -maxdepth 1 -name '*.pkg' -print -quit)
+          sudo installer -pkg "$package" -target /
+          '/Applications/NeoAstra.V2.Reference.app/Contents/MacOS/NeoAstra.V2.Reference' --validate-reference
+          upgrade=$(find artifacts/delivery/upgrade -maxdepth 1 -name '*.pkg' -print -quit)
+          sudo installer -pkg "$upgrade" -target /
+          '/Applications/NeoAstra.V2.Reference.app/Contents/MacOS/NeoAstra.V2.Reference' --validate-reference
+          sudo installer -pkg "$upgrade" -target /
+          sudo rm -rf '/Applications/NeoAstra.V2.Reference.app'
+          sudo pkgutil --forget dev.neoastra.reference || true
+          test ! -e '/Applications/NeoAstra.V2.Reference.app'
+      - name: Windows unsigned CI install, launch, re-register repair, and uninstall smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = (Get-ChildItem artifacts/delivery/installer/*.msix).FullName
+          Add-AppxPackage -Path $package -AllowUnsigned
+          $installed = Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference' | Select-Object -First 1
+          if ($null -eq $installed) { throw 'MSIX was not installed' }
+          & (Join-Path $installed.InstallLocation 'NeoAstra.V2.Reference.exe') --validate-reference
+          Add-AppxPackage -Path (Get-ChildItem artifacts/delivery/upgrade/*.msix).FullName -AllowUnsigned
+          $installed = Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference' | Select-Object -First 1
+          if ($installed.Version.ToString() -ne '0.1.1.0') { throw "MSIX upgrade did not select 0.1.1.0: $($installed.Version)" }
+          & (Join-Path $installed.InstallLocation 'NeoAstra.V2.Reference.exe') --validate-reference
+          Add-AppxPackage -Register (Join-Path $installed.InstallLocation 'AppxManifest.xml') -DisableDevelopmentMode
+          Remove-AppxPackage $installed.PackageFullName
+          if (Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference') { throw 'MSIX uninstall failed' }
+      - name: Record qualification boundary
+        shell: pwsh
+        run: |
+          @'
+          Portable target-host build/extract/launch passed.
+          Unsigned installer generation, structure, install, upgrade, repair-equivalent reinstall, uninstall, and launch passed.
+          Signed upgrade/downgrade, signing/notarization, desktop association delivery, interruption, and updater
+          rollback remain unqualified and must not be advertised by this job.
+          '@ | Set-Content artifacts/delivery/QUALIFICATION.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delivery-${{ matrix.rid }}
+          path: |
+            artifacts/delivery/output
+            artifacts/delivery/installer/inspect
+            artifacts/delivery/installer/*.*
+            artifacts/delivery/upgrade/inspect
+            artifacts/delivery/upgrade/*.*
+            artifacts/delivery/QUALIFICATION.txt
+          if-no-files-found: error
