@@ -18,6 +18,26 @@ struct log_capture {
     bool valid{true};
 };
 
+struct close_capture {
+    uint32_t calls{};
+    neoastra_decision_t* decision{};
+};
+
+void NEOASTRA_CALL capture_close(void* context, const neoastra_event_t* event) {
+    auto* capture = static_cast<close_capture*>(context);
+    if (!event || event->header.type != NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED) return;
+    ++capture->calls;
+    assert(event->value == NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC);
+    assert(event->native_code == 1);
+    assert(event->decision != nullptr);
+    assert(neoastra_decision_get_kind(event->decision) == NEOASTRA_DECISION_WINDOW_CLOSE);
+    assert(neoastra_decision_get_default_action(event->decision) == NEOASTRA_DECISION_CANCEL);
+    assert(neoastra_decision_get_deadline_ns(event->decision) != 0);
+    assert(neoastra_decision_defer(event->decision) == NEOASTRA_OK);
+    neoastra_decision_retain(event->decision);
+    capture->decision = event->decision;
+}
+
 void NEOASTRA_CALL capture_log(void* context, neoastra_log_level_t level,
                                   neoastra_string_view_t category, neoastra_string_view_t message,
                                   uint64_t thread_id, uint64_t timestamp_ns, int64_t native_code, uint64_t object_id) {
@@ -40,6 +60,7 @@ static_assert(std::is_same_v<std::underlying_type_t<neoastra_option_state_t>, ui
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_script_injection_time_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_decision_action_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_decision_kind_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_close_reason_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_permission_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_process_failure_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_event_type_t>, uint32_t>);
@@ -58,6 +79,8 @@ static_assert(NEOASTRA_SCRIPT_DOCUMENT_END == 1);
 static_assert(NEOASTRA_DECISION_DOWNLOAD == 5);
 static_assert(NEOASTRA_DECISION_HANDLED_EXTERNAL == 6);
 static_assert(NEOASTRA_DECISION_CLIENT_CERTIFICATE == 10);
+static_assert(NEOASTRA_DECISION_WINDOW_CLOSE == 11);
+static_assert(NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC == 5);
 static_assert(NEOASTRA_PERMISSION_PERSISTENT_STORAGE == 12);
 static_assert(NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE == 3);
 static_assert(NEOASTRA_EVENT_CLIENT_CERTIFICATE_REQUESTED == 33);
@@ -67,7 +90,7 @@ static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRA
 static_assert(NEOASTRA_RESOURCE_MANIFEST == 12);
 static_assert(NEOASTRA_RESOURCE_BODY_FILE == 2);
 static_assert(NEOASTRA_BRIDGE_DISABLED == 0 && NEOASTRA_BRIDGE_TRUSTED_ORIGINS == 1 && NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW == 2);
-static_assert(sizeof(void*) == 8, "ABI 1.8 targets the current 64-bit primary platforms");
+static_assert(sizeof(void*) == 8, "ABI 1.9 targets the current 64-bit primary platforms");
 static_assert(sizeof(neoastra_struct_header_t) == 8);
 static_assert(sizeof(neoastra_string_view_t) == 16);
 static_assert(sizeof(neoastra_point_t) == 8);
@@ -161,6 +184,19 @@ int main() {
     neoastra_window_state_t state{};
     assert(neoastra_window_get_state(window, &state) == NEOASTRA_OK);
     assert(state == NEOASTRA_WINDOW_NORMAL);
+    close_capture closes{};
+    assert(neoastra_app_set_event_callback(app, capture_close, &closes) == NEOASTRA_OK);
+    assert(neoastra_window_close(window) == NEOASTRA_OK);
+    assert(neoastra_window_close(window) == NEOASTRA_OK);
+    assert(closes.calls == 1 && closes.decision != nullptr);
+    neoastra_decision_response_t close_response{};
+    close_response.size = sizeof(close_response);
+    close_response.version = 1;
+    close_response.action = NEOASTRA_DECISION_CANCEL;
+    assert(neoastra_decision_complete(closes.decision, &close_response, &error) == NEOASTRA_OK);
+    assert(neoastra_decision_complete(closes.decision, &close_response, &error) == NEOASTRA_ERROR_INVALID_STATE);
+    if (error) { neoastra_error_release(error); error = nullptr; }
+    neoastra_decision_release(closes.decision);
     double zoom{};
     assert(neoastra_view_get_zoom_factor(nullptr, &zoom) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_zoom_factor(nullptr, 1.0) == NEOASTRA_ERROR_INVALID_ARGUMENT);

@@ -9,6 +9,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private readonly NeoRpcHost _host;
     private readonly global::NeoAstra.NeoAstra _view;
     private readonly Func<NeoTransportSessionSnapshot, NeoRpcSession> _openSession;
+    private readonly NeoApplication? _application;
     private readonly object _gate = new();
     private readonly List<Task> _teardowns = [];
     private NeoRpcSession? _session;
@@ -24,8 +25,10 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         _host = host;
         _view = view;
         _openSession = openSession;
+        _application = view.Environment?.Application;
         view.TransportApplicationMessageReceived += OnMessage;
         view.TransportSessionChanged += OnSessionChanged;
+        if (_application is not null) _application.Stopping += OnApplicationStopping;
         if (view.TransportSession is { } session) QueueTransition(session);
     }
 
@@ -39,7 +42,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(view);
-        if (view.ViewLabel is null) throw new InvalidOperationException("RPC requires a bridge-enabled view with an immutable view label.");
+        if (view.ViewLabel is null || !view.TransportEnabled) throw new InvalidOperationException("RPC requires a bridge-enabled view with an immutable view label.");
         return new(host, view);
     }
 
@@ -50,6 +53,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _view.TransportApplicationMessageReceived -= OnMessage;
         _view.TransportSessionChanged -= OnSessionChanged;
+        if (_application is not null) _application.Stopping -= OnApplicationStopping;
         NeoRpcSession? session;
         Task[] teardowns;
         lock (_gate)
@@ -68,6 +72,13 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         if (Volatile.Read(ref _disposed) != 0) return;
         QueueTransition(snapshot);
+    }
+
+    private void OnApplicationStopping(object? sender, EventArgs args)
+    {
+        // Revoke document authority before native views are destroyed. QueueTransition is
+        // idempotent and closes calls, subscriptions, channels, resources, and scoped services.
+        QueueTransition(null);
     }
 
     private void QueueTransition(NeoTransportSessionSnapshot? snapshot)

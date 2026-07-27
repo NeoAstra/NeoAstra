@@ -319,7 +319,8 @@ internal static class NeoTransportViewInitializer
     {
         options ??= new NeoAstraOptions();
         options.Validate(environment);
-        environment.Application.ReserveViewLabel(options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel);
+        environment.Application.EnsureTopLevelWorkAccepted();
+        environment.Application.ReserveViewLabel(options.ViewLabel);
         NeoAstra? view = null;
         try
         {
@@ -330,7 +331,7 @@ internal static class NeoTransportViewInitializer
         catch
         {
             if (view is not null) await view.DisposeAsync();
-            else environment.Application.ReleaseViewLabel(options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel);
+            else environment.Application.ReleaseViewLabel(options.ViewLabel);
             throw;
         }
     }

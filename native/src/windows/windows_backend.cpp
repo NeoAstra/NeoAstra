@@ -792,12 +792,41 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     return result;
 }
 
+LRESULT handle_session_message(neoastra_app_t* app, UINT message, WPARAM wparam) {
+    if (message == WM_QUERYENDSESSION) {
+        // Windows does not permit an asynchronous veto here. Publish a bounded best-effort
+        // request and truthfully report that cancellation is unavailable.
+        if (app->session_end_phase.exchange(1, std::memory_order_acq_rel) == 0) {
+            auto* decision = new(std::nothrow) neoastra_decision_t;
+            if (decision) {
+                decision->kind = NEOASTRA_DECISION_APPLICATION_QUIT;
+                decision->default_action = NEOASTRA_DECISION_ALLOW;
+                decision->deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                decision->attach_app(app);
+                neo_emit_app(app, NEOASTRA_EVENT_APPLICATION_SESSION_END, 0, nullptr, nullptr, 0, 0, decision);
+                neo_finish_decision_event(app, decision);
+                decision->release();
+            } else neo_emit_app(app, NEOASTRA_EVENT_APPLICATION_SESSION_END, 0, nullptr, nullptr, 0);
+        }
+        return TRUE;
+    }
+    if (!wparam) {
+        if (app->session_end_phase.exchange(0, std::memory_order_acq_rel) != 0)
+            neo_emit_app(app, NEOASTRA_EVENT_APPLICATION_SESSION_END, 0, nullptr, nullptr, 3);
+    } else if (const auto previous = app->session_end_phase.exchange(2, std::memory_order_acq_rel); previous != 2) {
+        neo_emit_app(app, NEOASTRA_EVENT_APPLICATION_SESSION_END, 0, nullptr, nullptr, previous == 0 ? 2 : 1);
+        neoastra_app_quit(app, 0);
+    }
+    return 0;
+}
+
 LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
     }
     auto* app = reinterpret_cast<neoastra_app_t*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (app && (message == WM_QUERYENDSESSION || message == WM_ENDSESSION)) return handle_session_message(app, message, wparam);
     if (message == dispatch_message && app) { neo_drain_dispatch(app); return 0; }
     if (message == quit_message && app) { neo_drain_dispatch(app); PostQuitMessage(app->exit_code.load()); return 0; }
     if (message == destroy_app_message && app) { neo_destroy_app_on_ui(app); return 0; }
@@ -826,8 +855,21 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     if (!window) return DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
         case WM_CLOSE:
-            neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED, window->id);
-            DestroyWindow(hwnd);
+            if (window->force_closing) {
+                window->force_closing = false;
+                DestroyWindow(hwnd);
+            } else {
+                neo_window_request_close(window, NEOASTRA_WINDOW_CLOSE_USER, true);
+            }
+            return 0;
+        case WM_QUERYENDSESSION:
+            return handle_session_message(window->app, message, wparam);
+        case WM_ENDSESSION:
+            handle_session_message(window->app, message, wparam);
+            if (wparam) {
+                window->force_closing = true;
+                DestroyWindow(hwnd);
+            }
             return 0;
         case WM_DESTROY:
             static_cast<windows_window*>(window->platform)->hwnd = nullptr;
@@ -1024,7 +1066,8 @@ bool neo_platform_initialize(neoastra_app_t* app, neoastra_error_t** error) noex
         if (SUCCEEDED(hr)) state->owns_com = true;
         else if (hr != S_FALSE) { delete state; neo_fail(error, hr == RPC_E_CHANGED_MODE ? NEOASTRA_ERROR_WRONG_THREAD : NEOASTRA_ERROR_NATIVE_FAILURE, "COM STA initialization failed", hr, "com"); return false; }
         if (!register_class(dispatch_class, dispatcher_proc) || !register_class(window_class, window_proc)) { const auto code=GetLastError(); if(state->owns_com)CoUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window class registration failed",code,"win32");return false; }
-        state->dispatcher = CreateWindowExW(0, dispatch_class, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), app);
+        // A hidden top-level window, rather than HWND_MESSAGE, is required to receive session-end broadcasts.
+        state->dispatcher = CreateWindowExW(0, dispatch_class, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, GetModuleHandleW(nullptr), app);
         if (!state->dispatcher) { const auto code=GetLastError();if(state->owns_com)CoUninitialize();delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 dispatcher creation failed",code,"win32");return false; }
         app->platform = state; return true;
     } catch (...) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Windows backend initialization failed"); return false; }
@@ -1032,7 +1075,7 @@ bool neo_platform_initialize(neoastra_app_t* app, neoastra_error_t** error) noex
 
 void neo_platform_shutdown(neoastra_app_t* app) noexcept {
     auto* state = static_cast<windows_app*>(app->platform); if (!state) return;
-    for (auto* decision : state->decision_timers) { KillTimer(state->dispatcher, reinterpret_cast<UINT_PTR>(decision)); decision->release(); }
+    for (auto* decision : state->decision_timers) { KillTimer(state->dispatcher, reinterpret_cast<UINT_PTR>(decision)); decision->abandon(); decision->release(); }
     state->decision_timers.clear();
     if (state->dispatcher && IsWindow(state->dispatcher)) DestroyWindow(state->dispatcher);
     if (state->owns_com && app->ui_thread == std::this_thread::get_id()) CoUninitialize();
@@ -1048,7 +1091,7 @@ int32_t neo_platform_run(neoastra_app_t* app) noexcept {
 }
 void neo_platform_quit(neoastra_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,quit_message,0,0); }
 void neo_platform_wake(neoastra_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,dispatch_message,0,0); }
-bool neo_platform_schedule_decision_timeout(neoastra_view_t* view,neoastra_decision_t* decision) noexcept {auto* state=static_cast<windows_app*>(view->environment->app->platform);if(!state||!state->dispatcher)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(decision->deadline-std::chrono::steady_clock::now()).count();const auto delay=static_cast<UINT>(std::clamp<int64_t>(remaining+1,1,USER_TIMER_MAXIMUM));decision->retain();try{state->decision_timers.push_back(decision);}catch(...){decision->release();return false;}if(!SetTimer(state->dispatcher,reinterpret_cast<UINT_PTR>(decision),delay,nullptr)){state->decision_timers.pop_back();decision->release();return false;}return true;}
+bool neo_platform_schedule_decision_timeout(neoastra_app_t* app,neoastra_decision_t* decision) noexcept {auto* state=static_cast<windows_app*>(app->platform);if(!state||!state->dispatcher)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(decision->deadline-std::chrono::steady_clock::now()).count();const auto delay=static_cast<UINT>(std::clamp<int64_t>(remaining+1,1,USER_TIMER_MAXIMUM));decision->retain();try{state->decision_timers.push_back(decision);}catch(...){decision->release();return false;}if(!SetTimer(state->dispatcher,reinterpret_cast<UINT_PTR>(decision),delay,nullptr)){state->decision_timers.pop_back();decision->release();return false;}return true;}
 
 bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window_options_t* options, neoastra_error_t** error) noexcept {
     try {
@@ -1067,7 +1110,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
 void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
 neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);return NEOASTRA_OK;}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetForegroundWindow(s->hwnd)?NEOASTRA_OK:NEOASTRA_ERROR_INVALID_STATE;}
-neoastra_result_t neo_platform_window_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
+neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,w->bounds.width,w->bounds.height,SWP_NOZORDER|SWP_NOACTIVATE)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetWindowPos(s->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);return NEOASTRA_OK;}

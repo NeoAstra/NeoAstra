@@ -3,12 +3,19 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+using NeoAstra;
+using NeoAstra.Hosting;
 using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(FixtureJsonContext))]
 
 var frames = new List<string>();
 var secondFrames = new List<string>();
+var hostedServices = new ServiceCollection();
+hostedServices.AddNeoAstraRpc();
+hostedServices.AddNeoAstraApplication<HostedFixtureApplication>();
+if (!hostedServices.Any(static descriptor => descriptor.ServiceType == typeof(INeoHostedApplication))) return 4;
 var catalog = new NeoPermissionCatalogBuilder()
     .Add(new NeoPermissionDeclaration("documents:open", 1, ["documents.open"], NeoPermissionRisk.Sensitive, NeoScopeFamily.None))
     .Add(new NeoPermissionDeclaration("documents:read", 1, ["documents.changed"], NeoPermissionRisk.Low, NeoScopeFamily.None))
@@ -50,6 +57,15 @@ Console.WriteLine($"NeoAstra RPC NativeAOT fixture passed ({NeoRpcGeneratedContr
 return 0;
 
 static NeoCapabilityPlatform CurrentPlatform() => OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
+
+public sealed class HostedFixtureApplication : INeoHostedApplication
+{
+    public ValueTask StartAsync(NeoApplication application, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.CompletedTask;
+    }
+}
 
 [NeoRpcService("documents", Version = 1)]
 public sealed class DocumentsService

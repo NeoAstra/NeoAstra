@@ -215,17 +215,23 @@ struct neoastra_decision final : neo_ref_counted {
     neoastra_decision_action_t default_action{NEOASTRA_DECISION_DENY};
     std::atomic<neoastra_decision_action_t> resolved_action{NEOASTRA_DECISION_DEFAULT};
     std::atomic_bool popup_creation_started{};
+    std::thread::id completion_thread{};
     neoastra_view_t* resolved_target{};
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::now() + std::chrono::seconds(30)};
     void (*completion)(void* context, const neoastra_decision_response_t* response) noexcept{};
     void* completion_context{};
     neoastra_view_t* owner{};
+    std::atomic<neoastra_app_t*> app_owner{};
+    neoastra_decision_t* app_previous{};
+    neoastra_decision_t* app_next{};
     neoastra_decision_t* owner_previous{};
     neoastra_decision_t* owner_next{};
     void* popup_context{};
     void (*popup_context_release)(void*) noexcept{};
 
     void detach_owner() noexcept;
+    void attach_app(neoastra_app_t* app) noexcept;
+    void detach_app() noexcept;
     void resolve(const neoastra_decision_response_t& response) noexcept;
     void resolve(neoastra_decision_action_t action) noexcept;
     void abandon() noexcept;
@@ -247,6 +253,7 @@ struct neoastra_app final : neo_ref_counted {
     std::atomic<bool> quit_requested{false};
     std::atomic<bool> stopping{false}; // Used by the platform loop after common shutdown has drained.
     std::atomic<bool> stopped{false};
+    std::atomic<uint32_t> session_end_phase{0}; // 0=none, 1=query, 2=final.
     std::atomic<neo_app_state> state{neo_app_state::created};
     std::atomic<int32_t> exit_code{0};
     std::thread::id ui_thread;
@@ -255,6 +262,8 @@ struct neoastra_app final : neo_ref_counted {
     std::mutex dispatch_mutex;
     std::deque<neo_dispatch_item> dispatches;
     std::mutex platform_mutex;
+    std::mutex decisions_mutex;
+    neoastra_decision_t* decisions{};
     std::mutex ui_lifetime_mutex;
     neo_ui_ref_counted* ui_objects{};
     neo_ui_ref_counted* pending_ui_destructions{};
@@ -398,6 +407,8 @@ struct neoastra_window final : neo_ui_ref_counted {
     neoastra_size_t maximum_size{};
     neoastra_window_state_t state{NEOASTRA_WINDOW_NORMAL};
     std::atomic<bool> closed{false};
+    neoastra_decision_t* pending_close{}; // UI-thread-only retained decision.
+    bool force_closing{}; // UI-thread-only; permits one platform close without renegotiation.
     std::vector<neoastra_view_t*> views; // UI-thread-only weak references.
     void* platform{};
     explicit neoastra_window(neoastra_app_t* value) : neo_ui_ref_counted(value, 1), app(value) { }
@@ -494,6 +505,7 @@ inline void neo_configure_decision(neoastra_decision_t* decision, const neoastra
     decision->kind = kind;
     decision->default_action = default_action;
     decision->deadline = std::chrono::steady_clock::now() + view->decision_timeout;
+    decision->completion_thread = view->environment->app->ui_thread;
     auto* mutable_view = const_cast<neoastra_view_t*>(view);
     std::lock_guard lock(mutable_view->decisions_mutex);
     if (!mutable_view->destroying) {
@@ -524,6 +536,37 @@ inline void neoastra_decision::detach_owner() noexcept {
     if (detached) release();
 }
 
+inline void neoastra_decision::attach_app(neoastra_app_t* app) noexcept {
+    if (!app) return;
+    std::lock_guard lock(app->decisions_mutex);
+    if (app_owner.load(std::memory_order_relaxed)) return;
+    completion_thread = app->ui_thread;
+    retain(); // Owned by the application's intrusive decision list until terminal resolution.
+    app_owner.store(app, std::memory_order_release);
+    app_next = app->decisions;
+    if (app_next) app_next->app_previous = this;
+    app->decisions = this;
+}
+
+inline void neoastra_decision::detach_app() noexcept {
+    auto* app = app_owner.load(std::memory_order_acquire);
+    if (!app) return;
+    bool detached{};
+    {
+        std::lock_guard lock(app->decisions_mutex);
+        if (app_owner.load(std::memory_order_relaxed) == app) {
+            if (app_previous) app_previous->app_next = app_next;
+            else app->decisions = app_next;
+            if (app_next) app_next->app_previous = app_previous;
+            app_owner.store(nullptr, std::memory_order_release);
+            app_previous = nullptr;
+            app_next = nullptr;
+            detached = true;
+        }
+    }
+    if (detached) release();
+}
+
 inline void neoastra_decision::resolve(const neoastra_decision_response_t& response) noexcept {
     resolved_action.store(response.action, std::memory_order_release);
     if (response.target_view && response.target_view->retain()) resolved_target = response.target_view;
@@ -533,6 +576,7 @@ inline void neoastra_decision::resolve(const neoastra_decision_response_t& respo
     completion_context = nullptr;
     if (callback) callback(context, &response);
     detach_owner();
+    detach_app();
 }
 
 inline void neoastra_decision::resolve(neoastra_decision_action_t action) noexcept {
@@ -699,12 +743,15 @@ void neo_emit_app(neoastra_app_t* app, neoastra_event_type_t type, uint64_t obje
 void neo_emit_view(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neoastra_decision_t* decision = nullptr) noexcept;
 void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id, const std::string* text, const std::string* uri, uint64_t value, int64_t native_code, neoastra_decision_t* decision, const neo_event_details& details) noexcept;
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
-void neo_finish_decision_event(neoastra_view_t* view, neoastra_decision_t* decision) noexcept;
+void neo_finish_decision_event(neoastra_app_t* app, neoastra_decision_t* decision) noexcept;
+inline void neo_finish_decision_event(neoastra_view_t* view, neoastra_decision_t* decision) noexcept { neo_finish_decision_event(view->environment->app, decision); }
 void neo_drain_dispatch(neoastra_app_t* app) noexcept;
 void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept;
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept;
 void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept;
 void neo_window_closed(neoastra_window_t* window) noexcept;
+void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,
+                              bool cancellation_permitted = true) noexcept;
 
 bool neo_platform_initialize(neoastra_app_t* app, neoastra_error_t** error) noexcept;
 void neo_platform_shutdown(neoastra_app_t* app) noexcept;
@@ -712,12 +759,13 @@ bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept;
 int32_t neo_platform_run(neoastra_app_t* app) noexcept;
 void neo_platform_quit(neoastra_app_t* app) noexcept;
 void neo_platform_wake(neoastra_app_t* app) noexcept;
-bool neo_platform_schedule_decision_timeout(neoastra_view_t* view, neoastra_decision_t* decision) noexcept;
+bool neo_platform_schedule_decision_timeout(neoastra_app_t* app, neoastra_decision_t* decision) noexcept;
+inline bool neo_platform_schedule_decision_timeout(neoastra_view_t* view, neoastra_decision_t* decision) noexcept { return neo_platform_schedule_decision_timeout(view->environment->app, decision); }
 bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window_options_t* options, neoastra_error_t** error) noexcept;
 void neo_platform_window_destroy(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_show(neoastra_window_t* window, bool visible) noexcept;
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* window) noexcept;
-neoastra_result_t neo_platform_window_close(neoastra_window_t* window) noexcept;
+neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* window) noexcept;

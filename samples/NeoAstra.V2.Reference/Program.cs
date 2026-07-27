@@ -29,14 +29,23 @@ if (args is ["--validate-reference"])
     Console.WriteLine($"NeoAstra v2 reference module graph, release main grant/preview denial, and generated contract {NeoRpcGeneratedContract.Hash} validated."); return 0;
 }
 
-return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra v2 Reference" }, async app =>
+return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra v2 Reference", ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed }, async app =>
 {
+    var routedLaunch = new NeoLaunchEvent(NeoLaunchReason.SecondInstance, args, Environment.CurrentDirectory);
+    await using var singleInstance = await NeoSingleInstance.AcquireAsync(app, new NeoSingleInstanceOptions
+    {
+        ApplicationId = "org.neoastra.v2-reference",
+        HungPrimaryPolicy = NeoSingleInstanceHungPrimaryPolicy.Retry,
+    }, routedLaunch);
+    if (!singleInstance.IsPrimary) { app.ForceShutdown(); return; }
     var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL"); var development = developmentUrl is not null; var assetRoot = Path.Combine(AppContext.BaseDirectory, "assets");
     var catalog = new NeoPermissionCatalogBuilder().Add(new NeoPermissionDeclaration("notes:read", 1, ["notes.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None)).Build();
     var capabilities = NeoCapabilityManifest.Resolve(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "capabilities", "main.json")), catalog, new() { Platform = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux, Release = !development, Profile = development ? NeoSecurityProfile.DevelopmentLocalApp : NeoSecurityProfile.ProductionLocalApp });
     var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions { ContractHash = NeoRpcGeneratedContract.Hash, CapabilityManifest = capabilities, AuthorizationService = new NeoCapabilityAuthorizationService(capabilities) }); rpcBuilder.AddNotesService(new NotesService()); await using var rpc = rpcBuilder.Build();
-    var window = app.CreateWindow(new NeoWindowOptions { Title = "NeoAstra v2 Reference", Width = 960, Height = 640, IsVisible = true });
-    var previewWindow = app.CreateWindow(new NeoWindowOptions { Title = "NeoAstra v2 Preview (no grants)", Width = 480, Height = 320, IsVisible = false });
+    var window = app.CreateWindow(new NeoWindowOptions { Label = "main", Title = "NeoAstra v2 Reference", Width = 960, Height = 640, IsVisible = true });
+    app.MainWindow = window;
+    var previewWindow = app.CreateWindow(new NeoWindowOptions { Label = "preview", Owner = window, Title = "NeoAstra v2 Preview (no grants)", Width = 480, Height = 320, IsVisible = false });
+    app.LaunchReceived += launch => { if (launch.Reason == NeoLaunchReason.SecondInstance) { window.Show(); window.Activate(); } return ValueTask.CompletedTask; };
     var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); window.Closed += (_, _) => closed.TrySetResult();
     NeoAssetManifest? manifest = development ? null : NeoAssetManifest.Load(Path.Combine(assetRoot, "neoastra-assets.json"));
     await using var environment = await app.CreateEnvironmentAsync(new NeoEnvironmentOptions { CustomSchemes = manifest is null ? [] : [NeoCustomScheme.Application("app", new NeoManifestResourceProvider(assetRoot, manifest))] });
@@ -45,7 +54,18 @@ return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstr
     await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), Options("main"));
     await using var preview = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(previewWindow), Options("preview"));
     await using var binding = NeoRpcViewBinding.Bind(rpc, view); await using var previewBinding = NeoRpcViewBinding.Bind(rpc, preview);
-    await view.NavigateAsync(target); await preview.NavigateAsync(target); await closed.Task;
+    var unsaved = string.Equals(Environment.GetEnvironmentVariable("NEOASTRA_REFERENCE_UNSAVED"), "1", StringComparison.Ordinal);
+    window.CloseRequested += async request =>
+    {
+        if (!unsaved || !request.CanCancel) return;
+        try
+        {
+            var save = await view.EvaluateScriptAsync("globalThis.confirm('Save unsaved reference work before closing?')", request.DeadlineToken);
+            if (!string.Equals(save, "true", StringComparison.OrdinalIgnoreCase)) request.Cancel(); else unsaved = false;
+        }
+        catch { request.Cancel(); } // Renderer failure must preserve unsaved work.
+    };
+    await view.NavigateAsync(target); await preview.NavigateAsync(target); app.NotifyReady(); await closed.Task;
 });
 
 [NeoRpcService("notes", Version = 1)] public sealed class NotesService { [NeoRpcMethod("hello", Permission = "notes:read")] public ValueTask<HelloResponse> HelloAsync(HelloRequest request, NeoRpcContext context, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(new HelloResponse($"Hello, {request.Name}!", context.ViewLabel)); } }

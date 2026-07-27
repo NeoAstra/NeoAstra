@@ -177,6 +177,28 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_DECISION_FULLSCREEN = unchecked((uint)9),
 
             NEOASTRA_DECISION_CLIENT_CERTIFICATE = unchecked((uint)10),
+
+            NEOASTRA_DECISION_WINDOW_CLOSE = unchecked((uint)11),
+
+            NEOASTRA_DECISION_APPLICATION_QUIT = unchecked((uint)12),
+        }
+
+        /// <summary>
+        /// Portable reason for a native window close request.
+        /// </summary>
+        public enum neoastra_window_close_reason : uint
+        {
+            NEOASTRA_WINDOW_CLOSE_USER = unchecked((uint)0),
+
+            NEOASTRA_WINDOW_CLOSE_OWNER = unchecked((uint)1),
+
+            NEOASTRA_WINDOW_CLOSE_APPLICATION_QUIT = unchecked((uint)2),
+
+            NEOASTRA_WINDOW_CLOSE_SESSION_END = unchecked((uint)3),
+
+            NEOASTRA_WINDOW_CLOSE_SYSTEM = unchecked((uint)4),
+
+            NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC = unchecked((uint)5),
         }
 
         public enum neoastra_script_dialog_kind : uint
@@ -312,6 +334,14 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_EVENT_DOWNLOAD_COMPLETED = unchecked((uint)32),
 
             NEOASTRA_EVENT_CLIENT_CERTIFICATE_REQUESTED = unchecked((uint)33),
+
+            NEOASTRA_EVENT_APPLICATION_ACTIVATED = unchecked((uint)34),
+
+            NEOASTRA_EVENT_APPLICATION_OPEN_FILE = unchecked((uint)35),
+
+            NEOASTRA_EVENT_APPLICATION_OPEN_URL = unchecked((uint)36),
+
+            NEOASTRA_EVENT_APPLICATION_SESSION_END = unchecked((uint)37),
         }
 
         public enum neoastra_capability : uint
@@ -1174,6 +1204,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_decision_kind_t (NativeMethods.neoastra_decision_kind from) => new (from);
         }
 
+        /// <summary>
+        /// Portable reason for a native window close request.
+        /// </summary>
+        public readonly partial record struct neoastra_window_close_reason_t(NativeMethods.neoastra_window_close_reason Value)
+        {
+            public static implicit operator NativeMethods.neoastra_window_close_reason (neoastra_window_close_reason_t from) => from.Value;
+
+            public static implicit operator neoastra_window_close_reason_t (NativeMethods.neoastra_window_close_reason from) => new (from);
+        }
+
         public readonly partial record struct neoastra_script_dialog_kind_t(NativeMethods.neoastra_script_dialog_kind Value)
         {
             public static implicit operator NativeMethods.neoastra_script_dialog_kind (neoastra_script_dialog_kind_t from) => from.Value;
@@ -1755,6 +1795,13 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_close")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_close(NativeMethods.neoastra_window_t arg0);
+
+        /// <summary>
+        /// Internal/backend teardown entry point. It bypasses close negotiation and is not exposed to renderers.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_force_close")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_force_close(NativeMethods.neoastra_window_t arg0);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_native_handle")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

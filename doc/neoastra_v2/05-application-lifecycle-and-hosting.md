@@ -194,20 +194,23 @@ Core MAY expose bounded lifecycle checkpoints (`starting`, `ready`, `quit reques
 
 ## 11. Implementation order
 
-- [ ] Specify native close decision ABI, reasons, deadlines, and platform mappings.
-- [ ] Implement cancelable close on Windows, macOS, and Linux with native tests.
-- [ ] Replace/repair managed close API and add async aggregation/reentrancy rules.
-- [ ] Implement application state machine and normal/forced quit coordinator.
-- [ ] Add bounded early activation/open-file/open-URL/reopen queues and ordering.
-- [ ] Implement secure single-instance lock and local IPC adapters.
-- [ ] Add immutable window/view labels and deterministic lookup.
-- [ ] Implement optional Generic Host scopes/lifetimes/logging/shutdown integration.
-- [ ] Integrate RPC/plugin revocation with navigation and app stopping.
-- [ ] Update reference app with unsaved-work and second-launch scenarios.
+- [x] Specify native close decision ABI, reasons, deadlines, and platform mappings.
+- [ ] Implement cancelable close on Windows, macOS, and Linux with native tests. (Implementation and compile/CI coverage are present; macOS/Linux runtime verification and the full native close matrix remain unavailable on this Windows host.)
+- [x] Replace/repair managed close API and add async aggregation/reentrancy rules.
+- [x] Implement application state machine and normal/forced quit coordinator.
+- [x] Add bounded early activation/open-file/open-URL/reopen queues and ordering.
+- [x] Implement secure single-instance lock and local IPC adapters.
+- [x] Add immutable window/view labels and deterministic lookup.
+- [x] Implement optional Generic Host scopes/lifetimes/logging/shutdown integration.
+- [x] Integrate RPC/plugin revocation with navigation and app stopping.
+- [x] Update reference app with unsaved-work and second-launch scenarios.
 
 ## 12. Verification
 
 Tests MUST cover allow/cancel/timeout/exception close; duplicate/reentrant close; owner/child ordering; programmatic versus user close; app quit canceled by app or any window; repeated quit callers; new window during quit; renderer unresponsive during save prompt; process failure; OS session end; early open-file/open-URL before ready; ordered multiple events; macOS reopen; single-instance concurrent races, stale lock, invalid peer/message, first-instance startup delay/hang; host start/stop exception/cancellation; scoped-service disposal; and NativeAOT.
+
+- [x] Windows-focused lifecycle, direct owner-close, host ordering/exception, replay suppression, malformed peer, concurrent-process election, and abandoned-lock recovery tests pass.
+- [ ] Complete the full cross-platform matrix above. macOS/Linux runtime execution is not available on this Windows host; its runtime-only cases remain delegated to platform CI.
 
 Platform integration tests launch real secondary processes and verify focus/restore policy through observable app state, not timing-only assertions.
 

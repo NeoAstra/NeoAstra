@@ -15,6 +15,12 @@ public sealed class NeoApplicationOptions
     /// <summary>Gets or sets the maximum number of queued dispatcher callbacks. The value must be positive.</summary>
     public uint MaximumPendingDispatches { get; set; } = 65_536;
 
+    /// <summary>Gets or sets the maximum number of launch events retained before <see cref="NeoApplicationState.Ready"/>.</summary>
+    public int MaximumPendingLaunchEvents { get; set; } = 128;
+
+    /// <summary>Gets or sets whether initial process arguments and working directory are queued as one authoritative initial launch event.</summary>
+    public bool QueueInitialLaunchEvent { get; set; } = true;
+
     /// <summary>Gets or sets the callback that receives native diagnostic log messages.</summary>
     /// <remarks>The callback can run on any native thread. Exceptions are contained and ignored.</remarks>
     public Action<NeoLogMessage>? LogCallback { get; set; }
@@ -34,6 +40,11 @@ public sealed class NeoApplicationOptions
         if (MaximumPendingDispatches == 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaximumPendingDispatches), "The pending-dispatch limit must be positive.");
+        }
+
+        if (MaximumPendingLaunchEvents is < 1 or > 4096)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumPendingLaunchEvents), "The launch-event limit must be between 1 and 4096.");
         }
     }
 }
@@ -207,6 +218,9 @@ public sealed class NeoProfileOptions
 /// <summary>Configures a NeoAstra-owned top-level window.</summary>
 public sealed class NeoWindowOptions
 {
+    /// <summary>Gets or sets the immutable application-local window label.</summary>
+    public string? Label { get; set; }
+
     /// <summary>Gets or sets the owner window.</summary>
     public NeoWindow? Owner { get; set; }
 
@@ -258,6 +272,10 @@ public sealed class NeoWindowOptions
     internal void Validate(NeoApplication application)
     {
         ArgumentNullException.ThrowIfNull(Title);
+        if (Label is not null && (string.IsNullOrWhiteSpace(Label) || Label.Length > 128 || Label.Any(char.IsControl)))
+        {
+            throw new ArgumentException("A window label must be non-empty, at most 128 characters, and free of controls.", nameof(Label));
+        }
         if (Width <= 0 || Height <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(Width), "Window dimensions must be positive.");
@@ -295,7 +313,7 @@ public sealed class NeoWindowOptions
 public sealed class NeoAstraOptions
 {
     /// <summary>Gets or sets the immutable application-assigned label used to identify this view.</summary>
-    /// <remarks>A non-empty label unique within the application is required when the bridge is enabled.</remarks>
+    /// <remarks>When specified, the label must be unique within the application. A label is required when the bridge is enabled.</remarks>
     public string? ViewLabel { get; set; }
 
     /// <summary>Gets or sets the profile used by the view.</summary>
@@ -359,9 +377,13 @@ public sealed class NeoAstraOptions
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
         ArgumentNullException.ThrowIfNull(Transport);
         Transport.Validate();
+        if (ViewLabel is not null && (string.IsNullOrWhiteSpace(ViewLabel) || ViewLabel.Length > 128 || ViewLabel.Any(char.IsControl)))
+        {
+            throw new ArgumentException("A view label must be non-empty and contain at most 128 characters without controls.", nameof(ViewLabel));
+        }
         if (BridgePolicy != NeoBridgePolicy.Disabled)
         {
-            if (string.IsNullOrWhiteSpace(ViewLabel) || ViewLabel.Length > 128 || ViewLabel.Any(char.IsControl))
+            if (ViewLabel is null)
             {
                 throw new ArgumentException("A bridge-enabled view requires a non-empty application label of at most 128 characters.", nameof(ViewLabel));
             }

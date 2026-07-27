@@ -131,6 +131,7 @@ jobs:
           dotnet pack src/NeoAstra/NeoAstra.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Rpc/NeoAstra.Rpc.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj -c Release --no-build -o artifacts/packages
+          dotnet pack src/NeoAstra.Hosting/NeoAstra.Hosting.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Sdk/NeoAstra.Sdk.csproj -c Release --no-build -o artifacts/packages

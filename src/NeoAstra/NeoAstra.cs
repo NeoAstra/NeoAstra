@@ -34,7 +34,7 @@ public sealed class NeoAstra : IAsyncDisposable
         _handle = handle;
         _host = host;
         _decisionTimeout = options.DecisionTimeout;
-        _viewLabel = options.BridgePolicy == NeoBridgePolicy.Disabled ? null : options.ViewLabel;
+        _viewLabel = options.ViewLabel;
         Profile = options.Profile;
         RegisterEventCallback();
         if (options.BridgePolicy != NeoBridgePolicy.Disabled)
@@ -383,11 +383,14 @@ public sealed class NeoAstra : IAsyncDisposable
 
     internal NeoProfile? Profile { get; }
 
-    internal string? ViewLabel => _viewLabel;
+    /// <summary>Gets the immutable application-unique label assigned at creation, or <see langword="null"/> when none was assigned.</summary>
+    public string? ViewLabel => _viewLabel;
 
     internal NeoWindow? OwnedWindow => _host.Window;
 
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
+
+    internal bool TransportEnabled => _transport is not null;
 
     internal event Action<NeoTransportApplicationMessage>? TransportApplicationMessageReceived;
 

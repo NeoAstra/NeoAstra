@@ -193,7 +193,15 @@ neoastra_window::~neoastra_window() {
     destroy_ui_once();
     if (owner) owner->release();
 }
-void neoastra_window::destroy_ui() noexcept { neo_platform_window_destroy(this); }
+void neoastra_window::destroy_ui() noexcept {
+    if (pending_close) {
+        auto* decision = pending_close;
+        pending_close = nullptr;
+        decision->abandon();
+        decision->release();
+    }
+    neo_platform_window_destroy(this);
+}
 neoastra_view::~neoastra_view() {
     destroy_ui_once();
     if (profile) profile->release();
@@ -564,6 +572,25 @@ void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept {
     }
 }
 
+namespace {
+void abandon_app_decisions(neoastra_app_t* app) noexcept {
+    for (;;) {
+        neoastra_decision_t* decision{};
+        {
+            std::lock_guard lock(app->decisions_mutex);
+            decision = app->decisions;
+            if (decision) decision->retain();
+        }
+        if (!decision) return;
+        decision->abandon();
+        // A terminal decision should already have detached in resolve; this also makes
+        // teardown robust if a platform placed a terminal decision in the list.
+        decision->detach_app();
+        decision->release();
+    }
+}
+}
+
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept {
     if (!app || !check_ui(app) || app->stopped.load(std::memory_order_acquire)) return;
     {
@@ -576,6 +603,7 @@ void neo_complete_app_shutdown(neoastra_app_t* app) noexcept {
     neo_log(app, NEOASTRA_LOG_INFORMATION, "application", "Native application shutdown started");
     neo_drain_dispatch(app);
     neo_complete_ui_shutdown(app);
+    abandon_app_decisions(app);
     app->events.clear();
     app->logs.clear();
     {
@@ -609,14 +637,54 @@ void neo_window_closed(neoastra_window_t* window) noexcept {
     if (should_quit) neoastra_app_quit(app, 0);
 }
 
-void neo_finish_decision_event(neoastra_view_t* view, neoastra_decision_t* decision) noexcept {
+void neo_finish_decision_event(neoastra_app_t* app, neoastra_decision_t* decision) noexcept {
     const auto state=decision->state.load(std::memory_order_acquire);
     if(state==neo_decision_state::pending){
         neoastra_decision_response_t response{};response.size=sizeof(response);response.version=1;response.action=decision->default_action;
         neoastra_decision_complete(decision,&response,nullptr);
-    }else if(state==neo_decision_state::deferred&&!neo_platform_schedule_decision_timeout(view,decision)){
+    }else if(state==neo_decision_state::deferred&&!neo_platform_schedule_decision_timeout(app,decision)){
         decision->abandon();
     }
+}
+
+namespace {
+void complete_window_close(void* context, const neoastra_decision_response_t* response) noexcept {
+    auto* window = static_cast<neoastra_window_t*>(context);
+    if (!window) return;
+    if (window->pending_close) {
+        auto* retained = window->pending_close;
+        window->pending_close = nullptr;
+        retained->release();
+    }
+    if (response && (response->action == NEOASTRA_DECISION_ALLOW || response->action == NEOASTRA_DECISION_DEFAULT)) {
+        window->force_closing = true;
+        (void)neo_platform_window_force_close(window);
+    }
+    window->release();
+}
+}
+
+void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,
+                              bool cancellation_permitted) noexcept {
+    if (!window || window->closed.load(std::memory_order_acquire) || window->pending_close) return;
+    auto* decision = new(std::nothrow) neoastra_decision_t;
+    if (!decision) {
+        neo_log(window->app, NEOASTRA_LOG_ERROR, "window.close", "Unable to allocate a close decision; close was canceled", 0, window->id);
+        return;
+    }
+    decision->kind = NEOASTRA_DECISION_WINDOW_CLOSE;
+    decision->default_action = cancellation_permitted ? NEOASTRA_DECISION_CANCEL : NEOASTRA_DECISION_ALLOW;
+    decision->deadline = std::chrono::steady_clock::now() + (cancellation_permitted ? std::chrono::seconds(30) : std::chrono::seconds(2));
+    decision->completion = complete_window_close;
+    decision->completion_context = window;
+    decision->attach_app(window->app);
+    window->retain();
+    decision->retain(); // Owned by pending_close until completion or window teardown.
+    window->pending_close = decision;
+    neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED, window->id, nullptr, nullptr,
+                 static_cast<uint64_t>(reason), cancellation_permitted ? 1 : 0, decision);
+    neo_finish_decision_event(window->app, decision);
+    decision->release();
 }
 
 extern "C" {
@@ -668,6 +736,10 @@ void NEOASTRA_CALL neoastra_operation_cancel(neoastra_operation_t* value) { if (
 
 neoastra_result_t NEOASTRA_CALL neoastra_decision_defer(neoastra_decision_t* value) {
     if (!value) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    const auto initial_state=value->state.load(std::memory_order_acquire);
+    if(initial_state==neo_decision_state::timed_out)return NEOASTRA_ERROR_TIMED_OUT;
+    if(initial_state!=neo_decision_state::pending)return NEOASTRA_ERROR_INVALID_STATE;
+    if(value->completion_thread!=std::thread::id{}&&value->completion_thread!=std::this_thread::get_id())return NEOASTRA_ERROR_WRONG_THREAD;
     if (value->expire()) return NEOASTRA_ERROR_TIMED_OUT;
     auto expected=neo_decision_state::pending;
     value->retain();
@@ -677,7 +749,9 @@ neoastra_result_t NEOASTRA_CALL neoastra_decision_defer(neoastra_decision_t* val
 }
 neoastra_result_t NEOASTRA_CALL neoastra_decision_complete(neoastra_decision_t* value, const neoastra_decision_response_t* response, neoastra_error_t** error) {
     if (!value || !valid_struct(response, response ? response->size : 0, sizeof(*response)) || !valid_decision_action(response->action)) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "invalid decision response");
-    if (value->owner && !check_ui(value->owner->environment->app)) return neo_fail(error, NEOASTRA_ERROR_WRONG_THREAD, "decision completion must run on the UI thread");
+    const auto initial_state=value->state.load(std::memory_order_acquire);
+    if(initial_state!=neo_decision_state::pending&&initial_state!=neo_decision_state::deferred) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "decision is already complete");
+    if(value->completion_thread!=std::thread::id{}&&value->completion_thread!=std::this_thread::get_id()) return neo_fail(error, NEOASTRA_ERROR_WRONG_THREAD, "decision completion must run on the UI thread");
     if (!neo_valid_utf8(response->text) || !neo_valid_utf8(response->secondary_text) || (response->path_count && !response->paths)) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "decision response contains invalid strings");
     if (response->target_view && (value->kind != NEOASTRA_DECISION_NEW_WINDOW || !value->owner || response->target_view->environment != value->owner->environment || response->target_view->profile != value->owner->profile)) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "popup target is not opener-compatible");
     for (uint32_t index=0; index<response->path_count; ++index) if (!neo_valid_utf8(response->paths[index])) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "decision response contains invalid paths");
@@ -808,7 +882,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_window_set_title(neoastra_window_t* w,n
 neoastra_result_t NEOASTRA_CALL neoastra_window_show(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,true);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_hide(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,false);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_activate(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_activate(w);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:neo_platform_window_close(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t* w){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neo_window_request_close(w,NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC,true);return NEOASTRA_OK;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t* w){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;w->force_closing=true;return neo_platform_window_force_close(w);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_native_handle(neoastra_window_t* w,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h){if(!w||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEOASTRA_ERROR_INVALID_ARGUMENT;return neo_platform_window_get_handle(w,kind,h);}
 
 neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t* app,const neoastra_environment_options_t* options,neoastra_environment_created_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){

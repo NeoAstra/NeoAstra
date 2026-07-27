@@ -27,6 +27,7 @@ See [platform support and runtime dependencies](doc/platform-support.md) for the
 - Portable file chooser decisions on macOS and Linux
 - Typed native handles and runtime capability discovery
 - Generated, size/versioned C ABI interop with explicit lifetime management
+- Async cancelable close/quit coordination, bounded launch routing, secure local-user single instance, and optional Generic Host integration
 
 ## Quick start
 
@@ -94,6 +95,8 @@ and [Step 2 migration checklist](doc/migration-v2-capabilities.md).
 Use [the frontend tooling, secure assets, SDK, and templates guide](doc/frontend-tooling-and-assets.md)
 for `neoastra.json`, `dotnet neoastra dev/init/doctor/inspect`, generated-contract ordering,
 manifest-only SPA hosting, offline/prebuilt publish, and the vanilla/React/Vue templates.
+Use [the application lifecycle and hosting guide](doc/application-lifecycle-and-hosting.md) for async unsaved-work close,
+deterministic quit ordering, early launch events, authenticated second-instance routing, explicit DI scopes, and platform session-end limitations.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neoastra_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoAstra intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

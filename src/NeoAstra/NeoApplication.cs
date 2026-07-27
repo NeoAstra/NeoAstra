@@ -1,6 +1,7 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
@@ -15,14 +16,27 @@ public sealed class NeoApplication : IAsyncDisposable
     private readonly object _sync = new();
     private readonly SafeAppHandle _handle;
     private readonly Dictionary<ulong, NeoWindow> _windows = [];
+    private readonly Dictionary<string, NeoWindow> _windowsByLabel = new(StringComparer.Ordinal);
     private readonly HashSet<NeoAstra> _views = [];
     private readonly HashSet<string> _viewLabels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NeoAstra> _viewsByLabel = new(StringComparer.Ordinal);
+    private readonly HashSet<NeoWindow> _closingTrees = [];
+    private readonly Queue<NeoLaunchEvent> _launchEvents = new();
+    private readonly int _maximumPendingLaunchEvents;
+    private readonly Action<NeoLogMessage>? _logCallback;
     private GCHandle _eventRoot;
     private GCHandle _logRoot;
     private NeoWindow? _mainWindow;
     private NeoApplicationShutdownMode _shutdownMode;
     private ExceptionDispatchInfo? _startupException;
     private readonly TaskCompletionSource _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource<NeoQuitResult>? _activeQuit;
+    private NeoApplicationState _state = NeoApplicationState.Created;
+    private ulong _nextLaunchOrder;
+    private bool _launchDispatchActive;
+    private bool _startupCompleted;
+    private int _sessionEndPhase;
+    private CancellationTokenSource? _sessionQueryCancellation;
     private int _disposed;
 
     private NeoApplication(SafeAppHandle handle, NeoApplicationOptions options, GCHandle logRoot)
@@ -30,8 +44,15 @@ public sealed class NeoApplication : IAsyncDisposable
         _handle = handle;
         _logRoot = logRoot;
         _shutdownMode = options.ShutdownMode;
+        _maximumPendingLaunchEvents = options.MaximumPendingLaunchEvents;
+        _logCallback = options.LogCallback;
         Dispatcher = new NeoDispatcher(this, Environment.CurrentManagedThreadId);
         RegisterEventCallback();
+        TransitionTo(NeoApplicationState.Starting);
+        if (options.QueueInitialLaunchEvent)
+        {
+            QueueLaunchEvent(new NeoLaunchEvent(NeoLaunchReason.Initial, Environment.GetCommandLineArgs().Skip(1).ToArray(), Environment.CurrentDirectory));
+        }
     }
 
     /// <summary>Releases the managed callback root before safe-handle finalization requests native teardown.</summary>
@@ -92,6 +113,29 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <summary>Gets the UI-thread dispatcher.</summary>
     public NeoDispatcher Dispatcher { get; }
 
+    /// <summary>Gets the current deterministic application lifecycle state.</summary>
+    public NeoApplicationState State { get { lock (_sync) return _state; } }
+
+    /// <summary>Occurs after an application lifecycle state transition.</summary>
+    public event EventHandler<NeoApplicationStateChangedEventArgs>? StateChanged;
+
+    /// <summary>Registers ordered asynchronous application-level quit handlers.</summary>
+    public event Func<NeoQuitRequest, ValueTask>? BeforeQuit;
+
+    /// <summary>Occurs once when stopping begins, before views and capabilities are torn down.</summary>
+    public event EventHandler? Stopping;
+
+    internal event Func<CancellationToken, ValueTask>? StoppingAsync;
+
+    /// <summary>Occurs once when application teardown has completed.</summary>
+    public event EventHandler? Stopped;
+
+    /// <summary>Registers serial ordered launch-event handlers.</summary>
+    public event Func<NeoLaunchEvent, ValueTask>? LaunchReceived;
+
+    /// <summary>Occurs when the bounded early launch queue rejects an event.</summary>
+    public event EventHandler<NeoLaunchEvent>? LaunchQueueOverflow;
+
     /// <summary>Gets a snapshot of application-owned open windows.</summary>
     public IReadOnlyCollection<NeoWindow> Windows
     {
@@ -102,6 +146,30 @@ public sealed class NeoApplication : IAsyncDisposable
                 return Array.AsReadOnly(_windows.Values.ToArray());
             }
         }
+    }
+
+    /// <summary>Finds an open window by its immutable application-local label.</summary>
+    /// <param name="label">The exact label.</param>
+    /// <param name="window">Receives the window when found.</param>
+    /// <returns><see langword="true"/> when found.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="label"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="label"/> is empty.</exception>
+    public bool TryGetWindow(string label, out NeoWindow? window)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        lock (_sync) return _windowsByLabel.TryGetValue(label, out window);
+    }
+
+    /// <summary>Finds an open view by its immutable application-local label.</summary>
+    /// <param name="label">The exact label.</param>
+    /// <param name="view">Receives the view when found.</param>
+    /// <returns><see langword="true"/> when found.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="label"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="label"/> is empty.</exception>
+    public bool TryGetView(string label, out NeoAstra? view)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        lock (_sync) return _viewsByLabel.TryGetValue(label, out view);
     }
 
     /// <summary>Gets or sets the window used by <see cref="NeoApplicationShutdownMode.OnMainWindowClosed"/>.</summary>
@@ -147,9 +215,13 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
     /// <returns>The created environment.</returns>
     /// <exception cref="PlatformNotSupportedException">Custom schemes were supplied on a backend that does not implement them.</exception>
+    /// <exception cref="InvalidOperationException">Quit negotiation or stopping has begun.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
     public unsafe ValueTask<NeoEnvironment> CreateEnvironmentAsync(NeoEnvironmentOptions? options = null, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        EnsureTopLevelWorkAccepted();
         cancellationToken.ThrowIfCancellationRequested();
         options ??= new NeoEnvironmentOptions();
         options.Validate();
@@ -206,11 +278,22 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <summary>Creates and registers a top-level native window.</summary>
     /// <param name="options">Window options, or <see langword="null"/> for defaults.</param>
     /// <returns>The created window.</returns>
+    /// <exception cref="ArgumentException">The label is invalid or already in use, or the owner belongs to another application.</exception>
+    /// <exception cref="InvalidOperationException">Quit negotiation or stopping has begun.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
     public unsafe NeoWindow CreateWindow(NeoWindowOptions? options = null)
     {
         ThrowIfDisposed();
         options ??= new NeoWindowOptions();
         options.Validate(this);
+        EnsureTopLevelWorkAccepted();
+        lock (_sync)
+        {
+            if (options.Owner is not null && _closingTrees.Any(root => ReferenceEquals(options.Owner, root) || IsOwnedBy(options.Owner, root)))
+                throw new InvalidOperationException("A window cannot be added to an owner tree while that tree is closing.");
+            if (options.Label is not null && _windowsByLabel.ContainsKey(options.Label))
+                throw new ArgumentException($"The window label '{options.Label}' is already in use by this application.", nameof(options));
+        }
 
         using var title = new Utf8String(options.Title);
         var flags = (options.IsResizable ? 1u : 0u) |
@@ -257,22 +340,44 @@ public sealed class NeoApplication : IAsyncDisposable
         lock (_sync)
         {
             _windows.Add(window.Id, window);
+            if (window.Label is not null) _windowsByLabel.Add(window.Label, window);
             _mainWindow ??= window;
         }
 
         return window;
     }
 
-    /// <summary>Requests application shutdown. This method may be called from any thread.</summary>
+    /// <summary>Urgently bypasses cancelable quit and requests application shutdown. This method may be called from any thread.</summary>
     /// <param name="exitCode">The process-style exit code returned by <see cref="Run"/>.</param>
     /// <remarks>Safe to call concurrently with <see cref="DisposeAsync"/>; it is a no-op after disposal starts.</remarks>
     public void Shutdown(int exitCode = 0)
+        => ForceShutdown(exitCode);
+
+    /// <summary>Urgently bypasses close negotiation and requests backend shutdown.</summary>
+    /// <param name="exitCode">The process-style exit code.</param>
+    /// <remarks>This backend-only escape hatch is not exposed through renderer transport or RPC.</remarks>
+    public void ForceShutdown(int exitCode = 0)
     {
         if (Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
 
+        CompleteActiveQuitAsForced();
+        if (!Dispatcher.CheckAccess())
+        {
+            try { Dispatcher.Post(() => ForceShutdown(exitCode)); }
+            catch { RequestNativeQuit(exitCode); }
+            return;
+        }
+
+        BeginStopping();
+        Dispatcher.MarkShutdown();
+        RequestNativeQuit(exitCode);
+    }
+
+    private void RequestNativeQuit(int exitCode)
+    {
         var addedRef = false;
         try
         {
@@ -290,7 +395,6 @@ public sealed class NeoApplication : IAsyncDisposable
                 return;
             }
 
-            Dispatcher.MarkShutdown();
             NativeMethods.neoastra_app_quit(new NativeMethods.neoastra_app_t(_handle.DangerousGetHandle()), exitCode);
         }
         finally
@@ -300,6 +404,248 @@ public sealed class NeoApplication : IAsyncDisposable
                 _handle.DangerousRelease();
             }
         }
+    }
+
+    /// <summary>Transitions successful startup to ready and begins serial launch delivery.</summary>
+    /// <exception cref="InvalidOperationException">The application is not starting.</exception>
+    public void NotifyReady()
+    {
+        ThrowIfDisposed();
+        if (!Dispatcher.CheckAccess()) throw new InvalidOperationException("Ready must be signaled on the application dispatcher.");
+        var transition = false;
+        lock (_sync)
+        {
+            _startupCompleted = true;
+            if (_state == NeoApplicationState.Ready) return;
+            if (_state == NeoApplicationState.Starting) transition = true;
+            else if (_activeQuit is not null || _state is NeoApplicationState.QuitRequested or NeoApplicationState.ClosingWindows) return;
+            else throw new InvalidOperationException($"Cannot become ready from {_state}.");
+        }
+        if (transition)
+        {
+            TransitionTo(NeoApplicationState.Ready);
+            StartLaunchDispatch();
+        }
+    }
+
+    /// <summary>Queues validated launch data for ordered delivery, including before ready.</summary>
+    /// <param name="launchEvent">Immutable launch data.</param>
+    /// <returns><see langword="false"/> if the bounded queue is full or stopping has begun.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="launchEvent"/> is <see langword="null"/>.</exception>
+    public bool QueueLaunchEvent(NeoLaunchEvent launchEvent)
+    {
+        ArgumentNullException.ThrowIfNull(launchEvent);
+        var accepted = false;
+        var schedule = false;
+        NeoLaunchEvent? queued = null;
+        lock (_sync)
+        {
+            if (Volatile.Read(ref _disposed) == 0 && _state is not (NeoApplicationState.Stopping or NeoApplicationState.Stopped) && _launchEvents.Count < _maximumPendingLaunchEvents)
+            {
+                queued = launchEvent with { Order = ++_nextLaunchOrder };
+                _launchEvents.Enqueue(queued);
+                accepted = true;
+                schedule = _state == NeoApplicationState.Ready && !_launchDispatchActive;
+            }
+        }
+        if (schedule)
+        {
+            try { Dispatcher.Post(StartLaunchDispatch); }
+            catch
+            {
+                lock (_sync)
+                {
+                    var retained = _launchEvents.Where(value => value.Order != queued!.Order).ToArray();
+                    _launchEvents.Clear();
+                    foreach (var value in retained) _launchEvents.Enqueue(value);
+                }
+                accepted = false;
+            }
+        }
+        if (!accepted)
+        {
+            try
+            {
+                Dispatcher.Post(() =>
+                {
+                    try { LaunchQueueOverflow?.Invoke(this, launchEvent); }
+                    catch (Exception exception) { ReportLifecycleFailure("application.launch-overflow", exception, 0); }
+                });
+            }
+            catch { /* Dispatcher shutdown is already the authoritative rejection signal. */ }
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>Requests bounded normal quit. Concurrent and reentrant callers join one negotiation.</summary>
+    /// <param name="reason">The portable reason.</param>
+    /// <param name="exitCode">The requested process exit code.</param>
+    /// <param name="options">Quit policy, or <see langword="null"/> for safe defaults.</param>
+    /// <param name="cancellationToken">Cancels this negotiation and therefore all joined callers before stopping begins.</param>
+    /// <returns>The shared quit result.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="reason"/> or an option is invalid.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    public Task<NeoQuitResult> RequestQuitAsync(NeoQuitReason reason = NeoQuitReason.Programmatic, int exitCode = 0,
+        NeoQuitOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (!Enum.IsDefined(reason)) throw new ArgumentOutOfRangeException(nameof(reason));
+        options ??= new NeoQuitOptions();
+        options.Validate();
+        var timeout = options.Timeout;
+        var preflightWindows = options.PreflightWindows;
+        return RequestQuitCore(reason, exitCode, timeout, preflightWindows,
+            reason is not (NeoQuitReason.Forced or NeoQuitReason.SessionEnd), cancellationToken, null);
+    }
+
+    private Task<NeoQuitResult> RequestQuitCore(NeoQuitReason reason, int exitCode, TimeSpan timeout, bool preflightWindows,
+        bool canCancel, CancellationToken cancellationToken, SafeDecisionHandle? platformDecision)
+    {
+        TaskCompletionSource<NeoQuitResult> completion;
+        Task<NeoQuitResult>? joined = null;
+        lock (_sync)
+        {
+            if (_activeQuit is not null) joined = _activeQuit.Task;
+            if (_state is NeoApplicationState.Stopping or NeoApplicationState.Stopped)
+            {
+                CompletePlatformQuitDecision(platformDecision, true);
+                return Task.FromResult(NeoQuitResult.Forced);
+            }
+            if (joined is not null)
+            {
+                if (platformDecision is not null) _ = CompleteJoinedPlatformDecisionAsync(joined, platformDecision);
+                return joined;
+            }
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _activeQuit = completion;
+        }
+        try { Dispatcher.Post(() => _ = RunQuitAsync(reason, exitCode, timeout, preflightWindows, canCancel, cancellationToken, completion, platformDecision)); }
+        catch (Exception exception)
+        {
+            lock (_sync) if (ReferenceEquals(_activeQuit, completion)) _activeQuit = null;
+            CompletePlatformQuitDecision(platformDecision, false);
+            completion.TrySetException(exception);
+        }
+        return completion.Task;
+    }
+
+    private async Task CompleteJoinedPlatformDecisionAsync(Task<NeoQuitResult> quit, SafeDecisionHandle decision)
+    {
+        try
+        {
+            var result = await quit.ConfigureAwait(true);
+            await Dispatcher.InvokeAsync(() => CompletePlatformQuitDecision(decision, result != NeoQuitResult.Canceled)).ConfigureAwait(false);
+        }
+        catch
+        {
+            try { await Dispatcher.InvokeAsync(() => CompletePlatformQuitDecision(decision, false)).ConfigureAwait(false); }
+            catch { decision.Dispose(); }
+        }
+    }
+
+    private async Task RunQuitAsync(NeoQuitReason reason, int exitCode, TimeSpan timeout, bool preflightWindows, bool canCancel,
+        CancellationToken cancellationToken, TaskCompletionSource<NeoQuitResult> completion, SafeDecisionHandle? platformDecision)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(timeout);
+        var forced = !canCancel;
+        try
+        {
+            TransitionTo(NeoApplicationState.QuitRequested);
+            var request = new NeoQuitRequest(reason, exitCode, canCancel, DateTimeOffset.UtcNow + timeout, deadline.Token);
+            var appApproved = await InvokeOrderedAsync(BeforeQuit, request, deadline.Token).ConfigureAwait(true);
+            if (!forced && (!appApproved || request.IsCanceled))
+            {
+                CancelQuit(completion);
+                CompletePlatformQuitDecision(platformDecision, false);
+                return;
+            }
+
+            var windows = GetWindowsInCloseOrder();
+            if (preflightWindows)
+            {
+                foreach (var window in windows)
+                {
+                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : NeoWindowCloseReason.ApplicationQuit, !forced, deadline.Token).ConfigureAwait(true))
+                    {
+                        CancelQuit(completion);
+                        CompletePlatformQuitDecision(platformDecision, false);
+                        return;
+                    }
+                }
+                TransitionTo(NeoApplicationState.ClosingWindows);
+                foreach (var window in windows) window.ForceCloseFromApplication();
+            }
+            else
+            {
+                TransitionTo(NeoApplicationState.ClosingWindows);
+                foreach (var window in windows)
+                {
+                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : NeoWindowCloseReason.ApplicationQuit, !forced, deadline.Token).ConfigureAwait(true))
+                    {
+                        CancelQuit(completion);
+                        CompletePlatformQuitDecision(platformDecision, false);
+                        return;
+                    }
+                    window.ForceCloseFromApplication();
+                }
+            }
+
+            BeginStopping();
+            await InvokeStoppingHandlersAsync(deadline.Token).ConfigureAwait(true);
+            if (platformDecision is null) NativeMethods.neoastra_app_quit(DangerousNativeHandle, exitCode);
+            else CompletePlatformQuitDecision(platformDecision, true);
+            completion.TrySetResult(forced ? NeoQuitResult.Forced : NeoQuitResult.Completed);
+        }
+        catch (OperationCanceledException)
+        {
+            if (forced)
+            {
+                CompletePlatformQuitDecision(platformDecision, true);
+                ForceShutdown(exitCode);
+                completion.TrySetResult(NeoQuitResult.Forced);
+            }
+            else
+            {
+                CancelQuit(completion);
+                CompletePlatformQuitDecision(platformDecision, false);
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportLifecycleFailure("application.quit", exception, 0);
+            if (forced)
+            {
+                CompletePlatformQuitDecision(platformDecision, true);
+                ForceShutdown(exitCode);
+                completion.TrySetResult(NeoQuitResult.Forced);
+            }
+            else
+            {
+                // Handler failures use the safe default for cancelable requests: preserve windows.
+                CancelQuit(completion);
+                CompletePlatformQuitDecision(platformDecision, false);
+            }
+        }
+    }
+
+    private void CancelQuit(TaskCompletionSource<NeoQuitResult> completion)
+    {
+        bool stopping;
+        lock (_sync)
+        {
+            if (ReferenceEquals(_activeQuit, completion)) _activeQuit = null;
+            stopping = _state is NeoApplicationState.Stopping or NeoApplicationState.Stopped;
+        }
+        if (!stopping)
+        {
+            bool startupCompleted;
+            lock (_sync) startupCompleted = _startupCompleted;
+            TransitionTo(startupCompleted ? NeoApplicationState.Ready : NeoApplicationState.Starting);
+            if (startupCompleted) StartLaunchDispatch();
+        }
+        completion.TrySetResult(stopping ? NeoQuitResult.Forced : NeoQuitResult.Canceled);
     }
 
     /// <summary>Detaches the native application on its owning UI thread and releases its native reference.</summary>
@@ -339,6 +685,13 @@ public sealed class NeoApplication : IAsyncDisposable
         }
     }
 
+    internal void EnsureTopLevelWorkAccepted()
+    {
+        lock (_sync)
+            if (_activeQuit is not null || _state is NeoApplicationState.QuitRequested or NeoApplicationState.ClosingWindows or NeoApplicationState.Stopping or NeoApplicationState.Stopped)
+                throw new InvalidOperationException("New top-level work is not accepted after quit negotiation begins.");
+    }
+
     internal void ReleaseViewLabel(string? label)
     {
         if (label is null) return;
@@ -347,13 +700,271 @@ public sealed class NeoApplication : IAsyncDisposable
 
     internal void RegisterView(NeoAstra view)
     {
-        lock (_sync) _views.Add(view);
+        lock (_sync)
+        {
+            _views.Add(view);
+            if (view.ViewLabel is not null) _viewsByLabel.Add(view.ViewLabel, view);
+        }
     }
 
     internal void UnregisterView(NeoAstra view)
     {
-        lock (_sync) _views.Remove(view);
+        lock (_sync)
+        {
+            _views.Remove(view);
+            if (view.ViewLabel is not null) _viewsByLabel.Remove(view.ViewLabel);
+        }
         ReleaseViewLabel(view.ViewLabel);
+    }
+
+    private void StartLaunchDispatch()
+    {
+        lock (_sync)
+        {
+            if (_launchDispatchActive || _state != NeoApplicationState.Ready || _launchEvents.Count == 0) return;
+            _launchDispatchActive = true;
+        }
+        _ = DispatchLaunchEventsAsync();
+    }
+
+    private async Task DispatchLaunchEventsAsync()
+    {
+        for (;;)
+        {
+            NeoLaunchEvent launchEvent;
+            lock (_sync)
+            {
+                if (_state != NeoApplicationState.Ready || _launchEvents.Count == 0)
+                {
+                    _launchDispatchActive = false;
+                    return;
+                }
+                launchEvent = _launchEvents.Dequeue();
+            }
+            var handlers = LaunchReceived;
+            if (handlers is null) continue;
+            foreach (var handler in handlers.GetInvocationList().Cast<Func<NeoLaunchEvent, ValueTask>>())
+            {
+                try { await handler(launchEvent); }
+                catch (Exception exception) { ReportLifecycleFailure("application.launch", exception, 0); }
+            }
+        }
+    }
+
+    private async ValueTask<bool> InvokeOrderedAsync(Func<NeoQuitRequest, ValueTask>? handlers,
+        NeoQuitRequest request, CancellationToken cancellationToken)
+    {
+        if (handlers is null) return true;
+        foreach (var handler in handlers.GetInvocationList().Cast<Func<NeoQuitRequest, ValueTask>>())
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await handler(request).AsTask().WaitAsync(cancellationToken).ConfigureAwait(true);
+            }
+            catch (Exception exception)
+            {
+                ReportLifecycleFailure("application.quit", exception, 0);
+                request.Cancel();
+                return false;
+            }
+            if (request.IsCanceled) return false;
+        }
+        return true;
+    }
+
+    private async ValueTask InvokeStoppingHandlersAsync(CancellationToken cancellationToken)
+    {
+        var handlers = StoppingAsync;
+        if (handlers is null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Func<CancellationToken, ValueTask>>())
+        {
+            try
+            {
+                await handler(cancellationToken).AsTask().WaitAsync(cancellationToken).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                ReportLifecycleFailure("application.stopping", exception, 0);
+            }
+        }
+    }
+
+    private NeoWindow[] GetWindowsInCloseOrder()
+    {
+        lock (_sync)
+        {
+            return _windows.Values.OrderByDescending(static window => window.OwnerDepth).ThenBy(static window => window.Id).ToArray();
+        }
+    }
+
+    private async ValueTask<bool> EvaluateCloseTreeAsync(NeoWindow root, NeoWindowCloseReason reason, bool canCancel,
+        CancellationToken cancellationToken)
+    {
+        NeoWindow[] order;
+        lock (_sync)
+        {
+            if (_closingTrees.Any(existing => ReferenceEquals(root, existing) || IsOwnedBy(root, existing) || IsOwnedBy(existing, root))) return false;
+            _closingTrees.Add(root);
+            order = _windows.Values.Where(window => ReferenceEquals(window, root) || IsOwnedBy(window, root))
+                .OrderByDescending(static window => window.OwnerDepth).ThenBy(static window => window.Id).ToArray();
+        }
+        try
+        {
+            foreach (var window in order)
+            {
+                var windowReason = ReferenceEquals(window, root) ? reason : NeoWindowCloseReason.Owner;
+                if (!await window.EvaluateCloseAsync(windowReason, canCancel, cancellationToken).ConfigureAwait(true)) return false;
+            }
+            foreach (var window in order)
+                if (!ReferenceEquals(window, root)) window.ForceCloseFromApplication();
+            return true;
+        }
+        finally
+        {
+            lock (_sync) _closingTrees.Remove(root);
+        }
+    }
+
+    private static bool IsOwnedBy(NeoWindow window, NeoWindow owner)
+    {
+        for (var current = window.Owner; current is not null; current = current.Owner)
+            if (ReferenceEquals(current, owner)) return true;
+        return false;
+    }
+
+    private void BeginStopping()
+    {
+        NeoApplicationState state;
+        lock (_sync) state = _state;
+        if (state is NeoApplicationState.Stopping or NeoApplicationState.Stopped) return;
+        lock (_sync) _sessionQueryCancellation?.Cancel();
+        TransitionTo(NeoApplicationState.Stopping);
+        InvokeLifecycleEvent(Stopping, "application.stopping");
+        NotifyViewsOfShutdown();
+    }
+
+    private void CompleteActiveQuitAsForced()
+    {
+        TaskCompletionSource<NeoQuitResult>? active;
+        lock (_sync) { active = _activeQuit; _activeQuit = null; }
+        active?.TrySetResult(NeoQuitResult.Forced);
+    }
+
+    internal void ReportLifecycleFailure(string category, Exception exception, ulong objectId)
+    {
+        try
+        {
+            _logCallback?.Invoke(new NeoLogMessage(NeoLogLevel.Error, category, exception.Message, 0,
+                (ulong)(Stopwatch.GetTimestamp() * (1_000_000_000d / Stopwatch.Frequency)), 0, objectId));
+        }
+        catch { }
+    }
+
+    private unsafe void CompletePlatformQuitDecision(SafeDecisionHandle? decision, bool allow)
+    {
+        if (decision is null) return;
+        try
+        {
+            var response = new NativeMethods.neoastra_decision_response_t(new NativeMethods.neoastra_decision_response
+            {
+                size = (uint)sizeof(NativeMethods.neoastra_decision_response),
+                version = 1,
+                action = allow ? NativeMethods.neoastra_decision_action.NEOASTRA_DECISION_ALLOW : NativeMethods.neoastra_decision_action.NEOASTRA_DECISION_CANCEL,
+                selected_index = uint.MaxValue,
+            });
+            NativeMethods.neoastra_error_t error = default;
+            _ = NativeMethods.neoastra_decision_complete(new(decision.DangerousGetHandle()), &response, &error);
+            if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+        }
+        finally
+        {
+            decision.Dispose();
+            if (!allow) Interlocked.CompareExchange(ref _sessionEndPhase, 0, 1);
+        }
+    }
+
+    private void HandleSessionEnd(NativeMethods.neoastra_event value)
+    {
+        if (value.value == 3)
+        {
+            lock (_sync) _sessionQueryCancellation?.Cancel();
+            Interlocked.CompareExchange(ref _sessionEndPhase, 0, 1);
+            return;
+        }
+        if (value.value != 0)
+        {
+            lock (_sync) _sessionQueryCancellation?.Cancel();
+            if (Interlocked.Exchange(ref _sessionEndPhase, 2) != 2) ForceShutdown();
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _sessionEndPhase, 1, 0) != 0) return;
+        QueueLaunchEvent(new NeoLaunchEvent(NeoLaunchReason.SessionEnd));
+        SafeDecisionHandle? decision = null;
+        var remaining = TimeSpan.FromSeconds(2);
+        if (value.decision.Handle != 0)
+        {
+            NativeMethods.neoastra_decision_retain(value.decision);
+            decision = new SafeDecisionHandle(value.decision.Handle);
+            if (NativeError.Code(NativeMethods.neoastra_decision_defer(value.decision)) != NeoErrorCode.Success)
+            {
+                decision.Dispose();
+                Interlocked.CompareExchange(ref _sessionEndPhase, 0, 1);
+                return;
+            }
+            var deadline = NativeMethods.neoastra_decision_get_deadline_ns(value.decision);
+            var now = (ulong)(Stopwatch.GetTimestamp() * (1_000_000_000d / Stopwatch.Frequency));
+            remaining = deadline > now
+                ? TimeSpan.FromTicks(checked((long)Math.Min((deadline - now) / 100, (ulong)TimeSpan.FromMinutes(10).Ticks)))
+                : TimeSpan.FromMilliseconds(1);
+        }
+
+        if (value.native_code != 0)
+        {
+            _ = RequestQuitCore(NeoQuitReason.SessionEnd, 0, remaining, true, true, CancellationToken.None, decision);
+        }
+        else
+        {
+            _ = RunSessionQueryAsync(remaining, decision);
+        }
+    }
+
+    private async Task RunSessionQueryAsync(TimeSpan timeout, SafeDecisionHandle? decision)
+    {
+        using var deadline = new CancellationTokenSource(timeout);
+        lock (_sync) _sessionQueryCancellation = deadline;
+        var request = new NeoQuitRequest(NeoQuitReason.SessionEnd, 0, false, DateTimeOffset.UtcNow + timeout, deadline.Token);
+        try { await InvokeOrderedAsync(BeforeQuit, request, deadline.Token).ConfigureAwait(true); }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            lock (_sync) if (ReferenceEquals(_sessionQueryCancellation, deadline)) _sessionQueryCancellation = null;
+            CompletePlatformQuitDecision(decision, true);
+        }
+    }
+
+    private void TransitionTo(NeoApplicationState next)
+    {
+        NeoApplicationState previous;
+        lock (_sync)
+        {
+            previous = _state;
+            if (previous == next) return;
+            _state = next;
+        }
+        var handlers = StateChanged;
+        if (handlers is null) return;
+        var args = new NeoApplicationStateChangedEventArgs(previous, next);
+        foreach (var handler in handlers.GetInvocationList().Cast<EventHandler<NeoApplicationStateChangedEventArgs>>())
+        {
+            try { handler(this, args); }
+            catch (Exception exception) { ReportLifecycleFailure("application.state", exception, 0); }
+        }
     }
 
     private async Task DisposeOnDispatcherAsync()
@@ -386,7 +997,8 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private unsafe void DisposeCore()
     {
-        NotifyViewsOfShutdown();
+        CompleteActiveQuitAsForced();
+        BeginStopping();
         Dispatcher.MarkShutdown();
         UnregisterEventCallback();
         DisposeManagedWindows();
@@ -396,6 +1008,7 @@ public sealed class NeoApplication : IAsyncDisposable
         NativeError.ThrowIfFailed(result, error, "detach application");
         ReleaseLogCallback(canFree: true);
         _handle.Dispose();
+        CompleteStopped();
         GC.SuppressFinalize(this);
     }
 
@@ -406,6 +1019,7 @@ public sealed class NeoApplication : IAsyncDisposable
         {
             windows = _windows.Values.ToArray();
             _windows.Clear();
+            _windowsByLabel.Clear();
             _mainWindow = null;
         }
 
@@ -417,12 +1031,14 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private void ReleaseWithoutDetach()
     {
-        NotifyViewsOfShutdown();
+        CompleteActiveQuitAsForced();
+        BeginStopping();
         Dispatcher.MarkShutdown();
         UnregisterEventCallback();
         ReleaseLogCallback(canFree: false);
         DisposeManagedWindows();
         _handle.Dispose();
+        CompleteStopped();
         GC.SuppressFinalize(this);
     }
 
@@ -434,8 +1050,13 @@ public sealed class NeoApplication : IAsyncDisposable
             views = _views.ToArray();
             _views.Clear();
             _viewLabels.Clear();
+            _viewsByLabel.Clear();
         }
-        foreach (var view in views) view.NotifyApplicationShutdown();
+        foreach (var view in views)
+        {
+            try { view.NotifyApplicationShutdown(); }
+            catch (Exception exception) { ReportLifecycleFailure("application.stopping", exception, view.OwnedWindow?.Id ?? 0); }
+        }
     }
 
     private unsafe void UnregisterEventCallback()
@@ -565,6 +1186,7 @@ public sealed class NeoApplication : IAsyncDisposable
         try
         {
             await startup(this);
+            if (State is not (NeoApplicationState.Stopping or NeoApplicationState.Stopped)) NotifyReady();
         }
         catch (Exception ex)
         {
@@ -575,6 +1197,32 @@ public sealed class NeoApplication : IAsyncDisposable
 
     private void DispatchEvent(NativeMethods.neoastra_event value)
     {
+        var type = value.header.Value.type.Value;
+        try
+        {
+            switch (type)
+            {
+                case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_APPLICATION_ACTIVATED:
+                    QueueLaunchEvent(new NeoLaunchEvent(NeoLaunchReason.Activated));
+                    return;
+                case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_APPLICATION_OPEN_FILE:
+                    QueueLaunchEvent(new NeoLaunchEvent(NeoLaunchReason.OpenFiles, files: [Utf8String.Decode(value.text)]));
+                    return;
+                case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_APPLICATION_OPEN_URL:
+                    QueueLaunchEvent(new NeoLaunchEvent(NeoLaunchReason.OpenUrls, urls: [new Uri(Utf8String.Decode(value.uri), UriKind.Absolute)]));
+                    return;
+                case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_APPLICATION_SESSION_END:
+                    HandleSessionEnd(value);
+                    return;
+            }
+        }
+        catch (Exception exception)
+        {
+            // Malformed backend launch data is rejected rather than dispatched.
+            ReportLifecycleFailure("application.launch", exception, 0);
+            return;
+        }
+
         NeoWindow? window;
         lock (_sync)
         {
@@ -586,11 +1234,12 @@ public sealed class NeoApplication : IAsyncDisposable
             return;
         }
 
-        var type = value.header.Value.type.Value;
         switch (type)
         {
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED:
-                window.OnClosing();
+                window.OnClosing(value.decision.Handle, (NeoWindowCloseReason)value.value, value.native_code != 0,
+                    NativeMethods.neoastra_decision_get_deadline_ns(value.decision),
+                    cancellationToken => EvaluateCloseTreeAsync(window, (NeoWindowCloseReason)value.value, value.native_code != 0, cancellationToken));
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_CLOSED:
                 OnWindowClosed(window);
@@ -624,6 +1273,7 @@ public sealed class NeoApplication : IAsyncDisposable
         lock (_sync)
         {
             _windows.Remove(window.Id);
+            if (window.Label is not null) _windowsByLabel.Remove(window.Label);
             mode = _shutdownMode;
             main = _mainWindow;
             noWindows = _windows.Count == 0;
@@ -632,7 +1282,26 @@ public sealed class NeoApplication : IAsyncDisposable
         if (mode == NeoApplicationShutdownMode.OnLastWindowClosed && noWindows ||
             mode == NeoApplicationShutdownMode.OnMainWindowClosed && ReferenceEquals(main, window))
         {
-            Shutdown();
+            _ = RequestQuitAsync(mode == NeoApplicationShutdownMode.OnMainWindowClosed
+                ? NeoQuitReason.MainWindowClosed : NeoQuitReason.LastWindowClosed);
+        }
+    }
+
+    private void CompleteStopped()
+    {
+        if (State == NeoApplicationState.Stopped) return;
+        if (State != NeoApplicationState.Stopping) TransitionTo(NeoApplicationState.Stopping);
+        TransitionTo(NeoApplicationState.Stopped);
+        InvokeLifecycleEvent(Stopped, "application.stopped");
+    }
+
+    private void InvokeLifecycleEvent(EventHandler? handlers, string category)
+    {
+        if (handlers is null) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<EventHandler>())
+        {
+            try { handler(this, EventArgs.Empty); }
+            catch (Exception exception) { ReportLifecycleFailure(category, exception, 0); }
         }
     }
 

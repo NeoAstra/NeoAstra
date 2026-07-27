@@ -43,7 +43,7 @@ public sealed class AbiLayoutTests
     }
 
     [TestMethod]
-    public void GeneratedEnumsMatchNativeAbi18ValuesAndStorage()
+    public void GeneratedEnumsMatchNativeAbi19ValuesAndStorage()
     {
         AssertEnum<int, NativeMethods.neoastra_result>(-14, 0);
         AssertEnum<uint, NativeMethods.neoastra_support_level>(0, 3);
@@ -51,15 +51,16 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_native_parent_kind>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_native_handle_kind>(0, 9);
         AssertEnum<uint, NativeMethods.neoastra_window_state>(0, 3);
+        AssertEnum<uint, NativeMethods.neoastra_window_close_reason>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_option_state>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_script_injection_time>(0, 1);
         AssertEnum<uint, NativeMethods.neoastra_decision_action>(0, 6);
-        AssertEnum<uint, NativeMethods.neoastra_decision_kind>(0, 10);
+        AssertEnum<uint, NativeMethods.neoastra_decision_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_script_dialog_kind>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_download_state>(0, 4);
         AssertEnum<uint, NativeMethods.neoastra_permission_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_process_failure_kind>(0, 3);
-        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 33);
+        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 37);
         AssertEnum<uint, NativeMethods.neoastra_capability>(0, 32);
         AssertEnum<uint, NativeMethods.neoastra_log_level>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_resource_kind>(0, 12);
@@ -74,6 +75,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoSupportLevel, NativeMethods.neoastra_support_level>();
         AssertEquivalent<NeoApplicationShutdownMode, NativeMethods.neoastra_app_shutdown_mode>();
         AssertEquivalent<NeoWindowState, NativeMethods.neoastra_window_state>();
+        AssertEquivalent<NeoWindowCloseReason, NativeMethods.neoastra_window_close_reason>();
         AssertEquivalent<NeoOptionState, NativeMethods.neoastra_option_state>();
         AssertEquivalent<NeoBridgePolicy, NativeMethods.neoastra_bridge_policy>();
         AssertEquivalent<NeoDecisionAction, NativeMethods.neoastra_decision_action>();

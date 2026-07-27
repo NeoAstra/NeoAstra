@@ -3,11 +3,12 @@
 
 using NeoAstra.Interop;
 using NeoAstra.Interop.Generated;
+using System.Diagnostics;
 
 namespace NeoAstra;
 
 /// <summary>Represents a NeoAstra-owned top-level native window.</summary>
-public sealed unsafe class NeoWindow : IAsyncDisposable
+public sealed class NeoWindow : IAsyncDisposable
 {
     private readonly SafeWindowHandle _handle;
     private readonly NeoWindow? _owner;
@@ -27,6 +28,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
         Application = application;
         _handle = handle;
         _owner = options.Owner;
+        Label = options.Label;
         _bounds = new NeoRect(options.X, options.Y, options.Width, options.Height);
         _minimumClientSize = options.MinimumClientSize;
         _maximumClientSize = options.MaximumClientSize;
@@ -38,6 +40,9 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
 
     /// <summary>Gets the stable application-local window identifier.</summary>
     public ulong Id { get; }
+
+    /// <summary>Gets the immutable application-local label, when one was assigned at creation.</summary>
+    public string? Label { get; }
 
     /// <summary>Gets or sets the window title.</summary>
     /// <exception cref="ArgumentNullException">The assigned value is <see langword="null"/>.</exception>
@@ -90,7 +95,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
     /// <summary>Gets or sets the native minimum client-size constraint.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
     /// <exception cref="ArgumentException">The minimum exceeds the configured maximum.</exception>
-    public NeoSize MinimumClientSize
+    public unsafe NeoSize MinimumClientSize
     {
         get
         {
@@ -116,7 +121,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
     /// <summary>Gets or sets the native maximum client-size constraint. Zero disables a dimension's maximum.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
     /// <exception cref="ArgumentException">The maximum is less than the configured minimum.</exception>
-    public NeoSize MaximumClientSize
+    public unsafe NeoSize MaximumClientSize
     {
         get
         {
@@ -150,7 +155,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
 
     /// <summary>Gets or sets the native window presentation state.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The assigned value is not defined.</exception>
-    public NeoWindowState State
+    public unsafe NeoWindowState State
     {
         get
         {
@@ -176,8 +181,21 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
     /// <summary>Gets the owner window, if any.</summary>
     public NeoWindow? Owner => _owner;
 
+    internal int OwnerDepth
+    {
+        get
+        {
+            var depth = 0;
+            for (var owner = _owner; owner is not null; owner = owner._owner) depth++;
+            return depth;
+        }
+    }
+
     /// <summary>Occurs when the native window receives a close request.</summary>
     public event EventHandler<NeoWindowClosingEventArgs>? Closing;
+
+    /// <summary>Registers ordered asynchronous close handlers. Any cancellation or exception preserves the window.</summary>
+    public event Func<NeoWindowCloseRequest, ValueTask>? CloseRequested;
 
     /// <summary>Occurs once after the native window has closed.</summary>
     public event EventHandler? Closed;
@@ -224,7 +242,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
     /// <summary>Gets a typed borrowed native handle.</summary>
     /// <param name="kind">The requested backend handle kind.</param>
     /// <returns>A borrowed native handle valid while this window remains alive.</returns>
-    public NeoNativeHandle GetNativeHandle(NeoNativeHandleKind kind)
+    public unsafe NeoNativeHandle GetNativeHandle(NeoNativeHandleKind kind)
     {
         ThrowIfDisposed();
         if (!Enum.IsDefined(kind))
@@ -244,7 +262,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
         return new NeoNativeHandle((NeoNativeHandleKind)native.Value.kind.Value, (nint)native.Value.value);
     }
 
-    /// <summary>Closes the window if necessary and releases its native reference.</summary>
+    /// <summary>Authoritatively closes the window if necessary and releases its native reference. Use <see cref="Close"/> to run cancelable close policy.</summary>
     /// <returns>A completed value task.</returns>
     public ValueTask DisposeAsync()
     {
@@ -265,11 +283,111 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
 
     internal void DisposeFromApplication() => DisposeCore(requestClose: false);
 
-    internal void OnClosing()
+    internal void OnClosing(nint nativeDecision, NeoWindowCloseReason reason, bool canCancel, ulong deadlineNanoseconds,
+        Func<CancellationToken, ValueTask<bool>>? evaluate = null)
     {
-        var args = new NeoWindowClosingEventArgs();
-        try { Closing?.Invoke(this, args); } catch { }
-        // The current native ABI exposes a notification but no cancelable window-close decision.
+        if (nativeDecision == 0) return;
+        NativeMethods.neoastra_decision_retain(new(nativeDecision));
+        var decision = new SafeDecisionHandle(nativeDecision);
+        if (NativeError.Code(NativeMethods.neoastra_decision_defer(new(nativeDecision))) != NeoErrorCode.Success)
+        {
+            decision.Dispose();
+            return;
+        }
+        _ = CompleteNativeCloseAsync(decision, reason, canCancel, deadlineNanoseconds, evaluate);
+    }
+
+    internal async ValueTask<bool> EvaluateCloseAsync(NeoWindowCloseReason reason, bool canCancel, CancellationToken cancellationToken)
+    {
+        var request = new NeoWindowCloseRequest(reason, canCancel, cancellationToken);
+        var legacy = new NeoWindowClosingEventArgs();
+        try { Closing?.Invoke(this, legacy); }
+        catch (Exception exception) { Application?.ReportLifecycleFailure("window.close", exception, Id); request.Cancel(); }
+        if (legacy.Cancel) request.Cancel();
+        var handlers = CloseRequested;
+        if (handlers is not null)
+        {
+            foreach (var handler in handlers.GetInvocationList().Cast<Func<NeoWindowCloseRequest, ValueTask>>())
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await handler(request).AsTask().WaitAsync(cancellationToken).ConfigureAwait(true);
+                }
+                catch (Exception exception)
+                {
+                    Application?.ReportLifecycleFailure("window.close", exception, Id);
+                    request.Cancel();
+                    break;
+                }
+                if (request.IsCanceled) break;
+            }
+        }
+        return !request.IsCanceled || !canCancel;
+    }
+
+    internal void ForceCloseFromApplication()
+    {
+        if (Volatile.Read(ref _closed) != 0 || Volatile.Read(ref _disposed) != 0) return;
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_window_force_close(NativeHandle), default, "force close window after approved quit");
+    }
+
+    private async Task CompleteNativeCloseAsync(SafeDecisionHandle decision, NeoWindowCloseReason reason, bool canCancel, ulong deadlineNanoseconds,
+        Func<CancellationToken, ValueTask<bool>>? evaluate)
+    {
+        var remaining = TimeSpan.FromSeconds(30);
+        if (deadlineNanoseconds != 0)
+        {
+            var now = (ulong)(Stopwatch.GetTimestamp() * (1_000_000_000d / Stopwatch.Frequency));
+            remaining = deadlineNanoseconds > now ? TimeSpan.FromTicks(checked((long)Math.Min((deadlineNanoseconds - now) / 100, (ulong)TimeSpan.FromMinutes(10).Ticks))) : TimeSpan.Zero;
+        }
+        using var deadline = new CancellationTokenSource(remaining <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : remaining);
+        await CompleteCloseEvaluationAsync(
+            evaluate is null ? token => EvaluateCloseAsync(reason, canCancel, token) : evaluate,
+            canCancel,
+            deadline.Token,
+            allowed => Application.Dispatcher.InvokeAsync(() => CompleteCloseDecision(decision, allowed)),
+            decision.Dispose).ConfigureAwait(false);
+    }
+
+    internal async Task CompleteCloseEvaluationAsync(Func<CancellationToken, ValueTask<bool>> evaluate, bool canCancel,
+        CancellationToken cancellationToken, Func<bool, ValueTask> complete, Action release)
+    {
+        var allowed = !canCancel;
+        try
+        {
+            allowed = await evaluate(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Application?.ReportLifecycleFailure("window.close", exception, Id);
+        }
+        try
+        {
+            await complete(allowed).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Native timeout and application stopping both preserve ordinary unsaved work.
+            Application?.ReportLifecycleFailure("window.close-completion", exception, Id);
+        }
+        finally { release(); }
+    }
+
+    private static unsafe void CompleteCloseDecision(SafeDecisionHandle decision, bool allowed)
+    {
+        var response = new NativeMethods.neoastra_decision_response_t(new NativeMethods.neoastra_decision_response
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_decision_response),
+            version = 1,
+            action = allowed ? NativeMethods.neoastra_decision_action.NEOASTRA_DECISION_ALLOW : NativeMethods.neoastra_decision_action.NEOASTRA_DECISION_CANCEL,
+            selected_index = uint.MaxValue,
+        });
+        NativeMethods.neoastra_error_t error = default;
+        var result = NativeMethods.neoastra_decision_complete(new(decision.DangerousGetHandle()), &response, &error);
+        if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+        if (NativeError.Code(result) is not (NeoErrorCode.Success or NeoErrorCode.InvalidState or NeoErrorCode.TimedOut))
+            throw new NeoAstraException(NativeError.Code(result), "Unable to complete native close decision.", "complete window close");
     }
 
     internal bool OnClosed()
@@ -316,7 +434,7 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
 
     internal void OnStateChanged(NeoWindowState state) => _state = state;
 
-    private NeoRect GetBounds()
+    private unsafe NeoRect GetBounds()
     {
         ThrowIfDisposed();
         var native = new NativeMethods.neoastra_rect_t(default);
@@ -352,7 +470,9 @@ public sealed unsafe class NeoWindow : IAsyncDisposable
         {
             try
             {
-                NativeMethods.neoastra_window_close(new(_handle.DangerousGetHandle()));
+                // Disposal cannot retain a usable managed object for asynchronous negotiation.
+                // Explicit Close() remains the cancelable path; owned disposal is authoritative.
+                NativeMethods.neoastra_window_force_close(new(_handle.DangerousGetHandle()));
             }
             catch
             {

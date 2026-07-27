@@ -366,6 +366,82 @@ void test_decision_timeout() {
     assert(decision.resolved_action.load() == NEOASTRA_DECISION_DENY);
 }
 
+void test_app_teardown_detaches_retained_decision() {
+    auto* app = create_test_app(true);
+    auto* decision = new neoastra_decision;
+    captured_decision captured;
+    decision->kind = NEOASTRA_DECISION_APPLICATION_QUIT;
+    decision->default_action = NEOASTRA_DECISION_CANCEL;
+    decision->completion = capture_decision;
+    decision->completion_context = &captured;
+    decision->attach_app(app);
+    assert(neoastra_decision_defer(decision) == NEOASTRA_OK);
+
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    assert(decision->state.load(std::memory_order_acquire) == neo_decision_state::abandoned);
+    assert(decision->app_owner.load(std::memory_order_acquire) == nullptr);
+    assert(captured.action == NEOASTRA_DECISION_CANCEL);
+    neoastra_app_release(app);
+
+    neoastra_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = NEOASTRA_DECISION_ALLOW;
+    assert(neoastra_decision_complete(decision, &response, nullptr) == NEOASTRA_ERROR_INVALID_STATE);
+    neoastra_decision_release(decision);
+}
+
+void test_wrong_thread_decision_races_app_teardown() {
+    auto* app = create_test_app(true);
+    auto* decision = new neoastra_decision;
+    captured_decision captured;
+    decision->kind = NEOASTRA_DECISION_APPLICATION_QUIT;
+    decision->default_action = NEOASTRA_DECISION_CANCEL;
+    decision->completion = capture_decision;
+    decision->completion_context = &captured;
+    decision->attach_app(app);
+
+    std::atomic<neoastra_result_t> defer_result{NEOASTRA_OK};
+    std::atomic<bool> worker_ready{};
+    std::atomic<bool> stop{};
+    std::atomic<int> wrong_thread{};
+    std::atomic<int> invalid_state{};
+    std::atomic<bool> unexpected{};
+    std::thread worker([&] {
+        const auto deferred = neoastra_decision_defer(decision);
+        defer_result.store(deferred, std::memory_order_release);
+        if (deferred == NEOASTRA_ERROR_WRONG_THREAD) ++wrong_thread;
+        else unexpected.store(true, std::memory_order_release);
+        worker_ready.store(true, std::memory_order_release);
+        neoastra_decision_response_t response{};
+        response.size = sizeof(response);
+        response.version = 1;
+        response.action = NEOASTRA_DECISION_ALLOW;
+        while (!stop.load(std::memory_order_acquire)) {
+            const auto result = neoastra_decision_complete(decision, &response, nullptr);
+            if (result == NEOASTRA_ERROR_WRONG_THREAD) ++wrong_thread;
+            else if (result == NEOASTRA_ERROR_INVALID_STATE) ++invalid_state;
+            else unexpected.store(true, std::memory_order_release);
+        }
+    });
+    while (!worker_ready.load(std::memory_order_acquire)) std::this_thread::yield();
+    assert(defer_result.load(std::memory_order_acquire) == NEOASTRA_ERROR_WRONG_THREAD);
+    assert(decision->state.load(std::memory_order_acquire) == neo_decision_state::pending);
+    assert(neoastra_decision_defer(decision) == NEOASTRA_OK);
+
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+    while (invalid_state.load(std::memory_order_acquire) == 0) std::this_thread::yield();
+    stop.store(true, std::memory_order_release);
+    worker.join();
+
+    assert(!unexpected.load(std::memory_order_acquire));
+    assert(wrong_thread.load(std::memory_order_acquire) != 0);
+    assert(invalid_state.load(std::memory_order_acquire) != 0);
+    assert(decision->app_owner.load(std::memory_order_acquire) == nullptr);
+    neoastra_decision_release(decision);
+}
+
 void test_deferred_decision_self_lifetime() {
     std::atomic<int> completed{};
     auto* decision = new neoastra_decision;
@@ -778,6 +854,8 @@ int main() {
     test_operation_terminal_state();
     test_decision_state();
     test_decision_timeout();
+    test_app_teardown_detaches_retained_decision();
+    test_wrong_thread_decision_races_app_teardown();
     test_deferred_decision_self_lifetime();
     test_callback_quiescence();
     test_logging_thread_safety_and_exception_containment();
