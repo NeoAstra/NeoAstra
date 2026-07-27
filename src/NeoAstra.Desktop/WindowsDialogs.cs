@@ -216,9 +216,9 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
                 Content = detail,
                 MainIcon = options.Icon switch
                 {
-                    NeoDialogIcon.Warning => -1,
-                    NeoDialogIcon.Error => -2,
-                    NeoDialogIcon.Information => -3,
+                    NeoDialogIcon.Warning => 0xffff,
+                    NeoDialogIcon.Error => 0xfffe,
+                    NeoDialogIcon.Information => 0xfffd,
                     _ => 0,
                 },
                 ButtonCount = customCount,
@@ -368,10 +368,10 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
         internal delegate* unmanaged[Stdcall]<nint, uint, nint, nint, int> Callback; internal nint CustomData; internal int Image;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private readonly unsafe struct TaskDialogButton(int id, char* text) { internal readonly int Id = id; internal readonly char* Text = text; }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private unsafe struct TaskDialogConfig
     {
         internal uint Size; internal nint Owner; internal nint Instance; internal uint Flags; internal uint CommonButtons; internal char* WindowTitle; internal nint MainIcon;

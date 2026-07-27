@@ -46,4 +46,8 @@ Host `ApplicationStopping` requests normal NeoAstra quit. NeoAstra `Stopping` ca
 - **macOS:** normal AppKit termination is chained through the pre-existing application delegate and returns `NSTerminateLater`. NeoAstra supplies a cancelable request and a 30-second internal decision deadline, then calls `replyToApplicationShouldTerminate:`. AppKit or the OS may impose a shorter external deadline, so this is not a persistence guarantee. Other delegate selectors continue to the pre-existing delegate. Dock reopen and file/URL activation remain authoritative native events.
 - **Linux:** window close is deferred through GTK. Desktop session-end and activation protocols differ by compositor/session manager and may not be observable; single-instance launch routing remains available.
 
+Window activation is a best-effort request. In particular, Windows foreground-stealing policy can reject
+`SetForegroundWindow` even though the target window is valid and has been shown; that policy outcome does not
+turn the request into an invalid-state failure.
+
 Applications should persist incrementally and treat every session-end hook as best effort.

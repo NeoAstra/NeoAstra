@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using global::NeoAstra.Desktop;
@@ -300,6 +301,17 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void WindowsTaskDialogInteropUsesNativePackedLayouts()
+    {
+        var dialogs = typeof(NeoDesktopServices).Assembly.GetType("NeoAstra.Desktop.Dialogs.WindowsDialogs", throwOnError: true)!;
+        var config = dialogs.GetNestedType("TaskDialogConfig", System.Reflection.BindingFlags.NonPublic)!;
+        var button = dialogs.GetNestedType("TaskDialogButton", System.Reflection.BindingFlags.NonPublic)!;
+
+        Assert.AreEqual(IntPtr.Size == 8 ? 160 : 96, Marshal.SizeOf(config));
+        Assert.AreEqual(IntPtr.Size == 8 ? 12 : 8, Marshal.SizeOf(button));
+    }
+
+    [TestMethod]
     public void LinuxRoleTargetSelectionUsesOwnedWindowAndStableLiveViewOrdering()
     {
         var owner = new object(); var otherOwner = new object();
@@ -512,12 +524,19 @@ public sealed class DesktopServicesTests
                     var window = application.CreateWindow(new NeoWindowOptions { Label = "drop-window", Title = "Drop", Width = 320, Height = 200 });
                     await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { CustomSchemes = [NeoCustomScheme.Application("app", new DragResourceProvider())] });
                     await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "drop-view", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = ["app://neoastra"] });
+                    var parent = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                    var webViewWindow = FindWindowEx(parent, 0, "Chrome_WidgetWin_0", null);
+                    Assert.AreNotEqual(0, webViewWindow, "The windowed WebView2 child HWND was not created.");
+                    Assert.AreEqual(0, GetProp(parent, "NeoAstra.DropTarget"), "The host window must not replace an unrelated OLE target.");
+                    Assert.AreNotEqual(0, GetProp(webViewWindow, "NeoAstra.DropTarget"), "The WebView controller child must own a brokered OLE drop target.");
                     var oldSessionId = await NavigateAndGetSessionAsync(view, new Uri("app://neoastra/first.html"));
+                    var rendererWindows = GetDescendantWindows(webViewWindow);
+                    Assert.IsNotEmpty(rendererWindows, "The WebView2 renderer child-window tree was not created.");
+                    Assert.IsTrue(rendererWindows.All(windowHandle => GetProp(windowHandle, "NeoAstra.DropTarget") != 0), "Every descendant renderer window must own a brokered OLE drop target.");
                     var matchingFrames = new ConcurrentQueue<string>(); var otherFrames = new ConcurrentQueue<string>(); var replacementFrames = new ConcurrentQueue<string>();
                     await using var matching = rpc.OpenSession(new NeoRpcSessionIdentity("drop-view", oldSessionId), Capture(matchingFrames));
                     await using var other = rpc.OpenSession(new NeoRpcSessionIdentity("other-view", "session-other"), Capture(otherFrames));
                     await matching.ReceiveAsync(Subscribe("matching-drop")); await other.ReceiveAsync(Subscribe("other-drop"));
-
                     view.DispatchNativeDrop((int)NeoDragDataKind.File, [file], new NeoPoint(12, 18));
                     await WaitUntilAsync(() => EventFrames(matchingFrames).Count == 1);
                     Assert.AreEqual(0, EventFrames(otherFrames).Count);
@@ -679,6 +698,20 @@ public sealed class DesktopServicesTests
 
     private static NeoRpcSendFrame Capture(ConcurrentQueue<string> frames) => (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; };
     private static string Subscribe(string id) => $"{{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"{id}\",\"event\":\"desktop.drag-drop.inbound\"}}";
+
+#pragma warning disable SYSLIB1054 // Test-only Win32 inspection does not need source-generated interop.
+    [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowEx(nint parent, nint after, string? className, string? windowName);
+
+    [DllImport("user32.dll", EntryPoint = "GetPropW", CharSet = CharSet.Unicode)]
+    private static extern nint GetProp(nint window, string name);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumChildWindows(nint parent, EnumWindow callback, nint parameter);
+
+    private delegate bool EnumWindow(nint window, nint parameter);
+#pragma warning restore SYSLIB1054
     private static IReadOnlyList<JsonElement> EventFrames(ConcurrentQueue<string> frames)
         => frames.Select(ParseFrame).Where(static frame => frame.GetProperty("kind").GetString() == "event").ToArray();
     private static JsonElement ParseFrame(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -717,6 +750,13 @@ public sealed class DesktopServicesTests
             return await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally { view.TransportSessionChanged -= SessionChanged; }
+    }
+
+    private static IReadOnlyList<nint> GetDescendantWindows(nint parent)
+    {
+        var windows = new List<nint>();
+        EnumChildWindows(parent, (window, _) => { windows.Add(window); return true; }, 0);
+        return windows;
     }
 
     private static Task<T> RunStaAsync<T>(Func<T> action)

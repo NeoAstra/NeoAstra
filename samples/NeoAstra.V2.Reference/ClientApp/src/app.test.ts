@@ -1,11 +1,31 @@
 import {
   NeoRpcError,
   desktopCommands,
+  type NeoRpcCallOptions,
 } from "@neoastra/client";
 import {
   createMockDesktop,
   createMockRpcHarness,
 } from "@neoastra/client/testing";
+import { neoRpcContractHash } from "./generated/neoastra";
+import { withReferenceContract } from "./tour-api";
+
+const observedContractHashes: Array<string | undefined> = [];
+const contractRpc = withReferenceContract({
+  async invoke<TRequest, TResult>(_command: string, _args: TRequest, options?: NeoRpcCallOptions) {
+    observedContractHashes.push(options?.contractHash);
+    return undefined as TResult;
+  },
+  async subscribe<T>(_event: string, _handler: (value: T) => void, options?: NeoRpcCallOptions) {
+    observedContractHashes.push(options?.contractHash);
+    return async () => {};
+  },
+});
+await contractRpc.invoke("desktop.test", {});
+await contractRpc.subscribe("desktop.test-event", () => {});
+if (observedContractHashes.some(hash => hash !== neoRpcContractHash)) {
+  throw new Error("Desktop RPC calls must carry the generated host contract hash.");
+}
 
 const rpc = createMockRpcHarness();
 rpc.register("tour.hello", ({ args }) => {

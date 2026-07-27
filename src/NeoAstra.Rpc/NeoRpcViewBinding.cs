@@ -121,9 +121,17 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             Dispatcher = new ViewDispatcher(view.Environment.Application.Dispatcher),
         };
         return host.OpenSessionCore(identity,
-            async (json, cancellationToken) => await view.PostMessageAsync(json, cancellationToken).ConfigureAwait(false),
+            (json, cancellationToken) => SendAsync(view, json, cancellationToken),
             view,
             view.OwnedWindow);
+    }
+
+    private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string json, CancellationToken cancellationToken)
+    {
+        var send = await view.Environment.Application.Dispatcher
+            .InvokeAsync(() => view.PostMessageAsync(json, cancellationToken).AsTask(), cancellationToken)
+            .ConfigureAwait(false);
+        await send.ConfigureAwait(false);
     }
 
     private static NeoCapabilityPlatform CurrentPlatform()
@@ -139,7 +147,21 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         NeoRpcSession? session;
         lock (_gate) session = _session;
         if (session is null || !string.Equals(session.DocumentSessionId, message.Session.DocumentSessionId, StringComparison.Ordinal)) return;
-        _ = ReceiveContainedAsync(session, message);
+        if (_application is null)
+        {
+            _ = Task.Run(() => ReceiveContainedAsync(session, message));
+            return;
+        }
+        try
+        {
+            // Preserve transport order while leaving the native WebView callback before any
+            // application handler can synchronously enter its own native modal loop.
+            _application.Dispatcher.Post(() => _ = ReceiveContainedAsync(session, message));
+        }
+        catch (ObjectDisposedException)
+        {
+            // Application shutdown already revoked this binding's document authority.
+        }
     }
 
     private async Task ReceiveContainedAsync(NeoRpcSession session, NeoTransportApplicationMessage message)

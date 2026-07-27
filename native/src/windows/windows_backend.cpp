@@ -42,6 +42,7 @@ struct windows_window {
 };
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
+struct windows_drop_registration { HWND window{}; ComPtr<IDropTarget> target; };
 struct windows_view {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> core;
@@ -63,9 +64,7 @@ struct windows_view {
     EventRegistrationToken client_certificate{};
     EventRegistrationToken server_certificate_error{};
     bool events_registered{};
-    HWND drop_window{};
-    class view_drop_target* drop_registration{};
-    ComPtr<IDropTarget> drop_target;
+    std::vector<windows_drop_registration> drop_registrations;
 };
 
 struct windows_download {
@@ -96,35 +95,116 @@ std::string narrow(const wchar_t* value) {
 
 class view_drop_target final : public IDropTarget {
 public:
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,void** value) override {if(!value)return E_POINTER;*value=nullptr;if(iid==IID_IUnknown||iid==IID_IDropTarget){*value=static_cast<IDropTarget*>(this);AddRef();return S_OK;}return E_NOINTERFACE;}
-    ULONG STDMETHODCALLTYPE AddRef() override {return static_cast<ULONG>(InterlockedIncrement(&references_));}
-    ULONG STDMETHODCALLTYPE Release() override {const auto value=static_cast<ULONG>(InterlockedDecrement(&references_));if(value==0)delete this;return value;}
-    void initialize(neoastra_view_t* view,HWND window) {window_=window;views_.push_back(view);}
-    void add(neoastra_view_t* view){views_.push_back(view);}
-    bool remove(neoastra_view_t* view){views_.erase(std::remove(views_.begin(),views_.end(),view),views_.end());return views_.empty();}
-    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data,DWORD,POINTL,DWORD* effect) override {if(!effect)return E_POINTER;FORMATETC files{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL},text{CF_UNICODETEXT,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL},url{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")),nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};*effect=data&&(SUCCEEDED(data->QueryGetData(&files))||SUCCEEDED(data->QueryGetData(&text))||SUCCEEDED(data->QueryGetData(&url)))?(*effect&DROPEFFECT_COPY):DROPEFFECT_NONE;return S_OK;}
-    HRESULT STDMETHODCALLTYPE DragOver(DWORD,POINTL,DWORD* effect) override {if(!effect)return E_POINTER;*effect&=DROPEFFECT_COPY;return S_OK;}
-    HRESULT STDMETHODCALLTYPE DragLeave() override {return S_OK;}
-    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data,DWORD,POINTL point,DWORD* effect) override {
-        if(!data||!effect)return E_POINTER;if((*effect&DROPEFFECT_COPY)==0){*effect=DROPEFFECT_NONE;return S_OK;}*effect=DROPEFFECT_NONE;
-        FORMATETC format{CF_HDROP,nullptr,DVASPECT_CONTENT,-1,TYMED_HGLOBAL};STGMEDIUM medium{};bool files=true;
-        bool url_format=false;if(FAILED(data->GetData(&format,&medium))){files=false;format.cfFormat=static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW"));if(SUCCEEDED(data->GetData(&format,&medium)))url_format=true;else{format.cfFormat=CF_UNICODETEXT;if(FAILED(data->GetData(&format,&medium)))return S_OK;}}
-        try{
-            if(!files){const auto bytes=GlobalSize(medium.hGlobal);auto* value=static_cast<const wchar_t*>(GlobalLock(medium.hGlobal));try{if(value&&bytes>=sizeof(wchar_t)&&bytes<=65536){const auto maximum=bytes/sizeof(wchar_t);const auto length=wcsnlen(value,maximum);if(length>0&&length<maximum){auto text=narrow(std::wstring(value,length).c_str());POINT client{point.x,point.y};ScreenToClient(window_,&client);auto* target=target_at(client);if(target&&!text.empty()&&text.size()<=32768){const uint64_t kind=url_format||_wcsnicmp(value,L"https://",8)==0||_wcsnicmp(value,L"http://",7)==0||_wcsnicmp(value,L"ftp://",6)==0?1:0;neo_event_details details{};details.bounds={static_cast<int32_t>(client.x),static_cast<int32_t>(client.y),0,0};neo_emit_view_detailed(target,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&text,nullptr,(UINT64_C(1)<<63)|(kind<<56)|1,0,nullptr,details);*effect=DROPEFFECT_COPY;}}}}catch(...){if(value)GlobalUnlock(medium.hGlobal);throw;}if(value)GlobalUnlock(medium.hGlobal);ReleaseStgMedium(&medium);return S_OK;}
-            auto drop=static_cast<HDROP>(medium.hGlobal);const auto count=DragQueryFileW(drop,UINT_MAX,nullptr,0);
-            if(count==0||count>256){ReleaseStgMedium(&medium);return S_OK;}
-            std::string paths;
-            for(UINT index=0;index<count;++index){
-                const auto length=DragQueryFileW(drop,index,nullptr,0);if(length==0||length>32768)throw std::invalid_argument("drop path limit");
-                std::wstring path(static_cast<size_t>(length)+1,L'\0');if(DragQueryFileW(drop,index,path.data(),length+1)!=length)throw std::invalid_argument("drop path read");path.resize(length);
-                std::wstring canonical(32768,L'\0');const auto canonical_length=GetFullPathNameW(path.c_str(),static_cast<DWORD>(canonical.size()),canonical.data(),nullptr);if(canonical_length==0||canonical_length>=canonical.size())throw std::invalid_argument("drop path canonicalization");canonical.resize(canonical_length);
-                auto utf8=narrow(canonical.c_str());if(paths.size()+utf8.size()+1>1024*1024)throw std::invalid_argument("drop metadata limit");if(!paths.empty())paths.push_back('\0');paths+=utf8;
-            }
-            POINT client{point.x,point.y};ScreenToClient(window_,&client);auto* target=target_at(client);if(target){neo_event_details details{};details.bounds={static_cast<int32_t>(client.x),static_cast<int32_t>(client.y),0,0};neo_emit_view_detailed(target,NEOASTRA_EVENT_MESSAGE_RECEIVED,0,&paths,nullptr,(UINT64_C(1)<<63)|(UINT64_C(2)<<56)|count,0,nullptr,details);*effect=DROPEFFECT_COPY;}
-        }catch(...){if(!views_.empty())neo_log(views_.front()->environment->app,NEOASTRA_LOG_WARNING,"drag-drop","WebView2 native drop decoding failed");}
-        ReleaseStgMedium(&medium);return S_OK;
+    view_drop_target(neoastra_view_t* view, HWND window) : view_(view), window_(window) { }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (iid != IID_IUnknown && iid != IID_IDropTarget) return E_NOINTERFACE;
+        *value = static_cast<IDropTarget*>(this);
+        AddRef();
+        return S_OK;
     }
-private: neoastra_view_t* target_at(POINT point) noexcept {for(auto* view:views_){const auto bounds=view->bounds;if(view->fill_parent||(point.x>=bounds.x&&point.x<bounds.x+bounds.width&&point.y>=bounds.y&&point.y<bounds.y+bounds.height))return view;}return views_.empty()?nullptr:views_.front();}~view_drop_target()=default;volatile LONG references_{1};HWND window_{};std::vector<neoastra_view_t*> views_;
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&references_)); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const auto value = static_cast<ULONG>(InterlockedDecrement(&references_));
+        if (value == 0) delete this;
+        return value;
+    }
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+        if (!effect) return E_POINTER;
+        FORMATETC files{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        FORMATETC text{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        FORMATETC url{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        valid_ = data && (SUCCEEDED(data->QueryGetData(&files)) || SUCCEEDED(data->QueryGetData(&text)) || SUCCEEDED(data->QueryGetData(&url)));
+        *effect = valid_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
+        if (!effect) return E_POINTER;
+        *effect = valid_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override { valid_ = false; return S_OK; }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD, POINTL point, DWORD* effect) override {
+        if (!data || !effect) return E_POINTER;
+        *effect = DROPEFFECT_NONE;
+        if (!valid_) return S_OK;
+        valid_ = false;
+        FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        STGMEDIUM medium{};
+        bool files = true;
+        bool url_format{};
+        if (FAILED(data->GetData(&format, &medium))) {
+            files = false;
+            format.cfFormat = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW"));
+            if (SUCCEEDED(data->GetData(&format, &medium))) url_format = true;
+            else { format.cfFormat = CF_UNICODETEXT; if (FAILED(data->GetData(&format, &medium))) return S_OK; }
+        }
+        try {
+            if (!files) {
+                const auto bytes = GlobalSize(medium.hGlobal);
+                auto* value = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal));
+                try {
+                    if (value && bytes >= sizeof(wchar_t) && bytes <= 65536) {
+                        const auto maximum = bytes / sizeof(wchar_t);
+                        const auto length = wcsnlen(value, maximum);
+                        if (length > 0 && length < maximum) {
+                            auto text = narrow(std::wstring(value, length).c_str());
+                            POINT client{point.x, point.y};
+                            ScreenToClient(window_, &client);
+                            if (!text.empty() && text.size() <= 32768) {
+                                const uint64_t kind = url_format || _wcsnicmp(value, L"https://", 8) == 0 || _wcsnicmp(value, L"http://", 7) == 0 || _wcsnicmp(value, L"ftp://", 6) == 0 ? 1 : 0;
+                                neo_event_details details{};
+                                details.bounds = {static_cast<int32_t>(client.x), static_cast<int32_t>(client.y), 0, 0};
+                                neo_emit_view_detailed(view_, NEOASTRA_EVENT_MESSAGE_RECEIVED, 0, &text, nullptr,
+                                                       (UINT64_C(1) << 63) | (kind << 56) | 1, 0, nullptr, details);
+                                *effect = DROPEFFECT_COPY;
+                            }
+                        }
+                    }
+                } catch (...) { if (value) GlobalUnlock(medium.hGlobal); throw; }
+                if (value) GlobalUnlock(medium.hGlobal);
+                ReleaseStgMedium(&medium);
+                return S_OK;
+            }
+            const auto drop = static_cast<HDROP>(medium.hGlobal);
+            const auto count = DragQueryFileW(drop, UINT_MAX, nullptr, 0);
+            if (count == 0 || count > 256) { ReleaseStgMedium(&medium); return S_OK; }
+            std::string paths;
+            for (UINT index = 0; index < count; ++index) {
+                const auto length = DragQueryFileW(drop, index, nullptr, 0);
+                if (length == 0 || length > 32768) throw std::invalid_argument("drop path limit");
+                std::wstring path(static_cast<size_t>(length) + 1, L'\0');
+                if (DragQueryFileW(drop, index, path.data(), length + 1) != length) throw std::invalid_argument("drop path read");
+                path.resize(length);
+                std::wstring canonical(32768, L'\0');
+                const auto canonical_length = GetFullPathNameW(path.c_str(), static_cast<DWORD>(canonical.size()), canonical.data(), nullptr);
+                if (canonical_length == 0 || canonical_length >= canonical.size()) throw std::invalid_argument("drop path canonicalization");
+                canonical.resize(canonical_length);
+                auto utf8 = narrow(canonical.c_str());
+                if (paths.size() + utf8.size() + 1 > 1024 * 1024) throw std::invalid_argument("drop metadata limit");
+                if (!paths.empty()) paths.push_back('\0');
+                paths += utf8;
+            }
+            POINT client{point.x, point.y};
+            ScreenToClient(window_, &client);
+            neo_event_details details{};
+            details.bounds = {static_cast<int32_t>(client.x), static_cast<int32_t>(client.y), 0, 0};
+            neo_emit_view_detailed(view_, NEOASTRA_EVENT_MESSAGE_RECEIVED, 0, &paths, nullptr,
+                                   (UINT64_C(1) << 63) | (UINT64_C(2) << 56) | count, 0, nullptr, details);
+            *effect = DROPEFFECT_COPY;
+        } catch (...) {
+            neo_log(view_->environment->app, NEOASTRA_LOG_WARNING, "drag-drop", "WebView2 native drop decoding failed");
+        }
+        ReleaseStgMedium(&medium);
+        return S_OK;
+    }
+private:
+    ~view_drop_target() = default;
+    volatile LONG references_{1};
+    neoastra_view_t* view_{};
+    HWND window_{};
+    bool valid_{};
 };
 
 std::string take_string(LPWSTR value) {
@@ -1152,7 +1232,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
 }
 void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}}if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
 neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
-neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetForegroundWindow(s->hwnd)?NEOASTRA_OK:NEOASTRA_ERROR_INVALID_STATE;}
+neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,w->bounds.width,w->bounds.height,SWP_NOZORDER|SWP_NOACTIVATE)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
@@ -1409,6 +1489,45 @@ neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile, n
     return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 browsing-data clearing could not be started", result, "webview2");
 }
 
+void register_drop_target(neoastra_view_t* view, windows_view* state, HWND window) {
+    if (!window || std::any_of(state->drop_registrations.begin(), state->drop_registrations.end(),
+                               [window](const windows_drop_registration& value) { return value.window == window; })) return;
+    ComPtr<IDropTarget> target;
+    target.Attach(new (std::nothrow) view_drop_target(view, window));
+    if (!target) return;
+    (void)RevokeDragDrop(window);
+    if (SUCCEEDED(RegisterDragDrop(window, target.Get()))) {
+        (void)SetPropW(window, L"NeoAstra.DropTarget", target.Get());
+        state->drop_registrations.push_back({window, std::move(target)});
+    }
+}
+
+struct enumerate_drop_context { neoastra_view_t* view{}; windows_view* state{}; };
+BOOL CALLBACK enumerate_drop_window(HWND window, LPARAM parameter) {
+    auto* context = reinterpret_cast<enumerate_drop_context*>(parameter);
+    register_drop_target(context->view, context->state, window);
+    return TRUE;
+}
+
+void register_view_drop_targets(neoastra_view_t* view, windows_view* state) {
+    const auto parent = view_parent(view);
+    HWND webview{};
+    HWND candidate{};
+    while (parent && (candidate = FindWindowExW(parent, candidate, L"Chrome_WidgetWin_0", nullptr)) != nullptr) {
+        if (!GetPropW(candidate, L"NeoAstra.DropTarget")) { webview = candidate; break; }
+    }
+    if (webview) {
+        register_drop_target(view, state, webview);
+        enumerate_drop_context context{view, state};
+        // OLE hit testing reaches nested WebView2 renderer windows, including windows
+        // owned by the renderer process, so replacing only Chrome_WidgetWin_0 is insufficient.
+        EnumChildWindows(webview, enumerate_drop_window, reinterpret_cast<LPARAM>(&context));
+    }
+    if (state->drop_registrations.empty()) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "drag-drop", "Could not replace any WebView2 OLE drop targets");
+    }
+}
+
 bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_options_t*,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {
     auto* environment = static_cast<windows_environment*>(view->environment->platform);
     const auto parent = view_parent(view);
@@ -1425,16 +1544,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             ComPtr<ICoreWebView2Controller4> controller4;
             if (SUCCEEDED(result)) result=state->controller.As(&controller4);
             if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);
-            if (SUCCEEDED(result)) {
-                state->drop_window=view_parent(view);auto* target=static_cast<view_drop_target*>(GetPropW(state->drop_window,L"NeoAstra.DropTarget"));
-                if(target&&view->window){target->add(view);target->AddRef();state->drop_target.Attach(target);state->drop_registration=target;}
-                else {target=new view_drop_target();if(target){target->initialize(view,state->drop_window);state->drop_target.Attach(target);state->drop_registration=target;}}
-                // An owned NeoAstra window dedicates its content HWND to this view. Never revoke a target
-                // installed by an embedded host on a borrowed HWND.
-                if(view->window&&!GetPropW(state->drop_window,L"NeoAstra.DropTarget")){const auto revoked=RevokeDragDrop(state->drop_window);if(FAILED(revoked)&&revoked!=DRAGDROP_E_NOTREGISTERED)result=revoked;if(SUCCEEDED(result))result=state->drop_target?RegisterDragDrop(state->drop_window,state->drop_target.Get()):E_OUTOFMEMORY;if(SUCCEEDED(result)&&!SetPropW(state->drop_window,L"NeoAstra.DropTarget",target))result=HRESULT_FROM_WIN32(GetLastError());}
-                else if(!view->window&&SUCCEEDED(result))result=state->drop_target?RegisterDragDrop(state->drop_window,state->drop_target.Get()):E_OUTOFMEMORY;
-                if(FAILED(result)&&!view->window){controller4->put_AllowExternalDrop(TRUE);state->drop_window=nullptr;state->drop_registration=nullptr;state->drop_target.Reset();result=S_OK;}
-            }
+            if (SUCCEEDED(result)) register_view_drop_targets(view, state);
             if (SUCCEEDED(result)) result = register_view_events(view, state);
             if (SUCCEEDED(result) && view->profile) {
                 auto* profile = static_cast<windows_profile*>(view->profile->platform);
@@ -1466,7 +1576,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     if (FAILED(result)) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 controller creation could not be started", result, "webview2"); return false; }
     return true;
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;remove_view_events(state);if(state->drop_window&&state->drop_registration){if(state->drop_registration->remove(view)){RemovePropW(state->drop_window,L"NeoAstra.DropTarget");RevokeDragDrop(state->drop_window);}state->drop_window=nullptr;state->drop_registration=nullptr;state->drop_target.Reset();}if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;remove_view_events(state);for(auto& registration:state->drop_registrations){if(GetPropW(registration.window,L"NeoAstra.DropTarget")==registration.target.Get())RemovePropW(registration.window,L"NeoAstra.DropTarget");(void)RevokeDragDrop(registration.window);}state->drop_registrations.clear();if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_Bounds(view_bounds(view)))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(uri);const auto result=state->core->Navigate(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);auto* environment=static_cast<windows_environment*>(view->environment->platform);if(!state||!state->core||!environment||!environment->value)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(method.empty()||body_length>ULONG_MAX)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WebView2 request method or body length");ComPtr<IStream> content;if(body_length){HRESULT result=CreateStreamOnHGlobal(nullptr,TRUE,&content);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WebView2 request body",result,"webview2");ULONG written{};result=content->Write(body,static_cast<ULONG>(body_length),&written);LARGE_INTEGER start{};if(SUCCEEDED(result)&&written==body_length)result=content->Seek(start,STREAM_SEEK_SET,nullptr);if(FAILED(result)||written!=body_length)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not write WebView2 request body",FAILED(result)?result:E_FAIL,"webview2");}ComPtr<ICoreWebView2Environment2> environment2;ComPtr<ICoreWebView2_2> core2;auto result=environment->value.As(&environment2);if(SUCCEEDED(result))result=state->core.As(&core2);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"This WebView2 runtime does not support request navigation",result,"webview2");ComPtr<ICoreWebView2WebResourceRequest> request;result=environment2->CreateWebResourceRequest(widen(uri).c_str(),widen(method).c_str(),content.Get(),widen(headers).c_str(),&request);if(SUCCEEDED(result))result=core2->NavigateWithWebResourceRequest(request.Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 request navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}

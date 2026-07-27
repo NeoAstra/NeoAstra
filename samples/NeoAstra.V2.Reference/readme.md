@@ -41,13 +41,14 @@ files through `app://reference`.
 
 - **Portable transport:** inspect negotiated protocol, backend, platform, view label, and document session.
 - **Generated RPC:** invoke a typed C# method, cancel an invocation, consume an ordered channel, and watch
-  events emitted by a .NET hosted background service.
-- **Capabilities:** open the restricted preview window. It can call the read-only tour RPC but a desktop
-  call is denied before dispatch.
+  events emitted by a lightweight application-owned background pulse.
+- **Capabilities:** open, close, and reopen the restricted preview window. It can call the read-only tour RPC
+  but a desktop call is denied before dispatch; user-close hides the reusable preview until application exit.
 - **Lifecycle:** mark work as unsaved and close the main window; the asynchronous renderer confirmation can
   cancel close. Relaunch the executable to exercise authenticated single-instance routing.
 - **Desktop essentials:** native dialogs, window and context menus, tray/status items, clipboard, notifications,
-  global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish.
+  global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish. Drop a
+  file from your user profile into the main window to observe its document-session-scoped token in the activity log.
 - **Frontend/release path:** React, dynamic imports, a module worker, manifest-backed local assets, restrictive
   CSP, generated contracts, NativeAOT, and the bundle workflow.
 
@@ -69,10 +70,10 @@ manifest, two-view capability model, and generated RPC contract without opening 
 
 ## Code map
 
-- `Program.cs` — Generic Host composition and process entry point.
+- `Program.cs` — standalone NeoAstra process entry point and deterministic cleanup.
 - `ReferenceApplication.cs` — windows, views, lifecycle, native menu, plugins, and bindings.
 - `ReferenceCapabilities.cs` and `capabilities/main.json` — explicit permission catalog and per-view grants.
-- `ReferenceRpc.cs` — generated RPC service, channel, event, cancellation, state, and hosted-service pulse.
+- `ReferenceRpc.cs` — generated RPC service, channel, event, cancellation, and state.
 - `ReferenceValidation.cs` — noninteractive release validation.
 - `ClientApp/src/App.tsx` — tour shell and restricted preview.
 - `ClientApp/src/*Tour.tsx` — focused, readable feature demonstrations.

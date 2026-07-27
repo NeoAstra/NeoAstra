@@ -184,6 +184,8 @@ public enum ContractKind { First, Second }
             "public class RequestBase { public string BaseName { get; set; } = \"\"; } public sealed class Request : RequestBase { public string? Optional { get; set; } [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Omitted { get; set; } public System.Collections.Generic.List<Response?> Nested { get; set; } = []; }");
         var result = Run(source, captureArtifacts: true);
         Assert.AreEqual(0, result.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, result.Diagnostics));
+        StringAssert.Contains(result.TypeScript, "export const neoRpcContractHash = \"");
+        StringAssert.Contains(result.TypeScript, "contractHash: neoRpcContractHash");
         StringAssert.Contains(result.TypeScript, "readonly \"baseName\": string;");
         StringAssert.Contains(result.TypeScript, "readonly \"optional\": string | null;");
         StringAssert.Contains(result.TypeScript, "readonly \"omitted\"?: string | null;");

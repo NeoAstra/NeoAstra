@@ -231,7 +231,7 @@ export function DesktopTour({ report }: DesktopTourProps) {
             desktop.system.metadata())}
           >Application metadata</button>
           <button type="button" onClick={() => void run("system", "external-opener", () =>
-            desktop.opener.url("https://neoastra.local/docs"))}
+            desktop.opener.url("https://neoastra.dev/docs"))}
           >Open scoped URL</button>
         </div>
         <ResultPanel label="System result">{results.system}</ResultPanel>

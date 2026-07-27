@@ -167,6 +167,8 @@ internal static class NeoAssetManifestBuilder
         var parts = name.Split(['.', '-', '_']);
         for (var index = 1; index < parts.Length; index++)
             if ((parts[index].Length >= 8 && parts[index].All(Uri.IsHexDigit)) || (parts[index].Length == 8 && parts[index].All(static character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9'))) return true;
+        for (var index = 0; index < name.Length - 8; index++)
+            if (name[index] is '.' or '-' or '_' && name.Length - index - 1 == 8 && name[(index + 1)..].All(static character => character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '_')) return true;
         return false;
     }
     private static string SafeManifestPath(string root, string relative)

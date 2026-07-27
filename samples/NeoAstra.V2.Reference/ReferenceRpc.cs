@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using Microsoft.Extensions.Hosting;
 using NeoAstra.Rpc;
 
 internal sealed class TourState
@@ -52,31 +51,6 @@ internal sealed class TourEventHub
             DateTimeOffset.UtcNow.ToString("O"));
         _ = await publisher.PublishAsync(activity, cancellationToken).ConfigureAwait(false);
     }
-}
-
-internal sealed class TourPulseService(TourEventHub events) : BackgroundService
-{
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-
-        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
-        {
-            await events.PublishAsync(
-                "hosted-service",
-                "The .NET background service is healthy.",
-                stoppingToken).ConfigureAwait(false);
-        }
-    }
-}
-
-internal sealed class ReferenceLifetimeService(ReferenceApplication application) : IHostedService
-{
-    public Task StartAsync(CancellationToken cancellationToken) =>
-        Task.CompletedTask;
-
-    public async Task StopAsync(CancellationToken cancellationToken) =>
-        await application.StopAsync();
 }
 
 [NeoRpcService("tour", Version = 1)]

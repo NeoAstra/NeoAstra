@@ -334,6 +334,49 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task ViewBindingReturnsBeforeDispatchingUiThreadCommand()
+    {
+        using var dispatcher = new TestRpcDispatcher();
+        var callbackReturned = 0;
+        var invocations = 0;
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("binding.ui", async (request, context, _) =>
+        {
+            Assert.AreEqual(1, Volatile.Read(ref callbackReturned));
+            Assert.AreEqual(dispatcher.ThreadId, Environment.CurrentManagedThreadId);
+            await Task.Yield();
+            Assert.AreEqual(dispatcher.ThreadId, Environment.CurrentManagedThreadId);
+            Interlocked.Increment(ref invocations);
+            return new Response(request.Id, context.ViewLabel);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response,
+            new NeoRpcCommandOptions { Permission = "test:invoke", Dispatch = NeoRpcDispatchMode.UiThread });
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        SetField(view, "_viewLabel", "binding-view");
+        await using var binding = new NeoRpcViewBinding(host, view, snapshot => host.OpenSession(
+            new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId) { Dispatcher = dispatcher },
+            (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; }));
+        var queue = typeof(NeoRpcViewBinding).GetMethod("QueueTransition", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var receive = typeof(NeoRpcViewBinding).GetMethod("OnMessage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var snapshot = new NeoTransportSessionSnapshot("ui-document", 0, Array.Empty<string>(), true);
+        queue.Invoke(binding, [snapshot]);
+
+        dispatcher.Invoke(() =>
+        {
+            receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("ui-call", "binding.ui", "{\"id\":\"ui\"}"), snapshot, null, true)]);
+            Volatile.Write(ref callbackReturned, 1);
+        });
+
+        await WaitUntilAsync(() => frames.Count != 0);
+        var response = Parse(frames.Single());
+        Assert.IsTrue(response.GetProperty("ok").GetBoolean());
+        Assert.AreEqual(1, Volatile.Read(ref invocations));
+
+        static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
     public async Task AbuseClosureAndConcurrentDisposalAwaitOneCompleteTeardown()
     {
         var resource = new BlockingAsyncDisposable();
@@ -644,6 +687,62 @@ public sealed class RpcTests
             yield return "rpc";
         }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    private sealed class TestRpcDispatcher : SynchronizationContext, INeoRpcDispatcher, IDisposable
+    {
+        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
+        private readonly Thread _thread;
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TestRpcDispatcher()
+        {
+            _thread = new Thread(Run) { IsBackground = true, Name = "NeoAstra RPC test dispatcher" };
+            _thread.Start();
+            _started.Task.GetAwaiter().GetResult();
+        }
+
+        internal int ThreadId { get; private set; }
+
+        public override void Post(SendOrPostCallback callback, object? state) => _queue.Add((callback, state));
+
+        internal void Invoke(Action callback)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(_ =>
+            {
+                try { callback(); completion.TrySetResult(); }
+                catch (Exception exception) { completion.TrySetException(exception); }
+            }, null);
+            completion.Task.GetAwaiter().GetResult();
+        }
+
+        public ValueTask<object?> InvokeAsync(Func<ValueTask<object?>> callback, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Environment.CurrentManagedThreadId == ThreadId) return callback();
+            var completion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(async _ =>
+            {
+                try { completion.TrySetResult(await callback()); }
+                catch (Exception exception) { completion.TrySetException(exception); }
+            }, null);
+            return new ValueTask<object?>(completion.Task);
+        }
+
+        public void Dispose()
+        {
+            _queue.CompleteAdding();
+            _thread.Join();
+            _queue.Dispose();
+        }
+
+        private void Run()
+        {
+            ThreadId = Environment.CurrentManagedThreadId;
+            SetSynchronizationContext(this);
+            _started.TrySetResult();
+            foreach (var (callback, state) in _queue.GetConsumingEnumerable()) callback(state);
+        }
     }
     private sealed class TrackedDisposable(Action action) : IDisposable { public void Dispose() => action(); }
     private sealed class BlockingAsyncDisposable : IAsyncDisposable

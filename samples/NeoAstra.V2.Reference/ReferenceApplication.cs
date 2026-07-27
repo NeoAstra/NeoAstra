@@ -1,23 +1,23 @@
-using Microsoft.Extensions.Logging;
 using NeoAstra;
 using NeoAstra.Desktop;
 using NeoAstra.Desktop.DragDrop;
 using NeoAstra.Desktop.Menus;
 using NeoAstra.Desktop.Opener;
 using NeoAstra.Desktop.WindowState;
-using NeoAstra.Hosting;
 using NeoAstra.Rpc;
 
 internal sealed class ReferenceApplication(
     TourEventHub events,
-    TourState state,
-    ILogger<ReferenceApplication> logger) : INeoHostedApplication
+    TourState state)
 {
     internal const string ApplicationId = "org.neoastra.v2-reference";
     internal const string DisplayName = "NeoAstra v2 Feature Tour";
     internal const string Version = "2.0.0";
 
     private ReferenceSession? _session;
+    private readonly CancellationTokenSource _pulseCancellation = new();
+    private Task? _pulseTask;
+    private int _stopped;
 
     public async ValueTask StartAsync(
         NeoApplication application,
@@ -52,8 +52,8 @@ internal sealed class ReferenceApplication(
         if (!singleInstance.IsPrimary)
         {
             await singleInstance.DisposeAsync();
-            // Let the hosting adapter publish its ready transition before the queued secondary
-            // process shutdown runs. The launch payload has already reached the primary process.
+            // The launch payload has already reached the primary process. Queue shutdown so the
+            // startup callback can complete and publish its ready transition first.
             application.Dispatcher.Post(() => application.ForceShutdown());
             return;
         }
@@ -65,6 +65,7 @@ internal sealed class ReferenceApplication(
                 mainWindow,
                 singleInstance,
                 cancellationToken);
+            _pulseTask = RunPulseAsync(_pulseCancellation.Token);
         }
         catch
         {
@@ -82,6 +83,8 @@ internal sealed class ReferenceApplication(
         var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
         var development = developmentUrl is not null;
         var assetRoot = Path.Combine(AppContext.BaseDirectory, "assets");
+        var userFiles = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] openFileRoots = string.IsNullOrEmpty(userFiles) ? [assetRoot] : [assetRoot, userFiles];
         var privateData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "NeoAstra",
@@ -93,7 +96,7 @@ internal sealed class ReferenceApplication(
             Version,
             privateData,
             ["https://neoastra.dev"],
-            [assetRoot],
+            openFileRoots,
             [assetRoot],
             [NeoOpenFileIntent.TextDocument, NeoOpenFileIntent.PdfDocument, NeoOpenFileIntent.Image],
             application.Dispatcher);
@@ -130,6 +133,15 @@ internal sealed class ReferenceApplication(
             previewWindow.Show();
             previewWindow.Activate();
         });
+        previewWindow.CloseRequested += request =>
+        {
+            if (request.CanCancel && request.Reason == NeoWindowCloseReason.User)
+            {
+                request.Cancel();
+                previewWindow.Hide();
+            }
+            return ValueTask.CompletedTask;
+        };
 
         ConfigureLaunchRouting(application, mainWindow);
         await ConfigureNativeMenuAsync(
@@ -203,12 +215,6 @@ internal sealed class ReferenceApplication(
         await mainView.NavigateAsync(target, cancellationToken);
         await previewView.NavigateAsync(target, cancellationToken);
 
-        logger.LogInformation(
-            "Started {ApplicationName} with {SecurityProfile} assets at {Target}.",
-            DisplayName,
-            development ? "development" : "release",
-            target);
-
         return new ReferenceSession(
             singleInstance,
             pluginHost,
@@ -229,10 +235,6 @@ internal sealed class ReferenceApplication(
         {
             mainWindow.Show();
             mainWindow.Activate();
-            logger.LogInformation(
-                "Received launch reason {Reason} with {ArgumentCount} arguments.",
-                launch.Reason,
-                launch.Arguments.Count);
             await events.PublishAsync(
                 "application-lifecycle",
                 $"Received {launch.Reason} launch routing.");
@@ -343,14 +345,43 @@ internal sealed class ReferenceApplication(
 
     internal async ValueTask StopAsync()
     {
-        var session = Interlocked.Exchange(ref _session, null);
-        if (session is null)
+        if (Interlocked.Exchange(ref _stopped, 1) != 0)
         {
             return;
         }
 
-        logger.LogInformation("Stopping {ApplicationName}.", DisplayName);
-        await session.DisposeAsync();
+        _pulseCancellation.Cancel();
+        var pulseTask = Interlocked.Exchange(ref _pulseTask, null);
+        if (pulseTask is not null)
+        {
+            try
+            {
+                await pulseTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_pulseCancellation.IsCancellationRequested)
+            {
+            }
+        }
+
+        var session = Interlocked.Exchange(ref _session, null);
+        if (session is not null)
+        {
+            await session.DisposeAsync();
+        }
+
+        _pulseCancellation.Dispose();
+    }
+
+    private async Task RunPulseAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await events.PublishAsync(
+                "application-pulse",
+                "The lightweight background pulse is healthy.",
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class ReferenceSession(

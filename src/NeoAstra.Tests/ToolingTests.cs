@@ -143,12 +143,12 @@ public sealed class ToolingTests
     public void AssetManifestBuilder_IsDeterministicSortedAndRejectsSourceMapsAndCaseCollisions()
     {
         using var fixture = new ProjectFixture(); var dist = Path.Combine(fixture.Root, "Client App", "dist"); Directory.CreateDirectory(Path.Combine(dist, "assets"));
-        File.WriteAllText(Path.Combine(dist, "index.html"), "<!doctype html>"); File.WriteAllText(Path.Combine(dist, "assets", "z.01234567.js"), "z"); File.WriteAllText(Path.Combine(dist, "assets", "a.css"), "a");
+        File.WriteAllText(Path.Combine(dist, "index.html"), "<!doctype html>"); File.WriteAllText(Path.Combine(dist, "assets", "z.01234567.js"), "z"); File.WriteAllText(Path.Combine(dist, "assets", "index-D_Fr1Co1.js"), "i"); File.WriteAllText(Path.Combine(dist, "assets", "a.css"), "a");
         var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var first = Path.Combine(fixture.Root, "first.json"); var second = Path.Combine(fixture.Root, "second.json");
         Assert.AreEqual(NeoAssetManifestBuilder.Build(project, first), NeoAssetManifestBuilder.Build(project, second));
         CollectionAssert.AreEqual(File.ReadAllBytes(first), File.ReadAllBytes(second));
         var manifest = NeoAssetManifest.Load(first); CollectionAssert.AreEqual(manifest.Assets.OrderBy(static entry => entry.Path, StringComparer.Ordinal).ToArray(), manifest.Assets.ToArray());
-        Assert.AreEqual("public,max-age=31536000,immutable", manifest.Assets.Single(entry => entry.Path.EndsWith(".js", StringComparison.Ordinal)).CacheControl);
+        Assert.IsTrue(manifest.Assets.Where(entry => entry.Path.EndsWith(".js", StringComparison.Ordinal)).All(entry => entry.CacheControl == "public,max-age=31536000,immutable"));
         File.WriteAllText(Path.Combine(dist, "app.js.map"), "{}"); Assert.AreEqual("asset_source_map", Assert.ThrowsExactly<NeoToolException>(() => NeoAssetManifestBuilder.Build(project, first)).Code); File.Delete(Path.Combine(dist, "app.js.map"));
         File.WriteAllText(Path.Combine(dist, "A.txt"), "a"); File.WriteAllText(Path.Combine(dist, "a.txt"), "b");
         if (!OperatingSystem.IsWindows()) Assert.AreEqual("asset_case_collision", Assert.ThrowsExactly<NeoToolException>(() => NeoAssetManifestBuilder.Build(project, first)).Code);

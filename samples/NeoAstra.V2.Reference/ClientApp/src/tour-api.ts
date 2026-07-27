@@ -4,9 +4,37 @@ import {
   subscribe,
   type DesktopFileDialogRequest,
   type DesktopMenuItem,
+  type DesktopRpc,
+  type NeoRpcCallOptions,
 } from "@neoastra/client";
+import { neoRpcContractHash } from "./generated/neoastra";
 
-export const desktop = createDesktopClient({ invoke, subscribe });
+export function withReferenceContract(rpc: DesktopRpc): DesktopRpc {
+  return {
+    invoke<TRequest, TResult>(
+      command: string,
+      args: TRequest,
+      options?: NeoRpcCallOptions,
+    ): Promise<TResult> {
+      return rpc.invoke<TRequest, TResult>(command, args, {
+        ...options,
+        contractHash: neoRpcContractHash,
+      });
+    },
+    subscribe<T>(
+      event: string,
+      handler: (value: T) => void,
+      options?: NeoRpcCallOptions,
+    ) {
+      return rpc.subscribe(event, handler, {
+        ...options,
+        contractHash: neoRpcContractHash,
+      });
+    },
+  };
+}
+
+export const desktop = createDesktopClient(withReferenceContract({ invoke, subscribe }));
 
 export const menuItems: readonly DesktopMenuItem[] = [
   {

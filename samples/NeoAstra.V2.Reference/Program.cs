@@ -1,9 +1,5 @@
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using NeoAstra;
-using NeoAstra.Hosting;
 using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(ReferenceJsonContext))]
@@ -11,34 +7,28 @@ using NeoAstra.Rpc;
 internal static class Program
 {
     [STAThread]
-    internal static async Task<int> Main(string[] args)
+    internal static int Main(string[] args)
     {
         if (args is ["--validate-reference"])
         {
             return ReferenceValidation.Run();
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-
-        builder.Logging.SetMinimumLevel(LogLevel.Information);
-        builder.UseNeoAstra(options =>
+        var reference = new ReferenceApplication(new TourEventHub(), new TourState());
+        try
         {
-            options.Application.ApplicationName = ReferenceApplication.DisplayName;
-            options.Application.ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed;
-        });
-
-        builder.Services.AddSingleton<TourEventHub>();
-        builder.Services.AddSingleton<TourState>();
-        builder.Services.AddNeoAstraApplication<ReferenceApplication>(services => new(
-            services.GetRequiredService<TourEventHub>(),
-            services.GetRequiredService<TourState>(),
-            services.GetRequiredService<ILogger<ReferenceApplication>>()));
-        builder.Services.AddHostedService<TourPulseService>();
-        builder.Services.AddHostedService<ReferenceLifetimeService>();
-
-        using var host = builder.Build();
-        await host.RunAsync().ConfigureAwait(false);
-        return 0;
+            return NeoApplication.Run(
+                new NeoApplicationOptions
+                {
+                    ApplicationName = ReferenceApplication.DisplayName,
+                    ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed,
+                },
+                application => reference.StartAsync(application, CancellationToken.None));
+        }
+        finally
+        {
+            reference.StopAsync().AsTask().GetAwaiter().GetResult();
+        }
     }
 }
 

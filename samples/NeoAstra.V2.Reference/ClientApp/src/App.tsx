@@ -238,7 +238,7 @@ function ActivityLog({ activities }: { readonly activities: readonly ActivityEnt
         <span>{activities.length} entries</span>
       </header>
       {activities.length === 0
-        ? <p>Waiting for a hosted-service pulse or native event.</p>
+        ? <p>Waiting for an application pulse or native event.</p>
         : (
           <ol>
             {activities.map((activity, index) => (

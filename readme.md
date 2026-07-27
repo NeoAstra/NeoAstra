@@ -113,7 +113,7 @@ The basic sample is configured for NativeAOT. Publish it for the current platfor
 For a guided application-platform demonstration, run the
 [`NeoAstra.V2.Reference` feature tour](samples/NeoAstra.V2.Reference/readme.md). It combines a React/Vite
 view with generated typed RPC, cancellation, channels, events, differently authorized views, lifecycle
-negotiation, Generic Host background work, native desktop services, secure local assets, and NativeAOT.
+negotiation, native desktop services, secure local assets, and a compact standalone NativeAOT host.
 
 ## Building
 
