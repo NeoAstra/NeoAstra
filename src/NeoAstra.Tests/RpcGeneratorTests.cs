@@ -189,6 +189,9 @@ public enum ContractKind { First, Second }
         Assert.AreEqual(0, result.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, result.Diagnostics));
         StringAssert.Contains(result.TypeScript, "export const neoRpcContractHash = \"");
         StringAssert.Contains(result.TypeScript, "contractHash: neoRpcContractHash");
+        StringAssert.Contains(result.JavaScript, "import { invoke, invokeChannel, subscribe } from \"./client/rpc.js\";");
+        StringAssert.Contains(result.JavaScript, "contractHash: neoRpcContractHash");
+        StringAssert.Contains(result.JavaScript, "open: (request, options) => invoke(\"documents.open\"");
         StringAssert.Contains(result.TypeScript, "readonly \"baseName\": string;");
         StringAssert.Contains(result.TypeScript, "readonly \"optional\": string | null;");
         StringAssert.Contains(result.TypeScript, "readonly \"omitted\"?: string | null;");
@@ -231,7 +234,7 @@ public enum ContractKind { First, Second }
         Assert.IsTrue(Run(bothDirections).Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC005" && diagnostic.GetMessage().Contains("no public setter", StringComparison.Ordinal)));
     }
 
-    private static (IReadOnlyList<Diagnostic> Diagnostics, string Generated, string TypeScript, string Schema) Run(string source, bool captureArtifacts = false)
+    private static (IReadOnlyList<Diagnostic> Diagnostics, string Generated, string TypeScript, string JavaScript, string Schema) Run(string source, bool captureArtifacts = false)
     {
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
             .Select(static path => MetadataReference.CreateFromFile(path)).Cast<MetadataReference>().ToList();
@@ -247,6 +250,8 @@ public enum ContractKind { First, Second }
             optionsProvider = new TestOptionsProvider(new Dictionary<string, string>
             {
                 ["build_property.NeoRpcTypeScriptOutput"] = Path.Combine(directory, "contract.ts"),
+                ["build_property.NeoRpcJavaScriptOutput"] = Path.Combine(directory, "contract.js"),
+                ["build_property.NeoRpcJavaScriptImport"] = "./client/rpc.js",
                 ["build_property.NeoRpcSchemaOutput"] = Path.Combine(directory, "schema.json"),
             });
         }
@@ -258,6 +263,7 @@ public enum ContractKind { First, Second }
         var returned = (result.Diagnostics.Concat(generatorDiagnostics).Concat(result.Results.SelectMany(static item => item.Diagnostics)).Concat(outputCompilation.GetDiagnostics()).Distinct().ToArray(),
             string.Join("\n", result.Results.SelectMany(static item => item.GeneratedSources).Select(static item => item.SourceText.ToString())),
             directory is null || !File.Exists(Path.Combine(directory, "contract.ts")) ? string.Empty : File.ReadAllText(Path.Combine(directory, "contract.ts")),
+            directory is null || !File.Exists(Path.Combine(directory, "contract.js")) ? string.Empty : File.ReadAllText(Path.Combine(directory, "contract.js")),
             directory is null || !File.Exists(Path.Combine(directory, "schema.json")) ? string.Empty : File.ReadAllText(Path.Combine(directory, "schema.json")));
         if (directory is not null) Directory.Delete(directory, recursive: true);
         return returned;

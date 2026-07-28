@@ -1,4 +1,4 @@
-import { invoke } from "./neoastra-client/rpc.js";
+import { greeting } from "./generated/neoastra.js";
 
 const form = document.querySelector("#greeting-form");
 const name = document.querySelector("#name");
@@ -8,9 +8,10 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   result.textContent = "Calling C#…";
   try {
-    const response = await invoke("greeting.hello", { name: name.value });
+    const response = await greeting.hello({ name: name.value });
     result.textContent = response.message;
   } catch (error) {
+    console.error("Greeting RPC failed", error);
     result.textContent = error instanceof Error ? error.message : "The greeting failed.";
   }
 });

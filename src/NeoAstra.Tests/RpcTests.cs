@@ -555,11 +555,15 @@ public sealed class RpcTests
         var (host, session, frames) = Create(builder => builder.AddCommand<Request, Response>("documents.open", (request, context, _) => { invoked++; return ValueTask.FromResult(new Response(request.Id, context.ViewLabel)); }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy), new NeoRpcOptions { ContractHash = "expected" });
         await using (host) await using (session)
         {
-            await session.ReceiveAsync(Invoke("wrong", "documents.open", "{\"id\":\"x\"}"));
+            await session.ReceiveAsync(Invoke("missing", "documents.open", "{\"id\":\"x\"}"));
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"wrong\",\"command\":\"documents.open\",\"contract\":\"stale\",\"args\":{\"id\":\"x\"}}");
             await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"right\",\"command\":\"documents.open\",\"contract\":\"expected\",\"args\":{\"id\":\"x\"}}");
             var results = frames.ToArray();
             Assert.AreEqual("protocol_mismatch", ErrorCode(results[0]));
-            Assert.IsTrue(Parse(results[1]).GetProperty("ok").GetBoolean());
+            StringAssert.Contains(results[0], "Use the generated frontend RPC bindings");
+            Assert.AreEqual("protocol_mismatch", ErrorCode(results[1]));
+            StringAssert.Contains(results[1], "Regenerate the frontend RPC bindings");
+            Assert.IsTrue(Parse(results[2]).GetProperty("ok").GetBoolean());
             Assert.AreEqual(1, invoked);
         }
     }

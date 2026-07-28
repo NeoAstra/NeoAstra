@@ -87,7 +87,7 @@ sealed record GreetingResponse(string Message);
 partial class AppJsonContext : JsonSerializerContext;
 ```
 
-`NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
+`NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld, including a generated plain-JavaScript binding whose methods carry the contract hash automatically, and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
 NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, standalone entry points and attached host threads must use an STA apartment.
 

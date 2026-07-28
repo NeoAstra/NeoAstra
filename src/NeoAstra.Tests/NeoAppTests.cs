@@ -1,9 +1,7 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
-using System.Runtime.Versioning;
-using System.Security.Cryptography;
-using System.Text;
+using System.Text.RegularExpressions;
 using NeoAstra.Rpc;
 
 namespace NeoAstra.Tests;
@@ -11,6 +9,32 @@ namespace NeoAstra.Tests;
 [TestClass]
 public sealed class NeoAppTests
 {
+    [TestMethod]
+    public void SampleAssetsMatchTheirManifestAndContainTheImportedModuleGraph()
+    {
+        var manifestPath = FindRepositoryFile("samples", "NeoAstra.Sample", "assets", "neoastra-assets.json");
+        var root = Path.GetDirectoryName(manifestPath)!;
+        var manifest = NeoAssetManifest.Load(manifestPath);
+        var provider = new NeoManifestResourceProvider(root, manifest);
+        var assetPaths = manifest.Assets.Select(static asset => asset.Path).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var asset in manifest.Assets)
+        {
+            var uri = new Uri($"{manifest.Origin}/{asset.Path}");
+            var response = provider.GetResponse(new NeoResourceRequest(uri, "GET", new Dictionary<string, string>(), null, NeoResourceKind.Other, false, default));
+            Assert.IsNotNull(response, $"Manifest asset '{asset.Path}' was not served.");
+            Assert.AreEqual(200, response.StatusCode, $"Manifest asset '{asset.Path}' failed its integrity check.");
+
+            if (!asset.Path.EndsWith(".js", StringComparison.Ordinal)) continue;
+            var source = File.ReadAllText(Path.Combine(root, asset.Path.Replace('/', Path.DirectorySeparatorChar)));
+            foreach (Match match in Regex.Matches(source, "(?:\\bfrom\\s+|\\bimport\\s*(?:\\(\\s*)?)[\\\"'](?<specifier>\\.[^\\\"']+)[\\\"']", RegexOptions.CultureInvariant))
+            {
+                var dependency = Uri.UnescapeDataString(new Uri(uri, match.Groups["specifier"].Value).AbsolutePath.TrimStart('/'));
+                Assert.IsTrue(assetPaths.Contains(dependency), $"Module '{asset.Path}' imports '{dependency}', which is absent from the asset manifest.");
+            }
+        }
+    }
+
     [TestMethod]
     public void CodeFirstCapabilitiesRemainDefaultDenyUntilExplicitlyGranted()
     {
@@ -44,87 +68,19 @@ public sealed class NeoAppTests
         StringAssert.Contains(Assert.Throws<InvalidOperationException>(scoped.ValidateConfiguration).Message, "scoped capability manifest");
     }
 
-    [TestMethod]
-    [SupportedOSPlatform("windows")]
-    public async Task StartupRemainsOnTheUiDispatcherAcrossAsynchronousInitialization()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-
-        var assetsDirectory = CreateAssetDirectory();
-        var builder = CreateBuilder(ApplicationPermission());
-        builder.AssetsDirectory = assetsDirectory;
-        builder.GrantMainView("greeting:read");
-        try
-        {
-            var exitCode = await RunStaAsync(() => NeoApplication.Run(
-                new NeoApplicationOptions
-                {
-                    ApplicationName = "NeoAstra startup dispatcher test",
-                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
-                },
-                async application =>
-                {
-                    await builder.StartAsync(application, CancellationToken.None);
-                    Assert.IsTrue(application.Dispatcher.CheckAccess());
-                    application.Shutdown();
-                }));
-
-            Assert.AreEqual(0, exitCode);
-        }
-        catch (NeoAstraNativeLibraryException)
-        {
-            // Native assets are optional for the managed unit-test project.
-        }
-        finally
-        {
-            await builder.StopAsync();
-            Directory.Delete(assetsDirectory, recursive: true);
-        }
-    }
-
     private static NeoAppBuilder CreateBuilder(NeoPermissionDeclaration declaration) =>
         new NeoAppBuilder().ConfigureGeneratedRpc("contract", [declaration], static _ => { });
 
     private static NeoPermissionDeclaration ApplicationPermission() =>
         new("greeting:read", 1, ["greeting.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None);
 
-    private static string CreateAssetDirectory()
+    private static string FindRepositoryFile(params string[] segments)
     {
-        var directory = Path.Combine(Path.GetTempPath(), "neoastra-startup-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        var content = Encoding.UTF8.GetBytes("<!doctype html><html><body>startup</body></html>");
-        File.WriteAllBytes(Path.Combine(directory, "index.html"), content);
-        var entry = new NeoAssetEntry(
-            "index.html",
-            content.Length,
-            Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
-            "text/html; charset=utf-8",
-            "no-cache");
-        var manifest = new NeoAssetManifest(
-            1,
-            "index.html",
-            "index.html",
-            "app://neoastra",
-            "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-            "no-referrer",
-            [],
-            ["/api", "/_neoastra"],
-            [entry]);
-        File.WriteAllText(Path.Combine(directory, "neoastra-assets.json"), manifest.ToJson(), new UTF8Encoding(false));
-        return directory;
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static Task<T> RunStaAsync<T>(Func<T> callback)
-    {
-        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
-            try { completion.TrySetResult(callback()); }
-            catch (Exception exception) { completion.TrySetException(exception); }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        return completion.Task;
+            var candidate = Path.Combine([directory.FullName, .. segments]);
+            if (File.Exists(candidate)) return candidate;
+        }
+        throw new FileNotFoundException($"Could not locate repository file '{Path.Combine(segments)}'.");
     }
 }

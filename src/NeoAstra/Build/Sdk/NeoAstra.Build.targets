@@ -1,6 +1,8 @@
 <Project>
   <ItemGroup>
     <CompilerVisibleProperty Include="NeoRpcTypeScriptOutput" />
+    <CompilerVisibleProperty Include="NeoRpcJavaScriptOutput" />
+    <CompilerVisibleProperty Include="NeoRpcJavaScriptImport" />
     <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
     <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <CompilerVisibleProperty Include="NeoRpcBaselineManifest" />

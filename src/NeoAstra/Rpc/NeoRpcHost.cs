@@ -505,7 +505,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
         if (!ContractMatches(root))
         {
-            await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.ProtocolMismatch, "The generated frontend contract does not match the host.", null)).ConfigureAwait(false);
+            await SendErrorResultAsync(id, ContractMismatchError(root)).ConfigureAwait(false);
             return;
         }
         if (!_host.TryGetCommand(command, out var descriptor) || descriptor is null)
@@ -653,7 +653,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
         if (!ContractMatches(root))
         {
-            await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.ProtocolMismatch, "The generated frontend contract does not match the host.", null)).ConfigureAwait(false);
+            await SendSubscriptionErrorAsync(id, ContractMismatchError(root)).ConfigureAwait(false);
             return;
         }
         if (Interlocked.Increment(ref _subscriptionSlots) > _host.Options.MaximumSubscriptionsPerSession)
@@ -924,6 +924,15 @@ public sealed class NeoRpcSession : IAsyncDisposable
     {
         if (_host.Options.ContractHash.Length == 0) return true;
         return TryString(root, "contract", out var hash) && string.Equals(hash, _host.Options.ContractHash, StringComparison.Ordinal);
+    }
+
+    private NeoRpcError ContractMismatchError(JsonElement root)
+    {
+        var message = TryString(root, "contract", out _)
+            ? "The generated frontend contract does not match the host. Regenerate the frontend RPC bindings and rebuild the frontend assets."
+            : "The RPC request did not include a contract hash. Use the generated frontend RPC bindings instead of calling the low-level invoke API directly.";
+        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.ProtocolMismatch, message);
+        return FrameworkError(NeoRpcErrorCodes.ProtocolMismatch, message, null);
     }
 
     private static bool TryString(JsonElement root, string property, out string value)
