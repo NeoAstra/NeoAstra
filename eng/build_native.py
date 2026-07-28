@@ -69,7 +69,7 @@ def main() -> int:
     preset, library_name = RIDS[args.rid]
     initialize_windows_toolchain(args.rid)
     build_directory = ROOT / "artifacts" / "native" / args.rid
-    runtime_directory = ROOT / "src" / "NeoAstra" / "runtimes" / args.rid / "native"
+    runtime_directory = ROOT / "src" / "NeoAstra.Core" / "runtimes" / args.rid / "native"
     if args.clean:
         shutil.rmtree(build_directory, ignore_errors=True)
 

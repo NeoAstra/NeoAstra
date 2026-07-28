@@ -13,7 +13,7 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra.Rpc\NeoAstra.Rpc.csproj" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/capabilities-and-security.md" Pack="true" PackagePath="/" />

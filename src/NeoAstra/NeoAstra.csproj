@@ -1,58 +1,47 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
-
-    <!-- Enable AOT analyzers -->
     <IsAotCompatible>true</IsAotCompatible>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <Description>Build native desktop apps with web technologies.</Description>
-    <Copyright>Alexandre Mutel</Copyright>
-    <NeutralLanguage>en-US</NeutralLanguage>
-    <Authors>Alexandre Mutel</Authors>
-    <PackageTags>webview;webapp</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>The complete NeoAstra desktop application platform with RPC, secure capabilities, desktop services, and hosting.</Description>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageIcon>NeoAstra.png</PackageIcon>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageProjectUrl>https://github.com/xoofx/NeoAstra</PackageProjectUrl>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-    <!-- The .NET 10 SDK supplies the Git/GitHub Source Link targets. -->
+    <PackageProjectUrl>https://github.com/xoofx/NeoAstra</PackageProjectUrl>
     <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <NeoAstraGeneratorAssembly>$(MSBuildThisFileDirectory)..\NeoAstra.Generator\bin\$(Configuration)\netstandard2.0\NeoAstra.Generator.dll</NeoAstraGeneratorAssembly>
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Transport/transport-bootstrap.js" LogicalName="NeoAstra.Transport.transport-bootstrap.js" />
+    <ProjectReference Include="..\NeoAstra.Core\NeoAstra.Core.csproj" />
+    <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Desktop\neoastra.plugin.json" />
+    <EmbeddedResource Include="Desktop\schemas\*.schema.json" />
+    <None Update="Desktop\neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.desktop.essentials/" />
+    <None Update="Desktop\schemas\*.schema.json" Pack="true" PackagePath="plugins/neoastra.desktop.essentials/schemas/%(Filename)%(Extension)" />
+    <None Include="Build\NeoAstra.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.targets" />
+    <None Include="$(NeoAstraGeneratorAssembly)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="$(NeoAstraGeneratorAssembly).pdb" Condition="Exists('$(NeoAstraGeneratorAssembly).pdb')" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="/" />
-    <None Include="$(MSBuildThisFileDirectory)../../doc/platform-support.md" Pack="true" PackagePath="docs/" />
-    <None Include="$(MSBuildThisFileDirectory)../../doc/known-limitations.md" Pack="true" PackagePath="docs/" />
-    <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-transport.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/rpc-and-bindings.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/capabilities-and-security.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/security-threat-model.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/desktop-services.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/application-lifecycle-and-hosting.md" Pack="true" PackagePath="docs/" />
-    <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra.h" Pack="true" PackagePath="build/native/include/" />
-    <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra_version.h" Pack="true" PackagePath="build/native/include/" />
-    <None Update="runtimes/**/*" Pack="true" PackagePath="%(Identity)" />
-    <!-- Keep the host native library beside development outputs while packing every downloaded RID asset. -->
-    <None Update="runtimes/$(NETCoreSdkPortableRuntimeIdentifier)/native/*"
-          Link="%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="MinVer">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-capabilities-v1.schema.json" Pack="true" PackagePath="schemas/" />
   </ItemGroup>
 </Project>

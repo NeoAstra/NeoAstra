@@ -14,8 +14,7 @@
     <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra.Rpc\NeoAstra.Rpc.csproj" />
-    <ProjectReference Include="..\NeoAstra.Hosting\NeoAstra.Hosting.csproj" />
-    <ProjectReference Include="..\NeoAstra.Rpc.Generator\NeoAstra.Rpc.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

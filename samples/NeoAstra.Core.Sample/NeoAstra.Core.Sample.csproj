@@ -8,7 +8,7 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
+    <ProjectReference Include="../../src/NeoAstra.Core/NeoAstra.Core.csproj" />
     <Content Include="assets/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

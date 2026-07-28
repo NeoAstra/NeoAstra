@@ -7,6 +7,6 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra.Desktop\NeoAstra.Desktop.csproj" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
   </ItemGroup>
 </Project>

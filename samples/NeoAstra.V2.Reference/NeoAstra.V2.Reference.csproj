@@ -21,10 +21,8 @@
     <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
     <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
-    <ProjectReference Include="../../src/NeoAstra.Rpc/NeoAstra.Rpc.csproj" />
-    <ProjectReference Include="../../src/NeoAstra.Desktop/NeoAstra.Desktop.csproj" />
     <ProjectReference
-      Include="../../src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj"
+      Include="../../src/NeoAstra.Generator/NeoAstra.Generator.csproj"
       OutputItemType="Analyzer"
       ReferenceOutputAssembly="false"
       GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />

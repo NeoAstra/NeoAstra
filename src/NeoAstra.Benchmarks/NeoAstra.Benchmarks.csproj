@@ -8,7 +8,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../NeoAstra/NeoAstra.csproj" />
-    <ProjectReference Include="../NeoAstra.Rpc/NeoAstra.Rpc.csproj" />
     <Content Include="assets/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

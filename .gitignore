@@ -65,7 +65,7 @@ BenchmarkDotNet.Artifacts/
 project.lock.json
 project.fragment.lock.json
 artifacts/
-src/NeoAstra/runtimes/*/native/*
+src/NeoAstra.Core/runtimes/*/native/*
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt

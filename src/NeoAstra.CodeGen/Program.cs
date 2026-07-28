@@ -11,7 +11,7 @@ using Zio.FileSystems;
 var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
 var header = Path.Combine(repositoryRoot, "native", "include", "neoastra.h");
 var solution = Path.Combine(repositoryRoot, "src", "NeoAstra.slnx");
-var outputDirectory = Path.Combine(repositoryRoot, "src", "NeoAstra", "Generated", "Interop");
+var outputDirectory = Path.Combine(repositoryRoot, "src", "NeoAstra.Core", "Generated", "Interop");
 
 ConfigureLibClang();
 
