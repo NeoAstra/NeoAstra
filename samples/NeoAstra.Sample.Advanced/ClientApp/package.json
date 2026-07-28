@@ -1,0 +1,23 @@
+{
+  "name": "neoastra-sample-advanced",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@neoastra/client": "file:../../../frontend/packages/client",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

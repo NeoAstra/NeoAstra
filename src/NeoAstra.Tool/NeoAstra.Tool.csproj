@@ -10,9 +10,12 @@
     <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra.Tooling\NeoAstra.Tooling.csproj" />
+    <ProjectReference Include="..\NeoAstra.Core\NeoAstra.Core.csproj" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
@@ -21,4 +24,14 @@
     <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="/" />
   </ItemGroup>
+
+  <Target Name="NeoAstraExcludeNativeRuntimeFromTool" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish
+        Remove="@(ResolvedFileToPublish)"
+        Condition="'%(Filename)' == 'neoastra_native' or '%(Filename)' == 'libneoastra_native' or '%(Filename)' == 'neoastra-native'" />
+      <_NeoAstraStaleNativeToolFile Include="$(PublishDir)neoastra_native.*;$(PublishDir)libneoastra_native.*;$(PublishDir)neoastra-native.json" />
+    </ItemGroup>
+    <Delete Files="@(_NeoAstraStaleNativeToolFile)" />
+  </Target>
 </Project>

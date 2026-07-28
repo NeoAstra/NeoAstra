@@ -43,7 +43,7 @@ for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [rea
   }
 }
 
-const referenceRoot = path.join(repositoryRoot, "samples/NeoAstra.V2.Reference/ClientApp");
+const referenceRoot = path.join(repositoryRoot, "samples/NeoAstra.Sample.Advanced/ClientApp");
 const referenceCheckRoot = path.join(referenceRoot, ".neoastra-check-dist");
 try {
   await build({ root: referenceRoot, configFile: false, base: "./", plugins: [react()], logLevel: "error", resolve: { alias: sourceAliases }, assetsInclude: ["**/*.ttf"], worker: { format: "es" }, build: { assetsInlineLimit: 0, outDir: ".neoastra-check-dist", emptyOutDir: true } });

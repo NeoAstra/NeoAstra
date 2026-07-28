@@ -28,9 +28,11 @@
   <ItemGroup>
     <EmbeddedResource Include="Desktop\neoastra.plugin.json" />
     <EmbeddedResource Include="Desktop\schemas\*.schema.json" />
-    <None Update="Desktop\neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.desktop.essentials/" />
+    <None Update="Desktop\neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.desktop.essentials/neoastra.plugin.json" />
     <None Update="Desktop\schemas\*.schema.json" Pack="true" PackagePath="plugins/neoastra.desktop.essentials/schemas/%(Filename)%(Extension)" />
-    <None Include="Build\NeoAstra.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.targets" />
+    <None Include="Build\Sdk\NeoAstra.props" Pack="true" PackagePath="buildTransitive/NeoAstra.props" />
+    <None Include="Build\Sdk\NeoAstra.Build.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.targets" />
+    <None Include="$(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\*" Pack="true" PackagePath="tools/net10.0/any/" Exclude="**/*.pdb;**/*.xml;**/neoastra_native.*" />
     <None Include="$(NeoAstraGeneratorAssembly)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="$(NeoAstraGeneratorAssembly).pdb" Condition="Exists('$(NeoAstraGeneratorAssembly).pdb')" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
     <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
@@ -43,5 +45,10 @@
     <None Include="$(MSBuildThisFileDirectory)../../doc/desktop-services.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/application-lifecycle-and-hosting.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-capabilities-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-staging-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-update-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

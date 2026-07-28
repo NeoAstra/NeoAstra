@@ -1,8 +1,0 @@
-<Project>
-  <ItemGroup>
-    <CompilerVisibleProperty Include="NeoRpcTypeScriptOutput" />
-    <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
-    <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
-    <CompilerVisibleProperty Include="NeoRpcBaselineManifest" />
-  </ItemGroup>
-</Project>

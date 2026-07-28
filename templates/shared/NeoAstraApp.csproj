@@ -1,15 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><PublishAot>true</PublishAot><IsAotCompatible>true</IsAotCompatible>
-    <NeoRpcTypeScriptOutput>$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
-    <NeoRpcManifestOutput>$(MSBuildProjectDirectory)/generated/neoastra.manifest.json</NeoRpcManifestOutput>
-    <NeoRpcSchemaOutput>$(MSBuildProjectDirectory)/generated/neoastra.schema.json</NeoRpcSchemaOutput>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NeoAstra" Version="2.0.0" />
-    <PackageReference Include="NeoAstra.Rpc" Version="2.0.0" />
-    <PackageReference Include="NeoAstra.Rpc.Generator" Version="2.0.0" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
-    <PackageReference Include="NeoAstra.Sdk" Version="2.0.0" PrivateAssets="all" />
-    <None Include="capabilities/*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="capabilities/%(Filename)%(Extension)" />
+    <PackageReference Include="NeoAstra" Version="1.0.0" />
   </ItemGroup>
 </Project>

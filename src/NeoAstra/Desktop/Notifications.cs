@@ -75,7 +75,7 @@ public interface INeoNotifications
     ValueTask<NeoDesktopStatus> RemoveAsync(string id, CancellationToken cancellationToken = default);
 }
 
-/// <summary>Deterministic bounded notification fake that can route early activations to Step 5 launch delivery.</summary>
+/// <summary>Deterministic bounded notification fake that can route early activations to launch delivery.</summary>
 public sealed class NeoFakeNotifications : INeoNotifications, IAsyncDisposable
 {
     private readonly Dictionary<string, NeoNotificationRequest> _requests = new(StringComparer.Ordinal);

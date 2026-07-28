@@ -4,7 +4,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
-using NeoAstra.Rpc.Generator;
+using NeoAstra.Generator;
 
 namespace NeoAstra.Tests;
 
@@ -23,6 +23,9 @@ public sealed class RpcGeneratorTests
         StringAssert.Contains(first.Generated, "documents.open");
         StringAssert.Contains(first.Generated, "documents.changed");
         StringAssert.Contains(first.Generated, "NeoRpcGeneratedContract");
+        StringAssert.Contains(first.Generated, "NeoRpcGeneratedApplicationExtensions");
+        StringAssert.Contains(first.Generated, "ConfigureGeneratedRpc");
+        StringAssert.Contains(first.Generated, "new global::NeoAstra.Rpc.NeoPermissionDeclaration(\"test:invoke\"");
     }
 
     [TestMethod]

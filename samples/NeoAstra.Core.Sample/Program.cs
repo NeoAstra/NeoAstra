@@ -9,7 +9,7 @@ internal static class Program
         {
             var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
             {
-                ApplicationName = "NeoAstra NativeAOT Validation",
+                ApplicationName = "NeoAstra.Core NativeAOT Validation",
                 ShutdownMode = NeoApplicationShutdownMode.Explicit,
             });
             application.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -18,12 +18,12 @@ internal static class Program
         }
 
         return NeoApplication.Run(
-            new NeoApplicationOptions { ApplicationName = "NeoAstra Sample" },
+            new NeoApplicationOptions { ApplicationName = "NeoAstra.Core Sample" },
             async app =>
             {
                 var window = app.CreateWindow(new NeoWindowOptions
                 {
-                    Title = "NeoAstra Sample",
+                    Title = "NeoAstra.Core Sample",
                     Width = 1000,
                     Height = 700,
                     IsVisible = true,

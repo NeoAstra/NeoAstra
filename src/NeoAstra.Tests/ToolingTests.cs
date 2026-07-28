@@ -31,6 +31,30 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void ProjectConfiguration_UsesStrictFrontendConventionsWhenConfigIsAbsent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-conventions-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var frontend = Path.Combine(root, "ClientApp");
+            Directory.CreateDirectory(frontend);
+            File.WriteAllText(Path.Combine(frontend, "package.json"), "{}");
+            File.WriteAllText(Path.Combine(frontend, "package-lock.json"), "{}");
+            var project = NeoProjectConfiguration.Load(Path.Combine(root, "neoastra.json"));
+            Assert.AreEqual("npm", project.PackageManager);
+            Assert.AreEqual(Path.Combine(frontend, "dist"), project.DistDirectory);
+            CollectionAssert.AreEqual(new[] { "npm", "run", "build" }, project.BuildCommand.Arguments.ToArray());
+
+            File.WriteAllText(Path.Combine(frontend, "pnpm-lock.yaml"), "lockfileVersion: 9");
+            Assert.AreEqual("configuration_lockfile", Assert.ThrowsExactly<NeoToolException>(() => NeoProjectConfiguration.Load(Path.Combine(root, "neoastra.json"))).Code);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void ProjectConfiguration_RejectsUnknownDuplicateVersionAndRemoteOrigin()
     {
         using var fixture = new ProjectFixture();
@@ -72,7 +96,7 @@ public sealed class ToolingTests
     [TestMethod]
     public void ReferenceCapabilities_ResolveForReleaseAndRestrictThePreviewView()
     {
-        var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.V2.Reference", "capabilities", "main.json"));
+        var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.Sample.Advanced", "capabilities", "main.json"));
         var catalog = new NeoPermissionCatalogBuilder()
             .Add(new NeoPermissionDeclaration("tour:read", 1, ["tour.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None))
             .Add(new NeoPermissionDeclaration("tour:control", 1, ["tour.delay", "tour.stream", "tour.setDirty", "tour.showPreview"], NeoPermissionRisk.Low, NeoScopeFamily.None))

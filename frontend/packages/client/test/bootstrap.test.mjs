@@ -5,7 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { webcrypto } from "node:crypto";
 
-const templatePath = path.resolve(import.meta.dirname, "../../../../src/NeoAstra/Transport/transport-bootstrap.js");
+const templatePath = path.resolve(import.meta.dirname, "../../../../src/NeoAstra.Core/Transport/transport-bootstrap.js");
 const template = await readFile(templatePath, "utf8");
 
 function scriptFor(backend, platform = "windows", maximumFrameBytes = 1048576) {

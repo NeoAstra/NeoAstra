@@ -357,7 +357,7 @@ public sealed class CapabilityTests
     private static async Task AssertToolRejectsAsync(string catalog, string temp, string configurationName = "Release")
     {
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var tool = FindRepositoryFile("src", "NeoAstra.Capabilities.Tool", "bin", configuration, "net10.0", "NeoAstra.Capabilities.Tool.dll");
+        var tool = FindRepositoryFile("src", "NeoAstra.Tool", "bin", configuration, "net10.0", "NeoAstra.Tool.dll");
         var capabilities = FindRepositoryFile("src", "NeoAstra.Tests", "Fixtures", "Capabilities", "capabilities.json");
         var start = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
@@ -365,7 +365,7 @@ public sealed class CapabilityTests
             RedirectStandardOutput = true,
             UseShellExecute = false,
         };
-        foreach (var argument in new[] { tool, "resolve", "--capabilities", capabilities, "--catalog", catalog, "--platform", "windows", "--configuration", configurationName, Path.Combine(temp, "rejected.json") }) start.ArgumentList.Add(argument);
+        foreach (var argument in new[] { tool, "capabilities", "resolve", "--capabilities", capabilities, "--catalog", catalog, "--platform", "windows", "--configuration", configurationName, Path.Combine(temp, "rejected.json") }) start.ArgumentList.Add(argument);
         using var process = System.Diagnostics.Process.Start(start)!;
         var error = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();

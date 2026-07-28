@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <NeoAstraProjectConfig Condition="'$(NeoAstraProjectConfig)' == ''">$(MSBuildProjectDirectory)/neoastra.json</NeoAstraProjectConfig>
+    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/ClientApp/package.json'))">true</NeoAstraFrontendEnabled>
+    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == ''">false</NeoAstraFrontendEnabled>
+    <NeoAstraPrebuiltAssets Condition="'$(NeoAstraPrebuiltAssets)' == ''">false</NeoAstraPrebuiltAssets>
+    <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == ''">$(MSBuildThisFileDirectory)..\tools\net10.0\any\NeoAstra.Tool.dll</NeoAstraToolPath>
+    <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == '' and '$(DotNetHostPath)' != ''">$(DotNetHostPath)</NeoAstraDotNetHost>
+    <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
+    <NeoRpcTypeScriptOutput Condition="'$(NeoRpcTypeScriptOutput)' == ''">$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
+    <NeoRpcManifestOutput Condition="'$(NeoRpcManifestOutput)' == ''">$(MSBuildProjectExtensionsPath)neoastra/neoastra.manifest.json</NeoRpcManifestOutput>
+    <NeoRpcSchemaOutput Condition="'$(NeoRpcSchemaOutput)' == ''">$(MSBuildProjectExtensionsPath)neoastra/neoastra.schema.json</NeoRpcSchemaOutput>
+  </PropertyGroup>
+</Project>

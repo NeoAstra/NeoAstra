@@ -189,9 +189,9 @@ public sealed class ManagedApiTests
         var gtk = File.ReadAllText(FindRepositoryFile("native", "src", "linux", "gtk_backend.cpp"));
         var windows = File.ReadAllText(FindRepositoryFile("native", "src", "windows", "windows_backend.cpp"));
         var common = File.ReadAllText(FindRepositoryFile("native", "src", "common", "neoastra.cpp"));
-        var managed = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoEnvironment.cs"));
-        var managedView = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoAstra.cs"));
-        var managedApplication = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "NeoApplication.cs"));
+        var managed = File.ReadAllText(FindRepositoryFile("src", "NeoAstra.Core", "NeoEnvironment.cs"));
+        var managedView = File.ReadAllText(FindRepositoryFile("src", "NeoAstra.Core", "NeoAstra.cs"));
+        var managedApplication = File.ReadAllText(FindRepositoryFile("src", "NeoAstra.Core", "NeoApplication.cs"));
 
         StringAssert.Contains(cocoa, "NSObject<WKURLSchemeHandler>");
         StringAssert.Contains(cocoa, "startURLSchemeTask:");

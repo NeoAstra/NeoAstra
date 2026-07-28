@@ -1,0 +1,12 @@
+<Project>
+  <!-- NuGet supplies this analyzer through NeoAstra's buildTransitive assets. Source-tree
+       samples mirror that behavior without exposing a generator reference in each app. -->
+  <Target
+    Name="NeoAstraAddSourceGenerator"
+    BeforeTargets="CoreCompile"
+    Condition="'@(ProjectReference-&gt;WithMetadataValue('Filename', 'NeoAstra'))' != ''">
+    <ItemGroup>
+      <Analyzer Include="$(MSBuildThisFileDirectory)..\src\NeoAstra.Generator\bin\$(Configuration)\netstandard2.0\NeoAstra.Generator.dll" />
+    </ItemGroup>
+  </Target>
+</Project>

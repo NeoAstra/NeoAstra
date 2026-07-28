@@ -4,4 +4,4 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("NeoAstra.Tests")]
-[assembly: InternalsVisibleTo("NeoAstra.Desktop.NativeAotFixture")]
+[assembly: InternalsVisibleTo("NeoAstra.NativeAotFixture")]

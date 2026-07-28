@@ -15,9 +15,7 @@
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <ProjectReference Include="..\NeoAstra.SingleInstanceHelper\NeoAstra.SingleInstanceHelper.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" />
-    <ProjectReference Include="..\NeoAstra.Tooling\NeoAstra.Tooling.csproj" />
-    <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\NeoAstra.Capabilities.Tool\NeoAstra.Capabilities.Tool.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>

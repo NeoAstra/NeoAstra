@@ -3,7 +3,7 @@
 
 namespace NeoAstra.Rpc;
 
-/// <summary>Binds an RPC host to the authenticated Step 1 transport of one NeoAstra view.</summary>
+/// <summary>Binds an RPC host to the authenticated transport of one NeoAstra view.</summary>
 public sealed class NeoRpcViewBinding : IAsyncDisposable
 {
     private readonly NeoRpcHost _host;
@@ -34,7 +34,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
 
     /// <summary>Binds an RPC host to a bridge-enabled NeoAstra view.</summary>
     /// <param name="host">The immutable RPC host.</param>
-    /// <param name="view">The view whose trusted Step 1 sessions will own RPC state.</param>
+    /// <param name="view">The view whose trusted sessions will own RPC state.</param>
     /// <returns>A binding that must be disposed before the host or view when detached early.</returns>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">The view does not have a bridge-enabled transport.</exception>
