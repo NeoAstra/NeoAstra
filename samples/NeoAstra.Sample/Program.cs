@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using System.Text.Json.Serialization;
 using NeoAstra;
@@ -5,12 +6,19 @@ using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(AppJsonContext))]
 
-return NeoApp.Run(args, app =>
+internal static class Program
 {
-    app.Title = "NeoAstra HelloWorld";
-    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
-    app.GrantMainView("greeting:read");
-});
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        return NeoApp.Run(args, app =>
+        {
+            app.Title = "NeoAstra HelloWorld";
+            app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+            app.GrantMainView("greeting:read");
+        });
+    }
+}
 
 [NeoRpcService("greeting")]
 internal sealed class GreetingService

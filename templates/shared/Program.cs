@@ -4,12 +4,19 @@ using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(AppJsonContext))]
 
-return NeoApp.Run(args, app =>
+internal static class Program
 {
-    app.Title = "NeoAstra App";
-    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
-    app.GrantMainView("greeting:read");
-});
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        return NeoApp.Run(args, app =>
+        {
+            app.Title = "NeoAstra App";
+            app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+            app.GrantMainView("greeting:read");
+        });
+    }
+}
 
 [NeoRpcService("greeting", Version = 1)]
 public sealed class GreetingService

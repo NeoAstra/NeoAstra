@@ -137,6 +137,7 @@ public sealed class NeoAppBuilder
 
             Uri target;
             NeoAstraOptions viewOptions;
+            // Native window and browser setup must resume on the application's UI dispatcher.
             if (developmentOrigin is not null)
             {
                 target = new Uri(developmentOrigin, "/");
@@ -147,7 +148,7 @@ public sealed class NeoAppBuilder
                     BridgePolicy = trustEntireView ? NeoBridgePolicy.TrustEntireView : NeoBridgePolicy.TrustedOrigins,
                     BridgeOrigins = trustEntireView ? [] : [developmentOrigin.GetLeftPart(UriPartial.Authority)],
                 };
-                environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions(), cancellationToken).ConfigureAwait(false);
+                environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions(), cancellationToken).ConfigureAwait(true);
             }
             else
             {
@@ -158,7 +159,7 @@ public sealed class NeoAppBuilder
                     {
                         CustomSchemes = [NeoCustomScheme.Application("app", new NeoManifestResourceProvider(assetRoot, assetManifest))],
                     },
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(true);
                 target = new Uri("app://neoastra/index.html");
                 viewOptions = new NeoAstraOptions
                 {
@@ -169,9 +170,9 @@ public sealed class NeoAppBuilder
 
             window.Show();
             window.Activate();
-            view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(false);
+            view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
             binding = NeoRpcViewBinding.Bind(rpc, view);
-            await view.NavigateAsync(target, cancellationToken).ConfigureAwait(false);
+            await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             _session = new Session(rpc, environment, view, binding);
             rpc = null;
             environment = null;
@@ -180,10 +181,10 @@ public sealed class NeoAppBuilder
         }
         finally
         {
-            if (binding is not null) await binding.DisposeAsync().ConfigureAwait(false);
-            if (view is not null) await view.DisposeAsync().ConfigureAwait(false);
-            if (environment is not null) await environment.DisposeAsync().ConfigureAwait(false);
-            if (rpc is not null) await rpc.DisposeAsync().ConfigureAwait(false);
+            if (binding is not null) await binding.DisposeAsync().ConfigureAwait(true);
+            if (view is not null) await view.DisposeAsync().ConfigureAwait(true);
+            if (environment is not null) await environment.DisposeAsync().ConfigureAwait(true);
+            if (rpc is not null) await rpc.DisposeAsync().ConfigureAwait(true);
         }
     }
 

@@ -51,17 +51,25 @@ Install one package for the complete application platform:
 The package includes RPC, secure capabilities, desktop services, hosting integration, the incremental RPC generator, and frontend build targets. Use `NeoAstra.Core` instead when you want only the low-level cross-platform WebView/window API; its public types remain in the `NeoAstra` namespace.
 
 ```csharp
+using System;
 using System.Text.Json.Serialization;
 using NeoAstra;
 using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(AppJsonContext))]
 
-return NeoApp.Run(args, app =>
+internal static class Program
 {
-    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
-    app.GrantMainView("greeting:read"); // authority is always explicit
-});
+    [STAThread]
+    private static int Main(string[] args)
+    {
+        return NeoApp.Run(args, app =>
+        {
+            app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+            app.GrantMainView("greeting:read"); // authority is always explicit
+        });
+    }
+}
 
 [NeoRpcService("greeting")]
 sealed class GreetingService
@@ -81,7 +89,7 @@ partial class AppJsonContext : JsonSerializerContext;
 
 `NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
-NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
+NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, standalone entry points and attached host threads must use an STA apartment.
 
 Register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based and marked secure. Bridge access is separate and default-denied. For a cross-platform, locked-down local view, explicitly opt into whole-view trust only when every document, frame, script, asset, and navigation is controlled:
 
