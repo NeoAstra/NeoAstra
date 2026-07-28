@@ -87,7 +87,7 @@ internal sealed class TourService(TourState state)
         var count = Math.Clamp(request.Count, 1, 12);
         return new NeoRpcChannel<TourStreamItem>(
             StreamItemsAsync(count, cancellationToken),
-            ReferenceJsonContext.Default.TourStreamItem);
+            AdvancedJsonContext.Default.TourStreamItem);
     }
 
     [NeoRpcMethod("setDirty", Permission = "tour:control")]

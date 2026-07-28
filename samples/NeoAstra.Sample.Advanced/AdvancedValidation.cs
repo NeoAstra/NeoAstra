@@ -1,7 +1,7 @@
 using System.Text.Json;
 using NeoAstra;
 
-internal static class ReferenceValidation
+internal static class AdvancedValidation
 {
     internal static int Run()
     {
@@ -59,7 +59,7 @@ internal static class ReferenceValidation
     private static bool ValidateRoutes(NeoManifestResourceProvider provider)
     {
         var response = provider.GetResponse(new NeoResourceRequest(
-            new Uri("app://reference/route"),
+            new Uri("app://neoastra/route"),
             "HEAD",
             new Dictionary<string, string>
             {
@@ -80,7 +80,7 @@ internal static class ReferenceValidation
         foreach (var asset in manifest.Assets)
         {
             var response = provider.GetResponse(new NeoResourceRequest(
-                new Uri("app://reference/" + asset.Path),
+                new Uri("app://neoastra/" + asset.Path),
                 "HEAD",
                 new Dictionary<string, string>(),
                 null,
@@ -113,7 +113,7 @@ internal static class ReferenceValidation
         dynamicScript = scripts.SingleOrDefault(static asset =>
             Path.GetFileName(asset.Path).StartsWith("details-", StringComparison.Ordinal));
         workerScript = scripts.SingleOrDefault(static asset =>
-            Path.GetFileName(asset.Path).StartsWith("reference.worker-", StringComparison.Ordinal));
+            Path.GetFileName(asset.Path).StartsWith("advanced.worker-", StringComparison.Ordinal));
         style = manifest.Assets.SingleOrDefault(static asset =>
             asset.Path.EndsWith(".css", StringComparison.Ordinal));
         font = manifest.Assets.SingleOrDefault(static asset =>
@@ -176,7 +176,7 @@ internal static class ReferenceValidation
 
     private static bool ValidateCapabilities()
     {
-        var capabilities = ReferenceCapabilities.Load(development: false);
+        var capabilities = AdvancedCapabilities.Load(development: false);
         using var document = JsonDocument.Parse(capabilities.Json);
         var grants = document.RootElement.GetProperty("capabilities");
         if (grants.GetArrayLength() != 2)

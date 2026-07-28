@@ -9,7 +9,7 @@ import {
 } from "@neoastra/client";
 import { neoRpcContractHash } from "./generated/neoastra";
 
-export function withReferenceContract(rpc: DesktopRpc): DesktopRpc {
+export function withAdvancedContract(rpc: DesktopRpc): DesktopRpc {
   return {
     invoke<TRequest, TResult>(
       command: string,
@@ -34,7 +34,7 @@ export function withReferenceContract(rpc: DesktopRpc): DesktopRpc {
   };
 }
 
-export const desktop = createDesktopClient(withReferenceContract({ invoke, subscribe }));
+export const desktop = createDesktopClient(withAdvancedContract({ invoke, subscribe }));
 
 export const menuItems: readonly DesktopMenuItem[] = [
   {

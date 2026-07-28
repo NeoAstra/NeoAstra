@@ -1,12 +1,12 @@
 @font-face {
-  font-family: "NeoAstra Reference";
-  src: url("./reference-font.ttf") format("truetype");
+  font-family: "NeoAstra Advanced Sample";
+  src: url("./advanced-font.ttf") format("truetype");
   font-display: swap;
 }
 
 :root {
   color-scheme: light dark;
-  font-family: "NeoAstra Reference", Inter, system-ui, sans-serif;
+  font-family: "NeoAstra Advanced Sample", Inter, system-ui, sans-serif;
   color: #e9f2ff;
   background: #07101c;
   font-synthesis: none;

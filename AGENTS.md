@@ -8,7 +8,7 @@ Paths/commands below are relative to this directory.
 
 ## Orientation
 
-- Library: `src/NeoAstra/`
+- Libraries: `src/NeoAstra.Core/` and `src/NeoAstra/`
 - Tests: `src/NeoAstra.Tests/` (MSTest)
 - Docs to keep in sync with behavior: `readme.md` and the docs under `doc/` (e.g., `doc/**/*.md`)
 

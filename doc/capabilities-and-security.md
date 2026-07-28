@@ -28,7 +28,7 @@ Selectors are exact by default. Reviewed `prefix:*` view patterns are developmen
 Resolve at build/CI time with the source-generated, reflection-free tool:
 
 ```sh
-dotnet run --project src/NeoAstra.Capabilities.Tool -- resolve \
+dotnet neoastra capabilities resolve \
   --capabilities app.capabilities.json --catalog app.permissions.json \
   --platform windows --configuration Release obj/capabilities.windows.resolved.json
 ```
@@ -91,4 +91,4 @@ Session and host disposal are idempotent shared operations: every concurrent cal
 
 `INeoCapabilityDiagnosticSink` receives structured allow/deny events containing timestamp, view label, a bounded document-session suffix, operation, permission, stable decision code, origin-presence/trust flags, platform, and correlation ID. It does not receive renderer arguments, scope values, URLs, paths, or response bodies. Labels, permission/operation names, correlation IDs, and the session suffix are still operational identifiers—not anonymized data—so applications must avoid secrets in identifiers and apply retention/access controls. `GetDiagnosticSnapshot()` exposes bounded counts, manifest hash/profile, and grant count summaries; capability IDs are included but exact scope values are not.
 
-See [the threat model](security-threat-model.md) for trust boundaries and [migration guidance](migration-v2-capabilities.md) for upgrading Step 2 applications.
+See [the threat model](security-threat-model.md) for trust boundaries and review its deployment checklist before enabling renderer authority.

@@ -1,6 +1,6 @@
 # Plugins and desktop services
 
-`NeoAstra.Desktop` is the statically composed Step 6 desktop-services package. It depends on `NeoAstra` and `NeoAstra.Rpc`, is marked AOT-compatible, and does not scan assemblies, load adapters dynamically, or use runtime reflection.
+The `NeoAstra.Desktop` namespaces are the statically composed desktop-service layer included in `NeoAstra.dll`. The implementation is AOT-compatible and does not scan assemblies, load adapters dynamically, or use runtime reflection.
 
 ## Security model
 
@@ -42,7 +42,7 @@ Support is reported per service through `NeoCapabilityInfo`; callers must not in
 | Safe storage | Per-user DPAPI and atomic encrypted files | Binary-safe Keychain generic-password APIs with exact service/account lookup | Secret Service via trusted absolute `secret-tool` when available; no fallback (`Limited` because the keyring/helper may be unavailable or locked) |
 | Drag/drop | OLE inbound file/text/URL capture installed across the complete WebView2 child-window tree and Shell OLE outbound file/text/URL drags with source-window pointer correlation | WKWebView/AppKit inbound file/text/URL capture and AppKit outbound typed dragging sessions bound to the current source-view event | WebKitGTK native inbound file/text/URL capture and GTK outbound typed drag contexts bound to a copied source-widget event; compositor support varies |
 
-Windows executables that use the dialog service must activate Common Controls v6 in their application manifest because `TaskDialogIndirect` is a v6 API. The v2 reference sample's `app.manifest` provides this dependency for both normal and NativeAOT builds.
+Windows executables that use the dialog service must activate Common Controls v6 in their application manifest because `TaskDialogIndirect` is a v6 API. The advanced sample's `app.manifest` provides this dependency for both normal and NativeAOT builds.
 
 Native inbound drops are routed only to the active trusted renderer document session for the target view. On Windows, NeoAstra disables WebView2's browser-native external drop and replaces the OLE targets on the controller window and every descendant renderer window, including descendants owned by the WebView process. Native code accepts bounded `CF_HDROP`, Unicode text, and URL data; file paths are canonicalized and passed directly to the existing file-scope broker, so paths never enter page JavaScript, which receives only opaque tokens. View/window labels remain metadata, while navigation, transport-session rotation, renderer teardown, view disposal, and window closure revoke the old session's file tokens. A renderer calls `dragDrop.outbound(viewLabel, items)` from its native drag-start handler; background calls or calls after the source gesture expires, is reused, targets another view/session, or is invalidated by navigation return `Denied`.
 | Window state/polish | Source-generated atomic persistence, topology/scale clamping, native icon/attention/taskbar progress/DWM title intent/capture affinity | Persistence plus app icon, attention, dock badge, represented document and sharing restriction; per-window icon/progress/title-only theme semantics are unavailable or limited | Persistence plus GTK icon/attention; generic taskbar progress/badge/title theme and capture exclusion have no reliable portable GTK/Wayland semantic |

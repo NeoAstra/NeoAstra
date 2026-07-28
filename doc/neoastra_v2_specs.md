@@ -1,5 +1,7 @@
 # NeoAstra v2 Application Platform Specification
 
+> **Historical implementation audit.** NeoAstra is still unreleased. The separate runtime/package names in this document are superseded: the shipping topology is `NeoAstra.Core` plus the full `NeoAstra` package, with RPC, Desktop, Hosting, generator, and build integration consolidated as described in the root README. This file is retained only as design and security review history.
+
 **Status:** Draft 0.1
 **Date:** July 26, 2026
 **Audience:** NeoAstra maintainers, implementers, plugin authors, tooling authors, and reviewers

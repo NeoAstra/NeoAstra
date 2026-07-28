@@ -15,7 +15,7 @@ safe-storage namespaces, notification delivery, package upgrades, and update com
 requires semantic and platform numeric versions, publisher, executable, source icons, explicit RIDs,
 artifact targets, an allowlist of publish-relative files, notices, minimum OS, and reviewed runtime
 dependencies. Optional associations, protocols, notification identity, symbols, entitlements, and update
-policy are bounded and reject unknown fields. Association and protocol declarations must match Step 5
+policy are bounded and reject unknown fields. Association and protocol declarations must match application
 `OpenFiles`/`OpenUrls` launch handlers; `doctor` emits a prominent review finding because tooling cannot
 prove application event-handler behavior statically.
 
@@ -96,7 +96,7 @@ SHA-256 digest. Rotation pins old and new public keys in reviewed application po
 Revocation is local signed-release policy: a revoked or unknown key fails before artifact selection. Never
 remove the last trusted non-revoked key without shipping a prior authenticated transition.
 Staged rollout requires a bounded backend-owned stable installation identity (normally derived from the
-Step 6 safe-storage boundary) and uses a deterministic SHA-256 cohort; renderer input cannot select it.
+safe storage) and uses a deterministic SHA-256 cohort; renderer input cannot select it.
 
 HTTPS is mandatory but not authentication. Feed, release-note, artifact, and at most three redirects must
 use HTTPS, no credentials/fragments, and the exact IDN host/effective port pinned by the application.
@@ -110,7 +110,7 @@ Authenticated portable extraction accepts only zip or `tar.gz`, rechecks the art
 links/special files/traversal/portable path collisions, caps file count and expanded bytes, verifies the
 single packaged app/version/RID identity root, and writes only to an empty backend-owned root. Native installer formats are never parsed as portable archives.
 
-The backend coordinates an ordinary Step 5 quit before handing a canonical state file to the minimal
+The backend coordinates an ordinary lifecycle-aware quit before handing a canonical state file to the minimal
 per-OS helper. App refusal or timeout leaves the authenticated artifact staged and performs no
 replacement. Installation accepts only backend-owned absolute non-root paths, refuses linked payload
 roots, renames the current install to a fixed previous path, atomically promotes a separately verified

@@ -1,0 +1,1 @@
+function e(){return`Dynamic advanced chunk loaded.`}export{e as advancedDetails};

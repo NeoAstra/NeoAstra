@@ -4,7 +4,7 @@ import {
   onDiagnostic,
   type NeoAstraRuntimeInfo,
 } from "@neoastra/client";
-import markUrl from "./reference-mark.svg";
+import markUrl from "./advanced-mark.svg";
 import { DesktopTour } from "./DesktopTour";
 import { FeatureCard, ResultPanel } from "./FeatureCard";
 import { tour, type TourActivity } from "./generated/neoastra";
@@ -38,12 +38,12 @@ export function App() {
 
   React.useEffect(() => {
     const worker = new Worker(
-      new URL("./reference.worker.ts", import.meta.url),
+      new URL("./advanced.worker.ts", import.meta.url),
       { type: "module" },
     );
     worker.onmessage = (event: MessageEvent<string>) => setWorkerMessage(event.data);
     worker.postMessage("ready");
-    void import("./details").then(module => setDetails(module.referenceDetails()));
+    void import("./details").then(module => setDetails(module.advancedDetails()));
     return () => worker.terminate();
   }, []);
 

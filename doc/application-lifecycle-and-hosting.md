@@ -27,7 +27,7 @@ Elevated and unelevated Windows processes may be separated by pipe ACL/integrity
 
 ## Optional Generic Host package
 
-`NeoAstra.Hosting` depends on core/RPC and `Microsoft.Extensions.Hosting.Abstractions`; core and RPC do not depend on hosting. Registration is static and NativeAOT-safe:
+The `NeoAstra.Hosting` namespace is included in `NeoAstra.dll`, which depends on `NeoAstra.Core` and `Microsoft.Extensions.Hosting.Abstractions`. Registration is static and NativeAOT-safe:
 
 ```csharp
 Host.CreateApplicationBuilder(args)

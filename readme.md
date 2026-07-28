@@ -29,33 +29,57 @@ See [platform support and runtime dependencies](doc/platform-support.md) for the
 - Generated, size/versioned C ABI interop with explicit lifetime management
 - Async cancelable close/quit coordination, bounded launch routing, secure local-user single instance, and optional Generic Host integration
 
+## Product packages
+
+| Package | Role | Application runtime reference |
+| --- | --- | --- |
+| `NeoAstra.Core` | Cross-platform window and WebView core; public API remains in namespace `NeoAstra` | Use directly for low-level hosts |
+| `NeoAstra` | Default desktop application platform: RPC, capabilities, desktop services, hosting, embedded generator, and frontend build integration | The single reference for ordinary apps; depends on `NeoAstra.Core` |
+| `NeoAstra.Tool` | Optional `dotnet neoastra` development, capability, asset, delivery, and update tooling | Tool installation only; not a runtime framework package |
+| `NeoAstra.Templates` | Vanilla, React, and Vue `dotnet new` templates | Template installation only |
+
+NeoAstra has not shipped a stable release. Earlier repository-only package and project boundaries were removed as a clean break; there are no compatibility packages or migration shims.
+
 ## Quick start
 
-```csharp
-using NeoAstra;
+Install one package for the complete application platform:
 
-return NeoApplication.Run(
-    new NeoApplicationOptions { ApplicationName = "NeoAstra Sample" },
-    async app =>
-    {
-        var window = app.CreateWindow(new NeoWindowOptions
-        {
-            Title = "NeoAstra",
-            Width = 1000,
-            Height = 700,
-            IsVisible = true,
-        });
-
-        await using var environment = await app.CreateEnvironmentAsync();
-        await using var webView = await environment.CreateWebViewAsync(
-            NeoAstraHost.FillWindow(window));
-
-        webView.NavigationCompleted += (_, navigation) =>
-            Console.WriteLine($"Navigation succeeded: {navigation.IsSuccess}");
-
-        await webView.NavigateAsync(new Uri("https://example.com/"));
-    });
+```xml
+<PackageReference Include="NeoAstra" Version="1.0.0" />
 ```
+
+The package includes RPC, secure capabilities, desktop services, hosting integration, the incremental RPC generator, and frontend build targets. Use `NeoAstra.Core` instead when you want only the low-level cross-platform WebView/window API; its public types remain in the `NeoAstra` namespace.
+
+```csharp
+using System.Text.Json.Serialization;
+using NeoAstra;
+using NeoAstra.Rpc;
+
+[assembly: NeoRpcJsonContext(typeof(AppJsonContext))]
+
+return NeoApp.Run(args, app =>
+{
+    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+    app.GrantMainView("greeting:read"); // authority is always explicit
+});
+
+[NeoRpcService("greeting")]
+sealed class GreetingService
+{
+    [NeoRpcMethod("hello", Permission = "greeting:read")]
+    public ValueTask<GreetingResponse> HelloAsync(GreetingRequest request) =>
+        ValueTask.FromResult(new GreetingResponse($"Hello, {request.Name}!"));
+}
+
+sealed record GreetingRequest(string Name);
+sealed record GreetingResponse(string Message);
+
+[JsonSerializable(typeof(GreetingRequest))]
+[JsonSerializable(typeof(GreetingResponse))]
+partial class AppJsonContext : JsonSerializerContext;
+```
+
+`NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
 NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, an attached host thread must use an STA apartment.
 
@@ -84,16 +108,16 @@ Custom resource-provider callbacks currently remain synchronous on all three bac
 WebKitGTK exposes URI, method, headers, and a synchronously buffered request body (limited to 64 MiB), but not trustworthy initiating-origin, frame, or resource-kind metadata for these requests; those fields are reported as unknown. Linux honors secure and CORS-enabled scheme flags, but has no equivalent authority or per-origin CORS registration switches and rejects service-worker descriptors, so custom-scheme capability is reported as limited. WebKitGTK 4.1 script-message callbacks also omit trustworthy source-origin data. NeoAstra therefore does not infer trust from the current top-level URI: `TrustedOrigins` is rejected on Linux, `TrustEntireView` delivers messages with `SourceOrigin == null`, and message-origin capability remains unavailable.
 
 See [the security and resource-limit review](doc/security-review.md) for the verified controls, trust assumptions, and backend limitations.
-See [the portable frontend transport and migration guide](doc/frontend-transport.md) before enabling
-v2 frontend messaging. Bridge-enabled views require a unique `ViewLabel`; application frontend code
+See [the portable frontend transport guide](doc/frontend-transport.md) before enabling
+frontend messaging. Bridge-enabled views require a unique `ViewLabel`; application frontend code
 uses `@neoastra/client` and never selects backend browser globals.
 See [the typed RPC and generated bindings guide](doc/rpc-and-bindings.md) for explicit NativeAOT-safe
 commands, cancellation, events, channels, resources, deterministic artifacts, and test doubles.
 Before exposing RPC to a renderer, follow [the capability and security guide](doc/capabilities-and-security.md),
 including its fail-closed host setup, platform provenance limits, [threat model](doc/security-threat-model.md),
-and [Step 2 migration checklist](doc/migration-v2-capabilities.md).
-Use [the frontend tooling, secure assets, SDK, and templates guide](doc/frontend-tooling-and-assets.md)
-for `neoastra.json`, `dotnet neoastra dev/init/doctor/inspect`, generated-contract ordering,
+and reviewed capability configuration for advanced/scoped applications.
+Use [the frontend tooling, secure assets, and templates guide](doc/frontend-tooling-and-assets.md)
+for convention-based projects, optional `neoastra.json` overrides, `dotnet neoastra dev/init/doctor/inspect`, generated-contract ordering,
 manifest-only SPA hosting, offline/prebuilt publish, and the vanilla/React/Vue templates.
 Use [the application lifecycle and hosting guide](doc/application-lifecycle-and-hosting.md) for async unsaved-work close,
 deterministic quit ordering, early launch events, authenticated second-instance routing, explicit DI scopes, and platform session-end limitations.
@@ -108,10 +132,10 @@ Native diagnostics can be observed without an additional logging dependency by s
 
 Use `NeoEnvironment.GetCapability` before enabling optional browser UX. WebView2 does not expose portable file-chooser interception, WebKitGTK does not expose the current TLS/client-certificate decision hooks, and WKWebView does not expose the portable client-certificate or fullscreen hooks.
 
-The basic sample is configured for NativeAOT. Publish it for the current platform, for example with `dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained`. Passing `--validate-native-library` performs a non-interactive native load and dispatcher-detach smoke check without creating a browser view; CI runs that check against the freshly built Windows native asset.
+Both samples are configured for NativeAOT. Publish the complete HelloWorld with `dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained`. The Core sample's `--validate-native-library` option performs a non-interactive native load and dispatcher-detach smoke check without creating a browser view.
 
 For a guided application-platform demonstration, run the
-[`NeoAstra.V2.Reference` feature tour](samples/NeoAstra.V2.Reference/readme.md). It combines a React/Vite
+[`NeoAstra.Sample.Advanced` feature tour](samples/NeoAstra.Sample.Advanced/readme.md). It combines a React/Vite
 view with generated typed RPC, cancellation, channels, events, differently authorized views, lifecycle
 negotiation, native desktop services, secure local assets, and a compact standalone NativeAOT host.
 
@@ -131,7 +155,7 @@ The browser conformance and performance executables are built with the solution 
 
 Run the dependency-free benchmark harness with `dotnet run --project src/NeoAstra.Benchmarks -c Release -- --run --quick`; omit `--quick` for the bounded default sample, or use `--iterations`, `--lifecycle-iterations`, `--timeout-seconds`, and `--idle-seconds` to tune it. Each `RESULT`/`SKIP` identifies the backend and platform. Results include browser-engine, native-backend, OS-scheduling, and machine effects; environment/view timing must not be interpreted as NeoAstra controlling engine startup, and memory/idle-CPU figures currently cover only the host process. Use same-machine, same-engine regression baselines rather than absolute comparisons across platforms.
 
-The native library uses CMake presets and Clang. The build helper selects a .NET RID, runs the native tests, and stages the resulting library in `src/NeoAstra/runtimes/<RID>/native`:
+The native library uses CMake presets and Clang. The build helper selects a .NET RID, runs the native tests, and stages the resulting library in `src/NeoAstra.Core/runtimes/<RID>/native`:
 
 ```sh
 python eng/build_native.py --rid win-x64 --clean
@@ -152,7 +176,7 @@ Native tests include a public-header ABI test, common ownership tests, contended
 
 Native CI is configured with explicit `linux-x64-asan-ubsan`, `linux-x64-tsan`, `linux-x64-analysis`, and `macos-x64-asan-ubsan` presets. The ThreadSanitizer test preset selects only the common ownership and contended teardown tests; it does not run browser conformance automation. Sanitizer test presets use fail-fast runtime options, instrument the test executables and shared library, and disable LTO. LeakSanitizer remains disabled until process-global allocations in GTK/WebKitGTK and Apple WebKit have reviewed suppressions. These are configured CI jobs, not evidence that they ran on a Windows development host; run the matching preset on its named host to establish an execution result. ThreadSanitizer remains separate from AddressSanitizer and UndefinedBehaviorSanitizer.
 
-See [`doc/neoastra_specs.md`](doc/neoastra_specs.md) for the current architecture and normative v1 implementation requirements. The planned application-platform evolution is specified by [`doc/neoastra_v2_specs.md`](doc/neoastra_v2_specs.md) and its implementation-step sub-specifications.
+See [`doc/neoastra_specs.md`](doc/neoastra_specs.md) for the original Core architecture. The application-platform design audits under the `neoastra_v2_*` filenames are retained as historical implementation records; their former package and sample names are superseded by the two-package product described above.
 
 ## License
 

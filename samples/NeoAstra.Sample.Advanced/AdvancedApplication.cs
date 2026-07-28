@@ -6,7 +6,7 @@ using NeoAstra.Desktop.Opener;
 using NeoAstra.Desktop.WindowState;
 using NeoAstra.Rpc;
 
-internal sealed class ReferenceApplication(
+internal sealed class AdvancedApplication(
     TourEventHub events,
     TourState state)
 {
@@ -14,7 +14,7 @@ internal sealed class ReferenceApplication(
     internal const string DisplayName = "NeoAstra Advanced Sample";
     internal const string Version = "1.0.0";
 
-    private ReferenceSession? _session;
+    private AdvancedSession? _session;
     private readonly CancellationTokenSource _pulseCancellation = new();
     private Task? _pulseTask;
     private int _stopped;
@@ -74,7 +74,7 @@ internal sealed class ReferenceApplication(
         }
     }
 
-    private async ValueTask<ReferenceSession> CreateSessionAsync(
+    private async ValueTask<AdvancedSession> CreateSessionAsync(
         NeoApplication application,
         NeoWindow mainWindow,
         NeoSingleInstance singleInstance,
@@ -105,7 +105,7 @@ internal sealed class ReferenceApplication(
             .Build();
         await pluginHost.StartAsync(application, cancellationToken);
 
-        var capabilityManifest = ReferenceCapabilities.Load(development);
+        var capabilityManifest = AdvancedCapabilities.Load(development);
         var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions
         {
             ContractHash = NeoRpcGeneratedContract.Hash,
@@ -170,7 +170,7 @@ internal sealed class ReferenceApplication(
 
         var target = development
             ? new Uri(developmentUrl!)
-            : new Uri("app://reference/index.html");
+            : new Uri("app://neoastra/index.html");
         var trustEntireView = !development || OperatingSystem.IsLinux();
 
         NeoAstraOptions ViewOptions(string label) => new()
@@ -215,7 +215,7 @@ internal sealed class ReferenceApplication(
         await mainView.NavigateAsync(target, cancellationToken);
         await previewView.NavigateAsync(target, cancellationToken);
 
-        return new ReferenceSession(
+        return new AdvancedSession(
             singleInstance,
             pluginHost,
             rpc,
@@ -384,7 +384,7 @@ internal sealed class ReferenceApplication(
         }
     }
 
-    private sealed class ReferenceSession(
+    private sealed class AdvancedSession(
         NeoSingleInstance singleInstance,
         NeoPluginHost pluginHost,
         NeoRpcHost rpc,

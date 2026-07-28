@@ -1,3 +1,3 @@
-export function referenceDetails(): string {
-  return "Dynamic reference chunk loaded.";
+export function advancedDetails(): string {
+  return "Dynamic advanced chunk loaded.";
 }

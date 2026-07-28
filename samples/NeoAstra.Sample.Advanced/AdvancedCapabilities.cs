@@ -2,7 +2,7 @@ using NeoAstra;
 using NeoAstra.Desktop;
 using NeoAstra.Rpc;
 
-internal static class ReferenceCapabilities
+internal static class AdvancedCapabilities
 {
     internal static NeoCapabilityManifest Load(bool development)
     {

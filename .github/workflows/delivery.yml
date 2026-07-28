@@ -15,15 +15,15 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            executable: NeoAstra.V2.Reference.exe
+            executable: NeoAstra.Sample.Advanced.exe
             native: neoastra_native.dll
           - os: macos-latest
             rid: osx-arm64
-            executable: NeoAstra.V2.Reference
+            executable: NeoAstra.Sample.Advanced
             native: libneoastra_native.dylib
           - os: ubuntu-latest
             rid: linux-x64
-            executable: NeoAstra.V2.Reference
+            executable: NeoAstra.Sample.Advanced
             native: libneoastra_native.so
     runs-on: ${{ matrix.os }}
     steps:
@@ -34,17 +34,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-${{ matrix.rid }}
-          path: src/NeoAstra/runtimes/${{ matrix.rid }}/native
+          path: src/NeoAstra.Core/runtimes/${{ matrix.rid }}/native
       - name: Restore locked repository dependencies
         run: |
           dotnet restore src/NeoAstra.slnx
-          dotnet restore samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -r ${{ matrix.rid }}
+          dotnet restore samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -r ${{ matrix.rid }}
       - name: Build tooling and run delivery security tests
         run: |
           dotnet build src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-restore
           dotnet test src/NeoAstra.Tests/NeoAstra.Tests.csproj -c Release --no-restore --filter DeliveryTests
-      - name: Publish target NativeAOT reference
-        run: dotnet publish samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -c Release -r ${{ matrix.rid }} --self-contained --no-restore -o artifacts/delivery/publish
+      - name: Publish target NativeAOT advanced sample
+        run: dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -c Release -r ${{ matrix.rid }} --self-contained --no-restore -o artifacts/delivery/publish
       - name: Create host-specific reviewed fixture metadata
         shell: pwsh
         run: |
@@ -52,14 +52,14 @@ jobs:
           Copy-Item img/NeoAstra.png "artifacts/delivery/$icon"
           Copy-Item THIRD-PARTY-NOTICES.md artifacts/delivery/NOTICE.txt
           '{}' | Set-Content -NoNewline artifacts/delivery/assets.json
-          $config = Get-Content samples/NeoAstra.V2.Reference/neoastra.json -Raw | ConvertFrom-Json
+          $config = Get-Content samples/NeoAstra.Sample.Advanced/neoastra.json -Raw | ConvertFrom-Json
           $publishRoot = (Resolve-Path artifacts/delivery/publish).Path
           $files = Get-ChildItem $publishRoot -File -Recurse | Where-Object Extension -notin @('.pdb','.xml') | ForEach-Object { [IO.Path]::GetRelativePath($publishRoot, $_.FullName).Replace('\','/') } | Sort-Object
           $config | Add-Member bundle ([ordered]@{
-            identifier='dev.neoastra.reference'; displayName='NeoAstra v2 Reference'; version='0.1.0'; numericVersion='0.1.0.0'; publisher='CN=NeoAstra Development'; executable='NeoAstra.V2.Reference';
+            identifier='org.neoastra.sample.advanced'; displayName='NeoAstra Advanced Sample'; version='0.1.0'; numericVersion='0.1.0.0'; publisher='CN=NeoAstra Development'; executable='NeoAstra.Sample.Advanced';
             icons=@($icon); rids=@('${{ matrix.rid }}'); targets=@('portable','installer'); files=@($files); notices=@('NOTICE.txt');
             minimumOsVersion='10.0'; runtimeDependencies=@($(if ('${{ runner.os }}' -eq 'Linux') { 'libgtk-3-0, libwebkit2gtk-4.1-0' } elseif ('${{ runner.os }}' -eq 'Windows') { 'Evergreen WebView2 Runtime' } else { 'system WKWebView' }));
-            notificationIdentity='dev.neoastra.reference'; fileAssociations=@([ordered]@{extension='.neoastra-reference';mimeType='application/x-neoastra-reference';role='viewer'}); urlSchemes=@('neoastra-reference'); includeSymbols=$false
+            notificationIdentity='org.neoastra.sample.advanced'; fileAssociations=@([ordered]@{extension='.neoastra-sample';mimeType='application/x-neoastra-sample';role='viewer'}); urlSchemes=@('neoastra-sample'); includeSymbols=$false
           })
           $config | ConvertTo-Json -Depth 12 | Set-Content artifacts/delivery/neoastra.json
       - name: Build deterministic portable and retained installer inputs
@@ -68,11 +68,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory artifacts/delivery/extracted | Out-Null
-          if ('${{ runner.os }}' -eq 'Linux') { tar -xzf "artifacts/delivery/output/NeoAstra.V2.Reference-0.1.0-${{ matrix.rid }}.tar.gz" -C artifacts/delivery/extracted }
-          else { Expand-Archive "artifacts/delivery/output/NeoAstra.V2.Reference-0.1.0-${{ matrix.rid }}.zip" artifacts/delivery/extracted }
+          if ('${{ runner.os }}' -eq 'Linux') { tar -xzf "artifacts/delivery/output/NeoAstra.Sample.Advanced-0.1.0-${{ matrix.rid }}.tar.gz" -C artifacts/delivery/extracted }
+          else { Expand-Archive "artifacts/delivery/output/NeoAstra.Sample.Advanced-0.1.0-${{ matrix.rid }}.zip" artifacts/delivery/extracted }
           $app = Get-ChildItem artifacts/delivery/extracted -Recurse -File -Filter '${{ matrix.executable }}' | Select-Object -First 1
           if ($null -eq $app) { throw 'Portable executable is missing' }
-          & $app.FullName --validate-reference
+          & $app.FullName --validate-advanced
           if ($LASTEXITCODE -ne 0) { throw "Portable launch failed: $LASTEXITCODE" }
       - name: Generate installer package without signing or qualification claim
         run: dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- bundle --config artifacts/delivery/neoastra.json --rid ${{ matrix.rid }} --publish artifacts/delivery/publish --assets-manifest artifacts/delivery/assets.json --output artifacts/delivery/installer --execute-installer
@@ -97,43 +97,43 @@ jobs:
         run: |
           package=$(find artifacts/delivery/installer -maxdepth 1 -name '*.deb' -print -quit)
           sudo dpkg --install "$package"
-          /opt/dev.neoastra.reference/NeoAstra.V2.Reference --validate-reference
+          /opt/org.neoastra.sample.advanced/NeoAstra.Sample.Advanced --validate-advanced
           upgrade=$(find artifacts/delivery/upgrade -maxdepth 1 -name '*.deb' -print -quit)
           sudo dpkg --install "$upgrade"
-          /opt/dev.neoastra.reference/NeoAstra.V2.Reference --validate-reference
+          /opt/org.neoastra.sample.advanced/NeoAstra.Sample.Advanced --validate-advanced
           sudo dpkg --install "$upgrade"
-          sudo dpkg --remove dev-neoastra-reference
-          test ! -e /opt/dev.neoastra.reference
+          sudo dpkg --remove org-neoastra-sample-advanced
+          test ! -e /opt/org.neoastra.sample.advanced
       - name: macOS install, launch, repair-equivalent reinstall, and uninstall smoke
         if: runner.os == 'macOS'
         shell: bash
         run: |
           package=$(find artifacts/delivery/installer -maxdepth 1 -name '*.pkg' -print -quit)
           sudo installer -pkg "$package" -target /
-          '/Applications/NeoAstra.V2.Reference.app/Contents/MacOS/NeoAstra.V2.Reference' --validate-reference
+          '/Applications/NeoAstra.Sample.Advanced.app/Contents/MacOS/NeoAstra.Sample.Advanced' --validate-advanced
           upgrade=$(find artifacts/delivery/upgrade -maxdepth 1 -name '*.pkg' -print -quit)
           sudo installer -pkg "$upgrade" -target /
-          '/Applications/NeoAstra.V2.Reference.app/Contents/MacOS/NeoAstra.V2.Reference' --validate-reference
+          '/Applications/NeoAstra.Sample.Advanced.app/Contents/MacOS/NeoAstra.Sample.Advanced' --validate-advanced
           sudo installer -pkg "$upgrade" -target /
-          sudo rm -rf '/Applications/NeoAstra.V2.Reference.app'
-          sudo pkgutil --forget dev.neoastra.reference || true
-          test ! -e '/Applications/NeoAstra.V2.Reference.app'
+          sudo rm -rf '/Applications/NeoAstra.Sample.Advanced.app'
+          sudo pkgutil --forget org.neoastra.sample.advanced || true
+          test ! -e '/Applications/NeoAstra.Sample.Advanced.app'
       - name: Windows unsigned CI install, launch, re-register repair, and uninstall smoke
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $package = (Get-ChildItem artifacts/delivery/installer/*.msix).FullName
           Add-AppxPackage -Path $package -AllowUnsigned
-          $installed = Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference' | Select-Object -First 1
+          $installed = Get-AppxPackage | Where-Object Name -eq 'org.neoastra.sample.advanced' | Select-Object -First 1
           if ($null -eq $installed) { throw 'MSIX was not installed' }
-          & (Join-Path $installed.InstallLocation 'NeoAstra.V2.Reference.exe') --validate-reference
+          & (Join-Path $installed.InstallLocation 'NeoAstra.Sample.Advanced.exe') --validate-advanced
           Add-AppxPackage -Path (Get-ChildItem artifacts/delivery/upgrade/*.msix).FullName -AllowUnsigned
-          $installed = Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference' | Select-Object -First 1
+          $installed = Get-AppxPackage | Where-Object Name -eq 'org.neoastra.sample.advanced' | Select-Object -First 1
           if ($installed.Version.ToString() -ne '0.1.1.0') { throw "MSIX upgrade did not select 0.1.1.0: $($installed.Version)" }
-          & (Join-Path $installed.InstallLocation 'NeoAstra.V2.Reference.exe') --validate-reference
+          & (Join-Path $installed.InstallLocation 'NeoAstra.Sample.Advanced.exe') --validate-advanced
           Add-AppxPackage -Register (Join-Path $installed.InstallLocation 'AppxManifest.xml') -DisableDevelopmentMode
           Remove-AppxPackage $installed.PackageFullName
-          if (Get-AppxPackage | Where-Object Name -eq 'dev.neoastra.reference') { throw 'MSIX uninstall failed' }
+          if (Get-AppxPackage | Where-Object Name -eq 'org.neoastra.sample.advanced') { throw 'MSIX uninstall failed' }
       - name: Record qualification boundary
         shell: pwsh
         run: |

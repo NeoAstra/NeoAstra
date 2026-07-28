@@ -94,7 +94,7 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
-    public void ReferenceCapabilities_ResolveForReleaseAndRestrictThePreviewView()
+    public void AdvancedCapabilities_ResolveForReleaseAndRestrictThePreviewView()
     {
         var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.Sample.Advanced", "capabilities", "main.json"));
         var catalog = new NeoPermissionCatalogBuilder()

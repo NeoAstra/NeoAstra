@@ -1,6 +1,6 @@
 # Portable frontend transport
 
-NeoAstra v2 bridge-enabled views use the framework-neutral `@neoastra/client` ESM package. The
+NeoAstra bridge-enabled views use the framework-neutral `@neoastra/client` ESM package. The
 managed core injects a document-start bootstrap before returning a new view. Application scripts,
 generated bindings, samples, and harnesses must not inspect WebView2, WKWebView, or WebKitGTK
 objects. The bootstrap is the sole backend adapter and publishes only a non-enumerable, immutable
@@ -31,7 +31,7 @@ Every bridge-enabled `NeoAstraOptions` now requires an immutable `ViewLabel` uni
 application. Keep raw `MessageReceived`/`PostMessageAsync` only for v1 compatibility. Once the
 package handshake is active, managed transport application frames are unwrapped for
 `MessageReceived`, and `PostMessageAsync` wraps a valid object for the active document session.
-Step 2 generated RPC bindings will own those application frame kinds; application code should not
+Generated RPC bindings own those application frame kinds; application code should not
 invent transport control kinds (`hello`, `hello_ack`, `close`, or `diagnostic`).
 
 The sample and browser harnesses copy the built ESM files under `assets/neoastra-client`; this is a
@@ -73,7 +73,7 @@ current navigation, the host creates the separate opaque `documentSessionId` and
 renderer value with that host-owned session. Navigation closes the association, and the coordinator
 retains closed renderer IDs for the view lifetime so replayed hello and application frames cannot bind
 to a replacement document. Security comes from controlled content, native transport admission,
-host-owned view/navigation/session state, bounded framing, and (from later v2 steps) command
+host-owned view/navigation/session state, bounded framing, and command
 capabilities. On Linux, never infer sender origin from the current top-level URI or message timing;
 remote content belongs in a separate bridge-disabled view.
 

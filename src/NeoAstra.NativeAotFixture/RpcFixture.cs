@@ -57,7 +57,7 @@ internal static class RpcFixture
             Console.Error.WriteLine("The NativeAOT RPC fixture result did not match its generated contract.");
             return 3;
         }
-        Console.WriteLine($"NeoAstra RPC NativeAOT fixture passed ({NeoRpcGeneratedContract.Hash}).");
+        Console.WriteLine($"NeoAstra full-platform NativeAOT fixture passed ({NeoRpcGeneratedContract.Hash}).");
         return 0;
 
         static NeoCapabilityPlatform CurrentPlatform() => OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;

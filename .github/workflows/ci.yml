@@ -23,7 +23,7 @@ jobs:
       - run: npm run check
         working-directory: frontend
       - name: Verify generated embedded client assets
-        run: git diff --exit-code -- samples/NeoAstra.Sample/assets/neoastra-client src/NeoAstra.Conformance/assets/neoastra-client src/NeoAstra.Benchmarks/assets/neoastra-client
+        run: git diff --exit-code -- samples/NeoAstra.Sample/assets/neoastra-client samples/NeoAstra.Core.Sample/assets/neoastra-client src/NeoAstra.Conformance/assets/neoastra-client src/NeoAstra.Benchmarks/assets/neoastra-client
 
   managed:
     name: Managed (${{ matrix.os }})
@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           dotnet run --project src/NeoAstra.CodeGen/NeoAstra.CodeGen.csproj -c Release --no-restore
-          git diff --exit-code -- src/NeoAstra/Generated/Interop/NativeMethods.Generated.cs
+          git diff --exit-code -- src/NeoAstra.Core/Generated/Interop/NativeMethods.Generated.cs
       - name: Build
         run: dotnet build src/NeoAstra.slnx -c Release --no-restore
       - name: Verify capability schema and deterministic manifests
@@ -57,8 +57,8 @@ jobs:
         run: |
           mkdir -p artifacts/capabilities
           for platform in windows macos linux; do
-            dotnet run --project src/NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj -c Release --no-build -- resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.first.json"
-            dotnet run --project src/NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj -c Release --no-build -- resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.second.json"
+            dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- capabilities resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.first.json"
+            dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- capabilities resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.second.json"
             cmp "artifacts/capabilities/$platform.first.json" "artifacts/capabilities/$platform.second.json"
           done
       - name: Verify opt-in harness defaults
@@ -67,27 +67,22 @@ jobs:
           dotnet run --project src/NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj -c Release --no-build
       - name: Test
         run: dotnet test src/NeoAstra.slnx -c Release --no-build
-      - name: Publish and execute RPC NativeAOT fixture
+      - name: Publish and execute full-platform NativeAOT fixture
         shell: bash
         run: |
-          dotnet publish src/NeoAstra.Rpc.NativeAotFixture/NeoAstra.Rpc.NativeAotFixture.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/rpc-nativeaot
-          ./artifacts/rpc-nativeaot/NeoAstra.Rpc.NativeAotFixture${{ matrix.os == 'windows-latest' && '.exe' || '' }}
-          git diff --exit-code -- src/NeoAstra.Rpc.NativeAotFixture/generated
-          cmp src/NeoAstra.Rpc.NativeAotFixture/generated/neoastra.ts frontend/fixtures/generated/neoastra.ts
-      - name: Publish and execute desktop NativeAOT fixture
-        shell: bash
-        run: |
-          dotnet publish src/NeoAstra.Desktop.NativeAotFixture/NeoAstra.Desktop.NativeAotFixture.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/desktop-nativeaot
-          ./artifacts/desktop-nativeaot/NeoAstra.Desktop.NativeAotFixture${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          dotnet publish src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/full-nativeaot
+          ./artifacts/full-nativeaot/NeoAstra.NativeAotFixture${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          git diff --exit-code -- src/NeoAstra.NativeAotFixture/generated
+          cmp src/NeoAstra.NativeAotFixture/generated/neoastra.ts frontend/fixtures/generated/neoastra.ts
       - name: Publish NativeAOT sample
         run: dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
-      - name: Inspect and publish v2 reference assets under NativeAOT
+      - name: Inspect and publish advanced sample assets under NativeAOT
         shell: bash
         run: |
-          dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.V2.Reference/neoastra.json > artifacts/reference-inspect.json
-          dotnet publish samples/NeoAstra.V2.Reference/NeoAstra.V2.Reference.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/v2-reference
-          ./artifacts/v2-reference/NeoAstra.V2.Reference${{ matrix.os == 'windows-latest' && '.exe' || '' }} --validate-reference
-          git diff --exit-code -- samples/NeoAstra.V2.Reference/generated samples/NeoAstra.V2.Reference/ClientApp/src/generated
+          dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.Sample.Advanced/neoastra.json > artifacts/advanced-inspect.json
+          dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/advanced
+          ./artifacts/advanced/NeoAstra.Sample.Advanced${{ matrix.os == 'windows-latest' && '.exe' || '' }} --validate-advanced
+          git diff --exit-code -- samples/NeoAstra.Sample.Advanced/generated samples/NeoAstra.Sample.Advanced/ClientApp/src/generated
 
   native:
     uses: ./.github/workflows/native.yml
@@ -131,7 +126,7 @@ jobs:
         shell: bash
         run: |
           export NEOASTRA_NATIVE_LIBRARY="$PWD/artifacts/desktop-native/${{ matrix.library }}"
-          command=(dotnet run --project src/NeoAstra.Desktop.NativeAotFixture/NeoAstra.Desktop.NativeAotFixture.csproj -c Release -- --native-smoke)
+          command=(dotnet run --project src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -- --native-smoke)
           if [[ "${{ runner.os }}" == "Linux" ]]; then xvfb-run -a "${command[@]}"; else "${command[@]}"; fi
 
   package:
@@ -149,58 +144,55 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-win-x64
-          path: src/NeoAstra/runtimes/win-x64/native
+          path: src/NeoAstra.Core/runtimes/win-x64/native
       - uses: actions/download-artifact@v4
         with:
           name: native-win-arm64
-          path: src/NeoAstra/runtimes/win-arm64/native
+          path: src/NeoAstra.Core/runtimes/win-arm64/native
       - uses: actions/download-artifact@v4
         with:
           name: native-linux-x64
-          path: src/NeoAstra/runtimes/linux-x64/native
+          path: src/NeoAstra.Core/runtimes/linux-x64/native
       - uses: actions/download-artifact@v4
         with:
           name: native-linux-arm64
-          path: src/NeoAstra/runtimes/linux-arm64/native
+          path: src/NeoAstra.Core/runtimes/linux-arm64/native
       - uses: actions/download-artifact@v4
         with:
           name: native-osx-x64
-          path: src/NeoAstra/runtimes/osx-x64/native
+          path: src/NeoAstra.Core/runtimes/osx-x64/native
       - uses: actions/download-artifact@v4
         with:
           name: native-osx-arm64
-          path: src/NeoAstra/runtimes/osx-arm64/native
+          path: src/NeoAstra.Core/runtimes/osx-arm64/native
       - name: Build and pack
         shell: pwsh
         run: |
           dotnet restore src/NeoAstra.slnx
           dotnet build src/NeoAstra.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
+          dotnet pack src/NeoAstra.Core/NeoAstra.Core.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra/NeoAstra.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Rpc/NeoAstra.Rpc.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Rpc.Generator/NeoAstra.Rpc.Generator.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Hosting/NeoAstra.Hosting.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Desktop/NeoAstra.Desktop.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Capabilities.Tool/NeoAstra.Capabilities.Tool.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -o artifacts/packages
-          dotnet pack src/NeoAstra.Sdk/NeoAstra.Sdk.csproj -c Release --no-build -o artifacts/packages
           dotnet pack src/NeoAstra.Templates/NeoAstra.Templates.csproj -c Release --no-build -o artifacts/packages
-          dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
-          & artifacts/nativeaot/NeoAstra.Sample.exe --validate-native-library
+          dotnet publish samples/NeoAstra.Core.Sample/NeoAstra.Core.Sample.csproj -c Release -r win-x64 --self-contained -o artifacts/nativeaot
+          & artifacts/nativeaot/NeoAstra.Core.Sample.exe --validate-native-library
       - name: Verify native package assets
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $package = Get-ChildItem artifacts/packages/NeoAstra.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Rpc*' } | Select-Object -First 1
-          $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
-          $entries = $archive.Entries.FullName
-          $archive.Dispose()
+          $runtimePackages = @(Get-ChildItem artifacts/packages/*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Tool.*' -and $_.Name -notlike 'NeoAstra.Templates.*' })
+          if ($runtimePackages.Count -ne 2) { throw "Expected exactly NeoAstra and NeoAstra.Core runtime packages; found $($runtimePackages.Name -join ', ')" }
+          $corePackage = Get-ChildItem artifacts/packages/NeoAstra.Core.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
+          $coreArchive = [IO.Compression.ZipFile]::OpenRead($corePackage.FullName)
+          $coreEntries = $coreArchive.Entries.FullName
+          $coreArchive.Dispose()
           @(
             'license.txt',
             'THIRD-PARTY-NOTICES.md',
             'docs/platform-support.md',
             'docs/known-limitations.md',
-             'docs/frontend-transport.md',
-             'docs/rpc-and-bindings.md',
+            'docs/frontend-transport.md',
+            'lib/net10.0/NeoAstra.Core.dll',
             'build/native/include/neoastra.h',
             'build/native/include/neoastra_version.h',
             'runtimes/win-x64/native/neoastra_native.dll',
@@ -209,54 +201,73 @@ jobs:
             'runtimes/linux-arm64/native/libneoastra_native.so',
             'runtimes/osx-x64/native/libneoastra_native.dylib',
             'runtimes/osx-arm64/native/libneoastra_native.dylib'
-          ) | ForEach-Object { if ($_ -notin $entries) { throw "Missing package asset: $_" } }
-          $symbolPackage = Get-ChildItem artifacts/packages/*.snupkg | Select-Object -First 1
-          if ($null -eq $symbolPackage) { throw 'Missing managed symbol package' }
-          $symbolArchive = [IO.Compression.ZipFile]::OpenRead($symbolPackage.FullName)
-          $symbolEntries = $symbolArchive.Entries.FullName
-          $symbolArchive.Dispose()
-          if ('lib/net10.0/NeoAstra.pdb' -notin $symbolEntries) { throw 'Missing managed symbols' }
-          $rpcPackage = Get-ChildItem artifacts/packages/NeoAstra.Rpc.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Rpc.Generator*' } | Select-Object -First 1
-          $rpcArchive = [IO.Compression.ZipFile]::OpenRead($rpcPackage.FullName)
-          $rpcEntries = $rpcArchive.Entries.FullName
-          $rpcArchive.Dispose()
-          @('lib/net10.0/NeoAstra.Rpc.dll', 'docs/rpc-and-bindings.md', 'docs/capabilities-and-security.md', 'schemas/neoastra-capabilities-v1.schema.json') | ForEach-Object { if ($_ -notin $rpcEntries) { throw "Missing RPC package asset: $_" } }
-          $desktopPackage = Get-ChildItem artifacts/packages/NeoAstra.Desktop.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
-          $desktopArchive = [IO.Compression.ZipFile]::OpenRead($desktopPackage.FullName)
-          $desktopEntries = $desktopArchive.Entries.FullName
-          $desktopArchive.Dispose()
-          @('lib/net10.0/NeoAstra.Desktop.dll', 'docs/desktop-services.md', 'plugins/neoastra.desktop.essentials/neoastra.plugin.json', 'plugins/neoastra.desktop.essentials/schemas/dialogs.scope.schema.json', 'plugins/neoastra.desktop.essentials/schemas/clipboard.scope.schema.json', 'plugins/neoastra.desktop.essentials/schemas/notifications.scope.schema.json', 'plugins/neoastra.desktop.essentials/schemas/url.scope.schema.json', 'plugins/neoastra.desktop.essentials/schemas/filesystem.scope.schema.json', 'plugins/neoastra.desktop.essentials/schemas/shortcuts.scope.schema.json') | ForEach-Object { if ($_ -notin $desktopEntries) { throw "Missing desktop package asset: $_" } }
-          $generatorPackage = Get-ChildItem artifacts/packages/NeoAstra.Rpc.Generator.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
-          $generatorArchive = [IO.Compression.ZipFile]::OpenRead($generatorPackage.FullName)
-          $generatorEntries = $generatorArchive.Entries.FullName
-          $generatorArchive.Dispose()
-          @('analyzers/dotnet/cs/NeoAstra.Rpc.Generator.dll', 'buildTransitive/NeoAstra.Rpc.Generator.targets') | ForEach-Object { if ($_ -notin $generatorEntries) { throw "Missing generator package asset: $_" } }
-          $toolPackage = Get-ChildItem artifacts/packages/NeoAstra.Capabilities.Tool.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
-          $toolArchive = [IO.Compression.ZipFile]::OpenRead($toolPackage.FullName)
-          $toolEntries = $toolArchive.Entries.FullName
-          $toolArchive.Dispose()
-          @('tools/net10.0/any/NeoAstra.Capabilities.Tool.dll', 'schemas/neoastra-capabilities-v1.schema.json') | ForEach-Object { if ($_ -notin $toolEntries) { throw "Missing capability tool asset: $_" } }
+          ) | ForEach-Object { if ($_ -notin $coreEntries) { throw "Missing Core package asset: $_" } }
+          $package = Get-ChildItem artifacts/packages/NeoAstra.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Core.*' -and $_.Name -notlike 'NeoAstra.Tool.*' -and $_.Name -notlike 'NeoAstra.Templates.*' } | Select-Object -First 1
+          $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
+          $entries = $archive.Entries.FullName
+          $archive.Dispose()
+          @('lib/net10.0/NeoAstra.dll', 'analyzers/dotnet/cs/NeoAstra.Generator.dll', 'buildTransitive/NeoAstra.props', 'buildTransitive/NeoAstra.targets', 'tools/net10.0/any/NeoAstra.Tool.dll', 'docs/rpc-and-bindings.md', 'docs/desktop-services.md', 'plugins/neoastra.desktop.essentials/neoastra.plugin.json', 'schemas/neoastra-capabilities-v1.schema.json') | ForEach-Object { if ($_ -notin $entries) { throw "Missing NeoAstra package asset: $_" } }
           $frontendToolPackage = Get-ChildItem artifacts/packages/NeoAstra.Tool.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
           $frontendToolArchive = [IO.Compression.ZipFile]::OpenRead($frontendToolPackage.FullName)
           $frontendToolEntries = $frontendToolArchive.Entries.FullName
           $frontendToolArchive.Dispose()
           @('tools/net10.0/any/NeoAstra.Tool.dll', 'tools/net10.0/any/DotnetToolSettings.xml', 'schemas/neoastra-project-v1.schema.json', 'schemas/neoastra-staging-manifest-v1.schema.json', 'schemas/neoastra-update-manifest-v1.schema.json', 'delivery-and-updates.md') | ForEach-Object { if ($_ -notin $frontendToolEntries) { throw "Missing frontend tool package asset: $_" } }
-          $sdkPackage = Get-ChildItem artifacts/packages/NeoAstra.Sdk.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
-          $sdkArchive = [IO.Compression.ZipFile]::OpenRead($sdkPackage.FullName)
-          $sdkEntries = $sdkArchive.Entries.FullName
-          $sdkArchive.Dispose()
-          @('buildTransitive/NeoAstra.Sdk.props', 'buildTransitive/NeoAstra.Sdk.targets', 'tools/net10.0/any/NeoAstra.Tool.dll', 'schemas/neoastra-project-v1.schema.json', 'schemas/neoastra-staging-manifest-v1.schema.json', 'schemas/neoastra-update-manifest-v1.schema.json', 'docs/frontend-tooling-and-assets.md', 'docs/delivery-and-updates.md') | ForEach-Object { if ($_ -notin $sdkEntries) { throw "Missing SDK package asset: $_" } }
+          if ($frontendToolEntries | Where-Object { $_ -match '(?:^|/)(?:lib)?neoastra[_-]native(?:\.|/)' }) { throw 'NeoAstra.Tool must not duplicate native runtime assets' }
           $templatePackage = Get-ChildItem artifacts/packages/NeoAstra.Templates.*.nupkg | Where-Object Name -NotLike '*.snupkg' | Select-Object -First 1
           if ($null -eq $templatePackage) { throw 'Missing template package' }
           $templateArchive = [IO.Compression.ZipFile]::OpenRead($templatePackage.FullName)
           $templateEntries = $templateArchive.Entries.FullName
           $templateArchive.Dispose()
           @('content/neoastra-vanilla/.template.config/template.json', 'content/neoastra-react/.template.config/template.json', 'content/neoastra-vue/.template.config/template.json') | ForEach-Object { if ($_ -notin $templateEntries) { throw "Missing template package asset: $_" } }
+      - name: Verify one-reference package consumer
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem artifacts/packages/NeoAstra.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Core.*' -and $_.Name -notlike 'NeoAstra.Tool.*' -and $_.Name -notlike 'NeoAstra.Templates.*' } | Select-Object -First 1
+          $version = $package.BaseName.Substring('NeoAstra.'.Length)
+          $consumer = Join-Path $PWD artifacts/package-consumer
+          New-Item -ItemType Directory -Force $consumer | Out-Null
+          @"
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup>
+            <ItemGroup><PackageReference Include="NeoAstra" Version="$version" /></ItemGroup>
+          </Project>
+          "@ | Set-Content (Join-Path $consumer Consumer.csproj)
+          Copy-Item samples/NeoAstra.Sample/Program.cs (Join-Path $consumer Program.cs)
+          @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration><packageSources><clear /><add key="local" value="$PWD/artifacts/packages" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
+          "@ | Set-Content (Join-Path $consumer NuGet.config)
+          dotnet restore (Join-Path $consumer Consumer.csproj) --configfile (Join-Path $consumer NuGet.config)
+          dotnet build (Join-Path $consumer Consumer.csproj) -c Release --no-restore
+          @('ClientApp/src/generated/neoastra.ts', 'obj/neoastra/neoastra.manifest.json', 'obj/neoastra/neoastra.schema.json') | ForEach-Object { if (-not (Test-Path (Join-Path $consumer $_))) { throw "Embedded generator output is missing: $_" } }
+          if (Select-String -Path (Join-Path $consumer obj/project.assets.json) -Pattern 'NeoAstra.Generator/' -Quiet) { throw 'Generator must be an analyzer asset, not a package dependency' }
+      - name: Verify clean application templates
+        shell: pwsh
+        run: |
+          $runtimePackage = Get-ChildItem artifacts/packages/NeoAstra.*.nupkg | Where-Object { $_.Name -notlike '*.snupkg' -and $_.Name -notlike 'NeoAstra.Core.*' -and $_.Name -notlike 'NeoAstra.Tool.*' -and $_.Name -notlike 'NeoAstra.Templates.*' } | Select-Object -First 1
+          $version = $runtimePackage.BaseName.Substring('NeoAstra.'.Length)
+          $templatePackage = Get-ChildItem artifacts/packages/NeoAstra.Templates.*.nupkg | Select-Object -First 1
+          $root = Join-Path $PWD artifacts/template-consumers
+          $hive = Join-Path $root hive
+          dotnet new install $templatePackage.FullName --debug:custom-hive $hive
+          dotnet new neoastra -n VanillaApp -o (Join-Path $root VanillaApp) --neoAstraVersion $version --debug:custom-hive $hive
+          dotnet new neoastra-react -n ReactApp -o (Join-Path $root ReactApp) --neoAstraVersion $version --debug:custom-hive $hive
+          @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration><packageSources><clear /><add key="local" value="$PWD/artifacts/packages" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
+          "@ | Set-Content (Join-Path $root NuGet.config)
+          foreach ($name in @('VanillaApp', 'ReactApp')) {
+            $project = Get-ChildItem (Join-Path $root $name) -Filter *.csproj | Select-Object -First 1
+            if ((Select-String -Path $project.FullName -Pattern '<PackageReference').Count -ne 1) { throw "$name must contain one package reference" }
+            if (Test-Path (Join-Path $project.DirectoryName neoastra.json)) { throw "$name must use convention-based defaults" }
+            dotnet restore $project.FullName --configfile (Join-Path $root NuGet.config)
+            dotnet build $project.FullName -c Release --no-restore
+          }
       - name: Verify managed Source Link
         shell: pwsh
         run: |
           $symbolPackages = @(Get-ChildItem artifacts/packages/*.snupkg)
-          if ($symbolPackages.Count -lt 2) { throw "Expected core and desktop managed symbol packages; found $($symbolPackages.Count)" }
+          if ($symbolPackages.Count -lt 2) { throw "Expected Core and full managed symbol packages; found $($symbolPackages.Count)" }
           $commit = git rev-parse HEAD
           foreach ($symbolPackage in $symbolPackages) {
             & eng/verify_sourcelink.ps1 -SymbolPackage $symbolPackage.FullName -Repository xoofx/NeoAstra -Commit $commit

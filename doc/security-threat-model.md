@@ -1,4 +1,4 @@
-# NeoAstra v2 security threat model
+# NeoAstra security threat model
 
 ## Assets and boundaries
 

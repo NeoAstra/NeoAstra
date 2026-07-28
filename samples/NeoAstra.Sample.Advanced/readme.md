@@ -35,7 +35,7 @@ dotnet run --project samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.c
 
 For Visual Studio, add `NEOASTRA_DEV_URL=http://127.0.0.1:5173` to the project's debug environment.
 Without that variable, the application intentionally serves the deterministic prebuilt `ClientApp/dist`
-files through `app://reference`.
+files through `app://neoastra`.
 
 ## What to try
 
@@ -60,7 +60,7 @@ feature.
 ## Validation and publish
 
 ```powershell
-dotnet run --project samples/NeoAstra.Sample.Advanced -- --validate-reference
+dotnet run --project samples/NeoAstra.Sample.Advanced -- --validate-advanced
 dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj `
   -c Release -r win-x64 --self-contained
 ```
@@ -71,9 +71,9 @@ manifest, two-view capability model, and generated RPC contract without opening 
 ## Code map
 
 - `Program.cs` — standalone NeoAstra process entry point and deterministic cleanup.
-- `ReferenceApplication.cs` — windows, views, lifecycle, native menu, plugins, and bindings.
-- `ReferenceCapabilities.cs` and `capabilities/main.json` — explicit permission catalog and per-view grants.
-- `ReferenceRpc.cs` — generated RPC service, channel, event, cancellation, and state.
-- `ReferenceValidation.cs` — noninteractive release validation.
+- `AdvancedApplication.cs` — windows, views, lifecycle, native menu, plugins, and bindings.
+- `AdvancedCapabilities.cs` and `capabilities/main.json` — explicit permission catalog and per-view grants.
+- `AdvancedRpc.cs` — generated RPC service, channel, event, cancellation, and state.
+- `AdvancedValidation.cs` — noninteractive release validation.
 - `ClientApp/src/App.tsx` — tour shell and restricted preview.
 - `ClientApp/src/*Tour.tsx` — focused, readable feature demonstrations.

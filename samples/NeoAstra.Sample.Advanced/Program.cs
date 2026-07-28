@@ -2,32 +2,32 @@ using System.Text.Json.Serialization;
 using NeoAstra;
 using NeoAstra.Rpc;
 
-[assembly: NeoRpcJsonContext(typeof(ReferenceJsonContext))]
+[assembly: NeoRpcJsonContext(typeof(AdvancedJsonContext))]
 
 internal static class Program
 {
     [STAThread]
     internal static int Main(string[] args)
     {
-        if (args is ["--validate-reference"])
+        if (args is ["--validate-advanced"])
         {
-            return ReferenceValidation.Run();
+            return AdvancedValidation.Run();
         }
 
-        var reference = new ReferenceApplication(new TourEventHub(), new TourState());
+        var advanced = new AdvancedApplication(new TourEventHub(), new TourState());
         try
         {
             return NeoApplication.Run(
                 new NeoApplicationOptions
                 {
-                    ApplicationName = ReferenceApplication.DisplayName,
+                    ApplicationName = AdvancedApplication.DisplayName,
                     ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed,
                 },
-                application => reference.StartAsync(application, CancellationToken.None));
+                application => advanced.StartAsync(application, CancellationToken.None));
         }
         finally
         {
-            reference.StopAsync().AsTask().GetAwaiter().GetResult();
+            advanced.StopAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 }
@@ -43,4 +43,4 @@ internal static class Program
 [JsonSerializable(typeof(TourStreamItem))]
 [JsonSerializable(typeof(TourStreamRequest))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
-internal sealed partial class ReferenceJsonContext : JsonSerializerContext;
+internal sealed partial class AdvancedJsonContext : JsonSerializerContext;

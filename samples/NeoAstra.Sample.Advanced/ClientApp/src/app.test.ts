@@ -8,10 +8,10 @@ import {
   createMockRpcHarness,
 } from "@neoastra/client/testing";
 import { neoRpcContractHash } from "./generated/neoastra";
-import { withReferenceContract } from "./tour-api";
+import { withAdvancedContract } from "./tour-api";
 
 const observedContractHashes: Array<string | undefined> = [];
-const contractRpc = withReferenceContract({
+const contractRpc = withAdvancedContract({
   async invoke<TRequest, TResult>(_command: string, _args: TRequest, options?: NeoRpcCallOptions) {
     observedContractHashes.push(options?.contractHash);
     return undefined as TResult;
@@ -39,8 +39,8 @@ rpc.register("tour.hello", ({ args }) => {
 const greeting = await rpc.client.invoke<
   { name: string },
   { message: string; viewLabel: string }
->("tour.hello", { name: "reference" });
-if (greeting.message !== "Hello, reference!" || greeting.viewLabel !== "main") {
+>("tour.hello", { name: "advanced" });
+if (greeting.message !== "Hello, advanced!" || greeting.viewLabel !== "main") {
   throw new Error("Mock typed RPC result did not match the feature-tour contract.");
 }
 rpc.close();
