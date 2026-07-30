@@ -31,6 +31,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: src/global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
       - uses: actions/download-artifact@v4
         with:
           name: native-${{ matrix.rid }}

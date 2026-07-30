@@ -19,7 +19,7 @@
 
 ## Assumptions and open decisions
 - Resolved: frontend building is enabled by default only when frontend integration is detected/configured; a narrow property must disable command execution without disabling generated RPC contracts.
-- Resolved: dependency installation remains explicit and is not run implicitly by `dotnet build`.
+- Superseded on 2026-07-30: a later approved follow-up allows incremental `npm ci` during `dotnet build` only for explicitly configured npm projects with a committed `frontend.root/package-lock.json`; missing locks fail and no package manager is installed or inferred.
 - Resolved: no frontend technology is hard-coded; conventions may recognize package projects, while explicit configuration can run any bounded command or use prebuilt/plain assets.
 - Resolved: no browser/window-opening tests.
 
@@ -65,3 +65,4 @@
 - Used a small `dotnet neoastra frontend fingerprint` command rather than adding Microsoft.Build assembly dependencies to the packaged tool. This keeps strict configuration resolution and file validation in the existing framework-neutral tool while native MSBuild `Inputs`/`Outputs` provide target skipping.
 - Browser-free integration coverage uses `dotnet msbuild` as the configured frontend command with `packageManager: none`, proving the configured path does not require Node.
 - Release build passed twice (the second skipped asset preparation), and all 162 tests passed. Dependency-backed npm fixtures were not run because `node_modules` was absent; no dependencies were installed.
+- Approved follow-up: committed npm lockfiles now authorize incremental `npm ci`; `NeoAstra.Sample.Advanced` exercises restore, Vite build, staging, normal output, and publish end to end, while `packageManager: none`, prebuilt mode, and non-npm projects retain their no-automatic-npm behavior.

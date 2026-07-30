@@ -48,7 +48,7 @@ Normative configuration rules:
 - Release fails on development-only settings unless explicitly overridden with a prominent diagnostic;
 - configuration supports MSBuild property overrides for CI without making output non-reproducible;
 - resolved configuration can be printed as inspectable JSON with secrets redacted;
-- package installation is never automatic during build or publish.
+- npm dependency restore is automatic only when the project explicitly selects npm and commits/configures `frontend.root/package-lock.json`; missing lockfiles fail closed, non-npm/plain projects are not inferred, and prebuilt mode performs no restore.
 
 ## 3. Tool responsibilities
 
@@ -64,7 +64,7 @@ The SDK SHOULD own deterministic build integration:
 - copy/embed only the validated output;
 - produce metadata consumed by Step 7;
 - support `--no-frontend-build` only with an already validated explicit asset directory;
-- avoid running package-manager restore/install unexpectedly.
+- run configured locked npm restore incrementally before frontend build, with explicit opt-out/prebuilt behavior and no package-manager installation;
 
 ### 3.2 `dotnet neoastra`
 

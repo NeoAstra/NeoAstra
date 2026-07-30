@@ -4,7 +4,7 @@
 [`doc/neoastra_specs.md`](../../doc/neoastra_specs.md). It uses a normal React/Vite frontend and
 public NeoAstra APIs; it does not contain raw WebView bridge code.
 
-## Run the prebuilt frontend
+## Build and run the complete application
 
 From the repository root:
 
@@ -12,30 +12,34 @@ From the repository root:
 dotnet run --project samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj
 ```
 
+The committed `ClientApp/package-lock.json` makes this a single-command clean-checkout build: NeoAstra runs
+locked `npm ci` when dependencies are absent or stale, runs the configured Vite production build when frontend
+inputs changed, validates/stages exact assets, and copies them to the regular managed output. Node.js 20.19 or later
+and npm must be available on `PATH`; NeoAstra does not install the package manager itself.
+
 In Visual Studio, set `NeoAstra.Sample.Advanced` as the startup project and run it without command-line
 arguments. A second launch does not create another app instance: it securely routes the launch to the
 existing window.
 
 ## Frontend development with HMR
 
-Install the repository frontend dependencies as documented in the root readme, then run Vite:
+Run the coordinated development command from the repository root:
 
 ```powershell
-cd samples/NeoAstra.Sample.Advanced/ClientApp
-npm install
-npm run dev
+dotnet neoastra dev --config samples/NeoAstra.Sample.Advanced/neoastra.json
 ```
 
-In another terminal, point the managed host at Vite:
+It restores the committed npm graph when needed, updates generated contracts, starts Vite, waits for exact-loopback
+readiness, and then starts the watched backend without launching a competing production frontend build. When using
+the tool directly from this source checkout, the equivalent command is:
 
 ```powershell
-$env:NEOASTRA_DEV_URL = "http://127.0.0.1:5173"
-dotnet run --project samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj
+dotnet run --project src/NeoAstra.Tool -- dev --config samples/NeoAstra.Sample.Advanced/neoastra.json
 ```
 
-For Visual Studio, add `NEOASTRA_DEV_URL=http://127.0.0.1:5173` to the project's debug environment.
-Without that variable, the application intentionally serves the deterministic prebuilt `ClientApp/dist`
-files through `app://neoastra`.
+Without the development URL, the application serves the current production `ClientApp/dist` graph through
+`app://neoastra`. For reviewed offline builds, pass `NeoAstraPrebuiltAssets=true` and set
+`NeoAstraPrebuiltAssetDirectory` to the checked `ClientApp/dist`; prebuilt mode performs no npm restore or build.
 
 ## What to try
 

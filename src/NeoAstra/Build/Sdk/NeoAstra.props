@@ -4,6 +4,7 @@
     <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/ClientApp/package.json'))">true</NeoAstraFrontendEnabled>
     <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == ''">false</NeoAstraFrontendEnabled>
     <NeoAstraBuildFrontend Condition="'$(NeoAstraBuildFrontend)' == ''">true</NeoAstraBuildFrontend>
+    <NeoAstraRestoreFrontendDependencies Condition="'$(NeoAstraRestoreFrontendDependencies)' == ''">true</NeoAstraRestoreFrontendDependencies>
     <NeoAstraPrebuiltAssets Condition="'$(NeoAstraPrebuiltAssets)' == ''">false</NeoAstraPrebuiltAssets>
     <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == ''">$(MSBuildThisFileDirectory)..\tools\net10.0\any\NeoAstra.Tool.dll</NeoAstraToolPath>
     <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == '' and '$(DotNetHostPath)' != ''">$(DotNetHostPath)</NeoAstraDotNetHost>

@@ -6,14 +6,13 @@
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <NeoRpcTypeScriptOutput>$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
     <NeoRpcManifestOutput>$(MSBuildProjectDirectory)/generated/neoastra.manifest.json</NeoRpcManifestOutput>
     <NeoRpcSchemaOutput>$(MSBuildProjectDirectory)/generated/neoastra.schema.json</NeoRpcSchemaOutput>
     <NeoAstraToolPath>$(MSBuildThisFileDirectory)../../src/NeoAstra.Tool/bin/$(Configuration)/net10.0/NeoAstra.Tool.dll</NeoAstraToolPath>
-    <NeoAstraPrebuiltAssets>true</NeoAstraPrebuiltAssets>
-    <NeoAstraPrebuiltAssetDirectory>$(MSBuildProjectDirectory)/ClientApp/dist</NeoAstraPrebuiltAssetDirectory>
   </PropertyGroup>
 
   <ItemGroup>

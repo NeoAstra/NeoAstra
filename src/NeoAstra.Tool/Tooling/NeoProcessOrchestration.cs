@@ -246,7 +246,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
     {
         if (project.AllowRemoteDevServer) Console.Error.WriteLine("WARNING: insecure remote development server opt-in is active; release policy is unchanged.");
         static void Log(string label, string line, bool error) => (error ? Console.Error : Console.Out).WriteLine($"[{label}] {line}");
-        await using (var contract = processFactory.Start(new("contract", project.ContractCommand, project.ProjectDirectory, project.Environment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
+        var contractEnvironment = new Dictionary<string, string>(project.Environment, StringComparer.OrdinalIgnoreCase) { ["NeoAstraBuildFrontend"] = "false" };
+        await using (var contract = processFactory.Start(new("contract", project.ContractCommand, project.ProjectDirectory, contractEnvironment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
         {
             var contractExit = await contract.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
             if (contractExit != 0) return contractExit;

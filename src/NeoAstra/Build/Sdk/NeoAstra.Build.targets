@@ -10,6 +10,7 @@
 
   <PropertyGroup>
     <_NeoAstraPrepareFrontend Condition="'$(NeoAstraFrontendEnabled)' == 'true' and ('$(NeoAstraBuildFrontend)' == 'true' or '$(NeoAstraPrebuiltAssets)' == 'true') and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">true</_NeoAstraPrepareFrontend>
+    <_NeoAstraRestoreFrontend Condition="'$(_NeoAstraPrepareFrontend)' == 'true' and '$(NeoAstraPrebuiltAssets)' != 'true' and '$(NeoAstraRestoreFrontendDependencies)' == 'true'">true</_NeoAstraRestoreFrontend>
   </PropertyGroup>
 
   <Target Name="NeoAstraVerifyContracts" AfterTargets="Compile"
@@ -17,7 +18,12 @@
     <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; contract check --typescript &quot;$(NeoRpcTypeScriptOutput)&quot; --manifest &quot;$(NeoRpcManifestOutput)&quot;" />
   </Target>
 
-  <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts"
+  <Target Name="NeoAstraRestoreFrontendPackages" DependsOnTargets="Compile;NeoAstraVerifyContracts"
+          Condition="'$(_NeoAstraRestoreFrontend)' == 'true'">
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; frontend restore --config &quot;$(NeoAstraProjectConfig)&quot;" />
+  </Target>
+
+  <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts;NeoAstraRestoreFrontendPackages"
           Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
     <PropertyGroup>
       <NeoAstraFrontendIntermediateDirectory Condition="'$(NeoAstraFrontendIntermediateDirectory)' == ''">$(IntermediateOutputPath)neoastra/frontend</NeoAstraFrontendIntermediateDirectory>

@@ -28,7 +28,8 @@
     ],
     "dist": "ClientApp/dist",
     "spaFallback": "index.html",
-    "packageManager": "none",
+    "packageManager": "npm",
+    "lockfile": "ClientApp/package-lock.json",
     "generatedContract": "ClientApp/src/generated/neoastra.ts"
   },
   "assets": {

@@ -278,6 +278,40 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task FrontendDependencyRestore_UsesCommittedNpmLockfileAndIncrementalState()
+    {
+        using var fixture = new ProjectFixture();
+        var frontend = Path.Combine(fixture.Root, "Client App");
+        var lockfile = Path.Combine(frontend, "package-lock.json");
+        File.WriteAllText(Path.Combine(frontend, "package.json"), "{\"name\":\"restore-fixture\"}");
+        File.WriteAllText(lockfile, "{\"lockfileVersion\":3}");
+        File.WriteAllText(fixture.ConfigurationPath, File.ReadAllText(fixture.ConfigurationPath)
+            .Replace("\"packageManager\": \"none\"", "\"packageManager\": \"npm\", \"lockfile\": \"Client App/package-lock.json\"", StringComparison.Ordinal));
+        var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath);
+        var first = new FakeProcess(); first.Exit(0);
+        var changed = new FakeProcess(); changed.Exit(0);
+        var failed = new FakeProcess(); failed.Exit(19);
+        var factory = new FakeFactory([], first, changed, failed);
+        var restorer = new NeoFrontendDependencyRestorer(factory);
+
+        Assert.IsTrue(await restorer.RestoreAsync(project));
+        CollectionAssert.AreEqual(new[] { "npm", "ci", "--no-audit", "--no-fund" }, factory.Starts[0].Command.Arguments.ToArray());
+        Assert.IsFalse(await restorer.RestoreAsync(project));
+        Assert.HasCount(1, factory.Starts);
+
+        File.WriteAllText(lockfile, "{\"lockfileVersion\":3,\"changed\":true}");
+        Assert.IsTrue(await restorer.RestoreAsync(project));
+        Assert.HasCount(2, factory.Starts);
+
+        File.WriteAllText(lockfile, "{\"lockfileVersion\":3,\"changed\":\"again\"}");
+        Assert.AreEqual("package_restore_failed", (await Assert.ThrowsExactlyAsync<NeoToolException>(() => restorer.RestoreAsync(project))).Code);
+        Assert.IsFalse(File.Exists(Path.Combine(frontend, "node_modules", ".neoastra-restore.sha256")));
+
+        File.Delete(lockfile);
+        Assert.AreEqual("lockfile_missing", (await Assert.ThrowsExactlyAsync<NeoToolException>(() => restorer.RestoreAsync(project))).Code);
+    }
+
+    [TestMethod]
     public async Task IntegratedFrontendBuild_IsIncrementalAndFeedsBuildRunAndPublishOutputs()
     {
         using var fixture = new IntegratedBuildFixture();
@@ -349,6 +383,7 @@ public sealed class ToolingTests
         Assert.IsTrue(frontend.Stopped); Assert.IsTrue(backend.Stopped);
         CollectionAssert.AreEqual(project.ContractCommand.Arguments.ToArray(), factory.Starts[0].Command.Arguments.ToArray());
         CollectionAssert.AreEqual(project.DevCommand.Arguments.ToArray(), factory.Starts[1].Command.Arguments.ToArray());
+        Assert.AreEqual("false", factory.Starts[0].Environment["NeoAstraBuildFrontend"]);
         Assert.AreEqual("false", factory.Starts[2].Environment["NeoAstraBuildFrontend"]);
     }
 

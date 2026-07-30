@@ -22,7 +22,7 @@ internal static class NeoCommandPolicy
         var executable = Path.GetFileNameWithoutExtension(project.BuildCommand.Executable);
         var packageManager = Path.GetFileNameWithoutExtension(project.PackageManager);
         if (InstallerExecutables.Contains(executable) || executable.Equals(packageManager, StringComparison.OrdinalIgnoreCase) && project.BuildCommand.Arguments.Skip(1).Any(InstallerVerbs.Contains))
-            throw new NeoToolException("implicit_install", "The production build command must not install or update packages; restore explicit locked dependencies before invoking NeoAstra.");
+            throw new NeoToolException("implicit_install", "The production build command must not install or update packages; NeoAstra restores configured locked npm dependencies in a separate incremental step.");
     }
 }
 

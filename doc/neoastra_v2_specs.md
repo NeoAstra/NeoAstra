@@ -134,7 +134,7 @@ WebView2 / WKWebView / WebKitGTK and native OS services
 | `@neoastra/client` | Portable frontend transport, invoke/events/channels/resources, diagnostics | Depend on a UI framework or directly expose privileged backend globals |
 | `NeoAstra.Hosting` | Optional DI/configuration/logging/background-service integration | Become mandatory for core or RPC use |
 | `NeoAstra.Desktop.*` | Optional native desktop service contracts and adapters | Expose frontend commands without grants |
-| `NeoAstra.Sdk` | MSBuild integration for frontend build/assets/contracts | Install packages or execute arbitrary network operations implicitly |
+| `NeoAstra.Sdk` | MSBuild integration for locked frontend restore/build/assets/contracts | Install a package manager, perform unlocked dependency installation, or access the network without an explicitly configured committed lockfile |
 | `NeoAstra.Templates` | Vanilla TypeScript and selected SPA scaffolds | Fork or wrap frontend frameworks |
 | `NeoAstra.Bundle` | Inspectable bundle/sign/update orchestration | Store signing credentials or hide platform tools |
 | `NeoAstra.Testing` | Mocks, deterministic host, automation hooks | Weaken production policy |
