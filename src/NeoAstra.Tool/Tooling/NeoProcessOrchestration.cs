@@ -258,7 +258,12 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
             var first = await Task.WhenAny(ready, frontend.Completion).ConfigureAwait(false);
             if (first == frontend.Completion) return await frontend.Completion.ConfigureAwait(false) is 0 ? 1 : frontend.ExitCode!.Value;
             await ready.ConfigureAwait(false);
-            var backendEnvironment = new Dictionary<string, string>(project.Environment, StringComparer.OrdinalIgnoreCase) { ["NEOASTRA_ENVIRONMENT"] = "Development", ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri };
+            var backendEnvironment = new Dictionary<string, string>(project.Environment, StringComparer.OrdinalIgnoreCase)
+            {
+                ["NEOASTRA_ENVIRONMENT"] = "Development",
+                ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri,
+                ["NeoAstraBuildFrontend"] = "false",
+            };
             await using var backend = processFactory.Start(new("backend", project.BackendCommand, project.ProjectDirectory, backendEnvironment, project.SecretEnvironment, (line, error) => Log("backend", line, error)));
             using var registration = cancellationToken.Register(() => { });
             var cancellation = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);

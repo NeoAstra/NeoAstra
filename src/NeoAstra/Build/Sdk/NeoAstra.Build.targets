@@ -8,28 +8,81 @@
     <CompilerVisibleProperty Include="NeoRpcBaselineManifest" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <_NeoAstraPrepareFrontend Condition="'$(NeoAstraFrontendEnabled)' == 'true' and ('$(NeoAstraBuildFrontend)' == 'true' or '$(NeoAstraPrebuiltAssets)' == 'true') and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">true</_NeoAstraPrepareFrontend>
+  </PropertyGroup>
+
   <Target Name="NeoAstraVerifyContracts" AfterTargets="Compile"
-          Condition="'$(NeoAstraFrontendEnabled)' == 'true' and '$(NeoRpcTypeScriptOutput)' != '' and '$(NeoRpcManifestOutput)' != ''">
+          Condition="'$(NeoAstraFrontendEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(NeoRpcTypeScriptOutput)' != '' and '$(NeoRpcManifestOutput)' != ''">
     <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; contract check --typescript &quot;$(NeoRpcTypeScriptOutput)&quot; --manifest &quot;$(NeoRpcManifestOutput)&quot;" />
   </Target>
 
-  <Target Name="NeoAstraPrepareFrontend" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="Compile;NeoAstraVerifyContracts"
-          Condition="'$(NeoAstraFrontendEnabled)' == 'true'">
+  <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
     <PropertyGroup>
-      <NeoAstraAssetManifest Condition="'$(NeoAstraAssetManifest)' == ''">$(IntermediateOutputPath)neoastra/assets/neoastra-assets.json</NeoAstraAssetManifest>
-      <NeoAstraAssetOutput Condition="'$(NeoAstraAssetOutput)' == ''">$(IntermediateOutputPath)neoastra/assets/package</NeoAstraAssetOutput>
+      <NeoAstraFrontendIntermediateDirectory Condition="'$(NeoAstraFrontendIntermediateDirectory)' == ''">$(IntermediateOutputPath)neoastra/frontend</NeoAstraFrontendIntermediateDirectory>
+      <NeoAstraFrontendFingerprint Condition="'$(NeoAstraFrontendFingerprint)' == ''">$(NeoAstraFrontendIntermediateDirectory)/inputs.sha256</NeoAstraFrontendFingerprint>
+      <NeoAstraFrontendStamp Condition="'$(NeoAstraFrontendStamp)' == ''">$(NeoAstraFrontendIntermediateDirectory)/prepared.stamp</NeoAstraFrontendStamp>
+      <NeoAstraAssetManifest Condition="'$(NeoAstraAssetManifest)' == ''">$(NeoAstraFrontendIntermediateDirectory)/neoastra-assets.json</NeoAstraAssetManifest>
+      <NeoAstraAssetOutput Condition="'$(NeoAstraAssetOutput)' == ''">$(NeoAstraFrontendIntermediateDirectory)/assets</NeoAstraAssetOutput>
     </PropertyGroup>
+    <ItemGroup>
+      <_NeoAstraFrontendFingerprintInput Include="$(NeoRpcTypeScriptOutput)" Condition="Exists('$(NeoRpcTypeScriptOutput)')" />
+      <_NeoAstraFrontendFingerprintInput Include="$(NeoRpcManifestOutput)" Condition="Exists('$(NeoRpcManifestOutput)')" />
+      <_NeoAstraFrontendFingerprintInput Include="@(NeoAstraFrontendInput)" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_NeoAstraPrebuiltFingerprintArgument Condition="'$(NeoAstraPrebuiltAssets)' == 'true'">--prebuilt &quot;$(NeoAstraPrebuiltAssetDirectory)&quot;</_NeoAstraPrebuiltFingerprintArgument>
+      <_NeoAstraFrontendFingerprintArguments>@(_NeoAstraFrontendFingerprintInput-&gt;'--input &quot;%(FullPath)&quot;', ' ')</_NeoAstraFrontendFingerprintArguments>
+    </PropertyGroup>
+    <Error Condition="'$(NeoAstraPrebuiltAssets)' == 'true' and '$(NeoAstraPrebuiltAssetDirectory)' == ''" Text="Prebuilt mode requires an explicit NeoAstraPrebuiltAssetDirectory." />
+    <MakeDir Directories="$(NeoAstraFrontendIntermediateDirectory)" />
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; frontend fingerprint --config &quot;$(NeoAstraProjectConfig)&quot; --output &quot;$(NeoAstraFrontendFingerprint)&quot; --invalidate &quot;$(NeoAstraFrontendStamp)&quot; --configuration &quot;$(Configuration)&quot; $(_NeoAstraPrebuiltFingerprintArgument) $(_NeoAstraFrontendFingerprintArguments)" />
+    <ItemGroup>
+      <FileWrites Include="$(NeoAstraFrontendFingerprint)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraPrepareFrontend" DependsOnTargets="NeoAstraComputeFrontendFingerprint"
+          Inputs="$(NeoAstraFrontendFingerprint)" Outputs="$(NeoAstraFrontendStamp);$(NeoAstraAssetManifest)"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
     <PropertyGroup>
       <_NeoAstraPrebuiltArgument Condition="'$(NeoAstraPrebuiltAssets)' == 'true'">--prebuilt &quot;$(NeoAstraPrebuiltAssetDirectory)&quot;</_NeoAstraPrebuiltArgument>
       <_NeoAstraDevelopmentArgument Condition="'$(NeoAstraAllowDevelopmentSettingsInRelease)' == 'true'">--allow-development-settings</_NeoAstraDevelopmentArgument>
       <_NeoAstraDevUrlArgument Condition="'$(NeoAstraDevUrl)' != ''">--dev-url &quot;$(NeoAstraDevUrl)&quot;</_NeoAstraDevUrlArgument>
     </PropertyGroup>
-    <Error Condition="'$(NeoAstraPrebuiltAssets)' == 'true' and '$(NeoAstraPrebuiltAssetDirectory)' == ''" Text="Prebuilt mode requires an explicit NeoAstraPrebuiltAssetDirectory." />
     <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; assets --config &quot;$(NeoAstraProjectConfig)&quot; --manifest &quot;$(NeoAstraAssetManifest)&quot; --copy &quot;$(NeoAstraAssetOutput)&quot; $(_NeoAstraPrebuiltArgument) $(_NeoAstraDevelopmentArgument) $(_NeoAstraDevUrlArgument)" />
+    <Touch Files="$(NeoAstraFrontendStamp)" AlwaysCreate="true" />
     <ItemGroup>
-      <_NeoAstraAssetFile Include="$(NeoAstraAssetOutput)\**\*" />
-      <ResolvedFileToPublish Include="@(_NeoAstraAssetFile)">
-        <RelativePath>assets/%(_NeoAstraAssetFile.RecursiveDir)%(_NeoAstraAssetFile.Filename)%(_NeoAstraAssetFile.Extension)</RelativePath>
+      <FileWrites Include="$(NeoAstraFrontendStamp);$(NeoAstraAssetManifest)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraReadPreparedFrontend" DependsOnTargets="NeoAstraPrepareFrontend"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
+    <ItemGroup>
+      <_NeoAstraAssetFile Include="$(NeoAstraAssetOutput)/**/*" Exclude="$(NeoAstraAssetOutput)/neoastra-assets.json" />
+      <_NeoAstraAssetManifestFile Include="$(NeoAstraAssetOutput)/neoastra-assets.json" />
+      <FileWrites Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraCopyFrontendToOutput" AfterTargets="CopyFilesToOutputDirectory" DependsOnTargets="NeoAstraReadPreparedFrontend"
+          Inputs="$(NeoAstraFrontendStamp)" Outputs="$(OutDir)assets/neoastra-assets.json"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
+    <RemoveDir Directories="$(OutDir)assets" />
+    <Copy SourceFiles="@(_NeoAstraAssetFile)" DestinationFiles="@(_NeoAstraAssetFile-&gt;'$(OutDir)assets/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_NeoAstraAssetManifestFile)" DestinationFiles="@(_NeoAstraAssetManifestFile-&gt;'$(OutDir)assets/%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <FileWrites Include="$(OutDir)assets/**/*" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraAddAssetsToPublish" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="NeoAstraReadPreparedFrontend"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
+        <RelativePath>assets/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
     </ItemGroup>

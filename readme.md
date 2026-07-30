@@ -125,8 +125,9 @@ Before exposing RPC to a renderer, follow [the capability and security guide](do
 including its fail-closed host setup, platform provenance limits, [threat model](doc/security-threat-model.md),
 and reviewed capability configuration for advanced/scoped applications.
 Use [the frontend tooling, secure assets, and templates guide](doc/frontend-tooling-and-assets.md)
-for convention-based projects, optional `neoastra.json` overrides, `dotnet neoastra dev/init/doctor/inspect`, generated-contract ordering,
-manifest-only SPA hosting, offline/prebuilt publish, and the vanilla/React/Vue templates.
+for framework-neutral incremental frontend preparation during normal `dotnet build`/`dotnet run`, convention-based projects,
+optional `neoastra.json` overrides, `dotnet neoastra dev/init/doctor/inspect`, generated-contract ordering, manifest-only SPA hosting,
+plain-JavaScript/no-Node and offline/prebuilt workflows, and the vanilla/React/Vue templates.
 Use [the application lifecycle and hosting guide](doc/application-lifecycle-and-hosting.md) for async unsaved-work close,
 deterministic quit ordering, early launch events, authenticated second-instance routing, explicit DI scopes, and platform session-end limitations.
 Use [the plugins and desktop services guide](doc/desktop-services.md) for static plugin composition, renderer authority boundaries,

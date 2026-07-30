@@ -35,14 +35,4 @@
 
   <Import Project="../../src/NeoAstra/Build/Sdk/NeoAstra.props" />
   <Import Project="../../src/NeoAstra/Build/Sdk/NeoAstra.Build.targets" />
-
-  <Target
-    Name="NeoAstraCopyAdvancedFrontend"
-    AfterTargets="Build"
-    DependsOnTargets="NeoAstraPrepareFrontend">
-    <Copy
-      SourceFiles="@(_NeoAstraAssetFile)"
-      DestinationFiles="@(_NeoAstraAssetFile-&gt;'$(OutDir)assets/%(RecursiveDir)%(Filename)%(Extension)')"
-      SkipUnchangedFiles="true" />
-  </Target>
 </Project>

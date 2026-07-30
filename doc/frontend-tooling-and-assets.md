@@ -24,14 +24,19 @@ dotnet neoastra dev
 
 The tool first runs the configured `contractCommand` (default `dotnet build --no-restore`) so generated bindings are current, then starts the configured frontend command in `frontend.root`, labels/redacts output, probes the exact `devUrl` without following redirects, and starts the configured backend command only after readiness. Generated defaults use `127.0.0.1`; `localhost` is rejected. `::1` is also accepted. Other IP literals require `allowRemoteDevServer: true` and produce a prominent warning. The exact configured origin alone is trusted. Ctrl+C, readiness timeout, or either unexpected child exit tears down both process trees within a bounded interval and returns nonzero for unexpected failures. Frontend HMR remains Vite's responsibility; C# restart remains `dotnet watch`'s responsibility.
 
-## Publish and MSBuild properties
+## Build, run, publish, and MSBuild properties
 
-Reference only the `NeoAstra` package. Its integrated publish target runs after C# compilation so the embedded RPC generator finishes first, compares the generated TypeScript header with the SHA-256 of the generated backend manifest, runs the configured production build, generates `neoastra-assets.json`, re-verifies every hash while copying, and adds exactly the staging directory to publish output.
+Reference only the `NeoAstra` package. When frontend work is configured, normal `dotnet build` runs it after C# compilation so the embedded RPC generator finishes first, compares the generated TypeScript header with the SHA-256 of the generated backend manifest, runs the configured production command, generates `neoastra-assets.json`, and re-verifies every hash while copying an exact staging directory under `obj`. The same prepared assets are copied to `bin/.../assets`, so ordinary `dotnet run` consumes regular build output. Publish reuses that preparation instead of requiring a publish-only frontend build.
+
+The production command is framework-neutral: it is exactly the `frontend.buildCommand` argument array from configuration. It may invoke any locally available build tool and does not imply Vite, React, TypeScript, Node.js, or a package manager. A plain HTML/CSS/JavaScript application may continue to use ordinary SDK `Content`/`None` copy items with frontend integration disabled, use a non-Node configured copy/build command, or select reviewed prebuilt assets. NeoAstra never installs frontend dependencies.
+
+The targets fingerprint the effective configuration, configuration name, frontend tree, lockfile, generated RPC contract outputs, declared extra inputs, and NeoAstra tool version. The configured `dist` directory, `node_modules`, and VCS metadata are excluded from normal-build inputs. Content changes, additions, and deletions therefore rerun preparation, while an unchanged build skips the production command. Preparation and output copies synchronize exact directories so removed assets do not survive a rerun; `dotnet clean` removes tracked preparation/output files and causes the next build to prepare again.
 
 | Property | Meaning |
 | --- | --- |
 | `NeoAstraProjectConfig` | Optional configuration path; defaults to `$(MSBuildProjectDirectory)/neoastra.json`, with conventions used when absent |
 | `NeoAstraFrontendEnabled` | Explicitly disables frontend work when `false` |
+| `NeoAstraBuildFrontend` | Skips the configured production command and preparation when `false`; explicit prebuilt mode still validates and stages its reviewed directory |
 | `NeoAstraAssetManifest` / `NeoAstraAssetOutput` | Intermediate manifest/staging paths; CI may relocate them under `obj` |
 | `NeoAstraPrebuiltAssets` | Selects explicit prebuilt mode when `true` |
 | `NeoAstraPrebuiltAssetDirectory` | Required prebuilt directory; it must equal the resolved configured `dist` path |
@@ -39,9 +44,21 @@ Reference only the `NeoAstra` package. Its integrated publish target runs after 
 | `NeoAstraDevUrl` | CI/development URL override; it remains subject to the same exact loopback policy and does not affect production manifest output |
 | `NeoAstraAllowDevelopmentSettingsInRelease` | Prominent explicit override for a reviewed remote-dev setting; does not change production origin/CSP/capabilities |
 
-Normal publish (dependencies already restored):
+Additional files or directories that affect a custom frontend build can be declared with `NeoAstraFrontendInput` items. The generated TypeScript and manifest outputs are included automatically when present:
+
+```xml
+<ItemGroup>
+  <NeoAstraFrontendInput Include="frontend-build.config.json" />
+</ItemGroup>
+```
+
+`dotnet neoastra dev` sets `NeoAstraBuildFrontend=false` for its backend child so `dotnet watch` does not launch a competing production build while the configured development/HMR process is active. Design-time builds also skip production preparation.
+
+Normal build/run and publish (dependencies already restored):
 
 ```sh
+dotnet build -c Release
+dotnet run -c Release --no-build
 dotnet publish -c Release -r win-x64 --self-contained
 ```
 

@@ -27,7 +27,7 @@ Run after locked restore, release frontend asset generation, and NativeAOT publi
 
 ```sh
 dotnet neoastra bundle --config neoastra.json --rid win-x64 \
-  --publish artifacts/publish --assets-manifest obj/Release/neoastra/assets/neoastra-assets.json \
+  --publish artifacts/publish --assets-manifest obj/Release/net10.0/neoastra/frontend/neoastra-assets.json \
   --output artifacts/bundle
 ```
 

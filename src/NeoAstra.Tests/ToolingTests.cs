@@ -233,6 +233,110 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void FrontendFingerprint_TracksEffectiveInputsAndExcludesBuildOutput()
+    {
+        using var fixture = new ProjectFixture();
+        var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath);
+        var source = Path.Combine(project.FrontendRoot, "source.js");
+        var generated = Path.Combine(fixture.Root, "generated.js");
+        var output = Path.Combine(fixture.Root, "obj", "inputs.sha256");
+        Directory.CreateDirectory(project.DistDirectory);
+        File.WriteAllText(source, "console.log('first');");
+        File.WriteAllText(Path.Combine(project.DistDirectory, "index.html"), "first");
+
+        var initial = NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []);
+        File.WriteAllText(Path.Combine(project.DistDirectory, "index.html"), "changed output");
+        Assert.AreEqual(initial, NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []), "Normal-build output must not feed its own fingerprint.");
+
+        File.WriteAllText(source, "console.log('second');");
+        var sourceChanged = NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []);
+        Assert.AreNotEqual(initial, sourceChanged);
+        File.Delete(source);
+        var sourceDeleted = NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []);
+        Assert.AreNotEqual(sourceChanged, sourceDeleted);
+
+        var changedConfiguration = File.ReadAllText(fixture.ConfigurationPath)
+            .Replace("Fixture", "Changed fixture", StringComparison.Ordinal)
+            .Replace("\"packageManager\": \"none\"", "\"packageManager\": \"none\", \"lockfile\": \"external.lock\"", StringComparison.Ordinal);
+        File.WriteAllText(fixture.ConfigurationPath, changedConfiguration);
+        var lockfile = Path.Combine(fixture.Root, "external.lock");
+        File.WriteAllText(lockfile, "lock-v1");
+        project = NeoProjectConfiguration.Load(fixture.ConfigurationPath);
+        var configurationChanged = NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []);
+        Assert.AreNotEqual(sourceDeleted, configurationChanged);
+        File.WriteAllText(lockfile, "lock-v2");
+        Assert.AreNotEqual(configurationChanged, NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", []));
+
+        File.WriteAllText(generated, "generated-v1");
+        var generatedChanged = NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", [generated]);
+        File.WriteAllText(generated, "generated-v2");
+        Assert.AreNotEqual(generatedChanged, NeoFrontendFingerprint.Write(project, output, prebuilt: false, "Debug", [generated]));
+
+        var prebuilt = NeoFrontendFingerprint.Write(project, output, prebuilt: true, "Debug", []);
+        File.WriteAllText(Path.Combine(project.DistDirectory, "index.html"), "changed prebuilt output");
+        Assert.AreNotEqual(prebuilt, NeoFrontendFingerprint.Write(project, output, prebuilt: true, "Debug", []));
+    }
+
+    [TestMethod]
+    public async Task IntegratedFrontendBuild_IsIncrementalAndFeedsBuildRunAndPublishOutputs()
+    {
+        using var fixture = new IntegratedBuildFixture();
+        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+
+        var first = await fixture.BuildAsync();
+        StringAssert.Contains(first, "FRONTEND_EXECUTED");
+        Assert.AreEqual("first", File.ReadAllText(fixture.BuiltIndex));
+
+        var unchanged = await fixture.BuildAsync();
+        Assert.IsFalse(unchanged.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
+
+        File.WriteAllText(fixture.SourcePath, "second");
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+        Assert.AreEqual("second", File.ReadAllText(fixture.BuiltIndex));
+
+        var added = Path.Combine(fixture.FrontendRoot, "added.js");
+        File.WriteAllText(added, "added");
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+        File.Delete(added);
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+
+        File.WriteAllText(fixture.ConfigurationPath, File.ReadAllText(fixture.ConfigurationPath).Replace("Integrated fixture", "Changed fixture", StringComparison.Ordinal));
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+
+        fixture.WriteContract(2);
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+
+        File.WriteAllText(fixture.SourcePath, "opted-out");
+        var optedOut = await fixture.BuildAsync("-p:NeoAstraBuildFrontend=false");
+        Assert.IsFalse(optedOut.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
+        Assert.IsFalse(File.Exists(fixture.BuiltIndex));
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+
+        var publishDirectory = Path.Combine(fixture.Root, "publish");
+        var published = await fixture.RunDotNetAsync("publish", fixture.ProjectPath, "--no-restore", "--nologo", "-c", "Debug", "-o", publishDirectory);
+        Assert.IsFalse(published.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
+        Assert.AreEqual("opted-out", File.ReadAllText(Path.Combine(publishDirectory, "assets", "index.html")));
+
+        File.WriteAllText(Path.Combine(fixture.PreparedAssets, "stale.js"), "stale");
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.BuiltIndex)!, "stale.js"), "stale");
+        File.WriteAllText(fixture.SourcePath, "stale-removed");
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.PreparedAssets, "stale.js")));
+        Assert.IsFalse(File.Exists(Path.Combine(Path.GetDirectoryName(fixture.BuiltIndex)!, "stale.js")));
+
+        File.WriteAllText(fixture.DistIndex, "explicit prebuilt");
+        var prebuilt = await fixture.BuildAsync("-p:NeoAstraPrebuiltAssets=true", $"-p:NeoAstraPrebuiltAssetDirectory={fixture.DistDirectory}");
+        Assert.IsFalse(prebuilt.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
+        Assert.AreEqual("explicit prebuilt", File.ReadAllText(fixture.BuiltIndex));
+
+        await fixture.RunDotNetAsync("clean", fixture.ProjectPath, "--nologo", "-c", "Debug");
+        StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
+
+        await fixture.RunDotNetAsync("restore", fixture.DisabledProjectPath, "--nologo");
+        await fixture.RunDotNetAsync("build", fixture.DisabledProjectPath, "--no-restore", "--nologo", "-c", "Debug");
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_OrdersReadinessBeforeBackendAndStopsBothOnFailure()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -245,6 +349,7 @@ public sealed class ToolingTests
         Assert.IsTrue(frontend.Stopped); Assert.IsTrue(backend.Stopped);
         CollectionAssert.AreEqual(project.ContractCommand.Arguments.ToArray(), factory.Starts[0].Command.Arguments.ToArray());
         CollectionAssert.AreEqual(project.DevCommand.Arguments.ToArray(), factory.Starts[1].Command.Arguments.ToArray());
+        Assert.AreEqual("false", factory.Starts[2].Environment["NeoAstraBuildFrontend"]);
     }
 
     [TestMethod]
@@ -255,6 +360,133 @@ public sealed class ToolingTests
         Assert.AreEqual(7, await new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1)));
         CollectionAssert.AreEqual(new[] { "start:contract", "start:frontend", "readiness" }, order);
         Assert.AreEqual(2, factory.Starts.Count); Assert.IsTrue(frontend.Stopped);
+    }
+
+    private sealed class IntegratedBuildFixture : IDisposable
+    {
+        private readonly string _targetsPath;
+        private readonly string _toolPath;
+
+        internal IntegratedBuildFixture()
+        {
+            Root = Path.Combine(Path.GetTempPath(), "neoastra-integrated-build-" + Guid.NewGuid().ToString("N"));
+            FrontendRoot = Path.Combine(Root, "ClientApp");
+            DistDirectory = Path.Combine(FrontendRoot, "dist");
+            SourcePath = Path.Combine(FrontendRoot, "source.txt");
+            DistIndex = Path.Combine(DistDirectory, "index.html");
+            ConfigurationPath = Path.Combine(Root, "neoastra.json");
+            ProjectPath = Path.Combine(Root, "Fixture.csproj");
+            DisabledProjectPath = Path.Combine(Root, "Disabled", "Disabled.csproj");
+            var repository = FindRepositoryRoot();
+            var propsPath = Path.Combine(repository, "src", "NeoAstra", "Build", "Sdk", "NeoAstra.props");
+            _targetsPath = Path.Combine(repository, "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets");
+            _toolPath = Path.Combine(repository, "src", "NeoAstra.Tool", "bin", "Release", "net10.0", "NeoAstra.Tool.dll");
+            Assert.IsTrue(File.Exists(_toolPath), "NeoAstra.Tool must be built before its MSBuild integration test.");
+
+            Directory.CreateDirectory(FrontendRoot);
+            File.WriteAllText(SourcePath, "first");
+            File.WriteAllText(Path.Combine(FrontendRoot, "frontend.proj"), """
+                <Project>
+                  <Target Name="BuildFrontend">
+                    <Message Text="FRONTEND_EXECUTED" Importance="high" />
+                    <MakeDir Directories="dist" />
+                    <Copy SourceFiles="source.txt" DestinationFiles="dist/index.html" />
+                  </Target>
+                </Project>
+                """);
+            File.WriteAllText(ConfigurationPath, """
+                {
+                  "$schema": "neoastra-project-v1.schema.json",
+                  "version": 1,
+                  "app": { "identifier": "dev.neoastra.integrated", "displayName": "Integrated fixture" },
+                  "frontend": {
+                    "root": "ClientApp", "devCommand": ["dotnet", "--info"], "devUrl": "http://127.0.0.1:5173",
+                    "buildCommand": ["dotnet", "msbuild", "frontend.proj", "-nologo", "-v:minimal", "-t:BuildFrontend"],
+                    "dist": "ClientApp/dist", "spaFallback": "index.html", "packageManager": "none"
+                  },
+                  "assets": {
+                    "origin": "app://integrated", "cacheHashedAssets": true,
+                    "csp": "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'"
+                  },
+                  "capabilities": []
+                }
+                """);
+            WriteContract(1);
+            File.WriteAllText(ProjectPath, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <Import Project="{{Xml(propsPath)}}" />
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <NeoAstraToolPath>{{Xml(_toolPath)}}</NeoAstraToolPath>
+                    <NeoRpcTypeScriptOutput>{{Xml(Path.Combine(Root, "generated.ts"))}}</NeoRpcTypeScriptOutput>
+                    <NeoRpcManifestOutput>{{Xml(Path.Combine(Root, "generated.manifest.json"))}}</NeoRpcManifestOutput>
+                  </PropertyGroup>
+                  <Import Project="{{Xml(_targetsPath)}}" />
+                </Project>
+                """);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(DisabledProjectPath)!);
+            File.WriteAllText(DisabledProjectPath, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <Import Project="{{Xml(propsPath)}}" />
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <NeoAstraFrontendEnabled>false</NeoAstraFrontendEnabled>
+                    <NeoAstraToolPath>{{Xml(Path.Combine(Root, "missing-tool.dll"))}}</NeoAstraToolPath>
+                  </PropertyGroup>
+                  <Import Project="{{Xml(_targetsPath)}}" />
+                </Project>
+                """);
+        }
+
+        internal string Root { get; }
+        internal string FrontendRoot { get; }
+        internal string DistDirectory { get; }
+        internal string DistIndex { get; }
+        internal string ConfigurationPath { get; }
+        internal string SourcePath { get; }
+        internal string ProjectPath { get; }
+        internal string DisabledProjectPath { get; }
+        internal string BuiltIndex => Path.Combine(Root, "bin", "Debug", "net10.0", "assets", "index.html");
+        internal string PreparedAssets => Path.Combine(Root, "obj", "Debug", "net10.0", "neoastra", "frontend", "assets");
+
+        internal void WriteContract(int version)
+        {
+            var manifest = Encoding.UTF8.GetBytes($"{{\"version\":{version}}}\n");
+            File.WriteAllBytes(Path.Combine(Root, "generated.manifest.json"), manifest);
+            var hash = Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant();
+            File.WriteAllText(Path.Combine(Root, "generated.ts"), $"// <auto-generated by NeoAstra.Generator; contract {hash}>\n");
+        }
+
+        internal Task<string> BuildAsync(params string[] additionalArguments) =>
+            RunDotNetCoreAsync(["build", ProjectPath, "--no-restore", "--nologo", "-c", "Debug", .. additionalArguments]);
+
+        internal Task<string> RunDotNetAsync(params string[] arguments) => RunDotNetCoreAsync(arguments);
+
+        private async Task<string> RunDotNetCoreAsync(IReadOnlyList<string> arguments)
+        {
+            var start = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                WorkingDirectory = Root,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            foreach (var argument in arguments) start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            var output = await stdout + await stderr;
+            Assert.AreEqual(0, process.ExitCode, output);
+            return output;
+        }
+
+        public void Dispose() { try { Directory.Delete(Root, recursive: true); } catch { } }
+
+        private static string Xml(string value) => System.Security.SecurityElement.Escape(value)!;
     }
 
     private sealed class ProjectFixture : IDisposable

@@ -22,6 +22,7 @@ static async Task<int> MainAsync(string[] args)
             "init" => Init(args),
             "dev" => await DevAsync(args).ConfigureAwait(false),
             "assets" => await AssetsAsync(args).ConfigureAwait(false),
+            "frontend" => Frontend(args),
             "contract" => Contract(args),
             "bundle" => Bundle(args),
             "capabilities" => CapabilityCommand.Run(args[1..]),
@@ -98,6 +99,23 @@ static async Task<int> AssetsAsync(string[] args)
     }
     var hash = NeoAssetManifestBuilder.Build(project, manifest); if (copy is not null) NeoAssetManifestBuilder.CopyManifestAssets(manifest, project.DistDirectory, copy);
     Console.WriteLine($"Validated {project.DistDirectory}; asset manifest SHA-256 {hash}."); return 0;
+}
+
+static int Frontend(string[] args)
+{
+    if (args.Length < 2 || args[1] != "fingerprint") throw new NeoToolException("frontend_usage", "Usage: dotnet neoastra frontend fingerprint --config <file> --output <file> [--invalidate <stamp>] [--configuration <name>] [--prebuilt <explicit-dist>] [--input <path>]...");
+    var project = Load(args, 2);
+    var prebuilt = Optional(args, "--prebuilt");
+    if (prebuilt is not null && !Path.GetFullPath(prebuilt, project.ProjectDirectory).Equals(project.DistDirectory, PathComparison()))
+        throw new NeoToolException("prebuilt_directory", "Prebuilt mode requires the explicit configured dist directory.");
+    ValidateLockfile(project);
+    var output = Required(args, "--output");
+    var previous = File.Exists(output) ? File.ReadAllText(output, Encoding.UTF8).Trim() : null;
+    var fingerprint = NeoFrontendFingerprint.Write(project, output, prebuilt is not null,
+        Optional(args, "--configuration") ?? string.Empty, Values(args, "--input"));
+    if (previous != fingerprint && Optional(args, "--invalidate") is { } invalidated) File.Delete(invalidated);
+    Console.WriteLine($"Frontend input fingerprint {fingerprint} is current.");
+    return 0;
 }
 
 static int Contract(string[] args)
@@ -209,4 +227,4 @@ static void WriteFindings(List<(string Id, string Status, string Detail)> findin
 static string PackageCommand(string manager) => manager switch { "npm" => "npm install @neoastra/client --save", "pnpm" => "pnpm add @neoastra/client", "yarn" => "yarn add @neoastra/client", "bun" => "bun add @neoastra/client", "none" => "add @neoastra/client using your existing dependency workflow", _ => throw new NeoToolException("package_manager", "Unknown package manager.") };
 static string CreateConfiguration(string identifier, string name, string root, IReadOnlyList<string> dev, string devUrl, IReadOnlyList<string> build, string dist, string packageManager) { using var stream = new MemoryStream(); using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true })) { writer.WriteStartObject(); writer.WriteString("$schema", "neoastra-project-v1.schema.json"); writer.WriteNumber("version", 1); writer.WriteStartObject("app"); writer.WriteString("identifier", identifier); writer.WriteString("displayName", name); writer.WriteEndObject(); writer.WriteStartObject("frontend"); writer.WriteString("root", root); WriteArray(writer, "devCommand", dev); writer.WriteString("devUrl", devUrl); WriteArray(writer, "buildCommand", build); writer.WriteString("dist", dist); writer.WriteString("spaFallback", "index.html"); writer.WriteString("packageManager", packageManager); if (packageManager != "none") writer.WriteString("lockfile", Path.Combine(root, packageManager == "npm" ? "package-lock.json" : packageManager == "pnpm" ? "pnpm-lock.yaml" : packageManager == "yarn" ? "yarn.lock" : "bun.lock")); writer.WriteEndObject(); writer.WriteStartObject("assets"); writer.WriteString("origin", "app://neoastra"); writer.WriteBoolean("cacheHashedAssets", true); writer.WriteString("csp", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"); writer.WriteEndObject(); writer.WriteStartArray("capabilities"); writer.WriteEndArray(); writer.WriteEndObject(); } return Encoding.UTF8.GetString(stream.ToArray()); }
 static void WriteArray(Utf8JsonWriter writer, string name, IReadOnlyList<string> values) { writer.WriteStartArray(name); foreach (var value in values) writer.WriteStringValue(value); writer.WriteEndArray(); }
-static void Usage() => Console.WriteLine("NeoAstra tooling (no telemetry)\n  inspect|doctor|dev [--config neoastra.json] [--json]\n  assets --config <file> --manifest <file> [--copy <dir>] [--prebuilt <explicit-dist>]\n  bundle --config <file> --rid <rid> --publish <dir> --assets-manifest <file> --output <dir> [--dry-run] [--execute-installer] [--sign --signing-identity-env <name>]\n  capabilities resolve --capabilities <file> --catalog <file> --platform <windows|macos|linux> --configuration <Release|Debug> <output>\n  contract check --typescript <file> --manifest <file>\n  init --dry-run --frontend-root <dir> --dev-command <arg>... --dev-url <url> --build-command <arg>... --dist <dir> --identifier <id> --display-name <name> --package-manager <npm|pnpm|yarn|bun|none>");
+static void Usage() => Console.WriteLine("NeoAstra tooling (no telemetry)\n  inspect|doctor|dev [--config neoastra.json] [--json]\n  frontend fingerprint --config <file> --output <file> [--invalidate <stamp>] [--configuration <name>] [--prebuilt <explicit-dist>] [--input <path>]...\n  assets --config <file> --manifest <file> [--copy <dir>] [--prebuilt <explicit-dist>]\n  bundle --config <file> --rid <rid> --publish <dir> --assets-manifest <file> --output <dir> [--dry-run] [--execute-installer] [--sign --signing-identity-env <name>]\n  capabilities resolve --capabilities <file> --catalog <file> --platform <windows|macos|linux> --configuration <Release|Debug> <output>\n  contract check --typescript <file> --manifest <file>\n  init --dry-run --frontend-root <dir> --dev-command <arg>... --dev-url <url> --build-command <arg>... --dist <dir> --identifier <id> --display-name <name> --package-manager <npm|pnpm|yarn|bun|none>");
