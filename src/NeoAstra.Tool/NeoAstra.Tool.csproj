@@ -14,9 +14,10 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra.Core\NeoAstra.Core.csproj" />
-    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj"
+                      AdditionalProperties="NeoAstraSkipPackagedToolBuild=true" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
+    <PackageReference Include="XenoAtom.CommandLine" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-staging-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />

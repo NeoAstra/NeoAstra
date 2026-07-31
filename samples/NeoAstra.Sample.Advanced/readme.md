@@ -15,7 +15,7 @@ dotnet run --project samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.c
 The committed `ClientApp/package-lock.json` makes this a single-command clean-checkout build: NeoAstra runs
 locked `npm ci` when dependencies are absent or stale, runs the configured Vite production build when frontend
 inputs changed, validates/stages exact assets, and copies them to the regular managed output. Node.js 20.19 or later
-and npm must be available on `PATH`; NeoAstra does not install the package manager itself.
+and npm must be directly available or exposed through a detected executable manager such as fnm; NeoAstra does not install Node or the package manager itself. Use `frontend.packageManagerCommand` in `neoastra.json` when an explicit invocation prefix is required.
 
 In Visual Studio, set `NeoAstra.Sample.Advanced` as the startup project and run it without command-line
 arguments. A second launch does not create another app instance: it securely routes the launch to the

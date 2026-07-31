@@ -12,7 +12,6 @@
     <NeoRpcTypeScriptOutput>$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
     <NeoRpcManifestOutput>$(MSBuildProjectDirectory)/generated/neoastra.manifest.json</NeoRpcManifestOutput>
     <NeoRpcSchemaOutput>$(MSBuildProjectDirectory)/generated/neoastra.schema.json</NeoRpcSchemaOutput>
-    <NeoAstraToolPath>$(MSBuildThisFileDirectory)../../src/NeoAstra.Tool/bin/$(Configuration)/net10.0/NeoAstra.Tool.dll</NeoAstraToolPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,8 +19,11 @@
     <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
     <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
+    <!-- The source solution builds the tool as a separate graph node. Package and standalone
+         project-reference builds get it from NeoAstra's packaged-tool target instead. -->
     <ProjectReference
       Include="../../src/NeoAstra.Tool/NeoAstra.Tool.csproj"
+      Condition="'$(BuildingSolutionFile)' == 'true'"
       ReferenceOutputAssembly="false"
       Private="false"
       GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />

@@ -55,6 +55,85 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void PackageManagerCommand_PrefersDirectNpmThenKnownManagersAndSupportsOverride()
+    {
+        var direct = NeoPackageManagerCommandResolver.Discover(
+            "npm",
+            Environment.CurrentDirectory,
+            executable => executable == "npm");
+        CollectionAssert.AreEqual(new[] { "npm" }, direct.Arguments.ToArray());
+
+        var discoveryDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "neoastra-package-manager-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(discoveryDirectory);
+        try
+        {
+            var npmExecutable = OperatingSystem.IsWindows() ? "npm.cmd" : "npm";
+            var fnm = NeoPackageManagerCommandResolver.Discover(
+                "npm",
+                discoveryDirectory,
+                executable => executable == "fnm");
+            CollectionAssert.AreEqual(
+                new[] { "fnm", "exec", "--using=default", npmExecutable },
+                fnm.Arguments.ToArray());
+
+            File.WriteAllText(Path.Combine(discoveryDirectory, ".nvmrc"), "22\n");
+            var projectVersionFnm = NeoPackageManagerCommandResolver.Discover(
+                "npm",
+                discoveryDirectory,
+                executable => executable == "fnm");
+            CollectionAssert.AreEqual(
+                new[] { "fnm", "exec", npmExecutable },
+                projectVersionFnm.Arguments.ToArray());
+        }
+        finally
+        {
+            Directory.Delete(discoveryDirectory, recursive: true);
+        }
+
+        var volta = NeoPackageManagerCommandResolver.Discover(
+            "npm",
+            Environment.CurrentDirectory,
+            executable => executable == "volta");
+        CollectionAssert.AreEqual(new[] { "volta", "run", "npm" }, volta.Arguments.ToArray());
+
+        using var fixture = new ProjectFixture();
+        File.WriteAllText(
+            fixture.ConfigurationPath,
+            File.ReadAllText(fixture.ConfigurationPath).Replace(
+                "\"packageManager\": \"none\"",
+                "\"packageManager\": \"npm\", \"packageManagerCommand\": [\"custom-node\", \"npm\"]",
+                StringComparison.Ordinal));
+        var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath);
+        var effective = NeoPackageManagerCommandResolver.Apply(
+            project,
+            new NeoCommand(["npm", "run", "build"]));
+        CollectionAssert.AreEqual(
+            new[] { "custom-node", "npm", "run", "build" },
+            effective.Arguments.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "custom-node", "npm" },
+            project.PackageManagerCommand.Arguments.ToArray());
+    }
+
+    [TestMethod]
+    public async Task CommandLine_ProvidesGeneratedHelpAndOrderIndependentOptions()
+    {
+        using var fixture = new ProjectFixture();
+        var help = await RunToolAsync(fixture.Root, ["--help"]);
+        Assert.AreEqual(0, help.ExitCode);
+        StringAssert.Contains(help.StandardOutput, "Commands:");
+        StringAssert.Contains(help.StandardOutput, "frontend");
+
+        var inspect = await RunToolAsync(
+            fixture.Root,
+            ["inspect", "--config", fixture.ConfigurationPath]);
+        Assert.AreEqual(0, inspect.ExitCode);
+        StringAssert.Contains(inspect.StandardOutput, "\"identifier\": \"dev.neoastra.fixture\"");
+    }
+
+    [TestMethod]
     public void ProjectConfiguration_RejectsUnknownDuplicateVersionAndRemoteOrigin()
     {
         using var fixture = new ProjectFixture();

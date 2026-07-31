@@ -9,11 +9,11 @@ namespace NeoAstra.Tooling;
 internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFactory)
 {
     private const string StateFileName = ".neoastra-restore.sha256";
-
     internal async Task<bool> RestoreAsync(NeoResolvedProject project, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(project);
-        if (project.PackageManager == "none") return false;
+        if (project.PackageManager == "none")
+            return false;
         if (project.PackageManager != "npm")
         {
             Console.WriteLine($"Automatic frontend dependency restore does not manage {project.PackageManager}; using explicitly restored locked dependencies.");
@@ -23,12 +23,12 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
         var packageJson = Path.Combine(project.FrontendRoot, "package.json");
         var expectedLockfile = Path.Combine(project.FrontendRoot, "package-lock.json");
         EnsureDirectoryIsNotLink(project.FrontendRoot);
-        if (!File.Exists(packageJson)) throw new NeoToolException("package_manifest_missing", "Automatic npm restore requires frontend.root/package.json.");
+        if (!File.Exists(packageJson))
+            throw new NeoToolException("package_manifest_missing", "Automatic npm restore requires frontend.root/package.json.");
         if (project.Lockfile is null || !PathsEqual(project.Lockfile, expectedLockfile) || !File.Exists(expectedLockfile))
             throw new NeoToolException("lockfile_missing", "Automatic npm restore requires a committed frontend.root/package-lock.json configured as frontend.lockfile.");
         EnsureFileIsNotLink(packageJson);
         EnsureFileIsNotLink(expectedLockfile);
-
         var dependencyDirectory = Path.Combine(project.FrontendRoot, "node_modules");
         EnsureDirectoryIsNotLink(dependencyDirectory, allowMissing: true);
         var statePath = Path.Combine(dependencyDirectory, StateFileName);
@@ -45,12 +45,11 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
         }
 
         DeleteState(statePath);
-        var command = new NeoCommand(["npm", "ci", "--no-audit", "--no-fund"]);
-        await using var process = processFactory.Start(new("restore", command, project.FrontendRoot, project.Environment,
-            project.SecretEnvironment, (line, error) => (error ? Console.Error : Console.Out).WriteLine($"[frontend restore] {line}")));
+        var command = NeoPackageManagerCommandResolver.Apply(project, new NeoCommand(["npm", "ci", "--no-audit", "--no-fund"]));
+        await using var process = processFactory.Start(new("restore", command, project.FrontendRoot, project.Environment, project.SecretEnvironment, (line, error) => (error ? Console.Error : Console.Out).WriteLine($"[frontend restore] {line}")));
         var exit = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (exit != 0) throw new NeoToolException("package_restore_failed", $"The locked npm dependency restore failed with exit code {exit}.");
-
+        if (exit != 0)
+            throw new NeoToolException("package_restore_failed", $"The locked npm dependency restore failed with exit code {exit}.");
         EnsureDirectoryIsNotLink(dependencyDirectory, allowMissing: true);
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         WriteState(statePath, expectedState + "\n");
@@ -88,19 +87,33 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
     {
         try
         {
-            return File.Exists(path) && new FileInfo(path).Length <= 128 &&
-                   (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 &&
-                   File.ReadAllText(path, Encoding.UTF8).Trim().Equals(expected, StringComparison.Ordinal);
+            return File.Exists(path) && new FileInfo(path).Length <= 128 && (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0 && File.ReadAllText(path, Encoding.UTF8).Trim().Equals(expected, StringComparison.Ordinal);
         }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static void DeleteState(string path)
     {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (IOException) { throw new NeoToolException("restore_state", "NeoAstra could not invalidate the previous frontend restore state before running npm ci."); }
-        catch (UnauthorizedAccessException) { throw new NeoToolException("restore_state", "NeoAstra could not invalidate the previous frontend restore state before running npm ci."); }
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+            throw new NeoToolException("restore_state", "NeoAstra could not invalidate the previous frontend restore state before running npm ci.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new NeoToolException("restore_state", "NeoAstra could not invalidate the previous frontend restore state before running npm ci.");
+        }
     }
 
     private static void WriteState(string path, string content)
@@ -113,7 +126,13 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
         }
         finally
         {
-            try { File.Delete(temporary); } catch { }
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -127,10 +146,19 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-            if (DateTime.UtcNow >= deadline) throw new NeoToolException("package_restore_lock", "Timed out waiting for another frontend dependency restore to finish.");
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            if (DateTime.UtcNow >= deadline)
+                throw new NeoToolException("package_restore_lock", "Timed out waiting for another frontend dependency restore to finish.");
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -139,9 +167,11 @@ internal sealed class NeoFrontendDependencyRestorer(INeoProcessFactory processFa
     {
         if (!Directory.Exists(path))
         {
-            if (allowMissing) return;
+            if (allowMissing)
+                return;
             throw new NeoToolException("package_restore_path", "The frontend dependency restore directory does not exist.");
         }
+
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new NeoToolException("package_restore_path", "Frontend dependency restore directories must not be symbolic links, junctions, or reparse points.");
     }

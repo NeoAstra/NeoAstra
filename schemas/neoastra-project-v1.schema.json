@@ -96,6 +96,10 @@
             "none"
           ]
         },
+        "packageManagerCommand": {
+          "$ref": "#/$defs/command",
+          "description": "Optional command prefix used to invoke the selected package manager, for example [\"fnm\", \"exec\", \"--using=22\", \"npm.cmd\"] on Windows. This overrides automatic executable and Node-manager discovery."
+        },
         "lockfile": {
           "$ref": "#/$defs/path"
         },

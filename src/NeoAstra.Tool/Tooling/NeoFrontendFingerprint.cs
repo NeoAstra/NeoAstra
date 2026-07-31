@@ -11,17 +11,17 @@ internal static class NeoFrontendFingerprint
     private const int MaximumInputFiles = 100_000;
     private static readonly HashSet<string> ExcludedDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".git", ".hg", ".svn", "node_modules",
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
     };
-
-    internal static string Write(NeoResolvedProject project, string outputPath, bool prebuilt,
-        string configuration, IReadOnlyList<string> additionalInputs)
+    internal static string Write(NeoResolvedProject project, string outputPath, bool prebuilt, string configuration, IReadOnlyList<string> additionalInputs)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(additionalInputs);
-
         var files = new SortedDictionary<string, string>(PathComparer());
         if (prebuilt)
         {
@@ -29,20 +29,26 @@ internal static class NeoFrontendFingerprint
         }
         else
         {
-            AddTree(project.FrontendRoot,
-                [project.DistDirectory, Path.Combine(project.ProjectDirectory, "bin"), Path.Combine(project.ProjectDirectory, "obj"), Path.GetDirectoryName(Path.GetFullPath(outputPath))!], files);
+            AddTree(project.FrontendRoot, [project.DistDirectory, Path.Combine(project.ProjectDirectory, "bin"), Path.Combine(project.ProjectDirectory, "obj"), Path.GetDirectoryName(Path.GetFullPath(outputPath))!], files);
         }
 
-        if (File.Exists(project.ConfigurationPath)) AddFile(project.ConfigurationPath, files);
-        if (project.Lockfile is not null) AddRequiredFile(project.Lockfile, files);
-        if (project.GeneratedContract is not null) AddRequiredFile(project.GeneratedContract, files);
+        if (File.Exists(project.ConfigurationPath))
+            AddFile(project.ConfigurationPath, files);
+        if (project.Lockfile is not null)
+            AddRequiredFile(project.Lockfile, files);
+        if (project.GeneratedContract is not null)
+            AddRequiredFile(project.GeneratedContract, files);
         foreach (var input in additionalInputs)
         {
-            if (string.IsNullOrWhiteSpace(input)) throw new NeoToolException("frontend_input", "An additional frontend input path is empty.");
+            if (string.IsNullOrWhiteSpace(input))
+                throw new NeoToolException("frontend_input", "An additional frontend input path is empty.");
             var fullPath = Path.GetFullPath(input, project.ProjectDirectory);
-            if (File.Exists(fullPath)) AddFile(fullPath, files);
-            else if (Directory.Exists(fullPath)) AddTree(fullPath, [], files);
-            else throw new NeoToolException("frontend_input", "An additional frontend input path does not exist.");
+            if (File.Exists(fullPath))
+                AddFile(fullPath, files);
+            else if (Directory.Exists(fullPath))
+                AddTree(fullPath, [], files);
+            else
+                throw new NeoToolException("frontend_input", "An additional frontend input path does not exist.");
         }
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -52,7 +58,8 @@ internal static class NeoFrontendFingerprint
         Append(hash, project.ToInspectJson(redactSecrets: false));
         var toolAssembly = typeof(NeoFrontendFingerprint).Assembly;
         Append(hash, toolAssembly.ManifestModule.ModuleVersionId.ToString("D"));
-        if (toolAssembly.Location.Length != 0) Append(hash, NeoAssetManifestBuilder.ReadFileSnapshot(toolAssembly.Location).Sha256);
+        if (toolAssembly.Location.Length != 0)
+            Append(hash, NeoAssetManifestBuilder.ReadFileSnapshot(toolAssembly.Location).Sha256);
         foreach (var pair in files)
         {
             Append(hash, pair.Key);
@@ -67,7 +74,8 @@ internal static class NeoFrontendFingerprint
     private static void AddTree(string root, IReadOnlyList<string> excludedRoots, SortedDictionary<string, string> files)
     {
         root = Path.GetFullPath(root);
-        if (!Directory.Exists(root)) throw new NeoToolException("frontend_input", "The configured frontend input directory does not exist.");
+        if (!Directory.Exists(root))
+            throw new NeoToolException("frontend_input", "The configured frontend input directory does not exist.");
         EnsureNotLink(root);
         var excluded = excludedRoots.Select(Path.GetFullPath).ToArray();
         var pending = new Stack<DirectoryInfo>();
@@ -79,8 +87,10 @@ internal static class NeoFrontendFingerprint
             {
                 if (entry is DirectoryInfo childDirectory)
                 {
-                    if (ExcludedDirectoryNames.Contains(childDirectory.Name)) continue;
-                    if (excluded.Any(path => PathsEqual(childDirectory.FullName, path))) continue;
+                    if (ExcludedDirectoryNames.Contains(childDirectory.Name))
+                        continue;
+                    if (excluded.Any(path => PathsEqual(childDirectory.FullName, path)))
+                        continue;
                     if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
                         throw new NeoToolException("frontend_input", "Frontend inputs must not contain symbolic links, junctions, or reparse points outside excluded dependency directories.");
                     pending.Push(childDirectory);
@@ -112,7 +122,8 @@ internal static class NeoFrontendFingerprint
 
     private static void AddRequiredFile(string path, SortedDictionary<string, string> files)
     {
-        if (!File.Exists(path)) throw new NeoToolException("frontend_input", "A configured frontend input file does not exist.");
+        if (!File.Exists(path))
+            throw new NeoToolException("frontend_input", "A configured frontend input file does not exist.");
         AddFile(path, files);
     }
 
@@ -128,7 +139,8 @@ internal static class NeoFrontendFingerprint
     private static void WriteIfChanged(string path, string content)
     {
         var fullPath = Path.GetFullPath(path);
-        if (File.Exists(fullPath) && File.ReadAllText(fullPath, Encoding.UTF8) == content) return;
+        if (File.Exists(fullPath) && File.ReadAllText(fullPath, Encoding.UTF8) == content)
+            return;
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         var temporary = fullPath + ".tmp." + Guid.NewGuid().ToString("N");
         try
@@ -138,7 +150,13 @@ internal static class NeoFrontendFingerprint
         }
         finally
         {
-            try { File.Delete(temporary); } catch { }
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch
+            {
+            }
         }
     }
 
