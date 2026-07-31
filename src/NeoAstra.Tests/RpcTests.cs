@@ -46,23 +46,27 @@ public sealed class RpcTests
     public async Task CancelTimeoutConcurrencyAndTeardownAreBounded()
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var options = new NeoRpcOptions { MaximumConcurrentInvocations = 2, MaximumConcurrentInvocationsPerSession = 1, InvocationTimeout = TimeSpan.FromMilliseconds(40) };
         var (host, session, frames) = Create(builder => builder.AddCommand<Request, Response>("slow.wait", async (request, _, token) =>
         {
+            if (request.Id == "a") firstEntered.TrySetResult();
+            if (request.Id == "c") cancellationEntered.TrySetResult();
             await gate.Task.WaitAsync(token);
             return new Response(request.Id, "done");
         }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy), options);
         await using (host) await using (session)
         {
             var first = session.ReceiveAsync(Invoke("slow-1", "slow.wait", "{\"id\":\"a\"}")).AsTask();
-            await Task.Delay(10);
+            await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             await session.ReceiveAsync(Invoke("slow-2", "slow.wait", "{\"id\":\"b\"}"));
             await first;
             Assert.IsTrue(frames.Any(frame => ErrorCode(frame) == "too_many_requests"));
             Assert.IsTrue(frames.Any(frame => ErrorCode(frame) == "timeout"));
 
             var canceled = session.ReceiveAsync(Invoke("slow-3", "slow.wait", "{\"id\":\"c\"}")).AsTask();
-            await Task.Delay(5);
+            await cancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"cancel\",\"id\":\"slow-3\"}");
             await canceled;
             Assert.IsTrue(frames.Any(frame => ErrorCode(frame) == "operation_canceled"));
