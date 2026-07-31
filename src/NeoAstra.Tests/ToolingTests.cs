@@ -371,6 +371,21 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task FrontendDependencyRestoreFailure_IsReportedAsMsBuildError()
+    {
+        using var fixture = new IntegratedBuildFixture();
+        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+        fixture.ConfigureNpmRestore();
+
+        var result = await fixture.BuildWithoutPathAsync();
+
+        Assert.AreNotEqual(0, result.ExitCode);
+        StringAssert.Contains(result.Output, "error NEOASTRA1001:");
+        StringAssert.Contains(result.Output, "executable_missing: Configured executable 'npm' was not found on PATH");
+        Assert.DoesNotContain("MSB3073", result.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_OrdersReadinessBeforeBackendAndStopsBothOnFailure()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -497,6 +512,36 @@ public sealed class ToolingTests
             RunDotNetCoreAsync(["build", ProjectPath, "--no-restore", "--nologo", "-c", "Debug", .. additionalArguments]);
 
         internal Task<string> RunDotNetAsync(params string[] arguments) => RunDotNetCoreAsync(arguments);
+
+        internal void ConfigureNpmRestore()
+        {
+            File.WriteAllText(Path.Combine(FrontendRoot, "package.json"), "{\"name\":\"msbuild-error-fixture\"}");
+            File.WriteAllText(Path.Combine(FrontendRoot, "package-lock.json"), "{\"lockfileVersion\":3}");
+            File.WriteAllText(ConfigurationPath, File.ReadAllText(ConfigurationPath)
+                .Replace("\"packageManager\": \"none\"", "\"packageManager\": \"npm\", \"lockfile\": \"ClientApp/package-lock.json\"", StringComparison.Ordinal));
+        }
+
+        internal async Task<(int ExitCode, string Output)> BuildWithoutPathAsync()
+        {
+            var dotnet = NeoChildProcess.ResolveExecutable("dotnet", Root);
+            var start = new ProcessStartInfo
+            {
+                FileName = dotnet.Path,
+                WorkingDirectory = Root,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            foreach (var argument in dotnet.PrefixArguments) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "build", ProjectPath, "--no-restore", "--nologo", "-c", "Debug", $"-p:NeoAstraDotNetHost={dotnet.Path}" }) start.ArgumentList.Add(argument);
+            start.Environment["PATH"] = string.Empty;
+            using var process = Process.Start(start)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            return (process.ExitCode, await stdout + await stderr);
+        }
 
         private async Task<string> RunDotNetCoreAsync(IReadOnlyList<string> arguments)
         {

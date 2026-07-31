@@ -20,7 +20,17 @@
 
   <Target Name="NeoAstraRestoreFrontendPackages" DependsOnTargets="Compile;NeoAstraVerifyContracts"
           Condition="'$(_NeoAstraRestoreFrontend)' == 'true'">
-    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; frontend restore --config &quot;$(NeoAstraProjectConfig)&quot;" />
+    <ItemGroup>
+      <_NeoAstraFrontendRestoreOutput Remove="@(_NeoAstraFrontendRestoreOutput)" />
+    </ItemGroup>
+    <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; frontend restore --config &quot;$(NeoAstraProjectConfig)&quot;"
+          ConsoleToMsBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true">
+      <Output TaskParameter="ConsoleOutput" ItemName="_NeoAstraFrontendRestoreOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="_NeoAstraFrontendRestoreExitCode" />
+    </Exec>
+    <Error Condition="'$(_NeoAstraFrontendRestoreExitCode)' != '0'"
+           Code="NEOASTRA1001"
+           Text="NeoAstra frontend dependency restore failed: @(_NeoAstraFrontendRestoreOutput, ' | ')" />
   </Target>
 
   <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts;NeoAstraRestoreFrontendPackages"
