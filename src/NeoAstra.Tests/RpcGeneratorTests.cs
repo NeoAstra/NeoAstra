@@ -12,6 +12,15 @@ namespace NeoAstra.Tests;
 public sealed class RpcGeneratorTests
 {
     [TestMethod]
+    public void GeneratorIgnoresCompilationsWithoutRpcContracts()
+    {
+        var result = Run("public sealed class EmptyApplication { }");
+
+        Assert.IsFalse(result.Diagnostics.Any(static diagnostic => diagnostic.Id == "CS8785"));
+        Assert.AreEqual(string.Empty, result.Generated);
+    }
+
+    [TestMethod]
     public void GeneratorIsDeterministicAndEmitsRegistrationManifestAndAotMetadataUse()
     {
         var first = Run(ValidSource);

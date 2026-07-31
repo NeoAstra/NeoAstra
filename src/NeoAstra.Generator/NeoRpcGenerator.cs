@@ -99,6 +99,9 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
     {
         var services = serviceArray.OrderBy(static service => service.Name, StringComparer.Ordinal).ThenBy(static service => service.Symbol.ToDisplayString(), StringComparer.Ordinal).ToArray();
         var events = eventArray.OrderBy(static item => item.Name, StringComparer.Ordinal).ThenBy(static item => item.Symbol.ToDisplayString(), StringComparer.Ordinal).ToArray();
+        if (services.Length == 0 && events.Length == 0)
+            return;
+
         var contextAttribute = compilation.Assembly.GetAttributes().FirstOrDefault(static attribute => attribute.AttributeClass?.ToDisplayString() == "NeoAstra.Rpc.NeoRpcJsonContextAttribute");
         var serializerContext = contextAttribute?.ConstructorArguments.Length == 1 ? contextAttribute.ConstructorArguments[0].Value as INamedTypeSymbol : null;
         if ((services.Length != 0 || events.Length != 0) && serializerContext == null)
