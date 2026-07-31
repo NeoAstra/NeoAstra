@@ -75,6 +75,7 @@ public static class NeoDesktopLimits
 /// <summary>Restricts canonical filesystem paths to explicitly configured roots.</summary>
 public sealed class NeoFileScope
 {
+    private readonly string[] _lexicalRoots;
     private readonly string[] _roots;
     private readonly StringComparison _comparison;
 
@@ -85,9 +86,16 @@ public sealed class NeoFileScope
     {
         ArgumentNullException.ThrowIfNull(roots);
         _comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var values = roots.Take(129).Select(root => Canonicalize(root, requireExisting: false)).Order(StringComparerForPlatform()).ToArray();
-        if (values.Length is < 1 or > 128 || values.Distinct(StringComparerForPlatform()).Count() != values.Length) throw new ArgumentException("A file scope requires 1 to 128 unique absolute roots.", nameof(roots));
-        _roots = values;
+        var comparer = StringComparerForPlatform();
+        var lexicalRoots = roots.Take(129).Select(root => Canonicalize(root, requireExisting: false)).ToArray();
+        if (lexicalRoots.Length is < 1 or > 128 || lexicalRoots.Distinct(comparer).Count() != lexicalRoots.Length) throw new ArgumentException("A file scope requires 1 to 128 unique absolute roots.", nameof(roots));
+        var values = lexicalRoots
+            .Select(root => (Lexical: root, Canonical: Directory.Exists(root) || File.Exists(root) ? Canonicalize(root, requireExisting: true) : root))
+            .OrderBy(static value => value.Canonical, comparer)
+            .ToArray();
+        if (values.Select(static value => value.Canonical).Distinct(comparer).Count() != values.Length) throw new ArgumentException("A file scope requires 1 to 128 unique canonical roots.", nameof(roots));
+        _lexicalRoots = values.Select(static value => value.Lexical).ToArray();
+        _roots = values.Select(static value => value.Canonical).ToArray();
     }
 
     /// <summary>Gets canonical roots without exposing mutable storage.</summary>
@@ -104,7 +112,7 @@ public sealed class NeoFileScope
         try
         {
             var lexical = Canonicalize(path, requireExisting: false);
-            if (!IsWithinRoots(lexical)) return false;
+            if (!IsWithinLexicalRoots(lexical)) return false;
             var candidate = requireExisting ? Canonicalize(lexical, requireExisting: true) : lexical;
             foreach (var root in _roots)
             {
@@ -125,7 +133,7 @@ public sealed class NeoFileScope
         try
         {
             var full = Canonicalize(path, requireExisting: false);
-            if (!IsWithinRoots(full)) return false;
+            if (!IsWithinLexicalRoots(full)) return false;
             var parent = Path.GetDirectoryName(full);
             var name = Path.GetFileName(full);
             if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(name)) return false;
@@ -142,7 +150,7 @@ public sealed class NeoFileScope
 
     internal bool IsLexicallyWithin(string path)
     {
-        try { return IsWithinRoots(Canonicalize(path, requireExisting: false)); }
+        try { return IsWithinLexicalRoots(Canonicalize(path, requireExisting: false)); }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
     }
 
@@ -165,5 +173,6 @@ public sealed class NeoFileScope
 
     private static string EnsureSeparator(string path) => Path.EndsInDirectorySeparator(path) ? path : path + Path.DirectorySeparatorChar;
     private bool IsWithinRoots(string candidate) => _roots.Any(root => string.Equals(candidate, root, _comparison) || candidate.StartsWith(EnsureSeparator(root), _comparison));
+    private bool IsWithinLexicalRoots(string candidate) => IsWithinRoots(candidate) || _lexicalRoots.Any(root => string.Equals(candidate, root, _comparison) || candidate.StartsWith(EnsureSeparator(root), _comparison));
     private static StringComparer StringComparerForPlatform() => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }

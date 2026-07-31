@@ -893,6 +893,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
         if (!options.GlobalOptions.TryGetValue("build_property." + property, out var path) || string.IsNullOrWhiteSpace(path)) return;
         try
         {
+            content = Normalize(content);
             var fullPath = Path.GetFullPath(path);
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
             if (File.Exists(fullPath) && File.ReadAllText(fullPath, Encoding.UTF8) == content) return;

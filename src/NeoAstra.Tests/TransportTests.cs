@@ -46,7 +46,8 @@ public sealed class TransportTests
 
         var bootstrap = coordinator.CreateBootstrapScript(template);
 
-        Assert.AreEqual($"{coordinator.HostViewBinding}|4096|17|2500|windows|webview2|main|true", bootstrap);
+        var (platform, backend) = OperatingSystem.IsWindows() ? ("windows", "webview2") : OperatingSystem.IsMacOS() ? ("macos", "wkwebview") : ("linux", "webkitgtk");
+        Assert.AreEqual($"{coordinator.HostViewBinding}|4096|17|2500|{platform}|{backend}|main|true", bootstrap);
     }
 
     [TestMethod]

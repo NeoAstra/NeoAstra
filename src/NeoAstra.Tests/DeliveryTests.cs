@@ -2,6 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.IO.Compression;
+using System.Formats.Tar;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -22,7 +23,7 @@ public sealed class DeliveryTests
         var second = NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "second"), dryRun: false));
         CollectionAssert.AreEqual(File.ReadAllBytes(first.StagingManifest), File.ReadAllBytes(second.StagingManifest));
         Assert.AreEqual(Hash(first.Artifact), Hash(second.Artifact));
-        using var archive = ZipFile.OpenRead(first.Artifact); Assert.IsTrue(archive.Entries.Count >= 2); Assert.IsTrue(archive.Entries.All(static entry => entry.LastWriteTime.Year == 1980));
+        AssertDeterministicArchive(first.Artifact);
         Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "sbom.spdx.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "sbom.cyclonedx.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "provenance.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "SHA256SUMS")));
         var plan = File.ReadAllText(Path.Combine(fixture.Root, "first", "inspect", "command-plan.json")); Assert.DoesNotContain("secret-signing-value", plan, StringComparison.Ordinal); StringAssert.Contains(plan, "arguments");
         var platformInput = string.Join('\n', Directory.EnumerateFiles(Path.Combine(fixture.Root, "first", "inspect", fixture.Rid)).Where(path => Path.GetExtension(path) is ".xml" or ".plist" or ".desktop").Select(File.ReadAllText)); StringAssert.Contains(platformInput, "neoastra-fixture");
@@ -35,7 +36,7 @@ public sealed class DeliveryTests
         File.WriteAllText(Path.Combine(fixture.Publish, "neoastra-native.json"), File.ReadAllText(Path.Combine(fixture.Publish, "neoastra-native.json")).Replace("\"abiMinor\":9", "\"abiMinor\":8", StringComparison.Ordinal));
         Assert.AreEqual("bundle_native_abi", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "wrong-abi"), false))).Code); fixture.WriteNativeIdentity();
         File.Delete(Path.Combine(fixture.Publish, fixture.ExecutableFile)); Assert.AreEqual("bundle_declared_file", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "missing"), false))).Code);
-        fixture.WriteExecutable(); File.WriteAllText(fixture.Configuration, File.ReadAllText(fixture.Configuration).Replace($"\"{fixture.ExecutableFile}\",", "\"source.cs\",")); File.WriteAllText(Path.Combine(fixture.Publish, "source.cs"), "development"); project = NeoProjectConfiguration.Load(fixture.Configuration); Assert.AreEqual("bundle_forbidden_file", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "forbidden"), false))).Code);
+        fixture.WriteExecutable(); File.WriteAllText(fixture.Configuration, File.ReadAllText(fixture.Configuration).Replace($"\"files\":[\"{fixture.ExecutableFile}\"", "\"files\":[\"source.cs\"", StringComparison.Ordinal)); File.WriteAllText(Path.Combine(fixture.Publish, "source.cs"), "development"); project = NeoProjectConfiguration.Load(fixture.Configuration); Assert.AreEqual("bundle_forbidden_file", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "forbidden"), false))).Code);
         if (!OperatingSystem.IsWindows()) { File.WriteAllText(fixture.Configuration, File.ReadAllText(fixture.Configuration).Replace("\"source.cs\"", $"\"{fixture.ExecutableFile}\", \"{fixture.ExecutableFile.ToUpperInvariant()}\"")); File.Copy(Path.Combine(fixture.Publish, fixture.ExecutableFile), Path.Combine(fixture.Publish, fixture.ExecutableFile.ToUpperInvariant())); project = NeoProjectConfiguration.Load(fixture.Configuration); Assert.AreEqual("bundle_collision", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "collision"), false))).Code); }
     }
 
@@ -88,6 +89,28 @@ public sealed class DeliveryTests
     private static byte[] Sign(string json, ECDsa key) { var canonical = NeoUpdateManifestVerifier.CanonicalForSigning(Encoding.UTF8.GetBytes(json)); var signature = Convert.ToBase64String(key.SignData(canonical, HashAlgorithmName.SHA256)); var node = JsonNode.Parse(json)!.AsObject(); node["signature"] = signature; return Encoding.UTF8.GetBytes(node.ToJsonString()); }
     private static void AssertCode(string code, Action action) => Assert.AreEqual(code, Assert.ThrowsExactly<NeoToolException>(action).Code);
     private static string Hash(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
+
+    private static void AssertDeterministicArchive(string path)
+    {
+        if (path.EndsWith(".zip", StringComparison.Ordinal))
+        {
+            using var archive = ZipFile.OpenRead(path);
+            Assert.IsTrue(archive.Entries.Count >= 2);
+            Assert.IsTrue(archive.Entries.All(static entry => entry.LastWriteTime.Year == 1980));
+            return;
+        }
+
+        using var compressed = new GZipStream(File.OpenRead(path), CompressionMode.Decompress);
+        using var reader = new TarReader(compressed);
+        var count = 0;
+        TarEntry? entry;
+        while ((entry = reader.GetNextEntry()) is not null)
+        {
+            count++;
+            Assert.AreEqual(DateTimeOffset.UnixEpoch, entry.ModificationTime);
+        }
+        Assert.IsTrue(count >= 2);
+    }
 
     private sealed class BundleFixture : IDisposable
     {

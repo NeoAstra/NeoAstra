@@ -2,3 +2,9 @@
 * text=auto
 *.sh text eol=lf
 *.verified.txt text eol=lf working-tree-encoding=UTF-8
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.svg text eol=lf
+*.ts text eol=lf

@@ -127,7 +127,9 @@ public sealed class HostingTests
             builder.UseNeoAstra(options => options.Application.QueueInitialLaunchEvent = false);
             builder.Services.AddSingleton<INeoHostedApplication>(new ThrowingStartup());
             using var host = builder.Build();
-            await Assert.ThrowsAsync<InvalidOperationException>(async () => await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            var exception = await Assert.ThrowsAsync<Exception>(async () => await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            if (exception is NeoAstraNativeLibraryException) return;
+            Assert.IsInstanceOfType<InvalidOperationException>(exception);
         }
         catch (NeoAstraNativeLibraryException) { }
     }

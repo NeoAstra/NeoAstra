@@ -266,7 +266,7 @@ public sealed class ToolingTests
         Assert.IsTrue(manifest.Assets.Where(entry => entry.Path.EndsWith(".js", StringComparison.Ordinal)).All(entry => entry.CacheControl == "public,max-age=31536000,immutable"));
         File.WriteAllText(Path.Combine(dist, "app.js.map"), "{}"); Assert.AreEqual("asset_source_map", Assert.ThrowsExactly<NeoToolException>(() => NeoAssetManifestBuilder.Build(project, first)).Code); File.Delete(Path.Combine(dist, "app.js.map"));
         File.WriteAllText(Path.Combine(dist, "A.txt"), "a"); File.WriteAllText(Path.Combine(dist, "a.txt"), "b");
-        if (!OperatingSystem.IsWindows()) Assert.AreEqual("asset_case_collision", Assert.ThrowsExactly<NeoToolException>(() => NeoAssetManifestBuilder.Build(project, first)).Code);
+        if (Directory.EnumerateFiles(dist, "*.txt").Count() == 2) Assert.AreEqual("asset_case_collision", Assert.ThrowsExactly<NeoToolException>(() => NeoAssetManifestBuilder.Build(project, first)).Code);
     }
 
     [TestMethod]
@@ -625,7 +625,7 @@ public sealed class ToolingTests
                 CreateNoWindow = true,
             };
             foreach (var argument in dotnet.PrefixArguments) start.ArgumentList.Add(argument);
-            foreach (var argument in new[] { "build", ProjectPath, "--no-restore", "--nologo", "-c", "Debug", $"-p:NeoAstraDotNetHost={dotnet.Path}" }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "build", "--no-restore", "--nologo", "-c", "Debug", $"-p:NeoAstraDotNetHost={dotnet.Path}", ProjectPath }) start.ArgumentList.Add(argument);
             start.Environment["PATH"] = string.Empty;
             using var process = Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();

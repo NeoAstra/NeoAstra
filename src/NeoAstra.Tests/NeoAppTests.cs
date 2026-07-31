@@ -45,7 +45,8 @@ public sealed class NeoAppTests
         builder.ValidateConfiguration();
         var granted = builder.CreateCapabilityManifest(NeoSecurityProfile.ProductionLocalApp, release: true);
         StringAssert.Contains(granted.Json, "greeting:read");
-        CollectionAssert.Contains(granted.GrantSummaries.ToArray(), "main: views=1, permissions=1, wholeViewTrust=false, originAuthenticated=false");
+        var wholeViewTrust = OperatingSystem.IsLinux() ? "required" : "false";
+        CollectionAssert.Contains(granted.GrantSummaries.ToArray(), $"main: views=1, permissions=1, wholeViewTrust={wholeViewTrust}, originAuthenticated=false");
     }
 
     [TestMethod]

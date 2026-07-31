@@ -8,6 +8,7 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "newLine": "lf",
     "outDir": "dist",
     "rootDir": "src",
     "verbatimModuleSyntax": true,

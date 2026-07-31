@@ -355,9 +355,9 @@ public sealed class DesktopServicesTests
             var roots = new Dictionary<string, string> { ["root"] = root }; var menus = new HashSet<string> { "allowed.command" }; var tray = new HashSet<string> { "main" }; var shortcuts = new HashSet<string> { "Ctrl+Shift+P" }; var secrets = new HashSet<string> { "token" };
             var options = new NeoDesktopRendererOptions { FileRoots = roots, AllowedMenuCommands = menus, AllowedTrayIds = tray, AllowedGlobalShortcuts = shortcuts, AllowedSafeStorageKeys = secrets };
             roots["root"] = outside; menus.Add("later.command"); tray.Add("later"); shortcuts.Add("Ctrl+Shift+Q"); secrets.Add("later");
-            Assert.AreEqual(Path.GetFullPath(root), options.FileRoots["root"]); Assert.IsFalse(options.AllowedMenuCommands.Contains("later.command")); Assert.IsFalse(options.AllowedTrayIds.Contains("later")); Assert.IsFalse(options.AllowedGlobalShortcuts.Contains("Ctrl+Shift+Q")); Assert.IsFalse(options.AllowedSafeStorageKeys.Contains("later"));
+            Assert.AreEqual(NeoFileScope.Canonicalize(root, requireExisting: true), options.FileRoots["root"]); Assert.IsFalse(options.AllowedMenuCommands.Contains("later.command")); Assert.IsFalse(options.AllowedTrayIds.Contains("later")); Assert.IsFalse(options.AllowedGlobalShortcuts.Contains("Ctrl+Shift+Q")); Assert.IsFalse(options.AllowedSafeStorageKeys.Contains("later"));
             Assert.Throws<ArgumentException>(() => new NeoDesktopRendererOptions { AllowedGlobalShortcuts = new HashSet<string> { "shift+ctrl+p" } });
-            var file = Path.Combine(root, "inside.txt"); File.WriteAllText(file, "inside"); Assert.AreEqual(Path.GetFullPath(file), options.ResolveExisting("root", "inside.txt"));
+            var file = Path.Combine(root, "inside.txt"); File.WriteAllText(file, "inside"); Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), options.ResolveExisting("root", "inside.txt"));
             var outsideFile = Path.Combine(outside, "outside.txt"); File.WriteAllText(outsideFile, "outside"); var link = Path.Combine(root, "link.txt");
             try { File.CreateSymbolicLink(link, outsideFile); Assert.Throws<NeoRpcException>(() => options.ResolveExisting("root", "link.txt")); }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException) { }
@@ -462,7 +462,7 @@ public sealed class DesktopServicesTests
             var token = drop.Value!.Items[0].FileToken!;
             Assert.IsFalse(broker.TryResolveFile(token, thief, out _));
             Assert.IsTrue(broker.TryResolveFile(token, owner, out var canonical));
-            Assert.AreEqual(Path.GetFullPath(file), canonical);
+            Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), canonical);
             broker.ReleaseOwner(owner);
             Assert.IsFalse(broker.TryResolveFile(token, owner, out _));
             var gesture = broker.IssueUserGesture(owner, TimeSpan.FromSeconds(1));
@@ -493,7 +493,7 @@ public sealed class DesktopServicesTests
             Assert.AreEqual(NeoDesktopStatus.Denied, await broker.StartOutboundAsync(token, thief, request));
             Assert.AreEqual(NeoDesktopStatus.Success, await broker.StartOutboundAsync(token, owner, request));
             Assert.AreEqual(NeoDesktopStatus.Denied, await broker.StartOutboundAsync(token, owner, request));
-            Assert.AreEqual(Path.GetFullPath(file), presenter.LastRequest!.Items[0].Value);
+            Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), presenter.LastRequest!.Items[0].Value);
 
             presenter.Throw = true;
             Assert.AreEqual(NeoDesktopStatus.Failed, await broker.StartOutboundAsync(broker.IssueUserGesture(owner, TimeSpan.FromSeconds(1)), owner, request));
