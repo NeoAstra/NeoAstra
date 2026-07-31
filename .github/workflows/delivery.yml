@@ -93,6 +93,7 @@ jobs:
         run: |
           New-Item -ItemType Directory artifacts/delivery/extracted | Out-Null
           if ('${{ runner.os }}' -eq 'Linux') { tar -xzf "artifacts/delivery/output/NeoAstra.Sample.Advanced-0.1.0-${{ matrix.rid }}.tar.gz" -C artifacts/delivery/extracted }
+          elseif ('${{ runner.os }}' -eq 'macOS') { unzip -q "artifacts/delivery/output/NeoAstra.Sample.Advanced-0.1.0-${{ matrix.rid }}.zip" -d artifacts/delivery/extracted }
           else { Expand-Archive "artifacts/delivery/output/NeoAstra.Sample.Advanced-0.1.0-${{ matrix.rid }}.zip" artifacts/delivery/extracted }
           $app = Get-ChildItem artifacts/delivery/extracted -Recurse -File -Filter '${{ matrix.executable }}' | Select-Object -First 1
           if ($null -eq $app) { throw 'Portable executable is missing' }

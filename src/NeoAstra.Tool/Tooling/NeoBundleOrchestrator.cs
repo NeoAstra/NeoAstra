@@ -662,6 +662,7 @@ internal static class NeoBundleOrchestrator
             Directory.CreateDirectory(control);
             Directory.CreateDirectory(Path.GetDirectoryName(app)!);
             CopyDirectory(payload, app);
+            File.SetUnixFileMode(Path.Combine(app, bundle.Executable), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
             File.Copy(Path.Combine(inspect, request.RuntimeIdentifier, "control"), Path.Combine(control, "control"));
             var share = Path.Combine(app, "share");
             if (Directory.Exists(share))

@@ -550,9 +550,10 @@ internal static class NeoAuthenticatedPackageExtractor
                     throw new NeoToolException("update_package_size", "Expanded package exceeds its bound.");
                 var destination = Destination(root, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                using var input = entry.Open();
-                using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                input.CopyTo(output);
+                using (var input = entry.Open())
+                using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    input.CopyTo(output);
+                ApplyUnixMode(destination, mode);
             }
         }
         else
@@ -573,16 +574,19 @@ internal static class NeoAuthenticatedPackageExtractor
                     throw new NeoToolException("update_package_link", "Portable package links and special files are forbidden.");
                 var destination = Destination(root, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                var buffer = new byte[64 * 1024];
-                int read;
-                while ((read = entry.DataStream.Read(buffer)) != 0)
+                using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
-                    expanded = checked(expanded + read);
-                    if (expanded > MaximumExpandedBytes)
-                        throw new NeoToolException("update_package_size", "Expanded package exceeds its bound.");
-                    output.Write(buffer, 0, read);
+                    var buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = entry.DataStream.Read(buffer)) != 0)
+                    {
+                        expanded = checked(expanded + read);
+                        if (expanded > MaximumExpandedBytes)
+                            throw new NeoToolException("update_package_size", "Expanded package exceeds its bound.");
+                        output.Write(buffer, 0, read);
+                    }
                 }
+                ApplyUnixMode(destination, (int)entry.Mode);
             }
         }
 
@@ -594,6 +598,13 @@ internal static class NeoAuthenticatedPackageExtractor
             throw new NeoToolException("update_package_identity", "Portable package contains files outside its single identity root.");
         VerifyIdentity(packageRoot, manifest);
         return packageRoot;
+    }
+
+    private static void ApplyUnixMode(string path, int mode)
+    {
+        var permissions = mode & 0x1ff;
+        if (!OperatingSystem.IsWindows() && permissions != 0)
+            File.SetUnixFileMode(path, (UnixFileMode)permissions);
     }
 
     private static string PathValue(string value, HashSet<string> paths, ref int count)

@@ -99,6 +99,7 @@ public sealed class DeliveryTests
             using var archive = ZipFile.OpenRead(path);
             Assert.IsTrue(archive.Entries.Count >= 2);
             Assert.IsTrue(archive.Entries.All(static entry => entry.LastWriteTime.Year == 1980));
+            if (!OperatingSystem.IsWindows()) Assert.IsTrue(archive.Entries.Any(static entry => ((entry.ExternalAttributes >> 16) & 0x1ff) == 0x1ed));
             return;
         }
 
