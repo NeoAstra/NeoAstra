@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -26,6 +27,11 @@ SUPPORTED_RIDS = {
 HEADER = ROOT / "native" / "include" / "neoastra.h"
 VERSION_HEADER = ROOT / "native" / "include" / "neoastra_version.h"
 FROZEN_EXPORTS = ROOT / "native" / "tests" / "abi_1_7_exports.inc"
+
+
+def absolute_path(path: Path) -> Path:
+    """Make a path absolute without dereferencing its final symlink."""
+    return Path(os.path.abspath(path))
 
 
 def sha256(path: Path) -> str:
@@ -315,9 +321,9 @@ def main() -> int:
     args = create_parser().parse_args()
     try:
         if args.command == "native":
-            prepare_native(args.rid, args.binary.resolve(), args.runtime_binary.resolve(), args.output.resolve())
+            prepare_native(args.rid, absolute_path(args.binary), absolute_path(args.runtime_binary), absolute_path(args.output))
         else:
-            write_checksums(args.directory.resolve())
+            write_checksums(absolute_path(args.directory))
         return 0
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"error: {error}", file=sys.stderr)

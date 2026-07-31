@@ -7,6 +7,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CppAst.CodeGen" />
+    <PackageReference Include="libclang.runtime.win-x64" />
+    <PackageReference Include="libclang.runtime.win-arm64" />
+    <PackageReference Include="libclang.runtime.linux-x64" />
+    <PackageReference Include="libclang.runtime.linux-arm64" />
+    <PackageReference Include="libclang.runtime.osx-arm64" />
     <PackageReference Include="libClangSharp.runtime.win-x64" />
     <PackageReference Include="libClangSharp.runtime.win-arm64" />
     <PackageReference Include="libClangSharp.runtime.linux-x64" />

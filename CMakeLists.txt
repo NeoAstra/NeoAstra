@@ -44,8 +44,10 @@ if(NEOASTRA_ENABLE_ASAN)
   target_link_options(neoastra_sanitizers INTERFACE -fsanitize=address)
 endif()
 if(NEOASTRA_ENABLE_UBSAN)
-  target_compile_options(neoastra_sanitizers INTERFACE -fsanitize=undefined -fno-omit-frame-pointer)
-  target_link_options(neoastra_sanitizers INTERFACE -fsanitize=undefined)
+  # Internal test types cross the hidden-visibility shared-library boundary, so
+  # their RTTI is intentionally unavailable to vptr instrumentation.
+  target_compile_options(neoastra_sanitizers INTERFACE -fsanitize=undefined -fno-sanitize=vptr -fno-omit-frame-pointer)
+  target_link_options(neoastra_sanitizers INTERFACE -fsanitize=undefined -fno-sanitize=vptr)
 endif()
 if(NEOASTRA_ENABLE_TSAN)
   target_compile_options(neoastra_sanitizers INTERFACE -fsanitize=thread -fno-omit-frame-pointer)

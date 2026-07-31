@@ -100,6 +100,8 @@ static void ConfigureLibClang()
     var configured = Environment.GetEnvironmentVariable("LIBCLANG_PATH");
     var candidates = new List<string>();
     if (!string.IsNullOrWhiteSpace(configured)) candidates.Add(configured);
+    var runtimeLibraryName = OperatingSystem.IsWindows() ? "libclang.dll" : OperatingSystem.IsMacOS() ? "libclang.dylib" : "libclang.so";
+    candidates.Add(Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", runtimeLibraryName));
     foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
     {
         candidates.Add(Path.Combine(directory.Trim('"'), OperatingSystem.IsWindows() ? "libclang.dll" : OperatingSystem.IsMacOS() ? "libclang.dylib" : "libclang.so"));

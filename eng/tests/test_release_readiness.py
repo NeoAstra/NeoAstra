@@ -33,7 +33,7 @@ class ReleaseReadinessTests(unittest.TestCase):
             release_readiness.VERSION_HEADER.read_text(encoding="utf-8")
         )
 
-        self.assertEqual({"major": 1, "minor": 8}, version)
+        self.assertEqual({"major": 1, "minor": 9}, version)
 
     def test_checksum_manifest_is_sorted_and_does_not_hash_itself(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -89,6 +89,18 @@ class ReleaseReadinessTests(unittest.TestCase):
 
         self.assertEqual(1, result.returncode)
         self.assertIn("Required built native binary was not found", result.stderr)
+
+    @unittest.skipIf(sys.platform == "win32", "Creating symlinks is not generally permitted on Windows")
+    def test_absolute_path_preserves_symlink_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            versioned = directory / "libneoastra_native.so.0.1.0"
+            versioned.touch()
+            symbolic = directory / "libneoastra_native.so"
+            symbolic.symlink_to(versioned.name)
+
+            self.assertEqual("libneoastra_native.so", release_readiness.absolute_path(symbolic).name)
+            self.assertEqual("libneoastra_native.so.0.1.0", symbolic.resolve().name)
 
 
 if __name__ == "__main__":

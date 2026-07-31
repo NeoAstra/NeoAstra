@@ -56,7 +56,7 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
         neo_event_details details{};details.bounds={static_cast<int32_t>(point.x),static_cast<int32_t>(point.y),0,0};
         std::string paths;uint64_t path_count=0;
         for(NSURL* url in urls){
-            const char* value=url.standardizedFileURL.fileSystemRepresentation;
+            const char* value=url.standardizedURL.fileSystemRepresentation;
             if(!value||!*value)continue;
             const size_t length=strlen(value);
             if(length>32768||paths.size()+length+1>1024*1024)return handled;
