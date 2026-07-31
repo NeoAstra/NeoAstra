@@ -12,8 +12,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj"
-                      AdditionalProperties="NeoAstraSkipPackagedToolBuild=true" />
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <ProjectReference Include="..\NeoAstra.SingleInstanceHelper\NeoAstra.SingleInstanceHelper.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" />
     <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj" />

@@ -4,7 +4,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using NeoAstra;
+using NeoAstra.Tool.Shared;
 
 namespace NeoAstra.Tooling;
 

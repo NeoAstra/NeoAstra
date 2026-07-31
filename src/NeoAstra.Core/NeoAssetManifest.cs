@@ -6,7 +6,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
+#if NEOASTRA_TOOL
+namespace NeoAstra.Tool.Shared;
+#else
 namespace NeoAstra;
+#endif
 
 /// <summary>Describes one immutable file in a version 1 production asset manifest.</summary>
 /// <param name="Path">The normalized, slash-separated relative asset path.</param>
@@ -174,6 +178,7 @@ public sealed class NeoAssetManifest
     private static void ValidateJson(JsonElement root) { var count = 0; Visit(root); void Visit(JsonElement value) { if (++count > 500_000) throw new ArgumentException("Manifest exceeds its complexity bound."); if (value.ValueKind == JsonValueKind.Object) { var names = new HashSet<string>(StringComparer.Ordinal); foreach (var property in value.EnumerateObject()) { if (!names.Add(property.Name)) throw new ArgumentException("Manifest contains a duplicate property."); Visit(property.Value); } } else if (value.ValueKind == JsonValueKind.Array) foreach (var item in value.EnumerateArray()) Visit(item); } }
 }
 
+#if !NEOASTRA_TOOL
 /// <summary>Securely hosts exactly the regular files listed by a production asset manifest.</summary>
 public sealed class NeoManifestResourceProvider : INeoResourceProvider
 {
@@ -254,6 +259,7 @@ public sealed class NeoManifestResourceProvider : INeoResourceProvider
         }
     }
 }
+#endif
 
 /// <summary>Provides a bounded, content-free production asset diagnostic snapshot.</summary>
 /// <param name="ManifestVersion">The asset manifest version.</param>

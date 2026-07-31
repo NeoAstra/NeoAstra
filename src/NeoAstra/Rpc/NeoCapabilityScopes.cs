@@ -4,7 +4,11 @@
 using System.Globalization;
 using System.Text.Json;
 
+#if NEOASTRA_TOOL
+namespace NeoAstra.Tool.Shared.Rpc;
+#else
 namespace NeoAstra.Rpc;
+#endif
 
 /// <summary>Base class for immutable validated renderer argument scopes.</summary>
 public abstract class NeoCapabilityScope

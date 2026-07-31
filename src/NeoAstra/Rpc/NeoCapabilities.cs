@@ -7,7 +7,11 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+#if NEOASTRA_TOOL
+namespace NeoAstra.Tool.Shared.Rpc;
+#else
 namespace NeoAstra.Rpc;
+#endif
 
 /// <summary>Identifies a supported NeoAstra host platform without consulting renderer state.</summary>
 public enum NeoCapabilityPlatform
@@ -418,6 +422,7 @@ public sealed class NeoCapabilityManifest
         return new(options.Platform, options.Profile, Array.AsReadOnly(ordered), json, hash);
     }
 
+#if !NEOASTRA_TOOL
     internal NeoCapabilityMatch Match(NeoRpcAuthorizationRequest request)
     {
         if (request.Context.Platform != Platform) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.PlatformMismatch);
@@ -451,6 +456,7 @@ public sealed class NeoCapabilityManifest
         }
         return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.ScopeDenied);
     }
+#endif
 
     internal void ValidateRegistration(string operation, string permission, int? maximumConcurrency, TimeSpan? timeout, TimeSpan hostTimeout)
     {

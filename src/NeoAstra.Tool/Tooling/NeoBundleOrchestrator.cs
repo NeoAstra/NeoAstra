@@ -8,7 +8,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Xml;
-using NeoAstra.Interop;
+using NeoAstra.Tool.Shared.Interop;
 
 namespace NeoAstra.Tooling;
 
@@ -229,8 +229,8 @@ internal static class NeoBundleOrchestrator
 
     internal static void ValidateAbiVersion(uint major, uint minor)
     {
-        if (major != NativeLibraryLoader.ExpectedAbiMajor || minor != NativeLibraryLoader.ExpectedAbiMinor)
-            throw new NeoToolException("bundle_native_abi", $"Native ABI {major}.{minor} does not match managed NeoAstra ABI {NativeLibraryLoader.ExpectedAbiMajor}.{NativeLibraryLoader.ExpectedAbiMinor}.");
+        if (major != NeoNativeAbi.Major || minor != NeoNativeAbi.Minor)
+            throw new NeoToolException("bundle_native_abi", $"Native ABI {major}.{minor} does not match managed NeoAstra ABI {NeoNativeAbi.Major}.{NeoNativeAbi.Minor}.");
     }
 
     private static bool ArchitectureMatches(ReadOnlySpan<byte> bytes, string rid)

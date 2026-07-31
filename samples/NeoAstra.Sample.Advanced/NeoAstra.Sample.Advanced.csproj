@@ -19,14 +19,6 @@
     <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
     <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
-    <!-- The source solution builds the tool as a separate graph node. Package and standalone
-         project-reference builds get it from NeoAstra's packaged-tool target instead. -->
-    <ProjectReference
-      Include="../../src/NeoAstra.Tool/NeoAstra.Tool.csproj"
-      Condition="'$(BuildingSolutionFile)' == 'true'"
-      ReferenceOutputAssembly="false"
-      Private="false"
-      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained;PublishAot" />
     <None
       Include="capabilities/*.json"
       CopyToOutputDirectory="PreserveNewest"

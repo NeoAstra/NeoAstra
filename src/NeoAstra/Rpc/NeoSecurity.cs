@@ -1,7 +1,11 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+#if NEOASTRA_TOOL
+namespace NeoAstra.Tool.Shared.Rpc;
+#else
 namespace NeoAstra.Rpc;
+#endif
 
 /// <summary>Named security defaults with fully visible resolved settings.</summary>
 public sealed class NeoSecurityProfile
@@ -53,6 +57,7 @@ public sealed class NeoSecurityProfile
     }
 }
 
+#if !NEOASTRA_TOOL
 /// <summary>Contains immutable framework authorization information attached before application dispatch.</summary>
 public sealed class NeoRpcAuthorizationDecision
 {
@@ -146,3 +151,4 @@ public sealed class NeoRpcDiagnosticSnapshot
     /// <summary>Gets redacted manifest grant summaries.</summary>
     public IReadOnlyList<string> Grants { get; }
 }
+#endif

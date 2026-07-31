@@ -2,7 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Text.Json;
-using NeoAstra.Rpc;
+using NeoAstra.Tool.Shared.Rpc;
 
 namespace NeoAstra.Tool;
 

@@ -12,10 +12,16 @@
     <PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DefineConstants>$(DefineConstants);NEOASTRA_TOOL</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj"
-                      AdditionalProperties="NeoAstraSkipPackagedToolBuild=true" />
+    <!-- Keep the tool standalone by compiling only the shared models and validation it uses. -->
+    <Compile Include="..\NeoAstra.Core\NeoAssetManifest.cs" Link="Shared\NeoAssetManifest.cs" />
+    <Compile Include="..\NeoAstra.Core\Interop\NeoNativeAbi.cs" Link="Shared\NeoNativeAbi.cs" />
+    <Compile Include="..\NeoAstra\Rpc\NeoCapabilities.cs" Link="Shared\NeoCapabilities.cs" />
+    <Compile Include="..\NeoAstra\Rpc\NeoCapabilityScopes.cs" Link="Shared\NeoCapabilityScopes.cs" />
+    <Compile Include="..\NeoAstra\Rpc\NeoRpcValidation.cs" Link="Shared\NeoRpcValidation.cs" />
+    <Compile Include="..\NeoAstra\Rpc\NeoSecurity.cs" Link="Shared\NeoSecurity.cs" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
     <PackageReference Include="XenoAtom.CommandLine" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />

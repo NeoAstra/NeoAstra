@@ -17,12 +17,16 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <NeoAstraGeneratorAssembly>$(MSBuildThisFileDirectory)..\NeoAstra.Generator\bin\$(Configuration)\netstandard2.0\NeoAstra.Generator.dll</NeoAstraGeneratorAssembly>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);NeoAstraCollectPackagedTool</TargetsForTfmSpecificContentInPackage>
-    <_NeoAstraToolBuiltBySolution>$([System.String]::Copy('$(CurrentSolutionConfigurationContents)').Contains('NeoAstra.Tool.csproj'))</_NeoAstraToolBuiltBySolution>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\NeoAstra.Core\NeoAstra.Core.csproj" />
     <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" ReferenceOutputAssembly="false" />
+    <!-- Build the packaged tool through the normal acyclic graph without copying or referencing it. -->
+    <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
   </ItemGroup>
@@ -53,22 +57,12 @@
     <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 
-  <!-- NeoAstra.Tool depends on NeoAstra, so a ProjectReference in the opposite direction
-       would create a cycle. Build it after this project and collect its output at pack time.
-       The skip property prevents the tool's reference back to NeoAstra from recursing. -->
-  <Target Name="NeoAstraBuildPackagedTool"
-          AfterTargets="Build"
-          Condition="'$(NoBuild)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(NeoAstraSkipPackagedToolBuild)' != 'true' and '$(_NeoAstraToolBuiltBySolution)' != 'true'">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)..\NeoAstra.Tool\NeoAstra.Tool.csproj"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);NeoAstraSkipPackagedToolBuild=true" />
-  </Target>
-
-  <Target Name="NeoAstraCollectPackagedTool"
-          DependsOnTargets="NeoAstraBuildPackagedTool">
+  <Target Name="NeoAstraCollectPackagedTool">
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\*"
-                              Exclude="**/*.pdb;**/*.xml;**/neoastra_native.*;**/neoastra-native.json">
+      <TfmSpecificPackageFile Include="$(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\NeoAstra.Tool.dll;
+                                       $(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\NeoAstra.Tool.deps.json;
+                                       $(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\NeoAstra.Tool.runtimeconfig.json;
+                                       $(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\XenoAtom.CommandLine.dll">
         <PackagePath>tools/net10.0/any/%(Filename)%(Extension)</PackagePath>
       </TfmSpecificPackageFile>
     </ItemGroup>

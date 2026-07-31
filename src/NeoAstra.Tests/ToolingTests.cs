@@ -16,6 +16,18 @@ namespace NeoAstra.Tests;
 public sealed class ToolingTests
 {
     [TestMethod]
+    public void ToolAssembly_DoesNotReferenceNeoAstraRuntimeAssemblies()
+    {
+        var references = typeof(NeoProjectConfiguration).Assembly
+            .GetReferencedAssemblies()
+            .Select(static reference => reference.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("NeoAstra", references);
+        Assert.DoesNotContain("NeoAstra.Core", references);
+    }
+
+    [TestMethod]
     public void ProjectConfiguration_ResolvesFromConfigDirectoryAndRedactsSecrets()
     {
         using var fixture = new ProjectFixture();
