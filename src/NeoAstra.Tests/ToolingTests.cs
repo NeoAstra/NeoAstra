@@ -625,14 +625,23 @@ public sealed class ToolingTests
                 CreateNoWindow = true,
             };
             foreach (var argument in dotnet.PrefixArguments) start.ArgumentList.Add(argument);
-            foreach (var argument in new[] { "build", "--no-restore", "--nologo", "-c", "Debug", ProjectPath, $"/p:NeoAstraDotNetHost={dotnet.Path}" }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "build", "--no-restore", "--nologo", "-c", "Debug", ProjectPath }) start.ArgumentList.Add(argument);
             start.Environment["NeoAstraDotNetHost"] = dotnet.Path;
-            start.Environment["PATH"] = string.Empty;
+            start.Environment["PATH"] = CreateIsolatedExecutablePath();
             using var process = Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
             return (process.ExitCode, await stdout + await stderr);
+        }
+
+        private string CreateIsolatedExecutablePath()
+        {
+            if (OperatingSystem.IsWindows()) return string.Empty;
+            var path = Path.Combine(Root, "isolated-path");
+            Directory.CreateDirectory(path);
+            File.CreateSymbolicLink(Path.Combine(path, "sh"), "/bin/sh");
+            return path;
         }
 
         private async Task<string> RunDotNetCoreAsync(IReadOnlyList<string> arguments)
