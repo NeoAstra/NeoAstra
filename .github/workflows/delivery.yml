@@ -35,7 +35,14 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
+      - name: Build frontend client package
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build --workspace @neoastra/client
       - uses: actions/download-artifact@v4
         with:
           name: native-${{ matrix.rid }}
