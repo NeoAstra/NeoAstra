@@ -843,7 +843,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t* app, neoas
     if(!app||!callback)return NEOASTRA_ERROR_INVALID_ARGUMENT;
     if(!app->retain())return NEOASTRA_ERROR_DISPOSED;
     neoastra_result_t result=NEOASTRA_OK;
-    try { std::lock_guard lock(app->dispatch_mutex); if(app->stopped.load()||app->state.load()==neo_app_state::stopping)result=NEOASTRA_ERROR_DISPOSED;else if(app->dispatches.size()>=app->dispatch_limit)result=NEOASTRA_ERROR_INVALID_STATE;else app->dispatches.push_back({callback,context}); }
+    try { std::lock_guard lock(app->dispatch_mutex); if(app->stopping.load()||app->stopped.load())result=NEOASTRA_ERROR_DISPOSED;else if(app->dispatches.size()>=app->dispatch_limit)result=NEOASTRA_ERROR_INVALID_STATE;else app->dispatches.push_back({callback,context}); }
     catch (...) { result=NEOASTRA_ERROR_NATIVE_FAILURE; }
     if(result!=NEOASTRA_OK){
         if(result==NEOASTRA_ERROR_INVALID_STATE)neo_log(app,NEOASTRA_LOG_WARNING,"dispatcher","Native dispatcher queue limit reached");
