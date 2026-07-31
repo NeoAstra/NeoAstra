@@ -219,7 +219,8 @@ internal static class NeoBundleOrchestrator
             throw new NeoToolException("bundle_native_abi", "Native ABI identity is invalid.");
         }
 
-        var executable = entries.FirstOrDefault(entry => Path.GetFileNameWithoutExtension(entry.Path).Equals(bundle.Executable, StringComparison.OrdinalIgnoreCase));
+        var executableName = request.RuntimeIdentifier.StartsWith("win-", StringComparison.Ordinal) ? bundle.Executable + ".exe" : bundle.Executable;
+        var executable = entries.FirstOrDefault(entry => entry.Path.Equals(executableName, StringComparison.OrdinalIgnoreCase));
         if (executable is null)
             throw new NeoToolException("bundle_executable", "Declared payload does not contain the configured executable identity.");
         var bytes = File.ReadAllBytes(Path.Combine(request.PublishDirectory, executable.Path.Replace('/', Path.DirectorySeparatorChar)));

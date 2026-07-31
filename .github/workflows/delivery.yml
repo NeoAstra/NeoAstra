@@ -47,6 +47,18 @@ jobs:
         with:
           name: native-${{ matrix.rid }}
           path: src/NeoAstra.Core/runtimes/${{ matrix.rid }}/native
+      - name: Install Linux delivery dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0
+      - name: Add Windows SDK tools to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $makeAppx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" | Sort-Object FullName | Select-Object -Last 1
+          if ($null -eq $makeAppx) { throw 'makeappx.exe was not found in the Windows SDK' }
+          $makeAppx.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Restore locked repository dependencies
         run: |
           dotnet restore src/NeoAstra.slnx

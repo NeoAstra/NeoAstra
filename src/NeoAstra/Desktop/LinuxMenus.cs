@@ -82,7 +82,8 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
                         if (item.Accelerator is { } accelerator && target.Window != 0)
                         {
                             acceleratorGroup = acceleratorGroup == 0 ? Native.gtk_accel_group_new() : acceleratorGroup; Native.gtk_accelerator_parse(accelerator.Replace("Ctrl+", "<Control>", StringComparison.Ordinal).Replace("Alt+", "<Alt>", StringComparison.Ordinal).Replace("Shift+", "<Shift>", StringComparison.Ordinal).Replace("Meta+", "<Super>", StringComparison.Ordinal), out var key, out var modifiers);
-                            if (key == 0 || !Native.gtk_widget_add_accelerator(nativeItem, "activate", acceleratorGroup, key, modifiers, 1)) throw new ArgumentException("The GTK backend cannot represent the normalized accelerator.", nameof(items));
+                            if (key == 0) throw new ArgumentException("The GTK backend cannot represent the normalized accelerator.", nameof(items));
+                            Native.gtk_widget_add_accelerator(nativeItem, "activate", acceleratorGroup, key, modifiers, 1);
                         }
                     }
                 }
@@ -270,7 +271,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_add_accel_group(nint window, nint group);
         [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_remove_accel_group(nint window, nint group);
         [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void gtk_accelerator_parse(string accelerator, out uint key, out uint modifiers);
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool gtk_widget_add_accelerator(nint widget, string signal, nint group, uint key, uint modifiers, uint flags);
+        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void gtk_widget_add_accelerator(nint widget, string signal, nint group, uint key, uint modifiers, uint flags);
         [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_iconify(nint window);
         [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_close(nint window);
         [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_menu_popup_at_rect(nint menu, nint window, Rectangle* rectangle, int rectangleAnchor, int menuAnchor, nint triggerEvent);
