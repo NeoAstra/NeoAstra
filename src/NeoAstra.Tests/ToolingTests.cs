@@ -625,7 +625,7 @@ public sealed class ToolingTests
                 CreateNoWindow = true,
             };
             foreach (var argument in dotnet.PrefixArguments) start.ArgumentList.Add(argument);
-            foreach (var argument in new[] { "build", "--no-restore", "--nologo", "-c", "Debug", ProjectPath }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "build", "--no-restore", "--nologo", "-c", "Debug", ProjectPath, $"-p:NeoAstraDotNetHost={dotnet.Path}" }) start.ArgumentList.Add(argument);
             start.Environment["NeoAstraDotNetHost"] = dotnet.Path;
             start.Environment["PATH"] = string.Empty;
             using var process = Process.Start(start)!;
