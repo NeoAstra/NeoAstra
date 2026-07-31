@@ -80,7 +80,7 @@ internal static class NeoBundleOrchestrator
         Directory.CreateDirectory(inspect);
         var stagingManifest = Path.Combine(inspect, "staging-manifest.v1.json");
         WriteStagingManifest(stagingManifest, bundle, request.RuntimeIdentifier, entries);
-        WritePlatformInputs(inspect, bundle, request.RuntimeIdentifier, request.PublishDirectory, plans);
+        WritePlatformInputs(inspect, bundle, request.RuntimeIdentifier, request.PublishDirectory, request.Sign, plans);
         AddSigningPlans(bundle, request, plans);
         var artifactName = $"{bundle.Executable}-{bundle.Version}-{request.RuntimeIdentifier}";
         var artifact = Path.Combine(output, artifactName + (request.RuntimeIdentifier.StartsWith("win-", StringComparison.Ordinal) || request.RuntimeIdentifier.StartsWith("osx-", StringComparison.Ordinal) ? ".zip" : ".tar.gz"));
@@ -307,7 +307,7 @@ internal static class NeoBundleOrchestrator
         });
     }
 
-    private static void WritePlatformInputs(string inspect, NeoBundleConfiguration bundle, string rid, string publish, List<NeoBundleCommandPlan> plans)
+    private static void WritePlatformInputs(string inspect, NeoBundleConfiguration bundle, string rid, string publish, bool sign, List<NeoBundleCommandPlan> plans)
     {
         var directory = Path.Combine(inspect, rid);
         Directory.CreateDirectory(directory);
@@ -322,7 +322,7 @@ internal static class NeoBundleOrchestrator
             writer.WriteAttributeString("IgnorableNamespaces", "uap rescap");
             writer.WriteStartElement("Identity");
             writer.WriteAttributeString("Name", bundle.Identifier);
-            writer.WriteAttributeString("Publisher", bundle.Publisher);
+            writer.WriteAttributeString("Publisher", sign ? bundle.Publisher : "CN=Unsigned");
             writer.WriteAttributeString("Version", FourPart(bundle.NumericVersion));
             writer.WriteAttributeString("ProcessorArchitecture", rid.EndsWith("arm64", StringComparison.Ordinal) ? "arm64" : "x64");
             writer.WriteEndElement();
@@ -495,6 +495,8 @@ internal static class NeoBundleOrchestrator
             var relative = Path.GetRelativePath(Path.GetDirectoryName(source)!, file).Replace('\\', '/');
             var entry = archive.CreateEntry(relative, CompressionLevel.Optimal);
             entry.LastWriteTime = ArchiveTimestamp;
+            if (!OperatingSystem.IsWindows())
+                entry.ExternalAttributes = (0x8000 | ((int)File.GetUnixFileMode(file) & 0x1ff)) << 16;
             using var input = File.OpenRead(file);
             using var output = entry.Open();
             input.CopyTo(output);
@@ -712,6 +714,8 @@ internal static class NeoBundleOrchestrator
             var target = Path.Combine(destination, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target, true);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(target, File.GetUnixFileMode(file));
         }
     }
 
