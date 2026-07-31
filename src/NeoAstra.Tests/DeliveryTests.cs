@@ -27,6 +27,7 @@ public sealed class DeliveryTests
         Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "sbom.spdx.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "sbom.cyclonedx.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "provenance.json"))); Assert.IsTrue(File.Exists(Path.Combine(fixture.Root, "first", "SHA256SUMS")));
         var plan = File.ReadAllText(Path.Combine(fixture.Root, "first", "inspect", "command-plan.json")); Assert.DoesNotContain("secret-signing-value", plan, StringComparison.Ordinal); StringAssert.Contains(plan, "arguments");
         var platformInput = string.Join('\n', Directory.EnumerateFiles(Path.Combine(fixture.Root, "first", "inspect", fixture.Rid)).Where(path => Path.GetExtension(path) is ".xml" or ".plist" or ".desktop").Select(File.ReadAllText)); StringAssert.Contains(platformInput, "neoastra-fixture");
+        if (OperatingSystem.IsWindows()) { StringAssert.Contains(platformInput, "MinVersion=\"10.0.0.0\""); StringAssert.Contains(platformInput, "runFullTrust"); }
     }
 
     [TestMethod]

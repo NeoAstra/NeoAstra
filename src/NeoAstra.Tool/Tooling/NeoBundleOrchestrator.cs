@@ -318,6 +318,8 @@ internal static class NeoBundleOrchestrator
             using var writer = XmlWriter.Create(manifest, new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = true });
             writer.WriteStartElement("Package", "http://schemas.microsoft.com/appx/manifest/foundation/windows10");
             writer.WriteAttributeString("xmlns", "uap", null, "http://schemas.microsoft.com/appx/manifest/uap/windows10");
+            writer.WriteAttributeString("xmlns", "rescap", null, "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities");
+            writer.WriteAttributeString("IgnorableNamespaces", "uap rescap");
             writer.WriteStartElement("Identity");
             writer.WriteAttributeString("Name", bundle.Identifier);
             writer.WriteAttributeString("Publisher", bundle.Publisher);
@@ -354,6 +356,11 @@ internal static class NeoBundleOrchestrator
             writer.WriteAttributeString("Square44x44Logo", "Assets\\icon.png");
             writer.WriteEndElement();
             WriteWindowsExtensions(writer, bundle);
+            writer.WriteEndElement();
+            writer.WriteEndElement();
+            writer.WriteStartElement("Capabilities");
+            writer.WriteStartElement("rescap", "Capability", null);
+            writer.WriteAttributeString("Name", "runFullTrust");
             writer.WriteEndElement();
             writer.WriteEndElement();
             writer.WriteEndElement();
@@ -901,7 +908,7 @@ internal static class NeoBundleOrchestrator
         stream.WriteByte((byte)'\n');
     }
 
-    private static string FourPart(string version) => string.Join('.', version.Split('.').Concat(["0"]).Take(4));
+    private static string FourPart(string version) => string.Join('.', version.Split('.').Concat(["0", "0", "0", "0"]).Take(4));
     private static string DebVersion(string version) => version.Replace('+', '.');
     private static string LinuxPackage(string identifier) => identifier.ToLowerInvariant().Replace('.', '-');
     private static string EscapeDesktop(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal);

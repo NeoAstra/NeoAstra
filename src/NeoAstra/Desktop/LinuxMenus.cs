@@ -98,10 +98,16 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     {
         if (!_hosts.TryGetValue(target.Window, out var host))
         {
-            var child = Native.gtk_bin_get_child(target.Window); if (child == 0) throw new InvalidOperationException("The GTK window content is unavailable."); Native.g_object_ref(child); Native.gtk_container_remove(target.Window, child);
-            var box = Native.gtk_box_new(1, 0); if (box == 0) { Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); throw new InvalidOperationException("Unable to allocate a GTK menu host."); }
-            Native.gtk_container_add(target.Window, box); Native.gtk_box_pack_end(box, child, true, true, 0); Native.g_object_unref(child);
-            var ownerHandle = GCHandle.Alloc(this); if (Native.g_signal_connect_data(target.Window, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&OwnerDestroyed, GCHandle.ToIntPtr(ownerHandle), (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseHandle, 0) == 0) { ownerHandle.Free(); Native.g_object_ref(child); Native.gtk_container_remove(box, child); Native.gtk_container_remove(target.Window, box); Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); throw new InvalidOperationException("Unable to observe GTK menu-owner teardown."); }
+            var child = Native.gtk_bin_get_child(target.Window);
+            if (child != 0) { Native.g_object_ref(child); Native.gtk_container_remove(target.Window, child); }
+            var box = Native.gtk_box_new(1, 0); if (box == 0) { if (child != 0) { Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); } throw new InvalidOperationException("Unable to allocate a GTK menu host."); }
+            Native.gtk_container_add(target.Window, box); if (child != 0) { Native.gtk_box_pack_end(box, child, true, true, 0); Native.g_object_unref(child); }
+            if (child != 0)
+            {
+                var contentHandle = GCHandle.Alloc(new ContentContext(this, target.Window));
+                if (Native.g_signal_connect_data(child, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ContentDestroyed, GCHandle.ToIntPtr(contentHandle), (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseHandle, 0) == 0) { contentHandle.Free(); Native.g_object_ref(child); Native.gtk_container_remove(box, child); Native.gtk_container_remove(target.Window, box); Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); throw new InvalidOperationException("Unable to observe GTK menu-content teardown."); }
+            }
+            var ownerHandle = GCHandle.Alloc(this); if (Native.g_signal_connect_data(target.Window, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&OwnerDestroyed, GCHandle.ToIntPtr(ownerHandle), (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseHandle, 0) == 0) { ownerHandle.Free(); if (child != 0) { Native.g_object_ref(child); Native.gtk_container_remove(box, child); } Native.gtk_container_remove(target.Window, box); if (child != 0) { Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); } throw new InvalidOperationException("Unable to observe GTK menu-owner teardown."); }
             host = new(box, child, 0, null); _hosts.Add(target.Window, host);
         }
         Native.gtk_box_pack_start(host.Box, menu, false, false, 0);Native.gtk_widget_hide(menu);_hosts[target.Window] = host with { References = host.References + 1 }; Native.gtk_widget_show_all(target.Window);Native.gtk_widget_hide(menu);
@@ -129,7 +135,9 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
 
     private void RestoreHost(nint window, Host host)
     {
-        _hosts.Remove(window); if (Native.gtk_widget_get_parent(host.Content) == host.Box) { Native.g_object_ref(host.Content); Native.gtk_container_remove(host.Box, host.Content); Native.gtk_container_remove(window, host.Box); Native.gtk_container_add(window, host.Content); Native.g_object_unref(host.Content); Native.gtk_widget_show_all(window); }
+        _hosts.Remove(window);
+        if (host.Content == 0) { if (Native.gtk_widget_get_parent(host.Box) == window) Native.gtk_container_remove(window, host.Box); return; }
+        if (Native.gtk_widget_get_parent(host.Content) == host.Box) { Native.g_object_ref(host.Content); Native.gtk_container_remove(host.Box, host.Content); Native.gtk_container_remove(window, host.Box); Native.gtk_container_add(window, host.Content); Native.g_object_unref(host.Content); Native.gtk_widget_show_all(window); }
     }
 
     private void Activate(ActivationContext context)
@@ -229,16 +237,19 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     }
 
     private void OwnerClosed(nint window) { _hosts.Remove(window); foreach (var id in _entries.Where(pair => pair.Value.Target.Window == window).Select(static pair => pair.Key).ToArray()) if (_entries.Remove(id, out var entry)) { foreach (var callback in entry.Callbacks) if (callback.IsAllocated) callback.Free(); if (entry.AcceleratorGroup != 0) Native.g_object_unref(entry.AcceleratorGroup); } }
+    private void ContentClosed(nint window, nint content) { if (_hosts.TryGetValue(window, out var host) && host.Content == content) _hosts[window] = host with { Content = 0 }; }
     private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; foreach (var entry in _entries.Values.ToArray()) Destroy(entry, true); _entries.Clear(); _hosts.Clear(); }
     private void EnsureAccess() { var value = _dispatcher ?? throw new InvalidOperationException("The native menu presenter is not bound to a UI dispatcher."); if (!value.CheckAccess()) throw new InvalidOperationException("Native menu presenter mutations require the NeoAstra UI dispatcher."); }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void Activated(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ActivationContext context) context.Presenter.Activate(context); } catch { } }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void OwnerDestroyed(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is LinuxMenuPresenter presenter) presenter.OwnerClosed(widget); } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ContentDestroyed(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ContentContext context) context.Presenter.ContentClosed(context.Window, widget); } catch { } }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ReleaseHandle(nint data, nint closure) { try { var handle = GCHandle.FromIntPtr(data); if (handle.IsAllocated) handle.Free(); } catch { } }
 
     private enum TargetKind { Application, Window, Context }
     private sealed record Target(string Id, TargetKind Kind, NeoWindow ManagedWindow, NeoAstra? View, nint Window, nint Widget);
     private sealed record Entry(Target Target, nint Menu, nint AcceleratorGroup, IReadOnlyList<GCHandle> Callbacks, long Generation);
     private sealed record ActivationContext(LinuxMenuPresenter Presenter, string TargetId, long Generation, string? CommandId, NeoMenuRole? Role);
+    private sealed record ContentContext(LinuxMenuPresenter Presenter, nint Window);
     private sealed record RoleCandidate(NeoAstra View, NeoWindow? Owner, string? Label, nint Widget);
     private readonly record struct Host(nint Box, nint Content, int References, string? ActiveId);
     [StructLayout(LayoutKind.Sequential)] private struct Rectangle { internal int X, Y, Width, Height; }
