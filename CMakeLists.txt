@@ -148,7 +148,14 @@ if(NEOASTRA_BUILD_TESTS)
   add_test(NAME neoastra_abi_tests COMMAND neoastra_abi_tests)
   add_executable(neoastra_abi_1_7_compat_tests native/tests/abi_1_7_compat_tests.cpp)
   add_dependencies(neoastra_abi_1_7_compat_tests neoastra_native)
-  target_link_libraries(neoastra_abi_1_7_compat_tests PRIVATE ${CMAKE_DL_LIBS} neoastra_sanitizers)
+  add_library(neoastra_abi_compat_sanitizer_suppressions INTERFACE)
+  if(NEOASTRA_ENABLE_UBSAN)
+    # This fixture deliberately calls dynamic symbols through frozen ABI 1.7
+    # structural types, which function-type instrumentation treats as distinct.
+    target_compile_options(neoastra_abi_compat_sanitizer_suppressions INTERFACE -fno-sanitize=function)
+  endif()
+  target_link_libraries(neoastra_abi_1_7_compat_tests PRIVATE
+    ${CMAKE_DL_LIBS} neoastra_sanitizers neoastra_abi_compat_sanitizer_suppressions)
   add_test(NAME neoastra_abi_1_7_compat_tests
     COMMAND neoastra_abi_1_7_compat_tests $<TARGET_FILE:neoastra_native>)
   add_executable(neoastra_common_tests native/tests/common_tests.cpp)

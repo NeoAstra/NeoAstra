@@ -1,10 +1,11 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using ClangSharp.Interop;
 using CppAst.CodeGen.Common;
 using CppAst.CodeGen.CSharp;
-using ClangSharp.Interop;
-using System.Runtime.InteropServices;
 using Zio;
 using Zio.FileSystems;
 
@@ -40,6 +41,10 @@ var options = new CSharpConverterOptions
 options.IncludeFolders.Add(Path.GetDirectoryName(header)!);
 options.AdditionalArguments.Add("-std=c++20");
 options.AdditionalArguments.Add("-DNEOASTRA_BUILD=1");
+if (!OperatingSystem.IsWindows())
+{
+    options.AdditionalArguments.Add($"-resource-dir={FindClangResourceDirectory()}");
+}
 
 var compilation = CSharpConverter.Convert([header], options);
 if (compilation is null)
@@ -113,4 +118,37 @@ static void ConfigureLibClang()
     }
     clang.ResolveLibrary += (name, assembly, searchPath) =>
         name == "libclang" ? NativeLibrary.Load(libClang) : IntPtr.Zero;
+}
+
+static string FindClangResourceDirectory()
+{
+    var configured = Environment.GetEnvironmentVariable("CLANG_RESOURCE_DIR");
+    if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
+    {
+        return configured;
+    }
+
+    try
+    {
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "clang",
+            Arguments = "--print-resource-dir",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        });
+        var resourceDirectory = process?.StandardOutput.ReadToEnd().Trim();
+        process?.WaitForExit();
+        if (process?.ExitCode == 0 && Directory.Exists(resourceDirectory))
+        {
+            return resourceDirectory;
+        }
+    }
+    catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+    {
+        // Report the actionable configuration error below.
+    }
+
+    throw new InvalidOperationException("Clang's resource directory was not found. Install Clang and add it to PATH, or set CLANG_RESOURCE_DIR.");
 }
