@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace {
-struct gtk_app { GMainContext* context{}; };
+struct gtk_app { GMainContext* context{}; GSource* wake_source{}; };
 struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; };
 struct gtk_environment { WebKitWebContext* context{}; gulong download_started{}; };
 struct gtk_profile { WebKitWebContext* context{}; gulong download_started{}; };
@@ -235,8 +235,19 @@ GtkWidget* view_parent(neoastra_view_t* view) noexcept {
     return view->parent.kind==NEOASTRA_NATIVE_PARENT_GTK_WIDGET?static_cast<GtkWidget*>(view->parent.handle):nullptr;
 }
 
-void NEOASTRA_CALL invoke_dispatch(void* data) { auto* app=static_cast<neoastra_app_t*>(data); neo_drain_dispatch(app); app->release(); }
-gboolean dispatch_on_main(void* data) { invoke_dispatch(data); return G_SOURCE_REMOVE; }
+void release_dispatch_app(void* data) { static_cast<neoastra_app_t*>(data)->release(); }
+gboolean dispatch_on_main(void* data) {
+    auto* app=static_cast<neoastra_app_t*>(data);
+    GSource* source{};
+    {
+        std::lock_guard lock(app->platform_mutex);
+        auto* state=static_cast<gtk_app*>(app->platform);
+        if(state){source=state->wake_source;state->wake_source=nullptr;}
+    }
+    if(source)g_source_unref(source);
+    neo_drain_dispatch(app);
+    return G_SOURCE_REMOVE;
+}
 gboolean destroy_app_on_main(void* data) { neo_destroy_app_on_ui(static_cast<neoastra_app_t*>(data)); return G_SOURCE_REMOVE; }
 gboolean decision_timed_out(void* data){static_cast<neoastra_decision_t*>(data)->expire();return G_SOURCE_REMOVE;}
 void release_timed_decision(void* data){static_cast<neoastra_decision_t*>(data)->release();}
@@ -318,11 +329,11 @@ void clear_finished(GObject* object,GAsyncResult* result,void* data){std::unique
 }
 
 bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t** error) noexcept {if(!gtk_init_check(nullptr,nullptr)){neo_fail(error,NEOASTRA_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();app->platform=state;return true;}
-void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state)return;if(state->context)g_main_context_unref(state->context);delete state;app->platform=nullptr;}
+void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state)return;if(state->wake_source){g_source_destroy(state->wake_source);g_source_unref(state->wake_source);state->wake_source=nullptr;}if(state->context)g_main_context_unref(state->context);delete state;app->platform=nullptr;}
 bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return false;auto* source=g_idle_source_new();if(!source)return false;g_source_set_callback(source,destroy_app_on_main,app,nullptr);const auto id=g_source_attach(source,state->context);g_source_unref(source);return id!=0;}
 int32_t neo_platform_run(neoastra_app_t* app) noexcept {gtk_main();return app->exit_code.load();}
 void neo_platform_quit(neoastra_app_t*) noexcept {auto* source=g_idle_source_new();g_source_set_callback(source,[](void*)->gboolean{gtk_main_quit();return G_SOURCE_REMOVE;},nullptr,nullptr);g_source_attach(source,nullptr);g_source_unref(source);}
-void neo_platform_wake(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return;app->retain();auto* source=g_idle_source_new();g_source_set_callback(source,dispatch_on_main,app,nullptr);g_source_attach(source,state->context);g_source_unref(source);}
+void neo_platform_wake(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context||state->wake_source)return;auto* source=g_idle_source_new();if(!source)return;app->retain();g_source_set_callback(source,dispatch_on_main,app,release_dispatch_app);if(g_source_attach(source,state->context)==0){g_source_unref(source);return;}state->wake_source=source;}
 bool neo_platform_schedule_decision_timeout(neoastra_app_t* app,neoastra_decision_t* decision) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(decision->deadline-std::chrono::steady_clock::now()).count();decision->retain();auto* source=g_timeout_source_new(static_cast<guint>(std::clamp<int64_t>(remaining+1,1,G_MAXUINT)));if(!source){decision->release();return false;}g_source_set_callback(source,decision_timed_out,decision,release_timed_decision);const auto id=g_source_attach(source,state->context);g_source_unref(source);return id!=0;}
 
 bool neo_platform_window_create(neoastra_window_t* window,const neoastra_window_options_t* options,neoastra_error_t**) noexcept {auto* state=new(std::nothrow) gtk_window;if(!state)return false;state->widget=gtk_window_new(GTK_WINDOW_TOPLEVEL);window->platform=state;gtk_window_set_title(GTK_WINDOW(state->widget),window->title.c_str());if((options->flags&(32u|64u))==0)gtk_window_move(GTK_WINDOW(state->widget),window->bounds.x,window->bounds.y);gtk_window_set_default_size(GTK_WINDOW(state->widget),window->bounds.width,window->bounds.height);neo_platform_window_set_size_constraints(window);gtk_window_set_resizable(GTK_WINDOW(state->widget),(options->flags&1u)!=0);gtk_window_set_decorated(GTK_WINDOW(state->widget),(options->flags&2u)!=0);gtk_window_set_keep_above(GTK_WINDOW(state->widget),(options->flags&8u)!=0);gtk_window_set_skip_taskbar_hint(GTK_WINDOW(state->widget),(options->flags&16u)==0);if(window->owner){auto* owner=static_cast<gtk_window*>(window->owner->platform);if(owner&&owner->widget)gtk_window_set_transient_for(GTK_WINDOW(state->widget),GTK_WINDOW(owner->widget));}if(options->flags&64u)gtk_window_set_position(GTK_WINDOW(state->widget),window->owner?GTK_WIN_POS_CENTER_ON_PARENT:GTK_WIN_POS_CENTER);else if(options->flags&32u)gtk_window_set_position(GTK_WINDOW(state->widget),GTK_WIN_POS_NONE);gtk_window_set_modal(GTK_WINDOW(state->widget),(options->flags&128u)!=0);g_signal_connect(state->widget,"delete-event",G_CALLBACK(window_delete),window);g_signal_connect(state->widget,"destroy",G_CALLBACK(window_destroyed),window);g_signal_connect(state->widget,"size-allocate",G_CALLBACK(window_size),window);g_signal_connect(state->widget,"window-state-event",G_CALLBACK(window_state_changed),window);if(options->flags&4u){gtk_widget_show_all(state->widget);neo_platform_window_set_state(window);}return true;}
