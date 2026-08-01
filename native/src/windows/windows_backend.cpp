@@ -381,11 +381,13 @@ RECT view_bounds(const neoastra_view_t* view) noexcept {
     return bounds;
 }
 
-void refresh_fill_parent_views(neoastra_window_t* window) noexcept {
-    // Showing a previously hidden parent does not reliably emit WM_SIZE. Reapply
-    // controller bounds so WebView2 creates and paints its composition surface.
+void sync_window_view_visibility(neoastra_window_t* window, bool visible) noexcept {
     for (auto* view : window->views) {
-        if (view && view->fill_parent) (void)neo_platform_view_set_bounds(view);
+        if (!view) continue;
+        auto* state = static_cast<windows_view*>(view->platform);
+        if (!state || !state->controller) continue;
+        if (visible && view->fill_parent) (void)state->controller->put_Bounds(view_bounds(view));
+        (void)state->controller->put_IsVisible(visible ? TRUE : FALSE);
     }
 }
 
@@ -1243,7 +1245,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
     } catch(const std::exception& ex){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
 void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}}if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
-neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);refresh_fill_parent_views(w);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){sync_window_view_visibility(w,false);ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);sync_window_view_visibility(w,true);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
@@ -1577,6 +1579,10 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             state->controller = controller;
             result = controller->get_CoreWebView2(&state->core);
             if (SUCCEEDED(result)) result = controller->put_Bounds(view_bounds(view));
+            // A controller created for a hidden owned window must begin hidden too. Otherwise
+            // WebView2 never observes the visibility transition when its parent is first shown
+            // and can leave the controller's composition surface blank.
+            if (SUCCEEDED(result) && view->window) result = controller->put_IsVisible(IsWindowVisible(view_parent(view)));
             ComPtr<ICoreWebView2Controller4> controller4;
             if (SUCCEEDED(result)) result=state->controller.As(&controller4);
             if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);
