@@ -322,7 +322,7 @@ internal static class NeoBundleOrchestrator
             writer.WriteAttributeString("IgnorableNamespaces", "uap rescap");
             writer.WriteStartElement("Identity");
             writer.WriteAttributeString("Name", bundle.Identifier);
-            writer.WriteAttributeString("Publisher", sign ? bundle.Publisher : "CN=Unsigned");
+            writer.WriteAttributeString("Publisher", sign ? bundle.Publisher : "CN=Unsigned, OID.2.25.311729368913984317654407730594956997722=1");
             writer.WriteAttributeString("Version", FourPart(bundle.NumericVersion));
             writer.WriteAttributeString("ProcessorArchitecture", rid.EndsWith("arm64", StringComparison.Ordinal) ? "arm64" : "x64");
             writer.WriteEndElement();
@@ -372,7 +372,7 @@ internal static class NeoBundleOrchestrator
             WritePlist(Path.Combine(directory, "Info.plist"), bundle);
             WritePlist(Path.Combine(directory, "Entitlements.plist"), bundle, entitlements: true);
             plans.Add(new("portable-dmg", "hdiutil", ["create", "-srcfolder", "<app>", "-format", "UDZO", "<artifact>.dmg"], [], false));
-            plans.Add(new("installer", "pkgbuild", ["--component", "<app>", "--install-location", "/Applications", "<artifact>.pkg"], [], false));
+            plans.Add(new("installer", "pkgbuild", ["--root", "<package-root>", "--identifier", bundle.Identifier, "--version", bundle.NumericVersion, "--install-location", "/", "<artifact>.pkg"], [], false));
         }
         else
         {
@@ -653,6 +653,13 @@ internal static class NeoBundleOrchestrator
 
                 )
                     File.Copy(bundle.Icons[0], Path.Combine(assets, name), true);
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            packageRoot = Path.Combine(Path.GetDirectoryName(payload)!, "pkg-root");
+            var applications = Path.Combine(packageRoot, "Applications");
+            Directory.CreateDirectory(applications);
+            CopyDirectory(payload, Path.Combine(applications, Path.GetFileName(payload)));
         }
         else if (OperatingSystem.IsLinux())
         {
