@@ -173,7 +173,7 @@ negotiation, native desktop services, secure local assets, and a compact standal
 
 Managed projects target .NET 10:
 
-Managed and RID-specific native assets are a paired release unit. The managed loader rejects a native ABI major or minor mismatch rather than supporting mixed NeoAstra releases.
+NeoAstra's pre-release native ABI remains `1.0`. Until the first release, the managed loader and bundler enforce only ABI major compatibility so existing pre-release RID assets can be regenerated without blocking local applications. Managed and RID-specific native assets will become a strictly paired release unit before release.
 
 ```sh
 cd src

@@ -10,7 +10,6 @@ namespace NeoAstra.Interop;
 internal static class NativeLibraryLoader
 {
     internal const uint ExpectedAbiMajor = NeoNativeAbi.Major;
-    internal const uint ExpectedAbiMinor = NeoNativeAbi.Minor;
     private static readonly object Sync = new();
     private static readonly List<string> AttemptedPaths = [];
     private static nint _loadedHandle;
@@ -34,10 +33,10 @@ internal static class NativeLibraryLoader
             {
                 var major = NativeMethods.neoastra_get_abi_version_major();
                 var minor = NativeMethods.neoastra_get_abi_version_minor();
-                if (major != ExpectedAbiMajor || minor != ExpectedAbiMinor)
+                if (!NeoNativeAbi.IsCompatible(major, minor))
                 {
                     throw new NeoAstraNativeLibraryException(
-                        $"The loaded {NativeMethods.LibraryName} native ABI is {major}.{minor}; managed NeoAstra requires the paired ABI {ExpectedAbiMajor}.{ExpectedAbiMinor}. " +
+                        $"The loaded {NativeMethods.LibraryName} native ABI is {major}.{minor}; managed NeoAstra requires ABI major {ExpectedAbiMajor}. " +
                         "Install the paired RID asset or set NEOASTRA_NATIVE_LIBRARY to its full path.");
                 }
 

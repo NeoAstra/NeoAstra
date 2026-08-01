@@ -15,6 +15,13 @@ namespace NeoAstra.Tests;
 public sealed class DeliveryTests
 {
     [TestMethod]
+    public void BundleAbiValidation_AcceptsPreReleaseMinorDriftButRejectsOtherMajors()
+    {
+        NeoBundleOrchestrator.ValidateAbiVersion(1, 9);
+        Assert.AreEqual("bundle_native_abi", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.ValidateAbiVersion(2, 0)).Code);
+    }
+
+    [TestMethod]
     public void BundleConfigurationAndStagingAreStrictDeterministicAndRedacted()
     {
         using var fixture = new BundleFixture(); var project = NeoProjectConfiguration.Load(fixture.Configuration);
@@ -34,7 +41,7 @@ public sealed class DeliveryTests
     public void BundleRejectsUndeclaredMissingForbiddenCollisionWrongAbiAndCrossHostSigning()
     {
         using var fixture = new BundleFixture(); var project = NeoProjectConfiguration.Load(fixture.Configuration);
-        File.WriteAllText(Path.Combine(fixture.Publish, "neoastra-native.json"), File.ReadAllText(Path.Combine(fixture.Publish, "neoastra-native.json")).Replace("\"abiMinor\":0", "\"abiMinor\":1", StringComparison.Ordinal));
+        File.WriteAllText(Path.Combine(fixture.Publish, "neoastra-native.json"), File.ReadAllText(Path.Combine(fixture.Publish, "neoastra-native.json")).Replace("\"abiMajor\":1", "\"abiMajor\":2", StringComparison.Ordinal));
         Assert.AreEqual("bundle_native_abi", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "wrong-abi"), false))).Code); fixture.WriteNativeIdentity();
         File.Delete(Path.Combine(fixture.Publish, fixture.ExecutableFile)); Assert.AreEqual("bundle_declared_file", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "missing"), false))).Code);
         fixture.WriteExecutable(); File.WriteAllText(fixture.Configuration, File.ReadAllText(fixture.Configuration).Replace($"\"files\":[\"{fixture.ExecutableFile}\"", "\"files\":[\"source.cs\"", StringComparison.Ordinal)); File.WriteAllText(Path.Combine(fixture.Publish, "source.cs"), "development"); project = NeoProjectConfiguration.Load(fixture.Configuration); Assert.AreEqual("bundle_forbidden_file", Assert.ThrowsExactly<NeoToolException>(() => NeoBundleOrchestrator.Run(project, fixture.Request(Path.Combine(fixture.Root, "forbidden"), false))).Code);

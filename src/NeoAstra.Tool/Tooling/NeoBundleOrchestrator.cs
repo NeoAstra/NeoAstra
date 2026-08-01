@@ -230,8 +230,8 @@ internal static class NeoBundleOrchestrator
 
     internal static void ValidateAbiVersion(uint major, uint minor)
     {
-        if (major != NeoNativeAbi.Major || minor != NeoNativeAbi.Minor)
-            throw new NeoToolException("bundle_native_abi", $"Native ABI {major}.{minor} does not match managed NeoAstra ABI {NeoNativeAbi.Major}.{NeoNativeAbi.Minor}.");
+        if (!NeoNativeAbi.IsCompatible(major, minor))
+            throw new NeoToolException("bundle_native_abi", $"Native ABI {major}.{minor} does not match managed NeoAstra ABI major {NeoNativeAbi.Major}.");
     }
 
     private static bool ArchitectureMatches(ReadOnlySpan<byte> bytes, string rid)
