@@ -275,7 +275,7 @@ public sealed class DesktopServicesTests
     [TestMethod]
     public async Task AccessibilityAndLocalizationSnapshotsRemainDeterministic()
     {
-        using var systemInfo = new NeoSystemInfoService("test.accessibility", "Localized Héllo 更新", "1.0");
+        using var systemInfo = new NeoSystemInfoService("test.accessibility", "Localized Héllo 更新", "1.0", dispatcher: null, monitorPlatform: false);
         var changed = new TaskCompletionSource<NeoThemeSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
         systemInfo.ThemeChanged += (_, snapshot) => changed.TrySetResult(snapshot);
         var expected = new NeoThemeSnapshot(NeoSystemTheme.HighContrast, "#12ABEF", ReducedMotion: true, ReducedTransparency: true);

@@ -903,7 +903,14 @@ internal static class NeoBundleOrchestrator
 
     private static bool IsBelow(string path, string root) => path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     private static bool HostMatches(string rid) => rid.StartsWith("win-", StringComparison.Ordinal) && OperatingSystem.IsWindows() || rid.StartsWith("osx-", StringComparison.Ordinal) && OperatingSystem.IsMacOS() || rid.StartsWith("linux-", StringComparison.Ordinal) && OperatingSystem.IsLinux();
-    private static bool IsExecutable(string path, string executable) => Path.GetFileNameWithoutExtension(path).Equals(executable, StringComparison.OrdinalIgnoreCase) || path.EndsWith(".so", StringComparison.Ordinal) || path.EndsWith(".dylib", StringComparison.Ordinal);
+    private static bool IsExecutable(string path, string executable)
+    {
+        var fileName = Path.GetFileName(path);
+        return fileName.Equals(executable, StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(executable + ".exe", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".so", StringComparison.Ordinal)
+            || path.EndsWith(".dylib", StringComparison.Ordinal);
+    }
     private static string Component(string path) => path.Contains("neoastra", StringComparison.OrdinalIgnoreCase) ? "NeoAstra" : path.EndsWith(".deps.json", StringComparison.Ordinal) || path.EndsWith(".runtimeconfig.json", StringComparison.Ordinal) ? ".NET runtime policy" : "application";
     private static string HashFile(string path)
     {

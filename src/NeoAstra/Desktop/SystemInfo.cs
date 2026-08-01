@@ -87,6 +87,11 @@ public sealed class NeoSystemInfoService : IDisposable
 
     /// <summary>Initializes system information for an explicit application identity.</summary>
     public NeoSystemInfoService(string applicationId, string applicationName, string applicationVersion, NeoDispatcher? dispatcher = null)
+        : this(applicationId, applicationName, applicationVersion, dispatcher, monitorPlatform: true)
+    {
+    }
+
+    internal NeoSystemInfoService(string applicationId, string applicationName, string applicationVersion, NeoDispatcher? dispatcher, bool monitorPlatform)
     {
         NeoPluginMetadata.ValidateId(applicationId, nameof(applicationId));
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationName);
@@ -99,7 +104,7 @@ public sealed class NeoSystemInfoService : IDisposable
         Metadata = new(applicationId, applicationName, applicationVersion, RuntimeInformation.OSDescription, RuntimeInformation.ProcessArchitecture.ToString(), OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "cocoa" : OperatingSystem.IsLinux() ? "gtk" : "unknown", locale, Array.AsReadOnly(new[] { locale }));
         ThemeSupport = NeoSystemInfoPlatform.ThemeSupport;
         DisplaySupport = NeoSystemInfoPlatform.DisplaySupport;
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())
+        if (monitorPlatform && (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux()))
             _platformTimer = new Timer(static state => _ = ((NeoSystemInfoService)state!).RefreshPlatformAsync(), this, TimeSpan.Zero, TimeSpan.FromSeconds(2));
     }
 
