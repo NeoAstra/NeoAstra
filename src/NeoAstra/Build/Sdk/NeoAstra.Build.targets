@@ -55,7 +55,30 @@
            Text="NeoAstra frontend dependency restore failed: @(_NeoAstraFrontendRestoreOutput, ' | ')" />
   </Target>
 
-  <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts;NeoAstraRestoreFrontendPackages"
+  <Target Name="NeoAstraStageFrontendClient"
+          Condition="'$(NeoAstraStageFrontendClient)' == 'true'">
+    <PropertyGroup>
+      <_NeoAstraFrontendClientInputDirectory Condition="Exists('$(NeoAstraFrontendClientSourceDirectory)/package.json')">$(NeoAstraFrontendClientSourceDirectory)</_NeoAstraFrontendClientInputDirectory>
+      <_NeoAstraFrontendClientInputDirectory Condition="'$(_NeoAstraFrontendClientInputDirectory)' == ''">$(NeoAstraFrontendClientPackageDirectory)</_NeoAstraFrontendClientInputDirectory>
+    </PropertyGroup>
+    <Error Condition="'$(_NeoAstraFrontendClientInputDirectory)' == '' or !Exists('$(_NeoAstraFrontendClientInputDirectory)/package.json') or !Exists('$(_NeoAstraFrontendClientInputDirectory)/dist/index.js')"
+           Text="The packaged @neoastra/client runtime is unavailable. Restore a NeoAstra package containing tools/frontend/neoastra-client or build the source frontend package." />
+    <ItemGroup>
+      <_NeoAstraFrontendClientMetadata Include="$(_NeoAstraFrontendClientInputDirectory)/package.json;$(_NeoAstraFrontendClientInputDirectory)/LICENSE;$(_NeoAstraFrontendClientInputDirectory)/README.md;$(_NeoAstraFrontendClientInputDirectory)/provenance.json" />
+      <_NeoAstraFrontendClientDist Include="$(_NeoAstraFrontendClientInputDirectory)/dist/**/*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(NeoAstraFrontendClientStageDirectory)" />
+    <MakeDir Directories="$(NeoAstraFrontendClientStageDirectory)/dist" />
+    <Copy SourceFiles="@(_NeoAstraFrontendClientMetadata)" DestinationFolder="$(NeoAstraFrontendClientStageDirectory)" />
+    <Copy SourceFiles="@(_NeoAstraFrontendClientDist)"
+          DestinationFiles="@(_NeoAstraFrontendClientDist-&gt;'$(NeoAstraFrontendClientStageDirectory)/dist/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <ItemGroup>
+      <NeoAstraFrontendInput Include="$(NeoAstraFrontendClientStageDirectory)/package.json;$(NeoAstraFrontendClientStageDirectory)/dist/**/*" />
+      <FileWrites Include="$(NeoAstraFrontendClientStageDirectory)/**/*" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="NeoAstraComputeFrontendFingerprint" DependsOnTargets="Compile;NeoAstraVerifyContracts;NeoAstraStageFrontendClient;NeoAstraRestoreFrontendPackages"
           Condition="'$(_NeoAstraPrepareFrontend)' == 'true'">
     <PropertyGroup>
       <NeoAstraFrontendIntermediateDirectory Condition="'$(NeoAstraFrontendIntermediateDirectory)' == ''">$(IntermediateOutputPath)neoastra/frontend</NeoAstraFrontendIntermediateDirectory>

@@ -3,12 +3,6 @@
   <ItemGroup>
     <PackageReference Include="MinVer" PrivateAssets="all" />
     <Content Include="$(MSBuildThisFileDirectory)../../templates/neoastra-*/**/*" Pack="true" PackagePath="content/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/dist/**/*" Pack="true" PackagePath="content/neoastra-vanilla/ClientApp/vendor/neoastra-client/dist/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/package.json;$(MSBuildThisFileDirectory)../../frontend/packages/client/LICENSE;$(MSBuildThisFileDirectory)../../frontend/packages/client/README.md;$(MSBuildThisFileDirectory)../../frontend/packages/client/provenance.json" Pack="true" PackagePath="content/neoastra-vanilla/ClientApp/vendor/neoastra-client/%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/dist/**/*" Pack="true" PackagePath="content/neoastra-react/ClientApp/vendor/neoastra-client/dist/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/package.json;$(MSBuildThisFileDirectory)../../frontend/packages/client/LICENSE;$(MSBuildThisFileDirectory)../../frontend/packages/client/README.md;$(MSBuildThisFileDirectory)../../frontend/packages/client/provenance.json" Pack="true" PackagePath="content/neoastra-react/ClientApp/vendor/neoastra-client/%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/dist/**/*" Pack="true" PackagePath="content/neoastra-vue/ClientApp/vendor/neoastra-client/dist/%(RecursiveDir)%(Filename)%(Extension)" />
-    <Content Include="$(MSBuildThisFileDirectory)../../frontend/packages/client/package.json;$(MSBuildThisFileDirectory)../../frontend/packages/client/LICENSE;$(MSBuildThisFileDirectory)../../frontend/packages/client/README.md;$(MSBuildThisFileDirectory)../../frontend/packages/client/provenance.json" Pack="true" PackagePath="content/neoastra-vue/ClientApp/vendor/neoastra-client/%(Filename)%(Extension)" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="/" />
   </ItemGroup>

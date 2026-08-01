@@ -1,1 +1,1 @@
-{"name":"neoastra-app","private":true,"type":"module","scripts":{"dev":"vite","build":"tsc --noEmit && vite build","test":"tsx --test src/*.test.ts"},"dependencies":{"@neoastra/client":"file:vendor/neoastra-client"},"devDependencies":{"tsx":"latest","typescript":"^5.9.3","vite":"latest"}}
+{"name":"neoastra-app","private":true,"type":"module","scripts":{"dev":"vite","build":"tsc --noEmit && vite build","test":"tsx --test src/*.test.ts"},"dependencies":{"@neoastra/client":"file:../obj/neoastra/client"},"devDependencies":{"tsx":"latest","typescript":"^5.9.3","vite":"latest"}}

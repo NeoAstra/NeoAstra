@@ -4,12 +4,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prebuild": "tsc -p ../../../frontend/packages/client/tsconfig.json",
     "build": "tsc --noEmit && vite build",
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@neoastra/client": "file:../../../frontend/packages/client",
+    "@neoastra/client": "file:../obj/neoastra/client",
     "react": "latest",
     "react-dom": "latest"
   },

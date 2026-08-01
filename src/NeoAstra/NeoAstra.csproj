@@ -16,7 +16,8 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <NeoAstraGeneratorAssembly>$(MSBuildThisFileDirectory)..\NeoAstra.Generator\bin\$(Configuration)\netstandard2.0\NeoAstra.Generator.dll</NeoAstraGeneratorAssembly>
-    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);NeoAstraCollectPackagedTool</TargetsForTfmSpecificContentInPackage>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);NeoAstraCollectPackagedTool;NeoAstraCollectPackagedFrontendClient</TargetsForTfmSpecificContentInPackage>
+    <NeoAstraFrontendClientSourceDirectory>$(MSBuildThisFileDirectory)..\..\frontend\packages\client</NeoAstraFrontendClientSourceDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -65,6 +66,33 @@
                                        $(MSBuildThisFileDirectory)..\NeoAstra.Tool\bin\$(Configuration)\net10.0\XenoAtom.CommandLine.dll">
         <PackagePath>tools/net10.0/any/%(Filename)%(Extension)</PackagePath>
       </TfmSpecificPackageFile>
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <_NeoAstraPackagedFrontendClientInput Include="$(NeoAstraFrontendClientSourceDirectory)\package.json" />
+    <_NeoAstraPackagedFrontendClientInput Include="$(NeoAstraFrontendClientSourceDirectory)\tsconfig.json" />
+    <_NeoAstraPackagedFrontendClientInput Include="$(NeoAstraFrontendClientSourceDirectory)\src\**\*.ts" />
+    <_NeoAstraPackagedFrontendClientInput Include="$(NeoAstraFrontendClientSourceDirectory)\..\..\package.json" />
+    <_NeoAstraPackagedFrontendClientInput Include="$(NeoAstraFrontendClientSourceDirectory)\..\..\package-lock.json" />
+  </ItemGroup>
+
+  <Target Name="NeoAstraBuildFrontendClient" BeforeTargets="Build"
+          Inputs="@(_NeoAstraPackagedFrontendClientInput)"
+          Outputs="$(NeoAstraFrontendClientSourceDirectory)\dist\index.js;$(NeoAstraFrontendClientSourceDirectory)\dist\index.d.ts;$(NeoAstraFrontendClientSourceDirectory)\dist\testing.js;$(NeoAstraFrontendClientSourceDirectory)\dist\testing.d.ts">
+    <Exec WorkingDirectory="$(NeoAstraFrontendClientSourceDirectory)\..\.." Command="npm ci --no-audit --no-fund" />
+    <Exec WorkingDirectory="$(NeoAstraFrontendClientSourceDirectory)\..\.." Command="npm run build --workspace @neoastra/client" />
+  </Target>
+
+  <Target Name="NeoAstraCollectPackagedFrontendClient" DependsOnTargets="NeoAstraBuildFrontendClient">
+    <ItemGroup>
+      <_NeoAstraPackagedFrontendClientMetadata Include="$(NeoAstraFrontendClientSourceDirectory)\package.json;$(NeoAstraFrontendClientSourceDirectory)\LICENSE;$(NeoAstraFrontendClientSourceDirectory)\README.md;$(NeoAstraFrontendClientSourceDirectory)\provenance.json">
+        <PackagePath>tools/frontend/neoastra-client/%(_NeoAstraPackagedFrontendClientMetadata.Filename)%(_NeoAstraPackagedFrontendClientMetadata.Extension)</PackagePath>
+      </_NeoAstraPackagedFrontendClientMetadata>
+      <_NeoAstraPackagedFrontendClientDist Include="$(NeoAstraFrontendClientSourceDirectory)\dist\**\*">
+        <PackagePath>tools/frontend/neoastra-client/dist/%(_NeoAstraPackagedFrontendClientDist.RecursiveDir)%(_NeoAstraPackagedFrontendClientDist.Filename)%(_NeoAstraPackagedFrontendClientDist.Extension)</PackagePath>
+      </_NeoAstraPackagedFrontendClientDist>
+      <TfmSpecificPackageFile Include="@(_NeoAstraPackagedFrontendClientMetadata);@(_NeoAstraPackagedFrontendClientDist)" />
     </ItemGroup>
   </Target>
 </Project>

@@ -13,9 +13,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
-    <NeoAstraFrontendInput Include="../../frontend/packages/client/package.json" />
-    <NeoAstraFrontendInput Include="../../frontend/packages/client/tsconfig.json" />
-    <NeoAstraFrontendInput Include="../../frontend/packages/client/src/**/*.ts" />
     <None
       Include="capabilities/*.json"
       CopyToOutputDirectory="PreserveNewest"

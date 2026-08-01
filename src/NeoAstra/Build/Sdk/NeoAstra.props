@@ -8,6 +8,13 @@
     <NeoAstraPrebuiltAssets Condition="'$(NeoAstraPrebuiltAssets)' == ''">false</NeoAstraPrebuiltAssets>
     <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\..\NeoAstra.Tool\NeoAstra.Tool.csproj')">$(MSBuildThisFileDirectory)..\..\..\NeoAstra.Tool\bin\$(Configuration)\net10.0\NeoAstra.Tool.dll</NeoAstraToolPath>
     <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == ''">$(MSBuildThisFileDirectory)..\tools\net10.0\any\NeoAstra.Tool.dll</NeoAstraToolPath>
+    <_NeoAstraFrontendClientSourceCandidate>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\..\frontend\packages\client'))</_NeoAstraFrontendClientSourceCandidate>
+    <_NeoAstraFrontendClientPackageCandidate>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\tools\frontend\neoastra-client'))</_NeoAstraFrontendClientPackageCandidate>
+    <NeoAstraFrontendClientSourceDirectory Condition="'$(NeoAstraFrontendClientSourceDirectory)' == '' and Exists('$(_NeoAstraFrontendClientSourceCandidate)/package.json')">$(_NeoAstraFrontendClientSourceCandidate)</NeoAstraFrontendClientSourceDirectory>
+    <NeoAstraFrontendClientPackageDirectory Condition="'$(NeoAstraFrontendClientPackageDirectory)' == '' and Exists('$(_NeoAstraFrontendClientPackageCandidate)/package.json')">$(_NeoAstraFrontendClientPackageCandidate)</NeoAstraFrontendClientPackageDirectory>
+    <NeoAstraFrontendClientStageDirectory Condition="'$(NeoAstraFrontendClientStageDirectory)' == ''">$(MSBuildProjectDirectory)/$(BaseIntermediateOutputPath)neoastra/client</NeoAstraFrontendClientStageDirectory>
+    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == '' and Exists('$(MSBuildProjectDirectory)/ClientApp/package.json')">true</NeoAstraStageFrontendClient>
+    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == ''">false</NeoAstraStageFrontendClient>
     <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
     <NeoRpcIntermediateOutputPath Condition="'$(NeoRpcIntermediateOutputPath)' == ''">$(MSBuildProjectExtensionsPath)neoastra</NeoRpcIntermediateOutputPath>
     <NeoRpcTypeScriptOutput Condition="'$(NeoRpcTypeScriptOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.ts</NeoRpcTypeScriptOutput>

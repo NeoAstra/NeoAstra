@@ -486,6 +486,37 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task PackagedFrontendClient_IsStagedFromSdkAssets()
+    {
+        using var fixture = new IntegratedBuildFixture();
+        var packagedClient = Path.Combine(fixture.Root, "packaged-client");
+        Directory.CreateDirectory(Path.Combine(packagedClient, "dist"));
+        File.WriteAllText(Path.Combine(packagedClient, "package.json"), "{\"name\":\"@neoastra/client\",\"version\":\"1.2.3\"}");
+        File.WriteAllText(Path.Combine(packagedClient, "LICENSE"), "license");
+        File.WriteAllText(Path.Combine(packagedClient, "README.md"), "readme");
+        File.WriteAllText(Path.Combine(packagedClient, "provenance.json"), "{}");
+        File.WriteAllText(Path.Combine(packagedClient, "dist", "index.js"), "export const value = 1;");
+        File.WriteAllText(Path.Combine(packagedClient, "dist", "index.d.ts"), "export declare const value: number;");
+        File.WriteAllText(Path.Combine(fixture.FrontendRoot, "package.json"), "{\"name\":\"fixture\"}");
+
+        await fixture.RunDotNetAsync(
+            "msbuild",
+            fixture.ProjectPath,
+            "-nologo",
+            "-t:NeoAstraStageFrontendClient",
+            $"-p:NeoAstraFrontendClientSourceDirectory={Path.Combine(fixture.Root, "missing-source")}",
+            $"-p:NeoAstraFrontendClientPackageDirectory={packagedClient}");
+
+        var stagedClient = Path.Combine(fixture.Root, "obj", "neoastra", "client");
+        Assert.AreEqual(
+            File.ReadAllText(Path.Combine(packagedClient, "package.json")),
+            File.ReadAllText(Path.Combine(stagedClient, "package.json")));
+        Assert.AreEqual(
+            File.ReadAllText(Path.Combine(packagedClient, "dist", "index.js")),
+            File.ReadAllText(Path.Combine(stagedClient, "dist", "index.js")));
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_OrdersReadinessBeforeBackendAndStopsBothOnFailure()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
