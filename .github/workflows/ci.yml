@@ -276,11 +276,12 @@ jobs:
           dotnet new install $templatePackage.FullName --debug:custom-hive $hive
           dotnet new neoastra -n VanillaApp -o (Join-Path $root VanillaApp) --neoAstraVersion $version --debug:custom-hive $hive
           dotnet new neoastra-react -n ReactApp -o (Join-Path $root ReactApp) --neoAstraVersion $version --debug:custom-hive $hive
+          dotnet new neoastra-vue -n VueApp -o (Join-Path $root VueApp) --neoAstraVersion $version --debug:custom-hive $hive
           @"
           <?xml version="1.0" encoding="utf-8"?>
           <configuration><packageSources><clear /><add key="local" value="$PWD/artifacts/packages" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
           "@ | Set-Content (Join-Path $root NuGet.config)
-          foreach ($name in @('VanillaApp', 'ReactApp')) {
+          foreach ($name in @('VanillaApp', 'ReactApp', 'VueApp')) {
             $project = Get-ChildItem (Join-Path $root $name) -Filter *.csproj | Select-Object -First 1
             if ((Select-String -Path $project.FullName -Pattern '<PackageReference').Count -ne 1) { throw "$name must contain one package reference" }
             if (Test-Path (Join-Path $project.DirectoryName neoastra.json)) { throw "$name must use convention-based defaults" }

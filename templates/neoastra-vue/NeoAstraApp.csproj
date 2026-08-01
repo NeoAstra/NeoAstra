@@ -8,6 +8,6 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NeoAstra" Version="1.0.0" />
+    <PackageReference Include="NeoAstra" Version="NeoAstraPackageVersion" />
   </ItemGroup>
 </Project>
