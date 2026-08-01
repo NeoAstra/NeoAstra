@@ -371,8 +371,9 @@ internal static class NeoBundleOrchestrator
         {
             WritePlist(Path.Combine(directory, "Info.plist"), bundle);
             WritePlist(Path.Combine(directory, "Entitlements.plist"), bundle, entitlements: true);
+            WriteMacComponentPlist(Path.Combine(directory, "components.plist"), bundle);
             plans.Add(new("portable-dmg", "hdiutil", ["create", "-srcfolder", "<app>", "-format", "UDZO", "<artifact>.dmg"], [], false));
-            plans.Add(new("installer", "pkgbuild", ["--root", "<package-root>", "--identifier", bundle.Identifier, "--version", bundle.NumericVersion, "--install-location", "/", "<artifact>.pkg"], [], false));
+            plans.Add(new("installer", "pkgbuild", ["--root", "<package-root>", "--component-plist", "<components>", "--identifier", bundle.Identifier, "--version", bundle.NumericVersion, "--install-location", "/", "<artifact>.pkg"], [], false));
         }
         else
         {
@@ -685,6 +686,7 @@ internal static class NeoBundleOrchestrator
         {
             "<staging>" => payload,
             "<package-root>" => packageRoot,
+            "<components>" => Path.Combine(inspect, request.RuntimeIdentifier, "components.plist"),
             "<app>" => payload,
             "<artifact>.msix" or "<artifact>.pkg" or "<artifact>.deb" => destination,
             _ => argument
@@ -1020,6 +1022,30 @@ internal static class NeoBundleOrchestrator
             }
         }
 
+        xml.WriteEndElement();
+        xml.WriteEndElement();
+    }
+
+    private static void WriteMacComponentPlist(string path, NeoBundleConfiguration bundle)
+    {
+        using var xml = XmlWriter.Create(path, new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = true });
+        xml.WriteDocType("plist", "-//Apple//DTD PLIST 1.0//EN", "http://www.apple.com/DTDs/PropertyList-1.0.dtd", null);
+        xml.WriteStartElement("plist");
+        xml.WriteAttributeString("version", "1.0");
+        xml.WriteStartElement("array");
+        xml.WriteStartElement("dict");
+        Key(xml, "RootRelativeBundlePath", $"Applications/{bundle.Executable}.app");
+        xml.WriteElementString("key", "BundleIsRelocatable");
+        xml.WriteStartElement("false");
+        xml.WriteEndElement();
+        xml.WriteElementString("key", "BundleIsVersionChecked");
+        xml.WriteStartElement("true");
+        xml.WriteEndElement();
+        xml.WriteElementString("key", "BundleHasStrictIdentifier");
+        xml.WriteStartElement("true");
+        xml.WriteEndElement();
+        Key(xml, "BundleOverwriteAction", "upgrade");
+        xml.WriteEndElement();
         xml.WriteEndElement();
         xml.WriteEndElement();
     }
