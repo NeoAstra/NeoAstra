@@ -45,8 +45,12 @@ for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [rea
 
 const referenceRoot = path.join(repositoryRoot, "samples/NeoAstra.Sample.Advanced/ClientApp");
 const referenceCheckRoot = path.join(referenceRoot, ".neoastra-check-dist");
+const referenceAliases = [
+  { find: /^#neoastra$/, replacement: path.join(root, "fixtures/generated/advanced.ts") },
+  ...sourceAliases,
+];
 try {
-  await build({ root: referenceRoot, configFile: false, base: "./", plugins: [react()], logLevel: "error", resolve: { alias: sourceAliases }, assetsInclude: ["**/*.ttf"], worker: { format: "es" }, build: { assetsInlineLimit: 0, outDir: ".neoastra-check-dist", emptyOutDir: true } });
+  await build({ root: referenceRoot, configFile: false, base: "./", plugins: [react()], logLevel: "error", resolve: { alias: referenceAliases }, assetsInclude: ["**/*.ttf"], worker: { format: "es" }, build: { assetsInlineLimit: 0, outDir: ".neoastra-check-dist", emptyOutDir: true } });
   await assertDirectoriesEqual(path.join(referenceRoot, "dist"), referenceCheckRoot);
 } finally {
   await rm(referenceCheckRoot, { recursive: true, force: true });
