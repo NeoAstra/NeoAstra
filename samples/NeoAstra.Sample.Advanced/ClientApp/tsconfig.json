@@ -5,6 +5,10 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "noEmit": true,
+    "paths": {
+      "#neoastra": ["../obj/neoastra/neoastra.ts"],
+      "@neoastra/client": ["./node_modules/@neoastra/client/dist/index.d.ts"]
+    },
     "jsx": "react-jsx",
     "types": ["vite/client"],
     "lib": ["ES2022", "DOM"]

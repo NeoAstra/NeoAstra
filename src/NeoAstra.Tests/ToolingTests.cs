@@ -55,6 +55,7 @@ public sealed class ToolingTests
             var project = NeoProjectConfiguration.Load(Path.Combine(root, "neoastra.json"));
             Assert.AreEqual("npm", project.PackageManager);
             Assert.AreEqual(Path.Combine(frontend, "dist"), project.DistDirectory);
+            Assert.AreEqual(Path.Combine(root, "obj", "neoastra", "neoastra.ts"), project.GeneratedContract);
             CollectionAssert.AreEqual(new[] { "npm", "run", "build" }, project.BuildCommand.Arguments.ToArray());
 
             File.WriteAllText(Path.Combine(frontend, "pnpm-lock.yaml"), "lockfileVersion: 9");
@@ -411,6 +412,12 @@ public sealed class ToolingTests
         var first = await fixture.BuildAsync();
         StringAssert.Contains(first, "FRONTEND_EXECUTED");
         Assert.AreEqual("first", File.ReadAllText(fixture.BuiltIndex));
+        Assert.AreEqual(
+            File.ReadAllText(Path.Combine(fixture.Root, "generated.ts")),
+            File.ReadAllText(Path.Combine(fixture.BuildOutput, "neoastra", "generated.ts")));
+        Assert.AreEqual(
+            File.ReadAllText(Path.Combine(fixture.Root, "generated.manifest.json")),
+            File.ReadAllText(Path.Combine(fixture.BuildOutput, "neoastra", "generated.manifest.json")));
 
         var unchanged = await fixture.BuildAsync();
         Assert.IsFalse(unchanged.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
@@ -441,6 +448,8 @@ public sealed class ToolingTests
         var published = await fixture.RunDotNetAsync("publish", fixture.ProjectPath, "--no-restore", "--nologo", "-c", "Debug", "-o", publishDirectory);
         Assert.IsFalse(published.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
         Assert.AreEqual("opted-out", File.ReadAllText(Path.Combine(publishDirectory, "assets", "index.html")));
+        Assert.IsTrue(File.Exists(Path.Combine(publishDirectory, "neoastra", "generated.ts")));
+        Assert.IsTrue(File.Exists(Path.Combine(publishDirectory, "neoastra", "generated.manifest.json")));
 
         File.WriteAllText(Path.Combine(fixture.PreparedAssets, "stale.js"), "stale");
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(fixture.BuiltIndex)!, "stale.js"), "stale");
@@ -589,6 +598,7 @@ public sealed class ToolingTests
         internal string ProjectPath { get; }
         internal string DisabledProjectPath { get; }
         internal string BuiltIndex => Path.Combine(Root, "bin", "Debug", "net10.0", "assets", "index.html");
+        internal string BuildOutput => Path.Combine(Root, "bin", "Debug", "net10.0");
         internal string PreparedAssets => Path.Combine(Root, "obj", "Debug", "net10.0", "neoastra", "frontend", "assets");
 
         internal void WriteContract(int version)

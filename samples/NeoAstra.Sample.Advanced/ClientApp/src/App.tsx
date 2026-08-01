@@ -7,7 +7,7 @@ import {
 import markUrl from "./advanced-mark.svg";
 import { DesktopTour } from "./DesktopTour";
 import { FeatureCard, ResultPanel } from "./FeatureCard";
-import { tour, type TourActivity } from "./generated/neoastra";
+import { tour, type TourActivity } from "#neoastra";
 import { LifecycleTour } from "./LifecycleTour";
 import { RpcTour } from "./RpcTour";
 import { describe, describeError, desktop } from "./tour-api";

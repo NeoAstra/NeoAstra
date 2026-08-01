@@ -13,6 +13,28 @@
     <_NeoAstraRestoreFrontend Condition="'$(_NeoAstraPrepareFrontend)' == 'true' and '$(NeoAstraPrebuiltAssets)' != 'true' and '$(NeoAstraRestoreFrontendDependencies)' == 'true'">true</_NeoAstraRestoreFrontend>
   </PropertyGroup>
 
+  <Target Name="NeoAstraCollectRpcArtifacts"
+          BeforeTargets="_GetCopyToOutputDirectoryItemsFromThisProject"
+          DependsOnTargets="Compile">
+    <ItemGroup>
+      <ContentWithTargetPath Include="$(NeoRpcTypeScriptOutput)" Condition="Exists('$(NeoRpcTypeScriptOutput)')">
+        <TargetPath>neoastra/$([System.IO.Path]::GetFileName('$(NeoRpcTypeScriptOutput)'))</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ContentWithTargetPath>
+      <ContentWithTargetPath Include="$(NeoRpcManifestOutput)" Condition="Exists('$(NeoRpcManifestOutput)')">
+        <TargetPath>neoastra/$([System.IO.Path]::GetFileName('$(NeoRpcManifestOutput)'))</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ContentWithTargetPath>
+      <ContentWithTargetPath Include="$(NeoRpcSchemaOutput)" Condition="Exists('$(NeoRpcSchemaOutput)')">
+        <TargetPath>neoastra/$([System.IO.Path]::GetFileName('$(NeoRpcSchemaOutput)'))</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
   <Target Name="NeoAstraVerifyContracts" AfterTargets="Compile"
           Condition="'$(NeoAstraFrontendEnabled)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(NeoRpcTypeScriptOutput)' != '' and '$(NeoRpcManifestOutput)' != ''">
     <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; contract check --typescript &quot;$(NeoRpcTypeScriptOutput)&quot; --manifest &quot;$(NeoRpcManifestOutput)&quot;" />

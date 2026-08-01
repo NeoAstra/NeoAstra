@@ -7,7 +7,7 @@ import {
   type DesktopRpc,
   type NeoRpcCallOptions,
 } from "@neoastra/client";
-import { neoRpcContractHash } from "./generated/neoastra";
+import { neoRpcContractHash } from "#neoastra";
 
 export function withAdvancedContract(rpc: DesktopRpc): DesktopRpc {
   return {

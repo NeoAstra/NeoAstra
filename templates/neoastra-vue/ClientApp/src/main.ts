@@ -1,2 +1,2 @@
-import { createApp, ref } from "vue"; import "./style.css"; import { installNavigationGuard } from "./security"; import { greeting } from "./generated/neoastra";
+import { createApp, ref } from "vue"; import "./style.css"; import { installNavigationGuard } from "./security"; import { greeting } from "#neoastra";
 installNavigationGuard(); createApp({ setup() { const message = ref(""); const hello = async () => { message.value = (await greeting.hello({ name: "desktop" })).message; }; return { message, hello }; }, template: `<h1>NeoAstra Vue</h1><button type="button" @click="hello">Say hello</button><output aria-live="polite">{{ message }}</output>` }).mount("#app");

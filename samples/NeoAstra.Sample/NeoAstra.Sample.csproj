@@ -5,19 +5,13 @@
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>
-    <NeoRpcTypeScriptOutput>$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
     <NeoRpcJavaScriptOutput>$(MSBuildProjectDirectory)/assets/generated/neoastra.js</NeoRpcJavaScriptOutput>
     <NeoRpcJavaScriptImport>../neoastra-client/index.js</NeoRpcJavaScriptImport>
-    <NeoRpcManifestOutput>$(MSBuildProjectDirectory)/obj/generated/neoastra.manifest.json</NeoRpcManifestOutput>
-    <NeoRpcSchemaOutput>$(MSBuildProjectDirectory)/obj/generated/neoastra.schema.json</NeoRpcSchemaOutput>
   </PropertyGroup>
   <ItemGroup>
-    <CompilerVisibleProperty Include="NeoRpcTypeScriptOutput" />
-    <CompilerVisibleProperty Include="NeoRpcJavaScriptOutput" />
-    <CompilerVisibleProperty Include="NeoRpcJavaScriptImport" />
-    <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
-    <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
     <None Include="assets/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Import Project="../../src/NeoAstra/Build/Sdk/NeoAstra.props" />
+  <Import Project="../../src/NeoAstra/Build/Sdk/NeoAstra.Build.targets" />
 </Project>

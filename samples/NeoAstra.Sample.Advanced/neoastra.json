@@ -30,7 +30,7 @@
     "spaFallback": "index.html",
     "packageManager": "npm",
     "lockfile": "ClientApp/package-lock.json",
-    "generatedContract": "ClientApp/src/generated/neoastra.ts"
+    "generatedContract": "obj/neoastra/neoastra.ts"
   },
   "assets": {
     "origin": "app://neoastra",

@@ -94,7 +94,9 @@ jobs:
           dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.Sample.Advanced/neoastra.json > artifacts/advanced-inspect.json
           dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/advanced
           ./artifacts/advanced/NeoAstra.Sample.Advanced${{ matrix.os == 'windows-latest' && '.exe' || '' }} --validate-advanced
-          git diff --exit-code -- samples/NeoAstra.Sample.Advanced/generated samples/NeoAstra.Sample.Advanced/ClientApp/src/generated
+          @('neoastra.ts', 'neoastra.manifest.json', 'neoastra.schema.json') | ForEach-Object {
+            if (-not (Test-Path (Join-Path 'samples/NeoAstra.Sample.Advanced/obj/neoastra' $_))) { throw "Intermediate generator output is missing: $_" }
+          }
 
   native:
     uses: ./.github/workflows/native.yml
@@ -263,7 +265,10 @@ jobs:
           "@ | Set-Content (Join-Path $consumer NuGet.config)
           dotnet restore (Join-Path $consumer Consumer.csproj) --configfile (Join-Path $consumer NuGet.config)
           dotnet build (Join-Path $consumer Consumer.csproj) -c Release --no-restore
-          @('ClientApp/src/generated/neoastra.ts', 'obj/neoastra/neoastra.manifest.json', 'obj/neoastra/neoastra.schema.json') | ForEach-Object { if (-not (Test-Path (Join-Path $consumer $_))) { throw "Embedded generator output is missing: $_" } }
+          @('neoastra.ts', 'neoastra.manifest.json', 'neoastra.schema.json') | ForEach-Object {
+            if (-not (Test-Path (Join-Path $consumer "obj/neoastra/$_"))) { throw "Intermediate generator output is missing: $_" }
+            if (-not (Test-Path (Join-Path $consumer "bin/Release/net10.0/neoastra/$_"))) { throw "Generator output content is missing: $_" }
+          }
           if (Select-String -Path (Join-Path $consumer obj/project.assets.json) -Pattern 'NeoAstra.Generator/' -Quiet) { throw 'Generator must be an analyzer asset, not a package dependency' }
       - name: Verify clean application templates
         shell: pwsh

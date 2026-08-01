@@ -9,9 +9,10 @@
     <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == '' and Exists('$(MSBuildThisFileDirectory)..\..\..\NeoAstra.Tool\NeoAstra.Tool.csproj')">$(MSBuildThisFileDirectory)..\..\..\NeoAstra.Tool\bin\$(Configuration)\net10.0\NeoAstra.Tool.dll</NeoAstraToolPath>
     <NeoAstraToolPath Condition="'$(NeoAstraToolPath)' == ''">$(MSBuildThisFileDirectory)..\tools\net10.0\any\NeoAstra.Tool.dll</NeoAstraToolPath>
     <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
-    <NeoRpcTypeScriptOutput Condition="'$(NeoRpcTypeScriptOutput)' == ''">$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
+    <NeoRpcIntermediateOutputPath Condition="'$(NeoRpcIntermediateOutputPath)' == ''">$(MSBuildProjectExtensionsPath)neoastra</NeoRpcIntermediateOutputPath>
+    <NeoRpcTypeScriptOutput Condition="'$(NeoRpcTypeScriptOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.ts</NeoRpcTypeScriptOutput>
     <NeoRpcJavaScriptImport Condition="'$(NeoRpcJavaScriptImport)' == ''">@neoastra/client</NeoRpcJavaScriptImport>
-    <NeoRpcManifestOutput Condition="'$(NeoRpcManifestOutput)' == ''">$(MSBuildProjectExtensionsPath)neoastra/neoastra.manifest.json</NeoRpcManifestOutput>
-    <NeoRpcSchemaOutput Condition="'$(NeoRpcSchemaOutput)' == ''">$(MSBuildProjectExtensionsPath)neoastra/neoastra.schema.json</NeoRpcSchemaOutput>
+    <NeoRpcManifestOutput Condition="'$(NeoRpcManifestOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.manifest.json</NeoRpcManifestOutput>
+    <NeoRpcSchemaOutput Condition="'$(NeoRpcSchemaOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.schema.json</NeoRpcSchemaOutput>
   </PropertyGroup>
 </Project>

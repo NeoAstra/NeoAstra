@@ -1,5 +1,5 @@
 import React from "react";
-import { tour } from "./generated/neoastra";
+import { tour } from "#neoastra";
 import { FeatureCard, ResultPanel } from "./FeatureCard";
 import { describeError } from "./tour-api";
 

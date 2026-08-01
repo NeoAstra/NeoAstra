@@ -7,7 +7,7 @@ import {
   createMockDesktop,
   createMockRpcHarness,
 } from "@neoastra/client/testing";
-import { neoRpcContractHash } from "./generated/neoastra";
+import { neoRpcContractHash } from "#neoastra";
 import { withAdvancedContract } from "./tour-api";
 
 const observedContractHashes: Array<string | undefined> = [];

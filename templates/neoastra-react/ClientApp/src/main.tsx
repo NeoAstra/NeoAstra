@@ -1,2 +1,2 @@
-import React from "react"; import { createRoot } from "react-dom/client"; import "./style.css"; import { installNavigationGuard } from "./security"; import { greeting } from "./generated/neoastra";
+import React from "react"; import { createRoot } from "react-dom/client"; import "./style.css"; import { installNavigationGuard } from "./security"; import { greeting } from "#neoastra";
 installNavigationGuard(); function App() { const [message, setMessage] = React.useState(""); return <><h1>NeoAstra React</h1><button type="button" onClick={async () => setMessage((await greeting.hello({ name: "desktop" })).message)}>Say hello</button><output aria-live="polite">{message}</output></>; } createRoot(document.querySelector("#app")!).render(<App />);

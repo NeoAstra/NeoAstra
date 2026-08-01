@@ -9,15 +9,9 @@
     <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <NeoRpcTypeScriptOutput>$(MSBuildProjectDirectory)/ClientApp/src/generated/neoastra.ts</NeoRpcTypeScriptOutput>
-    <NeoRpcManifestOutput>$(MSBuildProjectDirectory)/generated/neoastra.manifest.json</NeoRpcManifestOutput>
-    <NeoRpcSchemaOutput>$(MSBuildProjectDirectory)/generated/neoastra.schema.json</NeoRpcSchemaOutput>
   </PropertyGroup>
 
   <ItemGroup>
-    <CompilerVisibleProperty Include="NeoRpcTypeScriptOutput" />
-    <CompilerVisibleProperty Include="NeoRpcManifestOutput" />
-    <CompilerVisibleProperty Include="NeoRpcSchemaOutput" />
     <ProjectReference Include="../../src/NeoAstra/NeoAstra.csproj" />
     <None
       Include="capabilities/*.json"

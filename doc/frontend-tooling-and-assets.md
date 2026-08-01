@@ -75,12 +75,11 @@ dotnet publish -c Release -r linux-x64 --self-contained \
 
 Prebuilt mode does not skip validation. It requires the explicit configured directory, rebuilds the deterministic manifest, rejects links/reparse points, source maps unless opted in, VCS/source/dependency/secret paths, case collisions, reserved routes, excessive files/sizes, and files that change between manifest and copy. It requires the configured lockfile but skips npm restore and the frontend command. To work fully offline, populate NuGet and frontend caches beforehand or use reviewed prebuilt mode. Do not point prebuilt mode at downloaded or mutable content without reviewing it.
 
-For deterministic CI, generate the manifest twice from clean equivalent frontend outputs and byte-compare it, run `dotnet neoastra contract check`, then fail on generated-tree drift:
+For deterministic CI, generate the manifest twice from clean equivalent frontend outputs and byte-compare it, then verify the intermediate RPC contract before publishing:
 
 ```sh
 dotnet build -c Release
-dotnet neoastra contract check --typescript ClientApp/src/generated/neoastra.ts --manifest generated/neoastra.manifest.json
-git diff --exit-code -- ClientApp/src/generated generated
+dotnet neoastra contract check --typescript obj/neoastra/neoastra.ts --manifest obj/neoastra/neoastra.manifest.json
 dotnet publish -c Release -r "$RID" --self-contained
 ```
 

@@ -225,7 +225,7 @@ internal static class NeoProjectConfiguration
             packageManager,
             packageManagerCommand,
             Path.Combine(frontendRoot, candidates[0].File),
-            Path.Combine(frontendRoot, "src", "generated", "neoastra.ts"),
+            Path.Combine(directory, "obj", "neoastra", "neoastra.ts"),
             false,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(StringComparer.OrdinalIgnoreCase),

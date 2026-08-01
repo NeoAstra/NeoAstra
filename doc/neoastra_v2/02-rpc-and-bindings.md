@@ -256,7 +256,7 @@ Warnings about likely breaking contract changes MUST explain how to assign a new
 Generated use SHALL look like normal TypeScript:
 
 ```ts
-import { documents } from "./generated/neoastra";
+import { documents } from "#neoastra";
 
 const document = await documents.open({ id: selectedId }, { signal });
 const unsubscribe = await documents.onChanged(value => render(value));
