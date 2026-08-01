@@ -12,7 +12,7 @@ public sealed class AbiLayoutTests
     [TestMethod]
     public void GeneratedStructuresMatchNativeAbi18Layout()
     {
-        Assert.AreEqual(8, IntPtr.Size, "ABI 1.8 is validated for the current 64-bit primary targets.");
+        Assert.AreEqual(8, IntPtr.Size, "ABI 1.0 is validated for the current 64-bit primary targets.");
 
         AssertLayout<NativeMethods.neoastra_string_view>(16, (nameof(NativeMethods.neoastra_string_view.length), 8));
         AssertLayout<NativeMethods.neoastra_struct_header>(8, (nameof(NativeMethods.neoastra_struct_header.version), 4));
@@ -51,6 +51,8 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_native_parent_kind>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_native_handle_kind>(0, 9);
         AssertEnum<uint, NativeMethods.neoastra_window_state>(0, 3);
+        AssertEnum<uint, NativeMethods.neoastra_window_attribute>(0, 3);
+        AssertEnum<uint, NativeMethods.neoastra_window_resize_edge>(0, 7);
         AssertEnum<uint, NativeMethods.neoastra_window_close_reason>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_option_state>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_script_injection_time>(0, 1);
@@ -75,6 +77,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoSupportLevel, NativeMethods.neoastra_support_level>();
         AssertEquivalent<NeoApplicationShutdownMode, NativeMethods.neoastra_app_shutdown_mode>();
         AssertEquivalent<NeoWindowState, NativeMethods.neoastra_window_state>();
+        AssertEquivalent<NeoWindowResizeEdge, NativeMethods.neoastra_window_resize_edge>();
         AssertEquivalent<NeoWindowCloseReason, NativeMethods.neoastra_window_close_reason>();
         AssertEquivalent<NeoOptionState, NativeMethods.neoastra_option_state>();
         AssertEquivalent<NeoBridgePolicy, NativeMethods.neoastra_bridge_policy>();

@@ -11,7 +11,8 @@ See [platform support and runtime dependencies](doc/platform-support.md) for the
 ## Features
 
 - Native top-level windows or embedding into a borrowed `HWND`, `NSView`, or `GtkWidget`
-- Mutable window bounds, size constraints, and normal/minimized/maximized/fullscreen state
+- Mutable window bounds, constraints, decorations, resizing, topmost/task-switcher behavior, and normal/minimized/maximized/fullscreen state
+- Typed window transition events plus native chromeless drag and resize interactions
 - Asynchronous environment, profile, and browser-view creation
 - Profile cookie management and selective browsing-data clearing
 - Navigation state and completion events
@@ -90,6 +91,26 @@ partial class AppJsonContext : JsonSerializerContext;
 `NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld, including a generated plain-JavaScript binding whose methods carry the contract hash automatically, and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
 NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, standalone entry points and attached host threads must use an STA apartment.
+
+## Window management
+
+`NeoWindow` exposes aggregate events for state-oriented code and focused convenience events for ordinary application policy. `BoundsChanged`, `FocusChanged`, and `StateChanged` remain the complete forms; `PositionChanged`, `ClientSizeChanged`, `Activated`, `Deactivated`, `Minimized`, `Maximized`, `Restored`, `FullscreenEntered`, and `FullscreenExited` report distinct native transitions. Duplicate focus and state notifications are suppressed.
+
+Window behavior can be changed after creation, on the application UI thread:
+
+```csharp
+window.PositionChanged += (_, e) => SavePosition(e.NewPosition);
+window.Activated += (_, _) => RefreshCommands();
+window.FullscreenExited += (_, _) => RestoreOverlay();
+
+window.IsResizable = false;
+window.HasDecorations = false;
+window.IsAlwaysOnTop = true;
+window.Maximize();       // also Minimize(), Restore(), EnterFullscreen(), ExitFullscreen()
+window.BringToFront();
+```
+
+For a custom title bar, call `BeginDrag()` synchronously from a trusted pointer-press path. Custom resize handles call `BeginResize(NeoWindowResizeEdge)`. These methods ask the native window manager to perform the interaction; they do not synthesize input and are not renderer-callable by default. Interactive resizing is available on Windows and Linux; macOS currently reports `NotSupportedException`. Per-window `ShowInTaskbar` changes are likewise unavailable on macOS because Dock membership is application-scoped. On Wayland, compositor-controlled positions and move notifications remain best-effort. See [known limitations](doc/known-limitations.md) for the platform matrix.
 
 Register local application content before creating the environment. The directory provider rejects encoded traversal, links/reparse points, and files outside its fixed root; it serves only `GET` and `HEAD` requests. Application-scheme descriptors are authority-based and marked secure. Bridge access is separate and default-denied. For a cross-platform, locked-down local view, explicitly opt into whole-view trust only when every document, frame, script, asset, and navigation is controlled:
 

@@ -10,5 +10,5 @@ namespace NeoAstra.Interop;
 internal static class NeoNativeAbi
 {
     internal const uint Major = 1;
-    internal const uint Minor = 9;
+    internal const uint Minor = 0;
 }

@@ -36,10 +36,20 @@ assuming that every browser engine supports every portable event.
 | Download pause/resume | Available when reported by the runtime | Not exposed | Not exposed |
 | Trusted message origins | Exact trusted-origin policy available | Exact trusted-origin policy available | Unavailable; sender-origin data is not trustworthy |
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
+| Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
+| Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |
+| Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
 Linux, a handler that does not complete inline receives the documented safe default instead of an
 unbounded asynchronous deferral.
+
+Chromeless drag and resize entry points must be called synchronously while a native pointer press is
+active. They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
+when no suitable event is active and `NotSupportedException` when the operation has no safe native
+implementation. Linux window positioning is compositor-controlled on Wayland, so `Position`,
+`PositionChanged`, startup coordinates, and position restoration are best-effort there; size, focus,
+and native window-state transitions remain available.
 
 ## Custom schemes and the managed bridge
 

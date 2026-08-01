@@ -266,7 +266,8 @@ public sealed class NeoWindowOptions
     /// <summary>Gets or sets whether the window remains above ordinary windows.</summary>
     public bool IsAlwaysOnTop { get; set; }
 
-    /// <summary>Gets or sets whether the window appears in the taskbar or dock.</summary>
+    /// <summary>Gets or sets whether the window appears in the platform's per-window task switcher.</summary>
+    /// <remarks>macOS Dock membership is application-scoped, so the Cocoa backend ignores this per-window creation hint.</remarks>
     public bool ShowInTaskbar { get; set; } = true;
 
     /// <summary>Gets or sets the initial background color.</summary>

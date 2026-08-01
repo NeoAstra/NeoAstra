@@ -61,6 +61,8 @@ static_assert(std::is_same_v<std::underlying_type_t<neoastra_script_injection_ti
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_decision_action_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_decision_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_close_reason_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_attribute_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_resize_edge_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_permission_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_process_failure_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_event_type_t>, uint32_t>);
@@ -90,7 +92,7 @@ static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRA
 static_assert(NEOASTRA_RESOURCE_MANIFEST == 12);
 static_assert(NEOASTRA_RESOURCE_BODY_FILE == 2);
 static_assert(NEOASTRA_BRIDGE_DISABLED == 0 && NEOASTRA_BRIDGE_TRUSTED_ORIGINS == 1 && NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW == 2);
-static_assert(sizeof(void*) == 8, "ABI 1.9 targets the current 64-bit primary platforms");
+static_assert(sizeof(void*) == 8, "ABI 1.0 targets the current 64-bit primary platforms");
 static_assert(sizeof(neoastra_struct_header_t) == 8);
 static_assert(sizeof(neoastra_string_view_t) == 16);
 static_assert(sizeof(neoastra_point_t) == 8);
@@ -183,6 +185,14 @@ int main() {
     assert(neoastra_window_set_state(window, NEOASTRA_WINDOW_NORMAL) == NEOASTRA_OK);
     neoastra_window_state_t state{};
     assert(neoastra_window_get_state(window, &state) == NEOASTRA_OK);
+    uint32_t attribute{};
+    assert(neoastra_window_get_attribute(window, NEOASTRA_WINDOW_RESIZABLE, &attribute) == NEOASTRA_OK);
+    assert(attribute == 1);
+    assert(neoastra_window_set_attribute(window, NEOASTRA_WINDOW_RESIZABLE, 0) == NEOASTRA_OK);
+    assert(neoastra_window_get_attribute(window, NEOASTRA_WINDOW_RESIZABLE, &attribute) == NEOASTRA_OK);
+    assert(attribute == 0);
+    assert(neoastra_window_set_attribute(window, NEOASTRA_WINDOW_RESIZABLE, 1) == NEOASTRA_OK);
+    assert(neoastra_window_begin_resize(window, static_cast<neoastra_window_resize_edge_t>(99)) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(state == NEOASTRA_WINDOW_NORMAL);
     close_capture closes{};
     assert(neoastra_app_set_event_callback(app, capture_close, &closes) == NEOASTRA_OK);

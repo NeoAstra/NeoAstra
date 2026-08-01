@@ -180,6 +180,35 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
+    /// <summary>Gets or sets whether the window has normal platform decorations.</summary>
+    public bool HasDecorations
+    {
+        get => GetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_DECORATED);
+        set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_DECORATED, value);
+    }
+
+    /// <summary>Gets or sets whether the user can resize the window.</summary>
+    public bool IsResizable
+    {
+        get => GetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_RESIZABLE);
+        set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_RESIZABLE, value);
+    }
+
+    /// <summary>Gets or sets whether the window remains above ordinary windows.</summary>
+    public bool IsAlwaysOnTop
+    {
+        get => GetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALWAYS_ON_TOP);
+        set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALWAYS_ON_TOP, value);
+    }
+
+    /// <summary>Gets or sets whether the window appears in the platform's per-window task switcher.</summary>
+    /// <exception cref="NotSupportedException">The active backend does not expose per-window task-switcher membership.</exception>
+    public bool ShowInTaskbar
+    {
+        get => GetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_SHOW_IN_TASKBAR);
+        set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_SHOW_IN_TASKBAR, value);
+    }
+
     /// <summary>Gets the owner window, if any.</summary>
     public NeoWindow? Owner => _owner;
 
@@ -208,14 +237,41 @@ public sealed class NeoWindow : IAsyncDisposable
     /// <summary>Occurs when the logical position or client size changes.</summary>
     public event EventHandler<NeoWindowBoundsChangedEventArgs>? BoundsChanged;
 
+    /// <summary>Occurs when the logical window position changes.</summary>
+    public event EventHandler<NeoWindowPositionChangedEventArgs>? PositionChanged;
+
+    /// <summary>Occurs when the logical client size changes.</summary>
+    public event EventHandler<NeoWindowClientSizeChangedEventArgs>? ClientSizeChanged;
+
     /// <summary>Occurs when the effective scale factor changes.</summary>
     public event EventHandler<NeoWindowScaleFactorChangedEventArgs>? ScaleFactorChanged;
 
     /// <summary>Occurs when keyboard focus changes.</summary>
     public event EventHandler? FocusChanged;
 
+    /// <summary>Occurs when the window gains keyboard focus.</summary>
+    public event EventHandler? Activated;
+
+    /// <summary>Occurs when the window loses keyboard focus.</summary>
+    public event EventHandler? Deactivated;
+
     /// <summary>Occurs when the effective native presentation state changes.</summary>
     public event EventHandler<NeoWindowStateChangedEventArgs>? StateChanged;
+
+    /// <summary>Occurs when the effective native state becomes minimized.</summary>
+    public event EventHandler? Minimized;
+
+    /// <summary>Occurs when the effective native state becomes maximized.</summary>
+    public event EventHandler? Maximized;
+
+    /// <summary>Occurs when the effective native state becomes normal.</summary>
+    public event EventHandler? Restored;
+
+    /// <summary>Occurs when the effective native state enters fullscreen.</summary>
+    public event EventHandler? FullscreenEntered;
+
+    /// <summary>Occurs when the effective native state leaves fullscreen.</summary>
+    public event EventHandler? FullscreenExited;
 
     /// <summary>Shows the window.</summary>
     public void Show()
@@ -238,6 +294,50 @@ public sealed class NeoWindow : IAsyncDisposable
     {
         ThrowIfDisposed();
         NativeError.ThrowIfFailed(NativeMethods.neoastra_window_activate(NativeHandle), default, "activate window");
+    }
+
+    /// <summary>Requests foreground activation and places the window in front of ordinary windows.</summary>
+    public void BringToFront() => Activate();
+
+    /// <summary>Requests the maximized native state.</summary>
+    public void Maximize() => State = NeoWindowState.Maximized;
+
+    /// <summary>Requests the minimized native state.</summary>
+    public void Minimize() => State = NeoWindowState.Minimized;
+
+    /// <summary>Requests the normal restored native state.</summary>
+    public void Restore() => State = NeoWindowState.Normal;
+
+    /// <summary>Requests the fullscreen native state.</summary>
+    public void EnterFullscreen() => State = NeoWindowState.Fullscreen;
+
+    /// <summary>Leaves fullscreen by requesting the normal restored state.</summary>
+    public void ExitFullscreen()
+    {
+        if (State == NeoWindowState.Fullscreen) State = NeoWindowState.Normal;
+    }
+
+    /// <summary>Starts a native interactive move using the current pointer event.</summary>
+    /// <remarks>Call this synchronously from a trusted pointer-press handler used by a custom title bar.</remarks>
+    /// <exception cref="InvalidOperationException">No suitable native pointer event is active.</exception>
+    /// <exception cref="NotSupportedException">The active backend does not support native interactive moves.</exception>
+    public void BeginDrag()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_window_begin_drag(NativeHandle), default, "begin interactive window drag");
+    }
+
+    /// <summary>Starts a native interactive resize using the current pointer event.</summary>
+    /// <param name="edge">The edge or corner being dragged.</param>
+    /// <remarks>Call this synchronously from a trusted pointer-press handler used by a custom window frame.</remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="edge"/> is not defined.</exception>
+    /// <exception cref="InvalidOperationException">No suitable native pointer event is active.</exception>
+    /// <exception cref="NotSupportedException">The active backend does not support native interactive resizing.</exception>
+    public void BeginResize(NeoWindowResizeEdge edge)
+    {
+        if (!Enum.IsDefined(edge)) throw new ArgumentOutOfRangeException(nameof(edge));
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_window_begin_resize(NativeHandle, (NativeMethods.neoastra_window_resize_edge)edge), default, "begin interactive window resize");
     }
 
     /// <summary>Requests that the native window close.</summary>
@@ -418,7 +518,11 @@ public sealed class NeoWindow : IAsyncDisposable
             var newBounds = GetBounds();
             if (newBounds != oldBounds)
             {
-                BoundsChanged?.Invoke(this, new NeoWindowBoundsChangedEventArgs(oldBounds, newBounds));
+                try { BoundsChanged?.Invoke(this, new NeoWindowBoundsChangedEventArgs(oldBounds, newBounds)); } catch { }
+                if (newBounds.Position != oldBounds.Position)
+                    try { PositionChanged?.Invoke(this, new NeoWindowPositionChangedEventArgs(oldBounds.Position, newBounds.Position)); } catch { }
+                if (newBounds.Size != oldBounds.Size)
+                    try { ClientSizeChanged?.Invoke(this, new NeoWindowClientSizeChangedEventArgs(oldBounds.Size, newBounds.Size)); } catch { }
             }
         }
         catch
@@ -429,8 +533,10 @@ public sealed class NeoWindow : IAsyncDisposable
 
     internal void OnFocusChanged(bool focused)
     {
+        if (_isFocused == focused) return;
         _isFocused = focused;
         try { FocusChanged?.Invoke(this, EventArgs.Empty); } catch { }
+        try { (focused ? Activated : Deactivated)?.Invoke(this, EventArgs.Empty); } catch { }
     }
 
     internal void OnScaleFactorChanged(double scaleFactor)
@@ -446,6 +552,33 @@ public sealed class NeoWindow : IAsyncDisposable
         _state = state;
         if (previous == state) return;
         try { StateChanged?.Invoke(this, new(previous, state)); } catch { }
+        if (previous == NeoWindowState.Fullscreen && state != NeoWindowState.Fullscreen)
+            try { FullscreenExited?.Invoke(this, EventArgs.Empty); } catch { }
+        try
+        {
+            switch (state)
+            {
+                case NeoWindowState.Normal: Restored?.Invoke(this, EventArgs.Empty); break;
+                case NeoWindowState.Minimized: Minimized?.Invoke(this, EventArgs.Empty); break;
+                case NeoWindowState.Maximized: Maximized?.Invoke(this, EventArgs.Empty); break;
+                case NeoWindowState.Fullscreen: FullscreenEntered?.Invoke(this, EventArgs.Empty); break;
+            }
+        }
+        catch { }
+    }
+
+    private unsafe bool GetAttribute(NativeMethods.neoastra_window_attribute attribute)
+    {
+        ThrowIfDisposed();
+        uint value;
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_window_get_attribute(NativeHandle, attribute, &value), default, "get window attribute");
+        return value != 0;
+    }
+
+    private void SetAttribute(NativeMethods.neoastra_window_attribute attribute, bool value)
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_window_set_attribute(NativeHandle, attribute, value ? 1u : 0u), default, "set window attribute");
     }
 
     private unsafe NeoRect GetBounds()

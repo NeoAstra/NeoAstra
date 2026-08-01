@@ -1271,6 +1271,20 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
     ShowWindow(state->hwnd, command);
     return NEOASTRA_OK;
 }
+neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,bool enabled) noexcept {
+    auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    auto attributes=w->attributes;if(enabled)attributes|=1u<<attribute;else attributes&=~(1u<<attribute);
+    if(attribute==NEOASTRA_WINDOW_ALWAYS_ON_TOP)return SetWindowPos(state->hwnd,enabled?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+    if(attribute==NEOASTRA_WINDOW_SHOW_IN_TASKBAR){auto extended=static_cast<DWORD>(GetWindowLongW(state->hwnd,GWL_EXSTYLE));if(enabled){extended&=~WS_EX_TOOLWINDOW;extended|=WS_EX_APPWINDOW;}else{extended&=~WS_EX_APPWINDOW;extended|=WS_EX_TOOLWINDOW;}SetWindowLongW(state->hwnd,GWL_EXSTYLE,static_cast<LONG>(extended));return SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
+    auto style=(attributes&(1u<<NEOASTRA_WINDOW_DECORATED))?static_cast<DWORD>(WS_OVERLAPPEDWINDOW):static_cast<DWORD>(WS_POPUP);
+    if((attributes&(1u<<NEOASTRA_WINDOW_RESIZABLE))==0)style&=~static_cast<DWORD>(WS_THICKFRAME|WS_MAXIMIZEBOX);
+    const auto current=static_cast<DWORD>(GetWindowLongW(state->hwnd,GWL_STYLE));style|=current&static_cast<DWORD>(WS_VISIBLE|WS_DISABLED|WS_CLIPCHILDREN|WS_CLIPSIBLINGS);
+    if(state->fullscreen){state->restored_style=style;return NEOASTRA_OK;}
+    SetWindowLongW(state->hwnd,GWL_STYLE,static_cast<LONG>(style));
+    return SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* w) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,HTCAPTION,0);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t* w,neoastra_window_resize_edge_t edge) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;static constexpr WPARAM hit_tests[]={HTLEFT,HTTOP,HTRIGHT,HTBOTTOM,HTTOPLEFT,HTTOPRIGHT,HTBOTTOMLEFT,HTBOTTOMRIGHT};ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,hit_tests[edge],0);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* w,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WIN32_HWND)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;h->kind=kind;h->value=s->hwnd;return NEOASTRA_OK;}
 
 bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {

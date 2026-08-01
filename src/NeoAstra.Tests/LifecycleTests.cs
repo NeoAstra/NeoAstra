@@ -70,6 +70,44 @@ public sealed class LifecycleTests
     }
 
     [TestMethod]
+    public void WindowConvenienceEventsReportDistinctNativeTransitions()
+    {
+        var window = (NeoWindow)RuntimeHelpers.GetUninitializedObject(typeof(NeoWindow));
+        var events = new List<string>();
+        window.FocusChanged += (_, _) => events.Add("focus");
+        window.Activated += (_, _) => events.Add("activated");
+        window.Deactivated += (_, _) => events.Add("deactivated");
+        window.StateChanged += (_, args) => events.Add($"state:{args.OldState}-{args.NewState}");
+        window.Maximized += (_, _) => events.Add("maximized");
+        window.FullscreenEntered += (_, _) => events.Add("fullscreen-entered");
+        window.FullscreenExited += (_, _) => events.Add("fullscreen-exited");
+        window.Restored += (_, _) => events.Add("restored");
+
+        window.OnFocusChanged(true);
+        window.OnFocusChanged(true);
+        window.OnFocusChanged(false);
+        window.OnStateChanged(NeoWindowState.Maximized);
+        window.OnStateChanged(NeoWindowState.Maximized);
+        window.OnStateChanged(NeoWindowState.Fullscreen);
+        window.OnStateChanged(NeoWindowState.Normal);
+
+        CollectionAssert.AreEqual(new[]
+        {
+            "focus", "activated", "focus", "deactivated",
+            "state:Normal-Maximized", "maximized",
+            "state:Maximized-Fullscreen", "fullscreen-entered",
+            "state:Fullscreen-Normal", "fullscreen-exited", "restored",
+        }, events);
+    }
+
+    [TestMethod]
+    public void WindowResizeEdgeIsValidatedBeforeNativeDispatch()
+    {
+        var window = (NeoWindow)RuntimeHelpers.GetUninitializedObject(typeof(NeoWindow));
+        Assert.Throws<ArgumentOutOfRangeException>(() => window.BeginResize((NeoWindowResizeEdge)99));
+    }
+
+    [TestMethod]
     public void LaunchEventsAreImmutableAndStrictlyValidated()
     {
         var arguments = new[] { "--document", "note.txt" };

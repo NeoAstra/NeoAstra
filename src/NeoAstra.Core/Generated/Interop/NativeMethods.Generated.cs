@@ -121,6 +121,36 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_WINDOW_FULLSCREEN = unchecked((uint)3),
         }
 
+        public enum neoastra_window_attribute : uint
+        {
+            NEOASTRA_WINDOW_RESIZABLE = unchecked((uint)0),
+
+            NEOASTRA_WINDOW_DECORATED = unchecked((uint)1),
+
+            NEOASTRA_WINDOW_ALWAYS_ON_TOP = unchecked((uint)2),
+
+            NEOASTRA_WINDOW_SHOW_IN_TASKBAR = unchecked((uint)3),
+        }
+
+        public enum neoastra_window_resize_edge : uint
+        {
+            NEOASTRA_WINDOW_RESIZE_LEFT = unchecked((uint)0),
+
+            NEOASTRA_WINDOW_RESIZE_TOP = unchecked((uint)1),
+
+            NEOASTRA_WINDOW_RESIZE_RIGHT = unchecked((uint)2),
+
+            NEOASTRA_WINDOW_RESIZE_BOTTOM = unchecked((uint)3),
+
+            NEOASTRA_WINDOW_RESIZE_TOP_LEFT = unchecked((uint)4),
+
+            NEOASTRA_WINDOW_RESIZE_TOP_RIGHT = unchecked((uint)5),
+
+            NEOASTRA_WINDOW_RESIZE_BOTTOM_LEFT = unchecked((uint)6),
+
+            NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = unchecked((uint)7),
+        }
+
         public enum neoastra_option_state : uint
         {
             NEOASTRA_OPTION_DEFAULT = unchecked((uint)0),
@@ -1190,6 +1220,20 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_point_t (NativeMethods.neoastra_point from) => new (from);
         }
 
+        public readonly partial record struct neoastra_window_attribute_t(NativeMethods.neoastra_window_attribute Value)
+        {
+            public static implicit operator NativeMethods.neoastra_window_attribute (neoastra_window_attribute_t from) => from.Value;
+
+            public static implicit operator neoastra_window_attribute_t (NativeMethods.neoastra_window_attribute from) => new (from);
+        }
+
+        public readonly partial record struct neoastra_window_resize_edge_t(NativeMethods.neoastra_window_resize_edge Value)
+        {
+            public static implicit operator NativeMethods.neoastra_window_resize_edge (neoastra_window_resize_edge_t from) => from.Value;
+
+            public static implicit operator neoastra_window_resize_edge_t (NativeMethods.neoastra_window_resize_edge from) => new (from);
+        }
+
         public readonly partial record struct neoastra_option_state_t(NativeMethods.neoastra_option_state Value)
         {
             public static implicit operator NativeMethods.neoastra_option_state (neoastra_option_state_t from) => from.Value;
@@ -1772,6 +1816,14 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_set_state(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_window_state_t arg1);
 
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_attribute")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_attribute(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_window_attribute_t arg1, uint* arg2);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_set_attribute")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_set_attribute(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_window_attribute_t arg1, uint arg2);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_title")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_string_view_t neoastra_window_get_title(NativeMethods.neoastra_window_t arg0);
@@ -1791,6 +1843,14 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_activate")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_activate(NativeMethods.neoastra_window_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_begin_drag")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_begin_drag(NativeMethods.neoastra_window_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_begin_resize")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_begin_resize(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_window_resize_edge_t arg1);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_close")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

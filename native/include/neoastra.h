@@ -73,6 +73,8 @@ typedef enum neoastra_app_shutdown_mode : uint32_t { NEOASTRA_APP_SHUTDOWN_EXPLI
 typedef enum neoastra_native_parent_kind : uint32_t { NEOASTRA_NATIVE_PARENT_NONE = 0, NEOASTRA_NATIVE_PARENT_WIN32_HWND = 1, NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW = 2, NEOASTRA_NATIVE_PARENT_GTK_WIDGET = 3 } neoastra_native_parent_kind_t;
 typedef enum neoastra_native_handle_kind : uint32_t { NEOASTRA_NATIVE_HANDLE_NONE = 0, NEOASTRA_NATIVE_HANDLE_WIN32_HWND = 1, NEOASTRA_NATIVE_HANDLE_COCOA_NSWINDOW = 2, NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW = 3, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW = 4, NEOASTRA_NATIVE_HANDLE_GTK_WIDGET = 5, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER = 6, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE = 7, NEOASTRA_NATIVE_HANDLE_WKWEBVIEW = 8, NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = 9 } neoastra_native_handle_kind_t;
 typedef enum neoastra_window_state : uint32_t { NEOASTRA_WINDOW_NORMAL = 0, NEOASTRA_WINDOW_MINIMIZED = 1, NEOASTRA_WINDOW_MAXIMIZED = 2, NEOASTRA_WINDOW_FULLSCREEN = 3 } neoastra_window_state_t;
+typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 0, NEOASTRA_WINDOW_DECORATED = 1, NEOASTRA_WINDOW_ALWAYS_ON_TOP = 2, NEOASTRA_WINDOW_SHOW_IN_TASKBAR = 3 } neoastra_window_attribute_t;
+typedef enum neoastra_window_resize_edge : uint32_t { NEOASTRA_WINDOW_RESIZE_LEFT = 0, NEOASTRA_WINDOW_RESIZE_TOP = 1, NEOASTRA_WINDOW_RESIZE_RIGHT = 2, NEOASTRA_WINDOW_RESIZE_BOTTOM = 3, NEOASTRA_WINDOW_RESIZE_TOP_LEFT = 4, NEOASTRA_WINDOW_RESIZE_TOP_RIGHT = 5, NEOASTRA_WINDOW_RESIZE_BOTTOM_LEFT = 6, NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = 7 } neoastra_window_resize_edge_t;
 typedef enum neoastra_option_state : uint32_t { NEOASTRA_OPTION_DEFAULT = 0, NEOASTRA_OPTION_ENABLED = 1, NEOASTRA_OPTION_DISABLED = 2 } neoastra_option_state_t;
 typedef enum neoastra_script_injection_time : uint32_t { NEOASTRA_SCRIPT_DOCUMENT_START = 0, NEOASTRA_SCRIPT_DOCUMENT_END = 1 } neoastra_script_injection_time_t;
 typedef enum neoastra_decision_action : uint32_t { NEOASTRA_DECISION_DEFAULT = 0, NEOASTRA_DECISION_ALLOW = 1, NEOASTRA_DECISION_DENY = 2, NEOASTRA_DECISION_CANCEL = 3, NEOASTRA_DECISION_OPEN_EXTERNAL = 4, NEOASTRA_DECISION_DOWNLOAD = 5, NEOASTRA_DECISION_HANDLED_EXTERNAL = 6 } neoastra_decision_action_t;
@@ -208,11 +210,15 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_maximum_size(co
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_maximum_size(neoastra_window_t*, neoastra_size_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_state(const neoastra_window_t*, neoastra_window_state_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_state(neoastra_window_t*, neoastra_window_state_t);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_attribute(const neoastra_window_t*, neoastra_window_attribute_t, uint32_t*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_attribute(neoastra_window_t*, neoastra_window_attribute_t, uint32_t);
 NEOASTRA_API neoastra_string_view_t NEOASTRA_CALL neoastra_window_get_title(const neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_title(neoastra_window_t*, neoastra_string_view_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_show(neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_hide(neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_activate(neoastra_window_t*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_begin_drag(neoastra_window_t*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_begin_resize(neoastra_window_t*, neoastra_window_resize_edge_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t*);
 /* Internal/backend teardown entry point. It bypasses close negotiation and is not exposed to renderers. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t*);

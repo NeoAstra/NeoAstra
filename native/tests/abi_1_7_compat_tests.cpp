@@ -136,7 +136,8 @@ int main(int argc, char** argv) {
     assert(major && minor && version && runtime && attach && detach && release);
 
     assert(major() == 1);
-    assert(minor() >= 7);
+    // Pre-release ABI additions remain part of ABI 1.0 until the first release.
+    assert(minor() == 0);
     const auto semantic_version = version();
     assert(semantic_version.data != nullptr && semantic_version.length != 0);
 

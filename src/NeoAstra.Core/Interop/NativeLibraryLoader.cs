@@ -37,7 +37,8 @@ internal static class NativeLibraryLoader
                 if (major != ExpectedAbiMajor || minor != ExpectedAbiMinor)
                 {
                     throw new NeoAstraNativeLibraryException(
-                        $"The loaded NeoAstra native ABI is {major}.{minor}; managed NeoAstra requires the paired ABI {ExpectedAbiMajor}.{ExpectedAbiMinor}.");
+                        $"The loaded {NativeMethods.LibraryName} native ABI is {major}.{minor}; managed NeoAstra requires the paired ABI {ExpectedAbiMajor}.{ExpectedAbiMinor}. " +
+                        "Install the paired RID asset or set NEOASTRA_NATIVE_LIBRARY to its full path.");
                 }
 
                 _validated = true;

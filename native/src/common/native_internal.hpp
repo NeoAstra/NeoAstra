@@ -406,6 +406,7 @@ struct neoastra_window final : neo_ui_ref_counted {
     neoastra_size_t minimum_size{};
     neoastra_size_t maximum_size{};
     neoastra_window_state_t state{NEOASTRA_WINDOW_NORMAL};
+    uint32_t attributes{};
     std::atomic<bool> closed{false};
     neoastra_decision_t* pending_close{}; // UI-thread-only retained decision.
     bool force_closing{}; // UI-thread-only; permits one platform close without renegotiation.
@@ -770,6 +771,9 @@ neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexc
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexcept;
+neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window, neoastra_window_attribute_t attribute, bool enabled) noexcept;
+neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept;
+neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t* window, neoastra_window_resize_edge_t edge) noexcept;
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept;
 
 using neo_platform_created_callback_t = void (*)(void* context, neoastra_error_t* error) noexcept;

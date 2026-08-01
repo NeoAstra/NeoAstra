@@ -147,6 +147,28 @@ public sealed class NeoWindowBoundsChangedEventArgs(NeoRect oldBounds, NeoRect n
     public NeoRect NewBounds { get; } = newBounds;
 }
 
+/// <summary>Provides data when a window's logical position changes.</summary>
+/// <param name="oldPosition">The previous position.</param>
+/// <param name="newPosition">The new position.</param>
+public sealed class NeoWindowPositionChangedEventArgs(NeoPoint oldPosition, NeoPoint newPosition) : EventArgs
+{
+    /// <summary>Gets the previous position.</summary>
+    public NeoPoint OldPosition { get; } = oldPosition;
+    /// <summary>Gets the new position.</summary>
+    public NeoPoint NewPosition { get; } = newPosition;
+}
+
+/// <summary>Provides data when a window's logical client size changes.</summary>
+/// <param name="oldSize">The previous client size.</param>
+/// <param name="newSize">The new client size.</param>
+public sealed class NeoWindowClientSizeChangedEventArgs(NeoSize oldSize, NeoSize newSize) : EventArgs
+{
+    /// <summary>Gets the previous client size.</summary>
+    public NeoSize OldSize { get; } = oldSize;
+    /// <summary>Gets the new client size.</summary>
+    public NeoSize NewSize { get; } = newSize;
+}
+
 /// <summary>Provides data when a window scale factor changes.</summary>
 /// <param name="oldScaleFactor">The previous scale factor.</param>
 /// <param name="newScaleFactor">The new scale factor.</param>
