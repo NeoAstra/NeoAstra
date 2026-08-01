@@ -35,7 +35,7 @@ for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [rea
     await mkdir(generatedRoot, { recursive: true });
     await writeFile(generatedFile, 'import { invoke } from "@neoastra/client"; export const greeting = { hello: (request: { name: string }) => invoke<{ name: string }, { message: string }>("greeting.hello", request) };\n', { flag: "wx" });
     generated = true;
-    await build({ root: templateRoot, configFile: false, base: "./", plugins, logLevel: "error", resolve: { alias: sourceAliases }, build: { outDir: ".neoastra-check-dist", emptyOutDir: true } });
+    await build({ root: templateRoot, configFile: false, base: "./", plugins, logLevel: "error", resolve: { alias: [{ find: /^#neoastra$/, replacement: generatedFile }, ...sourceAliases] }, build: { outDir: ".neoastra-check-dist", emptyOutDir: true } });
   } finally {
     await rm(path.join(templateRoot, ".neoastra-check-dist"), { recursive: true, force: true });
     if (generated) await rm(generatedFile, { force: true });

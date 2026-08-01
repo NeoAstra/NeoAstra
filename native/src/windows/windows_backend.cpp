@@ -46,6 +46,7 @@ struct windows_drop_registration { HWND window{}; ComPtr<IDropTarget> target; };
 struct windows_view {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> core;
+    HWND drop_window{};
     EventRegistrationToken navigation_starting{};
     EventRegistrationToken navigation_completed{};
     EventRegistrationToken source_changed{};
@@ -66,6 +67,8 @@ struct windows_view {
     bool events_registered{};
     std::vector<windows_drop_registration> drop_registrations;
 };
+
+void register_view_drop_targets(neoastra_view_t* view, windows_view* state);
 
 struct windows_download {
     ComPtr<ICoreWebView2DownloadOperation> operation;
@@ -626,6 +629,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             args->get_IsSuccess(&success);
             args->get_WebErrorStatus(&status);
             args->get_NavigationId(&navigation_id);
+            if (success) register_view_drop_targets(view, static_cast<windows_view*>(view->platform));
             neo_emit_view(view, success ? NEOASTRA_EVENT_NAVIGATION_COMPLETED : NEOASTRA_EVENT_NAVIGATION_FAILED,
                           0, nullptr, &view->source, success ? 0 : static_cast<uint64_t>(NEOASTRA_ERROR_NATIVE_FAILURE),
                           static_cast<int64_t>(status));
@@ -1523,24 +1527,34 @@ BOOL CALLBACK enumerate_drop_window(HWND window, LPARAM parameter) {
     return TRUE;
 }
 
+namespace {
+
 void register_view_drop_targets(neoastra_view_t* view, windows_view* state) {
+    if (!state) return;
     const auto parent = view_parent(view);
-    HWND webview{};
-    HWND candidate{};
-    while (parent && (candidate = FindWindowExW(parent, candidate, L"Chrome_WidgetWin_0", nullptr)) != nullptr) {
-        if (!GetPropW(candidate, L"NeoAstra.DropTarget")) { webview = candidate; break; }
+    if (!IsWindow(state->drop_window) || !parent || !IsChild(parent, state->drop_window)) {
+        state->drop_window = nullptr;
+        HWND candidate{};
+        while (parent && (candidate = FindWindowExW(parent, candidate, L"Chrome_WidgetWin_0", nullptr)) != nullptr) {
+            if (!GetPropW(candidate, L"NeoAstra.DropTarget")) { state->drop_window = candidate; break; }
+        }
     }
-    if (webview) {
-        register_drop_target(view, state, webview);
+    std::erase_if(state->drop_registrations, [](const windows_drop_registration& registration) {
+        return !IsWindow(registration.window) || GetPropW(registration.window, L"NeoAstra.DropTarget") != registration.target.Get();
+    });
+    if (state->drop_window) {
+        register_drop_target(view, state, state->drop_window);
         enumerate_drop_context context{view, state};
         // OLE hit testing reaches nested WebView2 renderer windows, including windows
         // owned by the renderer process, so replacing only Chrome_WidgetWin_0 is insufficient.
-        EnumChildWindows(webview, enumerate_drop_window, reinterpret_cast<LPARAM>(&context));
+        EnumChildWindows(state->drop_window, enumerate_drop_window, reinterpret_cast<LPARAM>(&context));
     }
     if (state->drop_registrations.empty()) {
         neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "drag-drop", "Could not replace any WebView2 OLE drop targets");
     }
 }
+
+} // namespace
 
 bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_options_t*,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {
     auto* environment = static_cast<windows_environment*>(view->environment->platform);

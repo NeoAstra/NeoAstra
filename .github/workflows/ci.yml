@@ -89,7 +89,7 @@ jobs:
       - name: Publish NativeAOT sample
         run: dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
       - name: Inspect and publish advanced sample assets under NativeAOT
-        shell: bash
+        shell: pwsh
         run: |
           dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.Sample.Advanced/neoastra.json > artifacts/advanced-inspect.json
           dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/advanced
