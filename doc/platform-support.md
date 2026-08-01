@@ -75,11 +75,12 @@ All platforms require:
 
 ## What is and is not currently validated
 
-The repository workflows are configured to compile native assets for all six RIDs, execute native
-tests on all except Windows ARM64, run managed jobs on Windows x64, macOS ARM64, and Linux x64, and
-publish the sample with NativeAOT on those three managed-job RIDs. The native tests cover the ABI,
-ownership, dispatch, teardown, and stress behavior; they do not by themselves prove end-to-end
-browser behavior.
+The main CI workflow builds and tests `NeoAstra.slnx` on Windows x64, macOS ARM64, and Linux x64.
+A separate native workflow runs automatically only when native sources, build inputs, or staged native
+runtimes change; it compiles artifacts for all six RIDs and executes native tests on all except Windows
+ARM64. NativeAOT, packaging, delivery, and desktop conformance remain separately dispatchable workflows
+rather than checks on every managed change. The native tests cover the ABI, ownership, dispatch,
+teardown, and stress behavior; they do not by themselves prove end-to-end browser behavior.
 
 The repository contains an opt-in browser conformance harness, but normal CI does not invoke it with
 `--run`. Consequently, this page does not infer macOS or Linux runtime support from source review,

@@ -1,13 +1,17 @@
 name: delivery
 
 on:
-  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  native:
+    uses: ./.github/workflows/native.yml
+
   portable-and-package-inputs:
+    needs: native
     name: Delivery smoke (${{ matrix.rid }})
     strategy:
       fail-fast: false
@@ -38,11 +42,6 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
-      - name: Build frontend client package
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build --workspace @neoastra/client
       - uses: actions/download-artifact@v4
         with:
           name: native-${{ matrix.rid }}

@@ -1,0 +1,74 @@
+name: extended validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  platform-validation:
+    name: Managed (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: ubuntu-latest
+            rid: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
+      - name: Restore
+        run: dotnet restore src/NeoAstra.slnx
+      - name: Verify generated interop
+        shell: bash
+        run: |
+          dotnet run --project src/NeoAstra.CodeGen/NeoAstra.CodeGen.csproj -c Release --no-restore
+          git diff --exit-code -- src/NeoAstra.Core/Generated/Interop/NativeMethods.Generated.cs
+      - name: Build
+        run: dotnet build src/NeoAstra.slnx -c Release --no-restore
+      - name: Verify capability schema and deterministic manifests
+        shell: bash
+        run: |
+          mkdir -p artifacts/capabilities
+          for platform in windows macos linux; do
+            dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- capabilities resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.first.json"
+            dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- capabilities resolve --capabilities src/NeoAstra.Tests/Fixtures/Capabilities/capabilities.json --catalog src/NeoAstra.Tests/Fixtures/Capabilities/catalog.json --platform "$platform" --configuration Release "artifacts/capabilities/$platform.second.json"
+            cmp "artifacts/capabilities/$platform.first.json" "artifacts/capabilities/$platform.second.json"
+          done
+      - name: Verify opt-in harness defaults
+        run: |
+          dotnet run --project src/NeoAstra.Conformance/NeoAstra.Conformance.csproj -c Release --no-build
+          dotnet run --project src/NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj -c Release --no-build
+      - name: Publish and execute full-platform NativeAOT fixture
+        shell: bash
+        run: |
+          dotnet publish src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/full-nativeaot
+          ./artifacts/full-nativeaot/NeoAstra.NativeAotFixture${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          git diff --exit-code -- src/NeoAstra.NativeAotFixture/generated
+          cmp src/NeoAstra.NativeAotFixture/generated/neoastra.ts frontend/fixtures/generated/neoastra.ts
+      - name: Publish NativeAOT sample
+        run: dotnet publish samples/NeoAstra.Sample/NeoAstra.Sample.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/nativeaot
+      - name: Inspect and publish advanced sample assets under NativeAOT
+        shell: pwsh
+        run: |
+          dotnet run --project src/NeoAstra.Tool/NeoAstra.Tool.csproj -c Release --no-build -- inspect --config samples/NeoAstra.Sample.Advanced/neoastra.json > artifacts/advanced-inspect.json
+          dotnet publish samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj -c Release -r ${{ matrix.rid }} --self-contained -o artifacts/advanced
+          ./artifacts/advanced/NeoAstra.Sample.Advanced${{ matrix.os == 'windows-latest' && '.exe' || '' }} --validate-advanced
+          @('neoastra.ts', 'neoastra.manifest.json', 'neoastra.schema.json') | ForEach-Object {
+            if (-not (Test-Path (Join-Path 'samples/NeoAstra.Sample.Advanced/obj/neoastra' $_))) { throw "Intermediate generator output is missing: $_" }
+          }

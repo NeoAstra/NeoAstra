@@ -1,0 +1,43 @@
+name: frontend
+
+on:
+  push:
+    paths:
+      - 'frontend/**'
+      - 'templates/**'
+      - 'samples/NeoAstra.Sample/assets/neoastra-client/**'
+      - 'samples/NeoAstra.Core.Sample/assets/neoastra-client/**'
+      - 'src/NeoAstra.Conformance/assets/neoastra-client/**'
+      - 'src/NeoAstra.Benchmarks/assets/neoastra-client/**'
+      - '.github/workflows/frontend.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'templates/**'
+      - 'samples/NeoAstra.Sample/assets/neoastra-client/**'
+      - 'samples/NeoAstra.Core.Sample/assets/neoastra-client/**'
+      - 'src/NeoAstra.Conformance/assets/neoastra-client/**'
+      - 'src/NeoAstra.Benchmarks/assets/neoastra-client/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend package and fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run check
+        working-directory: frontend
+      - name: Verify generated embedded client assets
+        run: git diff --exit-code -- samples/NeoAstra.Sample/assets/neoastra-client samples/NeoAstra.Core.Sample/assets/neoastra-client src/NeoAstra.Conformance/assets/neoastra-client src/NeoAstra.Benchmarks/assets/neoastra-client

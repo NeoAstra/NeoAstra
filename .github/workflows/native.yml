@@ -1,6 +1,26 @@
 name: native
 
 on:
+  push:
+    paths:
+      - 'native/**'
+      - 'src/NeoAstra.Core/runtimes/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'eng/build_native.py'
+      - 'eng/native/**'
+      - 'eng/release_readiness.py'
+      - '.github/workflows/native.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'src/NeoAstra.Core/runtimes/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'eng/build_native.py'
+      - 'eng/native/**'
+      - 'eng/release_readiness.py'
+      - '.github/workflows/native.yml'
   workflow_call:
   workflow_dispatch:
 
