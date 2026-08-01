@@ -309,14 +309,15 @@ internal sealed class ProcessDialogs : INeoDialogs
         catch { return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "dialog_failed"); }
     }
 
-    private static IReadOnlyList<string> MacArguments(NeoFileDialogOptions options, bool folders, bool save)
+    internal static IReadOnlyList<string> MacArguments(NeoFileDialogOptions options, bool folders, bool save)
     {
+        var multipleSelection = options.AllowMultiple ? " with multiple selections allowed" : string.Empty;
         var script = save
             ? "on run argv\nset p to choose file name with prompt (item 1 of argv) default name (item 2 of argv)\nreturn POSIX path of p\nend run"
             : folders
-                ? "on run argv\nset p to choose folder with prompt (item 1 of argv) with multiple selections allowed (item 2 of argv is \"true\")\nif class of p is list then\nset o to \"\"\nrepeat with x in p\nset o to o & POSIX path of x & linefeed\nend repeat\nreturn o\nend if\nreturn POSIX path of p\nend run"
-                : "on run argv\nset p to choose file with prompt (item 1 of argv) with multiple selections allowed (item 2 of argv is \"true\")\nif class of p is list then\nset o to \"\"\nrepeat with x in p\nset o to o & POSIX path of x & linefeed\nend repeat\nreturn o\nend if\nreturn POSIX path of p\nend run";
-        return save ? ["-e", script, "--", options.Title ?? string.Empty, options.SuggestedFileName ?? string.Empty] : ["-e", script, "--", options.Title ?? string.Empty, options.AllowMultiple ? "true" : "false"];
+                ? $"on run argv\nset p to choose folder with prompt (item 1 of argv){multipleSelection}\nif class of p is list then\nset o to \"\"\nrepeat with x in p\nset o to o & POSIX path of x & linefeed\nend repeat\nreturn o\nend if\nreturn POSIX path of p\nend run"
+                : $"on run argv\nset p to choose file with prompt (item 1 of argv){multipleSelection}\nif class of p is list then\nset o to \"\"\nrepeat with x in p\nset o to o & POSIX path of x & linefeed\nend repeat\nreturn o\nend if\nreturn POSIX path of p\nend run";
+        return save ? ["-e", script, "--", options.Title ?? string.Empty, options.SuggestedFileName ?? string.Empty] : ["-e", script, "--", options.Title ?? string.Empty];
     }
 
     private static IReadOnlyList<string> LinuxArguments(NeoFileDialogOptions options, bool folders, bool save)

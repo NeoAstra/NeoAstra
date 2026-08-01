@@ -312,6 +312,23 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void MacDialogScriptsUseLiteralMultipleSelectionClause()
+    {
+        var scope = new NeoFileScope([Path.GetTempPath()]);
+        var multiple = new NeoFileDialogOptions { AllowMultiple = true, Scope = scope };
+        var single = new NeoFileDialogOptions { Scope = scope };
+
+        var multipleFileScript = ProcessDialogs.MacArguments(multiple, folders: false, save: false)[1];
+        var multipleFolderScript = ProcessDialogs.MacArguments(multiple, folders: true, save: false)[1];
+        var singleFileScript = ProcessDialogs.MacArguments(single, folders: false, save: false)[1];
+
+        StringAssert.Contains(multipleFileScript, "choose file with prompt (item 1 of argv) with multiple selections allowed");
+        StringAssert.Contains(multipleFolderScript, "choose folder with prompt (item 1 of argv) with multiple selections allowed");
+        Assert.IsFalse(singleFileScript.Contains("multiple selections allowed", StringComparison.Ordinal));
+        Assert.IsFalse(multipleFileScript.Contains("multiple selections allowed (", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void LinuxRoleTargetSelectionUsesOwnedWindowAndStableLiveViewOrdering()
     {
         var owner = new object(); var otherOwner = new object();
