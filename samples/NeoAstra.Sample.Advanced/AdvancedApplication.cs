@@ -110,6 +110,9 @@ internal sealed class AdvancedApplication(
         {
             ContractHash = NeoRpcGeneratedContract.Hash,
             CapabilityManifest = capabilityManifest,
+            SecurityProfile = capabilityManifest.Profile,
+            Release = !development,
+            DevelopmentOrigin = development ? new Uri(developmentUrl!) : null,
             AuthorizationService = new NeoCapabilityAuthorizationService(capabilityManifest),
         });
         rpcBuilder.AddTourService(new TourService(state));
