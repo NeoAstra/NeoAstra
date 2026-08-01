@@ -16,6 +16,8 @@
   --muted: #a6b8cb;
   --accent: #63d5ff;
   --accent-strong: #15aee8;
+  --accent-warm: #ff8a2d;
+  --accent-warm-soft: #ffc247;
   --success: #84efc1;
   --danger: #ff8e9e;
   --shadow: 0 22px 60px rgba(0, 0, 0, 0.25);
@@ -30,7 +32,7 @@ html {
   min-height: 100%;
   background:
     radial-gradient(circle at 5% 0%, rgba(38, 153, 207, 0.22), transparent 32rem),
-    radial-gradient(circle at 95% 15%, rgba(102, 78, 210, 0.18), transparent 36rem),
+    radial-gradient(circle at 95% 15%, rgba(255, 122, 36, 0.16), transparent 36rem),
     #07101c;
 }
 
@@ -51,7 +53,7 @@ button {
   border: 1px solid transparent;
   border-radius: 0.65rem;
   color: #03121b;
-  background: linear-gradient(135deg, var(--accent), #a5f1ff);
+  background: linear-gradient(135deg, var(--accent-warm-soft), var(--accent-warm));
   font-weight: 750;
   cursor: pointer;
   transition: transform 120ms ease, filter 120ms ease, border-color 120ms ease;
@@ -127,6 +129,8 @@ p {
   border: 1px solid var(--border);
   border-radius: 1.5rem;
   background:
+    radial-gradient(circle at 92% 20%, rgba(255, 122, 36, 0.14), transparent 20rem),
+    radial-gradient(circle at 78% 100%, rgba(37, 185, 242, 0.12), transparent 24rem),
     linear-gradient(120deg, rgba(19, 39, 63, 0.98), rgba(10, 22, 37, 0.94)),
     var(--surface);
   box-shadow: var(--shadow);
@@ -139,8 +143,9 @@ p {
 
 .hero-mark {
   width: clamp(8rem, 20vw, 18rem);
-  opacity: 0.92;
-  filter: drop-shadow(0 0 3rem rgba(99, 213, 255, 0.25));
+  filter:
+    drop-shadow(0 0 3rem rgba(99, 213, 255, 0.2))
+    drop-shadow(0 0 2.25rem rgba(255, 122, 36, 0.16));
 }
 
 .compact-hero {
@@ -154,7 +159,7 @@ p {
 .eyebrow {
   display: inline-block;
   margin-bottom: 0.65rem;
-  color: var(--accent);
+  color: var(--accent-warm-soft);
   font-size: 0.76rem;
   font-weight: 850;
   letter-spacing: 0.14em;
@@ -176,6 +181,12 @@ p {
   background: rgba(25, 96, 123, 0.35);
   font-size: 0.82rem;
   font-weight: 700;
+}
+
+.badge-row span:nth-child(even) {
+  border-color: rgba(255, 138, 45, 0.3);
+  color: #ffe6c9;
+  background: rgba(111, 51, 18, 0.3);
 }
 
 .foundation-grid,
@@ -344,7 +355,7 @@ p {
 }
 
 .instruction.compact {
-  border-left-color: var(--success);
+  border-left-color: var(--accent-warm);
 }
 
 .activity-log {
@@ -409,6 +420,9 @@ p {
 .mark {
   width: 5rem;
   margin: 0 auto 1.5rem;
+  filter:
+    drop-shadow(0 0 1.5rem rgba(99, 213, 255, 0.2))
+    drop-shadow(0 0 1.25rem rgba(255, 122, 36, 0.16));
 }
 
 .pulse {

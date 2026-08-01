@@ -7,11 +7,29 @@
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <main>
-    <h1>Hello from NeoAstra</h1>
-    <p>Call a source-generated, explicitly authorized C# RPC method.</p>
-    <form id="greeting-form"><input id="name" value="desktop developer" aria-label="Name"><button>Greet</button></form>
-    <p id="result" aria-live="polite"></p>
+  <main class="app-shell">
+    <header class="hero">
+      <img class="brand-mark" src="./NeoAstra.svg" alt="">
+      <div>
+        <p class="eyebrow">Native desktop · Web technology</p>
+        <h1>Hello from <span>NeoAstra</span></h1>
+        <p>Call a source-generated, explicitly authorized C# RPC method.</p>
+      </div>
+    </header>
+    <section class="demo" aria-labelledby="demo-title">
+      <div>
+        <p class="eyebrow">Try the bridge</p>
+        <h2 id="demo-title">Send a greeting to C#</h2>
+      </div>
+      <form id="greeting-form">
+        <label for="name">Your name</label>
+        <div class="input-row">
+          <input id="name" value="desktop developer">
+          <button>Greet</button>
+        </div>
+      </form>
+      <p id="result" aria-live="polite">Ready to call the native host.</p>
+    </section>
   </main>
   <script type="module" src="./main.js"></script>
 </body>
