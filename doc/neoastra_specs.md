@@ -3236,7 +3236,7 @@ manifest. The package job similarly checksums its assembled NuGet artifacts. The
 readiness evidence only; they do not publish packages or create a release. The package build enables
 the SDK's continuous-integration mode, emits managed portable symbols in the existing `.snupkg`, and
 must verify the packaged `NeoAstra.pdb` Source Link record maps to the checked-out commit under
-`https://github.com/xoofx/NeoAstra`, rather than accepting only the presence of a PDB entry.
+`https://github.com/NeoAstra/NeoAstra`, rather than accepting only the presence of a PDB entry.
 
 ---
 

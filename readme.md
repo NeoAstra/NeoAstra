@@ -1,6 +1,6 @@
-# NeoAstra [![ci](https://github.com/xoofx/NeoAstra/actions/workflows/ci.yml/badge.svg)](https://github.com/xoofx/NeoAstra/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/NeoAstra.svg)](https://www.nuget.org/packages/NeoAstra/)
+# NeoAstra [![ci](https://github.com/NeoAstra/NeoAstra/actions/workflows/ci.yml/badge.svg)](https://github.com/NeoAstra/NeoAstra/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/NeoAstra.svg)](https://www.nuget.org/packages/NeoAstra/)
 
-<img align="right" width="160px" height="160px" src="https://raw.githubusercontent.com/xoofx/NeoAstra/main/img/NeoAstra.png">
+<img align="right" width="160px" height="160px" src="https://raw.githubusercontent.com/NeoAstra/NeoAstra/main/img/NeoAstra.png">
 
 Build native desktop applications with .NET and web technologies using the platform browser: WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux.
 

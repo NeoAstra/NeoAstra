@@ -10,8 +10,8 @@
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageIcon>NeoAstra.png</PackageIcon>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/xoofx/NeoAstra</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/NeoAstra/NeoAstra</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

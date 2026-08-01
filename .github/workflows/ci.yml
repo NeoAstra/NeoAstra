@@ -295,7 +295,7 @@ jobs:
           if ($symbolPackages.Count -lt 2) { throw "Expected Core and full managed symbol packages; found $($symbolPackages.Count)" }
           $commit = git rev-parse HEAD
           foreach ($symbolPackage in $symbolPackages) {
-            & eng/verify_sourcelink.ps1 -SymbolPackage $symbolPackage.FullName -Repository xoofx/NeoAstra -Commit $commit
+            & eng/verify_sourcelink.ps1 -SymbolPackage $symbolPackage.FullName -Repository NeoAstra/NeoAstra -Commit $commit
           }
       - name: Generate package checksums
         run: |

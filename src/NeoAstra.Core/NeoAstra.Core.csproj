@@ -20,10 +20,10 @@
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageIcon>NeoAstra.png</PackageIcon>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageProjectUrl>https://github.com/xoofx/NeoAstra</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/NeoAstra/NeoAstra</PackageProjectUrl>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
     <!-- The .NET 10 SDK supplies the Git/GitHub Source Link targets. -->
-    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

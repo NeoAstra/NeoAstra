@@ -7,7 +7,7 @@
     <PackageId>NeoAstra.Tool</PackageId>
     <Description>Secure development, assets, inspectable delivery, and update metadata tooling for NeoAstra applications.</Description>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/xoofx/NeoAstra</RepositoryUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source": "https://github.com/xoofx/NeoAstra",
+  "source": "https://github.com/NeoAstra/NeoAstra",
   "license": "BSD-2-Clause",
   "build": "npm ci && npm run build --workspace @neoastra/client",
   "runtimeDependencies": []
