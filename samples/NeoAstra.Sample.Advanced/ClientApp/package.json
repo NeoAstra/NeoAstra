@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "tsc -p ../../../frontend/packages/client/tsconfig.json",
     "build": "tsc --noEmit && vite build",
     "test": "tsx --test src/*.test.ts"
   },
