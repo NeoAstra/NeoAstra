@@ -106,6 +106,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         if (Menus is INeoApplicationBoundDesktopService menus) menus.BindApplication(application);
         if (Tray is INeoApplicationBoundDesktopService tray) tray.BindApplication(application);
         if (Clipboard is WindowsClipboard windowsClipboard) windowsClipboard.BindDispatcher(application.Dispatcher);
+        if (Clipboard is INeoApplicationBoundDesktopService clipboard) clipboard.BindApplication(application);
         if (Notifications is INeoApplicationBoundDesktopService notifications) notifications.BindApplication(application);
         if (GlobalShortcuts is INeoApplicationBoundDesktopService shortcuts) shortcuts.BindApplication(application);
         if (DragDrop is INeoApplicationBoundDesktopService dragDrop) dragDrop.BindApplication(application);

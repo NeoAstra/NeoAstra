@@ -43,14 +43,7 @@ public static class NeoClipboard
     {
         if (OperatingSystem.IsWindows()) return new WindowsClipboard(dispatcher);
         if (OperatingSystem.IsMacOS()) return new MacClipboard(dispatcher);
-        if (OperatingSystem.IsLinux())
-        {
-            var read = DesktopProcess.FindTrustedExecutable("/usr/bin/wl-paste", "/usr/local/bin/wl-paste");
-            var write = DesktopProcess.FindTrustedExecutable("/usr/bin/wl-copy", "/usr/local/bin/wl-copy");
-            if (!string.IsNullOrEmpty(read) && !string.IsNullOrEmpty(write)) return new ProcessClipboard(read, write, []);
-            read = DesktopProcess.FindTrustedExecutable("/usr/bin/xclip", "/usr/local/bin/xclip");
-            if (!string.IsNullOrEmpty(read)) return new ProcessClipboard(read, read, ["-selection", "clipboard"]);
-        }
+        if (OperatingSystem.IsLinux()) return new LinuxClipboard(dispatcher);
         return new UnsupportedClipboard();
     }
 }

@@ -329,6 +329,31 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void LinuxDialogsAuthorizeCanonicalSelectionsWithinScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-linux-dialog-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = Path.Combine(root, "selected.txt");
+            File.WriteAllText(file, "selected");
+            var options = new NeoFileDialogOptions { Scope = new NeoFileScope([root]) };
+            var dialogs = new LinuxDialogs(dispatcher: null);
+
+            Assert.AreEqual(NeoSupportLevel.Limited, dialogs.Support.SupportLevel);
+            StringAssert.Contains(dialogs.Support.Details, "Native GTK3");
+            var allowed = LinuxDialogs.AuthorizeSelections(options, [file], save: false, folders: false);
+            Assert.AreEqual(NeoDesktopStatus.Success, allowed.Status);
+            Assert.AreEqual(Path.GetFullPath(file), allowed.Value![0]);
+
+            var outside = LinuxDialogs.AuthorizeSelections(options, [Path.GetTempPath()], save: false, folders: true);
+            Assert.AreEqual(NeoDesktopStatus.Denied, outside.Status);
+            Assert.AreEqual("path_scope", outside.Code);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public void LinuxRoleTargetSelectionUsesOwnedWindowAndStableLiveViewOrdering()
     {
         var owner = new object(); var otherOwner = new object();
@@ -361,6 +386,10 @@ public sealed class DesktopServicesTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => clipboard.WriteAsync(NeoClipboardFormat.Png, new byte[NeoDesktopLimits.MaximumClipboardBytes + 1]).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(() => clipboard.WriteAsync(NeoClipboardFormat.FileList, "[\"../relative\"]"u8.ToArray()).AsTask());
         Assert.AreEqual(NeoDesktopStatus.NotFound, (await clipboard.ReadAsync(NeoClipboardFormat.Png)).Status);
+        var linux = new LinuxClipboard(dispatcher: null);
+        Assert.AreEqual(NeoSupportLevel.Native, linux.Support.SupportLevel);
+        CollectionAssert.AreEqual(new[] { "text/plain;charset=utf-8", "UTF8_STRING" }, LinuxClipboard.Targets(NeoClipboardFormat.Text).ToArray());
+        CollectionAssert.AreEqual(new[] { "image/png" }, LinuxClipboard.Targets(NeoClipboardFormat.Png).ToArray());
     }
 
     [TestMethod]

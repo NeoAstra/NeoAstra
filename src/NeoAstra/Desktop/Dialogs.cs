@@ -146,7 +146,7 @@ public static class NeoDialogs
             : OperatingSystem.IsMacOS()
                 ? new ProcessDialogs("/usr/bin/osascript", true)
                 : OperatingSystem.IsLinux()
-                    ? new ProcessDialogs(DesktopProcess.FindTrustedExecutable("/usr/bin/zenity", "/usr/local/bin/zenity"), false)
+                    ? new LinuxDialogs(dispatcher)
                     : new UnsupportedDialogs("No supported native dialog API is available.");
         return new OwnerBoundDialogs(presenter);
     }
