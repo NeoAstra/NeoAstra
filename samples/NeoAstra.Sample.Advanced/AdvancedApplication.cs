@@ -147,11 +147,6 @@ internal sealed class AdvancedApplication(
         };
 
         ConfigureLaunchRouting(application, mainWindow);
-        await ConfigureNativeMenuAsync(
-            application,
-            desktop,
-            previewWindow,
-            cancellationToken);
         _ = await desktop.WindowPolish.SetTitleBarThemeAsync(
             mainWindow,
             NeoWindowTitleBarTheme.System,
@@ -211,6 +206,13 @@ internal sealed class AdvancedApplication(
             cancellationToken);
         var mainBinding = NeoRpcViewBinding.Bind(rpc, mainView);
         var previewBinding = NeoRpcViewBinding.Bind(rpc, previewView);
+
+        // GTK installs its menu host around existing window content, so create the views first.
+        await ConfigureNativeMenuAsync(
+            application,
+            desktop,
+            previewWindow,
+            cancellationToken);
 
         mainWindow.CloseRequested += request =>
             ConfirmUnsavedCloseAsync(request, mainView);

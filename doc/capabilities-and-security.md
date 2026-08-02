@@ -58,7 +58,7 @@ Configure `NeoCapabilityAuthorizationService` and the same manifest on `NeoRpcOp
 
 - **Windows / WebView2:** application integration may attach authenticated top-level source origin from the native navigation/message source. It must not read JavaScript fields or use the mutable current URL as identity.
 - **macOS / WKWebView:** use backend-owned top-level frame/source metadata when the integration can prove it. If unavailable, any capability with `origins` denies. WKWebView process/frame provenance is not a sandbox boundary by itself.
-- **Linux / WebKitGTK:** authenticated per-message origin is not considered available. Resolution rejects Linux capabilities containing `origins`. Only an explicitly trusted whole view (`WholeViewTrust = true`) can invoke; use separate views/processes for differently trusted content. This is an honest limitation, not an origin fallback.
+- **Linux / WebKitGTK:** authenticated per-message origin and sender-frame provenance are not considered available. Resolution rejects Linux capabilities containing `origins`. Only an explicitly trusted whole view (`WholeViewTrust = true`) can invoke; that trust covers every script in the view, so use separate views/processes for differently trusted content. This is an honest limitation, not an origin fallback.
 
 ## Scope families
 

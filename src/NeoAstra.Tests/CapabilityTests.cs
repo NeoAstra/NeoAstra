@@ -160,7 +160,7 @@ public sealed class CapabilityTests
         Assert.AreEqual("permission_denied", ErrorCode(frames.Single()));
 
         var trustedFrames = new ConcurrentQueue<string>();
-        await using var trusted = host.OpenSession(new NeoRpcSessionIdentity("main", "linux-trusted") { Platform = NeoCapabilityPlatform.Linux, WholeViewTrust = true, IsMainFrame = true }, (frame, _) => { trustedFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await using var trusted = host.OpenSession(new NeoRpcSessionIdentity("main", "linux-trusted") { Platform = NeoCapabilityPlatform.Linux, WholeViewTrust = true, IsMainFrame = false }, (frame, _) => { trustedFrames.Enqueue(frame); return ValueTask.CompletedTask; });
         await trusted.ReceiveAsync(Invoke("first", "documents.open", "{}"));
         await trusted.ReceiveAsync(Invoke("second", "documents.open", "{}"));
         Assert.AreEqual(1, invoked);

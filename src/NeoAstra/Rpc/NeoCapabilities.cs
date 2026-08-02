@@ -426,7 +426,7 @@ public sealed class NeoCapabilityManifest
     internal NeoCapabilityMatch Match(NeoRpcAuthorizationRequest request)
     {
         if (request.Context.Platform != Platform) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.PlatformMismatch);
-        if (!request.Context.IsMainFrame) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.OriginUnavailable);
+        if (!request.Context.IsMainFrame && !(Platform == NeoCapabilityPlatform.Linux && request.Context.WholeViewTrust)) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.OriginUnavailable);
         var view = _capabilities.Where(item => item.Selectors.Any(selector => selector.IsMatch(request.Context.ViewLabel))).ToArray();
         if (view.Length == 0) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.NoMatchingCapability);
         var platform = view.Where(static item => item.PlatformMatch).ToArray();
