@@ -4,7 +4,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 const root = path.resolve(import.meta.dirname, "../..");
 const check = process.argv.includes("--check");
 const variants = [["neoastra-vanilla", "ts"], ["neoastra-react", "tsx"], ["neoastra-vue", "ts"]];
-const fragments = ["src/style.css", "src/security.ts", "src/app.test.ts"];
+const fragments = ["src/style.css", "src/app.test.ts"];
 let drift = false;
 for (const [name, extension] of variants) {
   const output = path.join(root, "templates", name);
