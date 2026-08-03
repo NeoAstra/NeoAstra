@@ -344,7 +344,7 @@ public sealed class DesktopServicesTests
             StringAssert.Contains(dialogs.Support.Details, File.Exists("/usr/bin/zenity") ? "GTK4-compatible dialogs" : "zenity is unavailable");
             var allowed = LinuxDialogs.AuthorizeSelections(options, [file], save: false, folders: false);
             Assert.AreEqual(NeoDesktopStatus.Success, allowed.Status);
-            Assert.AreEqual(Path.GetFullPath(file), allowed.Value![0]);
+            Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), allowed.Value![0]);
 
             var outside = LinuxDialogs.AuthorizeSelections(options, [Path.GetTempPath()], save: false, folders: true);
             Assert.AreEqual(NeoDesktopStatus.Denied, outside.Status);
