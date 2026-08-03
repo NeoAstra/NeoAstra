@@ -4,7 +4,8 @@
 
 Build native desktop applications with .NET and web technologies using the platform browser: WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux.
 
-> NeoAstra is pre-release software. The portable core and Windows vertical slice are usable; some advanced browser features and cross-platform validation are still in progress.
+> [!WARNING]
+> NeoAstra is under construction and not yet available.
 
 See [platform support and runtime dependencies](doc/platform-support.md) for the distinction between v1 support intent, implemented backends, configured workflow coverage, and runtime validation. Review the [known limitations](doc/known-limitations.md) before shipping an application.
 
