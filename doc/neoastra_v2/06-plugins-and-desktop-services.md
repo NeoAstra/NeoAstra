@@ -154,7 +154,7 @@ No arbitrary shell command, executable, verb, or unvalidated scheme is accepted.
 
 ## 13. Drag and drop (`NeoAstra.Desktop.DragDrop`)
 
-Inbound drop events provide typed data kinds and brokered file tokens/canonical paths according to capability policy, not untrusted DOM strings treated as authority. Events include target view/window and logical position. Limits apply to item count and metadata size.
+Inbound drop events provide typed data kinds and brokered file tokens/canonical paths according to capability policy, not untrusted DOM strings treated as authority. An existing path selected through a trusted native OS drop is canonicalized as an exact, short-lived grant rather than being limited to ambient application file roots. Events include target view/window and logical position. Limits apply to item count and metadata size.
 
 Outbound drag requires an explicit user gesture, declared data/files, optional drag image, and completion result. It MUST not expose unrestricted filesystem access or retain resources after drag completion. Backend/WebView DOM drag interactions need conformance tests.
 

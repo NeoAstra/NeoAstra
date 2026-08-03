@@ -51,8 +51,8 @@ Without the development URL, the application serves the current production `Clie
 - **Lifecycle:** mark work as unsaved and close the main window; the asynchronous renderer confirmation can
   cancel close. Relaunch the executable to exercise authenticated single-instance routing.
 - **Desktop essentials:** native dialogs, window and context menus, tray/status items, clipboard, notifications,
-  global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish. Drop a
-  file from your user profile into the main window to observe its document-session-scoped token in the activity log.
+  global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish. Drop an
+  existing local file into the main window to observe its document-session-scoped token in the activity log.
 - **Frontend/release path:** React, dynamic imports, a module worker, manifest-backed local assets, restrictive
   CSP, generated contracts, NativeAOT, and the bundle workflow.
 

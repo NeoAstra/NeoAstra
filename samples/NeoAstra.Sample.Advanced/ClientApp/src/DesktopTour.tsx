@@ -46,8 +46,11 @@ export function DesktopTour({ report }: DesktopTourProps) {
           report("theme-event", describe(value))),
         desktop.system.onDisplaysChanged(value =>
           report("display-event", describe(value))),
-        desktop.dragDrop.onInbound(value =>
-          report("drop-event", describe(value))),
+        desktop.dragDrop.onInbound(value => {
+          const message = describe(value);
+          setResults(current => ({ ...current, storage: message }));
+          report("drop-event", message);
+        }),
       ]);
       if (disposed) {
         await Promise.all(subscriptions.map(unsubscribe => unsubscribe()));
@@ -281,7 +284,7 @@ export function DesktopTour({ report }: DesktopTourProps) {
           onDragStart={event => void beginOutboundDrag(event)}
         >
           <strong>Drag this card out</strong>
-          <span>or drop a file/text/URL into the window to observe a brokered event.</span>
+          <span>or drop a file/text/URL here to observe its brokered event below.</span>
         </div>
         <ResultPanel label="Resource result">{results.storage}</ResultPanel>
       </FeatureCard>

@@ -493,16 +493,20 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
-    public async Task DragDropFileTokensAreScopedAndGestureTokensAreOneShot()
+    public async Task InboundDropGrantsExactOwnerScopedFileOutsideOutboundRootsAndGestureTokensRemainOneShot()
     {
         var root = CreateTemporaryDirectory();
         try
         {
+            var outboundRoot = Path.Combine(root, "outbound"); Directory.CreateDirectory(outboundRoot);
             var file = Path.Combine(root, "drop.txt"); await File.WriteAllTextAsync(file, "drop");
-            await using var broker = new NeoDragDropBroker(new NeoFileScope([root]));
+            await using var broker = new NeoDragDropBroker(new NeoFileScope([outboundRoot]));
             var owner = NeoPluginOwner.DocumentSession("session-a");
             var thief = NeoPluginOwner.DocumentSession("session-b");
             Assert.Throws<ArgumentException>(() => broker.BrokerInbound("view", null, default, Array.Empty<(NeoDragDataKind, string)>(), default));
+            var missing = broker.BrokerInbound("view", "window", default, [(NeoDragDataKind.File, Path.Combine(root, "missing.txt"))], owner);
+            Assert.AreEqual(NeoDesktopStatus.Denied, missing.Status);
+            Assert.AreEqual("invalid_drop_path", missing.Code);
             var drop = broker.BrokerInbound("view", "window", new NeoPoint(1, 2), [(NeoDragDataKind.File, file), (NeoDragDataKind.Text, "hello")], owner);
             Assert.AreEqual(NeoDesktopStatus.Success, drop.Status);
             var token = drop.Value!.Items[0].FileToken!;
@@ -511,6 +515,8 @@ public sealed class DesktopServicesTests
             Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), canonical);
             broker.ReleaseOwner(owner);
             Assert.IsFalse(broker.TryResolveFile(token, owner, out _));
+            var outsideGesture = broker.IssueUserGesture(owner, TimeSpan.FromSeconds(1));
+            Assert.AreEqual(NeoDesktopStatus.Denied, await broker.StartOutboundAsync(outsideGesture, owner, new() { ViewLabel = "view", Items = [new(NeoDragDataKind.File, file)] }));
             var gesture = broker.IssueUserGesture(owner, TimeSpan.FromSeconds(1));
             Assert.IsFalse(broker.TryConsumeUserGesture(gesture, thief));
             Assert.IsTrue(broker.TryConsumeUserGesture(gesture, owner));

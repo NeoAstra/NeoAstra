@@ -19,7 +19,7 @@ public enum NeoDragDataKind
 /// <summary>Contains one bounded inbound drop item. File authority is represented by <see cref="FileToken"/>, not DOM text.</summary>
 /// <param name="Kind">Data kind.</param>
 /// <param name="Text">Owned text or URL data.</param>
-/// <param name="FileToken">Opaque broker token for a scoped file.</param>
+/// <param name="FileToken">Opaque broker token for the exact user-dropped file.</param>
 public sealed record NeoDropItem(NeoDragDataKind Kind, string? Text, string? FileToken);
 
 /// <summary>Contains one trusted inbound drop event in logical view coordinates.</summary>
@@ -64,11 +64,11 @@ internal interface INeoRendererOutboundDragPresenter
     ValueTask<NeoDesktopStatus> StartRendererAsync(string documentSessionId, NeoOutboundDragRequest request, CancellationToken cancellationToken);
 }
 
-/// <summary>Brokers canonical file drops and one-shot outbound user gestures with bounded lifetime.</summary>
+/// <summary>Brokers canonical user-selected file drops and one-shot outbound user gestures with bounded lifetime.</summary>
 public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDesktopService
 {
     private readonly object _sync = new();
-    private readonly NeoFileScope _files;
+    private readonly NeoFileScope _outboundFiles;
     private readonly Dictionary<string, (string Path, NeoPluginOwner Owner, DateTimeOffset Expires)> _tokens = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (DateTimeOffset Expires, NeoPluginOwner Owner)> _gestures = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _rendererSessions = new(StringComparer.Ordinal);
@@ -78,8 +78,8 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
     private int _rendererRegistrations;
     private bool _disposed;
 
-    /// <summary>Initializes the broker with a mandatory backend file policy.</summary>
-    public NeoDragDropBroker(NeoFileScope files, INeoOutboundDragPresenter? outboundPresenter = null) { ArgumentNullException.ThrowIfNull(files); _files = files; _outboundPresenter = outboundPresenter; }
+    /// <summary>Initializes the broker with the file policy used for outbound drags.</summary>
+    public NeoDragDropBroker(NeoFileScope files, INeoOutboundDragPresenter? outboundPresenter = null) { ArgumentNullException.ThrowIfNull(files); _outboundFiles = files; _outboundPresenter = outboundPresenter; }
 
     /// <summary>Gets truthful support. Native WebView file drops are brokered automatically after application binding.</summary>
     public NeoCapabilityInfo Support => _outboundPresenter?.Support ?? new(NeoSupportLevel.Limited, 1, 2, "Native WebView inbound file drops are canonicalized, bounded, owner-scoped, and released on navigation/view teardown; no outbound native presenter is attached.");
@@ -115,7 +115,7 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
             if (!Enum.IsDefined(item.Kind) || item.Value is null || item.Value.Length > 32_768 || item.Value.Any(static c => c == '\0')) return NeoDesktopResult<NeoDropEvent>.Failure(NeoDesktopStatus.Denied, "invalid_drop_metadata");
             if (item.Kind == NeoDragDataKind.File)
             {
-                if (!_files.TryAuthorize(item.Value, requireExisting: true, out var canonical)) return NeoDesktopResult<NeoDropEvent>.Failure(NeoDesktopStatus.Denied, "path_scope");
+                if (!TryCanonicalizeDroppedFile(item.Value, out var canonical)) return NeoDesktopResult<NeoDropEvent>.Failure(NeoDesktopStatus.Denied, "invalid_drop_path");
                 validated.Add((item.Kind, canonical!));
             }
             else if (item.Kind == NeoDragDataKind.Url && (!Uri.TryCreate(item.Value, UriKind.Absolute, out var uri) || uri.IsFile)) return NeoDesktopResult<NeoDropEvent>.Failure(NeoDesktopStatus.Denied, "invalid_url");
@@ -234,13 +234,13 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
             var value = item.Value;
             if (item.Kind == NeoDragDataKind.File)
             {
-                if (!_files.TryAuthorize(value, requireExisting: true, out var canonical)) return null;
+                if (!_outboundFiles.TryAuthorize(value, requireExisting: true, out var canonical)) return null;
                 value = canonical!;
             }
             else if (item.Kind == NeoDragDataKind.Url && (!Uri.TryCreate(value, UriKind.Absolute, out var url) || url.IsFile || url.OriginalString.Any(char.IsControl))) return null;
             items[index] = new(item.Kind, value);
         }
-        if (request.DragImagePath is { } dragImage && (!_files.TryAuthorize(dragImage, requireExisting: true, out var canonicalImage) || !string.Equals(Path.GetExtension(canonicalImage), ".png", StringComparison.OrdinalIgnoreCase))) return null;
+        if (request.DragImagePath is { } dragImage && (!_outboundFiles.TryAuthorize(dragImage, requireExisting: true, out var canonicalImage) || !string.Equals(Path.GetExtension(canonicalImage), ".png", StringComparison.OrdinalIgnoreCase))) return null;
         return request with { Items = Array.AsReadOnly(items), DragImagePath = request.DragImagePath is null ? null : NeoFileScope.Canonicalize(request.DragImagePath, requireExisting: true) };
     }
 
@@ -363,6 +363,11 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
     }
 
     private static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+    private static bool TryCanonicalizeDroppedFile(string path, out string? canonicalPath)
+    {
+        try { canonicalPath = NeoFileScope.Canonicalize(path, requireExisting: true); return true; }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException) { canonicalPath = null; return false; }
+    }
     private static void ValidateToken(string token) { if (token is null || token.Length != 32 || token.Any(static c => !Uri.IsHexDigit(c))) throw new ArgumentException("An opaque token is malformed.", nameof(token)); }
     private static void ValidateLabel(string value, string parameterName) { if (string.IsNullOrEmpty(value) || value.Length > 128 || value.Any(static c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_' or ':'))) throw new ArgumentException("A target label is malformed.", parameterName); }
     private void CleanupGestures() { var now = DateTimeOffset.UtcNow; foreach (var token in _gestures.Where(pair => pair.Value.Expires <= now).Select(static pair => pair.Key).ToArray()) _gestures.Remove(token); }

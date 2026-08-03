@@ -46,7 +46,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
     /// <param name="applicationVersion">Application version displayed by system metadata.</param>
     /// <param name="privateDataDirectory">Absolute private directory for encrypted records.</param>
     /// <param name="allowedUrlOrigins">Exact URL origins accepted by the opener.</param>
-    /// <param name="openFileRoots">Canonical roots from which existing non-executable files may be opened or dropped.</param>
+    /// <param name="openFileRoots">Canonical roots from which existing non-executable files may be opened or used in outbound drags.</param>
     /// <param name="revealFileRoots">Canonical roots whose files/folders may be revealed.</param>
     /// <param name="openFileIntents">Explicit non-executable content intents accepted by the opener.</param>
     /// <param name="dispatcher">Optional UI dispatcher used for coalesced metadata/menu delivery.</param>
