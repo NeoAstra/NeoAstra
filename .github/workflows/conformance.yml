@@ -45,7 +45,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0 xvfb
+          sudo apt-get install -y libgtk-4-1 libwebkitgtk-6.0-4 xvfb
       - name: Run desktop session smoke fixture
         shell: bash
         run: |

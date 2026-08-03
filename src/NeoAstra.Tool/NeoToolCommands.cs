@@ -285,7 +285,7 @@ internal static class NeoToolCommands
         }
         else
         {
-            CheckOptionalCommand("pkg-config", ["--exists", "webkit2gtk-4.1"], "webkitgtk-native-dependencies", findings);
+            CheckOptionalCommand("pkg-config", ["--exists", "webkitgtk-6.0"], "webkitgtk-native-dependencies", findings);
             findings.Add(("webkitgtk-runtime", "info", "Runtime launch remains the authoritative WebKitGTK/native dependency check for the target distribution."));
         }
     }

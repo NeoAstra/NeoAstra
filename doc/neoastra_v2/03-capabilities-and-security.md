@@ -128,7 +128,7 @@ The initial implementation SHOULD avoid runtime deny rules. Multiple grants for 
 
 ## 7. Linux policy
 
-WebKitGTK 4.1 does not provide trustworthy script-message source origin. Therefore:
+WebKitGTK 6.0 does not provide trustworthy script-message source origin. Therefore:
 
 - `origins` constraints never match a Linux bridge message;
 - the runtime MUST NOT fill origin from top-level navigation, referrer, custom-scheme request metadata, or JavaScript arguments;

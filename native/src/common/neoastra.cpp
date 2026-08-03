@@ -927,7 +927,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     static const std::string unavailable="Not exposed by the current portable implementation";
 #if defined(__linux__)
     static const std::string linux_custom_scheme="WebKitGTK supports synchronous byte/file responses, secure and CORS scheme flags, and request bodies up to 64 MiB; authority, allowed-origin, service-worker, initiator, frame and resource-kind semantics and application-scheme bridge trust are unavailable";
-    static const std::string linux_message_origin="WebKitGTK 4.1 script messages do not expose trustworthy source-origin data";
+    static const std::string linux_message_origin="WebKitGTK 6.0 script messages do not expose trustworthy source-origin data";
 #endif
     info->support=NEOASTRA_SUPPORT_NONE;info->capability_version=1;info->flags=0;
     switch(capability){

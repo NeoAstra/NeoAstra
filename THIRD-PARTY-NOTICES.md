@@ -7,7 +7,7 @@ The Windows native backend is built with Microsoft.Web.WebView2 SDK version 1.0.
 links its `WebView2LoaderStatic.lib` into `neoastra_native.dll`. The WebView2 browser runtime is an
 external system/runtime dependency and is not distributed by NeoAstra.
 
-The macOS system frameworks (Cocoa, Security, and WebKit) and the Linux GTK 3, WebKitGTK 4.1,
+The macOS system frameworks (Cocoa, Security, and WebKit) and the Linux GTK 4, WebKitGTK 6.0,
 libsoup 3, and GLib runtime libraries are external platform dependencies and are not copied into
 NeoAstra release artifacts. Build-only and test-only .NET packages are not included in the
 NeoAstra runtime package.

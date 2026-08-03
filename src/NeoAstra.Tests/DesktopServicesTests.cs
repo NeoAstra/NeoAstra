@@ -295,7 +295,7 @@ public sealed class DesktopServicesTests
         var windowsSupport = new WindowsMenuPresenter(commands, null).Support; var macSupport = new MacMenuPresenter(commands, null).Support; var linuxSupport = new LinuxMenuPresenter(commands, null).Support;
         Assert.AreEqual(NeoSupportLevel.Limited, windowsSupport.SupportLevel); StringAssert.Contains(windowsSupport.Details, "role labels must be supplied by the application");
         Assert.AreEqual(NeoSupportLevel.Limited, macSupport.SupportLevel); StringAssert.Contains(macSupport.Details, "role labels must be supplied by the application");
-        StringAssert.Contains(linuxSupport.Details, "GTK3 stock resources localize");
+        StringAssert.Contains(linuxSupport.Details, "GTK4 removed stock menu-item labels");
         Assert.AreEqual("Ctrl+Alt+Shift+P", NeoAccelerator.Normalize("shift+ctrl+alt+p"));
         Assert.AreEqual("Localized Héllo 更新", systemInfo.Metadata.ApplicationName);
     }
@@ -340,8 +340,8 @@ public sealed class DesktopServicesTests
             var options = new NeoFileDialogOptions { Scope = new NeoFileScope([root]) };
             var dialogs = new LinuxDialogs(dispatcher: null);
 
-            Assert.AreEqual(NeoSupportLevel.Limited, dialogs.Support.SupportLevel);
-            StringAssert.Contains(dialogs.Support.Details, "Native GTK3");
+            Assert.AreEqual(File.Exists("/usr/bin/zenity") ? NeoSupportLevel.Limited : NeoSupportLevel.None, dialogs.Support.SupportLevel);
+            StringAssert.Contains(dialogs.Support.Details, File.Exists("/usr/bin/zenity") ? "GTK4-compatible dialogs" : "zenity is unavailable");
             var allowed = LinuxDialogs.AuthorizeSelections(options, [file], save: false, folders: false);
             Assert.AreEqual(NeoDesktopStatus.Success, allowed.Status);
             Assert.AreEqual(Path.GetFullPath(file), allowed.Value![0]);
@@ -388,7 +388,7 @@ public sealed class DesktopServicesTests
         Assert.AreEqual(NeoDesktopStatus.NotFound, (await clipboard.ReadAsync(NeoClipboardFormat.Png)).Status);
         var linux = new LinuxClipboard(dispatcher: null);
         Assert.AreEqual(NeoSupportLevel.Native, linux.Support.SupportLevel);
-        CollectionAssert.AreEqual(new[] { "text/plain;charset=utf-8", "UTF8_STRING" }, LinuxClipboard.Targets(NeoClipboardFormat.Text).ToArray());
+        CollectionAssert.AreEqual(new[] { "text/plain;charset=utf-8", "text/plain" }, LinuxClipboard.Targets(NeoClipboardFormat.Text).ToArray());
         CollectionAssert.AreEqual(new[] { "image/png" }, LinuxClipboard.Targets(NeoClipboardFormat.Png).ToArray());
     }
 

@@ -221,7 +221,7 @@ public enum NeoBridgePolicy : uint
     /// <summary>
     /// Permits messaging only when the backend authenticates the document origin against
     /// <see cref="NeoAstraOptions.BridgeOrigins"/>. This mode is unavailable on Linux because
-    /// WebKitGTK 4.1 does not expose trustworthy script-message sender origins.
+    /// WebKitGTK 6.0 does not expose trustworthy script-message sender origins.
     /// </summary>
     TrustedOrigins = 1,
 

@@ -40,10 +40,16 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     private bool _disposed;
 
     /// <summary>Gets icon support.</summary>
-    public NeoCapabilityInfo IconSupport { get; } = OperatingSystem.IsMacOS() ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa exposes an application-scoped icon rather than a per-window icon.") : DesktopSupport("Native Win32 and GTK window icons use copied application-controlled files.");
+    public NeoCapabilityInfo IconSupport { get; } = OperatingSystem.IsWindows()
+        ? new(NeoSupportLevel.Native, 1, 0, "Native Win32 window icons use copied application-controlled files.")
+        : OperatingSystem.IsMacOS()
+            ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa exposes an application-scoped icon rather than a per-window icon.")
+            : OperatingSystem.IsLinux()
+                ? new(NeoSupportLevel.None, 1, 0, "GTK4 removed per-window file icons; Linux applications should provide desktop-entry icon metadata.")
+                : new(NeoSupportLevel.None, 1, 0, "No supported desktop window backend.");
     /// <summary>Gets attention support.</summary>
     public NeoCapabilityInfo AttentionSupport { get; } = OperatingSystem.IsLinux()
-        ? new(NeoSupportLevel.Limited, 1, 0, "GTK urgency hints are native requests, but the window manager/compositor decides whether and how they are presented.")
+        ? new(NeoSupportLevel.None, 1, 0, "GTK4 removed per-window urgency hints and no portable compositor-neutral replacement is available.")
         : OperatingSystem.IsMacOS()
             ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa user-attention requests are native but application-scoped rather than per-window.")
             : OperatingSystem.IsWindows()
@@ -165,11 +171,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
             }
             return NeoDesktopStatus.Success;
         }
-        if (OperatingSystem.IsLinux())
-        {
-            var error = nint.Zero; var ok = Native.GtkWindowSetIconFromFile(window.GetNativeHandle(NeoNativeHandleKind.GtkWindow).Value, path, ref error);
-            if (error != 0) Native.GErrorFree(error); return ok ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed;
-        }
+        if (OperatingSystem.IsLinux()) return NeoDesktopStatus.Unsupported;
         if (OperatingSystem.IsMacOS())
         {
             var name = ObjC.String(path); var image = ObjC.SendInt(ObjC.Send(ObjC.Class("NSImage"), ObjC.Selector("alloc")), ObjC.Selector("initWithContentsOfFile:"), name);
@@ -183,7 +185,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     {
         if (OperatingSystem.IsWindows()) { var handle=window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;if(!Native.IsWindow(handle))return NeoDesktopStatus.NotFound;var info = new FlashWindowInfo { Size = (uint)Marshal.SizeOf<FlashWindowInfo>(), Window = handle, Flags = 3 | 12, Count = critical ? 5u : 3u, Timeout = 0 }; _=Native.FlashWindowEx(ref info);return NeoDesktopStatus.Success; }
         if (OperatingSystem.IsMacOS()) { var app = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Selector("sharedApplication")); _ = ObjC.SendInt(app, ObjC.Selector("requestUserAttention:"), critical ? 0 : 10); return NeoDesktopStatus.Success; }
-        if (OperatingSystem.IsLinux()) { Native.GtkWindowSetUrgencyHint(window.GetNativeHandle(NeoNativeHandleKind.GtkWindow).Value, true); return NeoDesktopStatus.Success; }
+        if (OperatingSystem.IsLinux()) return NeoDesktopStatus.Unsupported;
         return NeoDesktopStatus.Unsupported;
     }
 
@@ -242,8 +244,6 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     }
     private static void ClearAndDestroyIcon(WindowIconEntry entry) { if (Native.IsWindow(entry.WindowHandle)) { _ = Native.SendMessage(entry.WindowHandle, 0x0080, 0, 0); _ = Native.SendMessage(entry.WindowHandle, 0x0080, 1, 0); } if (entry.Icon != 0) _ = Native.DestroyIcon(entry.Icon); }
     private sealed record WindowIconEntry(nint WindowHandle, nint Icon, EventHandler ClosedHandler);
-    private static NeoCapabilityInfo DesktopSupport(string details) => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() ? new(NeoSupportLevel.Native, 1, 0, details) : new(NeoSupportLevel.None, 1, 0, "No supported desktop window backend.");
-
     [StructLayout(LayoutKind.Sequential)] private struct FlashWindowInfo { internal uint Size; internal nint Window; internal uint Flags; internal uint Count; internal uint Timeout; }
     private static unsafe partial class Native
     {
@@ -256,10 +256,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool SetWindowDisplayAffinity(nint window, uint affinity);
         [LibraryImport("dwmapi.dll")] internal static partial int DwmSetWindowAttribute(nint window, uint attribute, ref int value, int size);
         [LibraryImport("ole32.dll")] internal static partial int CoCreateInstance(ref Guid clsid, nint outer, uint context, ref Guid iid, nint* value);
-        [LibraryImport("libgtk-3.so.0", EntryPoint = "gtk_window_set_icon_from_file", StringMarshalling = StringMarshalling.Utf8)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GtkWindowSetIconFromFile(nint window, string path, ref nint error);
-        [LibraryImport("libgtk-3.so.0", EntryPoint = "gtk_window_set_urgency_hint")] internal static partial void GtkWindowSetUrgencyHint(nint window, [MarshalAs(UnmanagedType.Bool)] bool setting);
-        [LibraryImport("libgtk-3.so.0", EntryPoint = "gtk_widget_set_sensitive")] internal static partial void GtkWidgetSetSensitive(nint widget, [MarshalAs(UnmanagedType.Bool)] bool sensitive);
-        [LibraryImport("libglib-2.0.so.0", EntryPoint = "g_error_free")] internal static partial void GErrorFree(nint error);
+        [LibraryImport("libgtk-4.so.1", EntryPoint = "gtk_widget_set_sensitive")] internal static partial void GtkWidgetSetSensitive(nint widget, [MarshalAs(UnmanagedType.Bool)] bool sensitive);
     }
 
     private static partial class ObjC

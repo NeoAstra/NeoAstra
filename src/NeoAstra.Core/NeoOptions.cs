@@ -414,7 +414,7 @@ public sealed class NeoAstraOptions
 
         if (BridgePolicy == NeoBridgePolicy.TrustedOrigins && OperatingSystem.IsLinux())
         {
-            throw new PlatformNotSupportedException("WebKitGTK 4.1 does not expose trustworthy script-message sender origins. Use Disabled or explicitly opt into TrustEntireView.");
+            throw new PlatformNotSupportedException("WebKitGTK 6.0 does not expose trustworthy script-message sender origins. Use Disabled or explicitly opt into TrustEntireView.");
         }
     }
 }

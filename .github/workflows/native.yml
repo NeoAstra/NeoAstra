@@ -37,7 +37,7 @@ jobs:
       - name: Install Linux analysis dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang clang-tidy libclang-rt-dev ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+          sudo apt-get install -y clang clang-tidy libclang-rt-dev ninja-build libgtk-4-dev libwebkitgtk-6.0-dev xvfb
       - name: AddressSanitizer and UndefinedBehaviorSanitizer
         run: |
           cmake --preset linux-x64-asan-ubsan
@@ -57,7 +57,7 @@ jobs:
       - name: Install Linux native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-rt-dev ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+          sudo apt-get install -y clang libclang-rt-dev ninja-build libgtk-4-dev libwebkitgtk-6.0-dev xvfb
       - name: ThreadSanitizer selected common-code tests
         run: |
           cmake --preset linux-x64-tsan
@@ -111,7 +111,7 @@ jobs:
         if: startsWith(matrix.rid, 'linux-')
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+          sudo apt-get install -y clang ninja-build libgtk-4-dev libwebkitgtk-6.0-dev xvfb
       - name: Build, test, and stage native runtime
         shell: bash
         run: |

@@ -226,7 +226,7 @@ public sealed class ManagedApiTests
         StringAssert.Contains(windows, "view->bridge_policy != NEOASTRA_BRIDGE_DISABLED");
         StringAssert.Contains(windows, "if (state->message_registered) state->core->remove_WebMessageReceived");
         StringAssert.Contains(gtk, "WebKitGTK custom schemes do not support service workers");
-        StringAssert.Contains(common, "WebKitGTK 4.1 script messages do not expose trustworthy source-origin data");
+        StringAssert.Contains(common, "WebKitGTK 6.0 script messages do not expose trustworthy source-origin data");
         StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
         StringAssert.Contains(managedView, "_transport?.Close(\"renderer_lost\")");
         StringAssert.Contains(managedView, "_transport?.Close(\"view_disposed\")");

@@ -131,8 +131,8 @@ documented in [`known-limitations.md`](known-limitations.md).
 | Windows 10/11 |        ARM64 | WebView2      | Required       |
 | macOS         |          x64 | WKWebView     | Required       |
 | macOS         |        ARM64 | WKWebView     | Required       |
-| Ubuntu 22.04+ |          x64 | WebKitGTK 4.1 | Required       |
-| Ubuntu 22.04+ |        ARM64 | WebKitGTK 4.1 | Required       |
+| Ubuntu 24.04+ |          x64 | WebKitGTK 6.0 | Required       |
+| Ubuntu 24.04+ |        ARM64 | WebKitGTK 6.0 | Required       |
 | Linux musl    |    x64/ARM64 | WebKitGTK     | Future target  |
 
 Thirty-two-bit architectures are not supported in v1.
@@ -141,12 +141,12 @@ Thirty-two-bit architectures are not supported in v1.
 
 The initial Linux backend MUST use:
 
-* WebKitGTK API 4.1.
-* GTK 3.
+* WebKitGTK API 6.0.
+* GTK 4.
 * libsoup 3.
 * The GLib main loop.
 
-WebKitGTK 4.1 is available on Ubuntu 22.04 and later. WebKitGTK 6.0 uses GTK 4 and officially supersedes the older GTK 3 API variants, but requiring it initially would reduce compatibility with existing distributions. The Linux implementation MUST therefore isolate all GTK/WebKitGTK code behind a backend boundary so that a WebKitGTK 6.0 implementation can be added later. It MUST NOT expose GTK-version-specific structures.
+WebKitGTK 6.0 uses GTK 4 and supersedes the earlier API variants. The initial Linux distribution baseline is Ubuntu 24.04, where the 6.0 development and runtime packages are available. The Linux implementation MUST continue to isolate GTK/WebKitGTK code behind a backend boundary and MUST NOT expose GTK-version-specific structures.
 
 ## 5.3 Musl constraints
 
@@ -492,8 +492,8 @@ The macOS backend MUST:
 The Linux backend MUST:
 
 * Use `pkg-config`.
-* Link against `webkit2gtk-4.1`.
-* Use GTK 3 and libsoup 3.
+* Link against `webkitgtk-6.0`.
+* Use GTK 4 and libsoup 3.
 * Work under both X11 and Wayland through GTK.
 * Avoid direct X11 assumptions in the portable layer.
 * Dynamically link the distro-provided WebKitGTK.
@@ -1460,7 +1460,7 @@ iframes, remote script dependencies, mutable local assets, injection vulnerabili
 any such script that can reach the registered handler receives the view's bridge authority.
 
 Each message event MUST report the source origin where the backend provides trustworthy provenance.
-WebKitGTK 4.1 does not provide that provenance: Linux MUST reject `TrustedOrigins`, MAY support
+WebKitGTK 6.0 does not provide that provenance: Linux MUST reject `TrustedOrigins`, MAY support
 `TrustEntireView`, and when it does MUST report the message origin as unavailable rather than substituting
 the current top-level URI. The message-origin capability MUST remain unavailable on that backend.
 
@@ -1552,9 +1552,9 @@ The implementation MUST apply backpressure and MUST NOT request the entire resou
 
 The current WKWebView mapping registers non-built-in schemes on each view configuration, including opener-compatible popup configurations inherited from WebKit. It preserves status, headers, MIME type, content length, byte and mapped-file response shapes. `NSHTTPURLResponse` does not expose a custom reason-phrase initializer, so WKWebView derives that text from the status code. Application-scheme registration does not itself grant bridge access: trusted application hosts are named through the view's explicit bridge-origin list. The public WKWebView API does not expose WebView2-equivalent authority, secure-context, CORS-allowlist or service-worker registration switches; capability discovery therefore reports limited support, and service-worker requests are rejected at environment creation.
 
-The WebKitGTK 4.1 mapping registers each non-built-in scheme on every environment-owned context with `webkit_web_context_register_uri_scheme`, including separate ephemeral-profile contexts. It preserves status, reason phrase, headers, MIME type, known content length, empty, copied-byte, and native-file-stream response shapes. URI, method, headers, and request body are available synchronously; the body is buffered with a 64 MiB bound before invoking the provider. `WebKitURISchemeRequest` does not expose trustworthy initiating-origin, frame, or resource-kind metadata, nor a provider cancellation signal, so those request fields remain unknown and a completed synchronous response is not cancellable through the ABI. The security manager honors secure and CORS-enabled flags; authority and per-origin allowlist semantics have no equivalent registration switch. Service-worker descriptors are rejected. Capability discovery therefore reports limited custom-scheme support.
+The WebKitGTK 6.0 mapping registers each non-built-in scheme on every environment-owned context with `webkit_web_context_register_uri_scheme`, including separate ephemeral-profile contexts. It preserves status, reason phrase, headers, MIME type, known content length, empty, copied-byte, and native-file-stream response shapes. URI, method, headers, and request body are available synchronously; the body is buffered with a 64 MiB bound before invoking the provider. `WebKitURISchemeRequest` does not expose trustworthy initiating-origin, frame, or resource-kind metadata, nor a provider cancellation signal, so those request fields remain unknown and a completed synchronous response is not cancellable through the ABI. The security manager honors secure and CORS-enabled flags; authority and per-origin allowlist semantics have no equivalent registration switch. Service-worker descriptors are rejected. Capability discovery therefore reports limited custom-scheme support.
 
-WebKitGTK 4.1 script-message callbacks do not provide trustworthy source-origin data. The Linux backend MUST NOT infer message origin from the mutable top-level view URI. Consequently its bridge is default-denied, application-scheme registration does not add bridge trust, explicit bridge origins remain unsupported, and message-origin capability is unavailable until a trustworthy backend signal exists.
+WebKitGTK 6.0 script-message callbacks do not provide trustworthy source-origin data. The Linux backend MUST NOT infer message origin from the mutable top-level view URI. Consequently its bridge is default-denied, application-scheme registration does not add bridge trust, explicit bridge origins remain unsupported, and message-origin capability is unavailable until a trustworthy backend signal exists.
 
 WebKitGTK permits URI scheme requests to be retained and completed asynchronously.
 
@@ -2592,8 +2592,8 @@ It MUST:
 
 The Linux implementation MUST use:
 
-* GTK 3.
-* WebKitGTK 4.1.
+* GTK 4.
+* WebKitGTK 6.0.
 * GLib/GObject.
 * `WebKitWebContext`.
 * `WebKitWebView`.
@@ -3132,7 +3132,7 @@ Deliverables:
 
 Acceptance:
 
-* Same managed sample runs on Ubuntu 22.04 and 24.04.
+* Same managed sample runs on Ubuntu 24.04 x64 and ARM64.
 * X11 and Wayland behavior is validated.
 * Missing WebKitGTK dependency is documented clearly.
 
@@ -3318,7 +3318,7 @@ The implementer should treat these decisions as fixed unless revised explicitly:
 9. Every asynchronous operation completes exactly once.
 10. A first-class multi-window standalone native windowing layer is included.
 11. Embedding is also supported.
-12. Linux v1 uses WebKitGTK 4.1 and GTK 3.
+12. Linux v1 uses WebKitGTK 6.0 and GTK 4.
 13. WebKitGTK 6.0 support is a separate backend implementation.
 14. Windows uses Win32 and WebView2 COM directly.
 15. macOS uses public Cocoa and WKWebView APIs.

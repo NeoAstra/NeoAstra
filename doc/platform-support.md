@@ -17,8 +17,8 @@ claim that every target has passed release-level runtime validation. In this doc
 | Windows 10/11 | ARM64 / `win-arm64` | WebView2 | Required | Implemented. Native asset cross-build/package coverage is configured; native execution is skipped and no ARM64 browser run is established. |
 | macOS | x64 / `osx-x64` | WKWebView | Required | Implemented and source-reviewed. Native build/test coverage is configured; no release-level browser-runtime result is asserted. The minimum supported macOS version is not yet frozen. |
 | macOS | ARM64 / `osx-arm64` | WKWebView | Required | Implemented and source-reviewed. Native and managed CI plus NativeAOT publish coverage are configured; no release-level browser-runtime result is asserted. The minimum supported macOS version is not yet frozen. |
-| Ubuntu 22.04+ | x64 / `linux-x64` | WebKitGTK 4.1 | Required | Implemented and source-reviewed. Native tests under Xvfb, managed CI, NativeAOT publish, and native hardening jobs are configured; no release-level browser-runtime result is asserted. |
-| Ubuntu 22.04+ | ARM64 / `linux-arm64` | WebKitGTK 4.1 | Required | Implemented and source-reviewed. Native build/test/package coverage on ARM64 infrastructure is configured; no release-level browser-runtime result is asserted. |
+| Ubuntu 24.04+ | x64 / `linux-x64` | WebKitGTK 6.0 | Required | Implemented and source-reviewed. Native tests under Xvfb, managed CI, NativeAOT publish, and native hardening jobs are configured; no release-level browser-runtime result is asserted. |
+| Ubuntu 24.04+ | ARM64 / `linux-arm64` | WebKitGTK 6.0 | Required | Implemented and source-reviewed. Native build/test/package coverage on ARM64 infrastructure is configured; no release-level browser-runtime result is asserted. |
 | Linux using musl | x64 or ARM64 | WebKitGTK | Not a v1 target | Unsupported. No musl RID assets, compatible dependency baseline, or musl runtime CI are present. |
 
 Thirty-two-bit architectures and RIDs other than those listed above are not supported. The NuGet
@@ -58,18 +58,17 @@ All platforms require:
 
 ### Linux
 
-- The initial target is Ubuntu 22.04 or later using glibc, with WebKitGTK API 4.1, GTK 3, libsoup 3,
+- The initial target is Ubuntu 24.04 or later using glibc, with WebKitGTK API 6.0, GTK 4, libsoup 3,
   GLib, and their transitive runtime libraries supplied by the distribution.
-- The build uses the `gtk+-3.0` and `webkit2gtk-4.1` pkg-config modules. Repository CI installs
-  `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` to compile; deployed applications need the corresponding
+- The build uses the `gtk4` and `webkitgtk-6.0` pkg-config modules. Repository CI installs
+  `libgtk-4-dev` and `libwebkitgtk-6.0-dev` to compile; deployed applications need the corresponding
   distribution runtime libraries, not necessarily the development packages.
-- On Ubuntu 22.04, install the direct runtime packages with
-  `sudo apt-get install libgtk-3-0 libwebkit2gtk-4.1-0`. Ubuntu 24.04 uses the time64-transitioned GTK
-  package name: `sudo apt-get install libgtk-3-0t64 libwebkit2gtk-4.1-0`. APT installs the required
+- On Ubuntu 24.04, install the direct runtime packages with
+  `sudo apt-get install libgtk-4-1 libwebkitgtk-6.0-4`. APT installs the required
   libsoup 3, GLib, and other transitive libraries.
 - GTK must be able to connect to an X11 or Wayland display. Backend initialization fails when no
   usable display is available.
-- Other glibc distributions may work when they provide ABI-compatible GTK 3 and WebKitGTK 4.1
+- Other glibc distributions may work when they provide ABI-compatible GTK 4 and WebKitGTK 6.0
   libraries, but they are not part of the current v1 support intent. Alpine and other musl systems
   are unsupported.
 

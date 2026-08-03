@@ -63,7 +63,7 @@ IDs, protocol mismatch, malformed input, close, and document replacement.
 | --- | --- | --- |
 | WebView2 | Persistent document-start script; WebView2 structured JSON messaging; native sender source metadata | `TrustedOrigins` or explicit whole-view trust |
 | WKWebView | One private `WKScriptMessageHandler`; document-start main-world adapter; `WKScriptMessage.frameInfo` origin/main-frame metadata | `TrustedOrigins` or explicit whole-view trust |
-| WebKitGTK 4.1 | One private `WebKitUserContentManager` handler; document-start adapter; sender origin remains unknown | Explicit `TrustEntireView`; controlled content only |
+| WebKitGTK 6.0 | One private `WebKitUserContentManager` handler; document-start adapter; sender origin remains unknown | Explicit `TrustEntireView`; controlled content only |
 
 The managed host generates `hostViewBinding` and injects it only into the private bootstrap closure. It
 admits envelopes to the configured view, but is **not** a secret from script already executing in that

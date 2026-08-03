@@ -323,7 +323,7 @@ implemented source rather than claiming that every platform was exercised on one
 
 The in-memory .NET/runtime, generator, TypeScript, deterministic artifact, and NativeAOT fixture paths are
 portable. Browser-backed execution remains conditional on the backend runtime installed on each CI host.
-A Windows development host cannot run WKWebView or WebKitGTK integration. WebKitGTK 4.1 does not provide
+A Windows development host cannot run WKWebView or WebKitGTK integration. WebKitGTK 6.0 does not provide
 authenticated sender-origin data, so Linux reports an unknown source origin and requires an
 application-controlled whole-view trust policy; NeoAstra never substitutes the mutable current URL.
 See [`../rpc-and-bindings.md`](../rpc-and-bindings.md) for setup, security, wire-format, teardown, mocking,

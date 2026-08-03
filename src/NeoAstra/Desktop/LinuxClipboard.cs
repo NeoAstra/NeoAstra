@@ -8,7 +8,7 @@ using System.Text.Json;
 
 namespace NeoAstra.Desktop.Clipboard;
 
-internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) : INeoClipboard, INeoApplicationBoundDesktopService
+internal sealed partial class LinuxClipboard(NeoDispatcher? dispatcher) : INeoClipboard, INeoApplicationBoundDesktopService
 {
     private NeoDispatcher? _dispatcher = dispatcher;
 
@@ -16,7 +16,7 @@ internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) :
         NeoSupportLevel.Native,
         1,
         0,
-        "Native GTK3 copied UTF-8 text, HTML, PNG, and URI file-list clipboard targets on the active X11 or Wayland desktop session.");
+        "Native GTK4 UTF-8 text, HTML, PNG, and URI file-list clipboard content on the active X11 or Wayland desktop session.");
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application)
     {
@@ -25,10 +25,13 @@ internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) :
         _dispatcher = application.Dispatcher;
     }
 
-    public ValueTask<NeoDesktopResult<byte[]>> ReadAsync(NeoClipboardFormat format, CancellationToken cancellationToken = default)
+    public async ValueTask<NeoDesktopResult<byte[]>> ReadAsync(NeoClipboardFormat format, CancellationToken cancellationToken = default)
     {
         NeoFakeClipboard.ValidateFormat(format);
-        return Invoke(() => Read(format), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var value = _dispatcher ?? throw new InvalidOperationException("The Linux clipboard must be bound to the NeoAstra UI dispatcher before use.");
+        var completion = await value.InvokeAsync(() => StartRead(format), cancellationToken).ConfigureAwait(false);
+        return await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask<NeoDesktopStatus> WriteAsync(NeoClipboardFormat format, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
@@ -43,7 +46,7 @@ internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) :
     }
 
     public ValueTask<NeoDesktopStatus> ClearAsync(CancellationToken cancellationToken = default)
-        => Invoke(() => { Native.gtk_clipboard_clear(General()); return NeoDesktopStatus.Success; }, cancellationToken);
+        => Invoke(() => Native.gdk_clipboard_set_content(General(), 0) ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed, cancellationToken);
 
     private ValueTask<T> Invoke<T>(Func<T> operation, CancellationToken cancellationToken)
     {
@@ -59,64 +62,95 @@ internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) :
         catch { return typeof(T) == typeof(NeoDesktopStatus) ? (T)(object)NeoDesktopStatus.Failed : (T)(object)NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Failed, "clipboard_failed"); }
     }
 
-    private static NeoDesktopResult<byte[]> Read(NeoClipboardFormat format)
+    private static unsafe Task<NeoDesktopResult<byte[]>> StartRead(NeoClipboardFormat format)
     {
-        var clipboard = General();
-        var targets = Targets(format);
-        foreach (var target in targets)
-        {
-            var atom = Native.gdk_atom_intern(target, false);
-            var selection = Native.gtk_clipboard_wait_for_contents(clipboard, atom);
-            if (selection == 0) continue;
-            try
-            {
-                var length = Native.gtk_selection_data_get_length(selection);
-                if (length < 0) continue;
-                if (length > NeoDesktopLimits.MaximumClipboardBytes) return NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.LimitExceeded);
-                var pointer = Native.gtk_selection_data_get_data(selection);
-                if (length != 0 && pointer == 0) return NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Corrupt, "clipboard_data_missing");
-                var bytes = new byte[length];
-                if (length != 0) Marshal.Copy(pointer, bytes, 0, length);
-                return format == NeoClipboardFormat.FileList ? DecodeFileList(bytes) : NeoDesktopResult<byte[]>.Success(bytes);
-            }
-            finally { Native.gtk_selection_data_free(selection); }
-        }
-        return NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.NotFound);
-    }
-
-    private static NeoDesktopStatus Write(NeoClipboardFormat format, byte[] content)
-    {
-        var payload = new ClipboardPayload(format == NeoClipboardFormat.FileList ? EncodeFileList(content) : (byte[])content.Clone());
+        var context = new ReadContext(format);
+        var handle = GCHandle.Alloc(context);
         var names = Targets(format);
-        var nativeNames = new nint[names.Count];
-        var entries = stackalloc TargetEntry[names.Count];
-        var handle = default(GCHandle);
-        var transferred = false;
+        var pointers = new nint[names.Count + 1];
         try
         {
-            for (var index = 0; index < names.Count; index++)
-            {
-                nativeNames[index] = Marshal.StringToCoTaskMemUTF8(names[index]);
-                entries[index] = new TargetEntry { Target = nativeNames[index], Info = (uint)index };
-            }
-            handle = GCHandle.Alloc(payload);
-            var success = Native.gtk_clipboard_set_with_data(
-                General(),
-                entries,
-                (uint)names.Count,
-                (nint)(delegate* unmanaged[Cdecl]<nint, nint, uint, nint, void>)&ProvideData,
-                (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseData,
-                GCHandle.ToIntPtr(handle));
-            if (!success)
-                return NeoDesktopStatus.Failed;
-            transferred = true;
-            Native.gtk_clipboard_store(General());
-            return NeoDesktopStatus.Success;
+            for (var index = 0; index < names.Count; index++) pointers[index] = Marshal.StringToCoTaskMemUTF8(names[index]);
+            fixed (nint* values = pointers)
+                Native.gdk_clipboard_read_async(General(), values, 0, 0, (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&ReadCompleted, GCHandle.ToIntPtr(handle));
+            return context.Completion.Task;
+        }
+        catch
+        {
+            handle.Free();
+            throw;
         }
         finally
         {
-            if (!transferred && handle.IsAllocated) { handle.Free(); payload.Clear(); }
-            foreach (var pointer in nativeNames) if (pointer != 0) Marshal.FreeCoTaskMem(pointer);
+            foreach (var pointer in pointers) if (pointer != 0) Marshal.FreeCoTaskMem(pointer);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void ReadCompleted(nint clipboard, nint result, nint data)
+    {
+        var handle = GCHandle.FromIntPtr(data);
+        try
+        {
+            if (handle.Target is not ReadContext context) return;
+            nint error = 0;
+            var stream = Native.gdk_clipboard_read_finish(clipboard, result, out _, ref error);
+            if (stream == 0)
+            {
+                context.Completion.TrySetResult(NeoDesktopResult<byte[]>.Failure(error == 0 ? NeoDesktopStatus.NotFound : NeoDesktopStatus.Failed, error == 0 ? null : "clipboard_failed"));
+                if (error != 0) Native.g_error_free(error);
+                return;
+            }
+            try
+            {
+                using var output = new MemoryStream();
+                var buffer = new byte[8192];
+                while (true)
+                {
+                    nint readError = 0;
+                    nint count;
+                    fixed (byte* pointer = buffer) count = Native.g_input_stream_read(stream, pointer, (nuint)buffer.Length, 0, ref readError);
+                    if (count < 0)
+                    {
+                        if (readError != 0) Native.g_error_free(readError);
+                        context.Completion.TrySetResult(NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Failed, "clipboard_read_failed"));
+                        return;
+                    }
+                    if (count == 0) break;
+                    if (output.Length + count > NeoDesktopLimits.MaximumClipboardBytes)
+                    {
+                        context.Completion.TrySetResult(NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.LimitExceeded));
+                        return;
+                    }
+                    output.Write(buffer, 0, checked((int)count));
+                }
+                var bytes = output.ToArray();
+                context.Completion.TrySetResult(context.Format == NeoClipboardFormat.FileList ? DecodeFileList(bytes) : NeoDesktopResult<byte[]>.Success(bytes));
+            }
+            finally { Native.g_object_unref(stream); }
+        }
+        catch { if (handle.Target is ReadContext context) context.Completion.TrySetResult(NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Failed, "clipboard_failed")); }
+        finally { if (handle.IsAllocated) handle.Free(); }
+    }
+
+    private static unsafe NeoDesktopStatus Write(NeoClipboardFormat format, byte[] content)
+    {
+        var payload = format == NeoClipboardFormat.FileList ? EncodeFileList(content) : content;
+        var mimeType = Targets(format)[0];
+        nint bytes = 0;
+        nint provider = 0;
+        try
+        {
+            fixed (byte* pointer = payload) bytes = Native.g_bytes_new(pointer, (nuint)payload.Length);
+            if (bytes == 0) return NeoDesktopStatus.Failed;
+            provider = Native.gdk_content_provider_new_for_bytes(mimeType, bytes);
+            return provider != 0 && Native.gdk_clipboard_set_content(General(), provider) ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed;
+        }
+        finally
+        {
+            if (provider != 0) Native.g_object_unref(provider);
+            if (bytes != 0) Native.g_bytes_unref(bytes);
+            if (!ReferenceEquals(payload, content)) Array.Clear(payload);
         }
     }
 
@@ -142,72 +176,40 @@ internal sealed unsafe partial class LinuxClipboard(NeoDispatcher? dispatcher) :
 
     private static nint General()
     {
-        var selection = Native.gdk_atom_intern("CLIPBOARD", false);
-        var clipboard = Native.gtk_clipboard_get(selection);
+        var display = Native.gdk_display_get_default();
+        var clipboard = display == 0 ? 0 : Native.gdk_display_get_clipboard(display);
         if (clipboard == 0) throw new InvalidOperationException("GTK could not access the desktop clipboard.");
         return clipboard;
     }
 
     internal static IReadOnlyList<string> Targets(NeoClipboardFormat format) => format switch
     {
-        NeoClipboardFormat.Text => ["text/plain;charset=utf-8", "UTF8_STRING"],
+        NeoClipboardFormat.Text => ["text/plain;charset=utf-8", "text/plain"],
         NeoClipboardFormat.Html => ["text/html"],
         NeoClipboardFormat.Png => ["image/png"],
         NeoClipboardFormat.FileList => ["text/uri-list"],
         _ => throw new ArgumentOutOfRangeException(nameof(format)),
     };
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void ProvideData(nint clipboard, nint selection, uint info, nint data)
+    private sealed class ReadContext(NeoClipboardFormat format)
     {
-        try
-        {
-            var handle = GCHandle.FromIntPtr(data);
-            if (handle.Target is not ClipboardPayload payload) return;
-            fixed (byte* pointer = payload.Content)
-                Native.gtk_selection_data_set(selection, Native.gtk_selection_data_get_target(selection), 8, pointer, payload.Content.Length);
-        }
-        catch { }
+        internal NeoClipboardFormat Format { get; } = format;
+        internal TaskCompletionSource<NeoDesktopResult<byte[]>> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void ReleaseData(nint clipboard, nint data)
+    private static unsafe partial class Native
     {
-        try
-        {
-            var handle = GCHandle.FromIntPtr(data);
-            if (handle.Target is ClipboardPayload payload) payload.Clear();
-            if (handle.IsAllocated) handle.Free();
-        }
-        catch { }
-    }
-
-    private sealed class ClipboardPayload(byte[] content)
-    {
-        internal byte[] Content { get; } = content;
-        internal void Clear() => Array.Clear(Content);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct TargetEntry
-    {
-        internal nint Target;
-        internal uint Flags;
-        internal uint Info;
-    }
-
-    private static partial class Native
-    {
-        [LibraryImport("libgdk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gdk_atom_intern(string atomName, [MarshalAs(UnmanagedType.Bool)] bool onlyIfExists);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_clipboard_get(nint selection);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_clipboard_wait_for_contents(nint clipboard, nint target);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_selection_data_free(nint selectionData);
-        [LibraryImport("libgtk-3.so.0")] internal static partial int gtk_selection_data_get_length(nint selectionData);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_selection_data_get_data(nint selectionData);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_selection_data_get_target(nint selectionData);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_selection_data_set(nint selectionData, nint type, int format, byte* data, int length);
-        [LibraryImport("libgtk-3.so.0")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool gtk_clipboard_set_with_data(nint clipboard, TargetEntry* targets, uint targetCount, nint getFunction, nint clearFunction, nint userData);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_clipboard_store(nint clipboard);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_clipboard_clear(nint clipboard);
+        private const string Gtk = "libgtk-4.so.1";
+        [LibraryImport(Gtk)] internal static partial nint gdk_display_get_default();
+        [LibraryImport(Gtk)] internal static partial nint gdk_display_get_clipboard(nint display);
+        [LibraryImport(Gtk)] internal static partial void gdk_clipboard_read_async(nint clipboard, nint* mimeTypes, int priority, nint cancellable, nint callback, nint userData);
+        [LibraryImport(Gtk)] internal static partial nint gdk_clipboard_read_finish(nint clipboard, nint result, out nint mimeType, ref nint error);
+        [LibraryImport(Gtk)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool gdk_clipboard_set_content(nint clipboard, nint provider);
+        [LibraryImport(Gtk, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gdk_content_provider_new_for_bytes(string mimeType, nint bytes);
+        [LibraryImport("libgio-2.0.so.0")] internal static partial nint g_input_stream_read(nint stream, byte* buffer, nuint count, nint cancellable, ref nint error);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial nint g_bytes_new(byte* data, nuint size);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial void g_bytes_unref(nint bytes);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial void g_error_free(nint error);
+        [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_object_unref(nint value);
     }
 }

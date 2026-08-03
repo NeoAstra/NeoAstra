@@ -16,7 +16,7 @@ internal sealed class NativeOutboundDragPresenter : INeoOutboundDragPresenter, I
     private readonly HashSet<CancellationTokenSource> _active=[];
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0,
-        "Native file, text, and URL drags use Shell OLE, AppKit dragging sessions, or GTK drag contexts with source-bound one-shot gestures; custom drag images are not yet portable.");
+        "Native file, text, and URL drags use Shell OLE, AppKit dragging sessions, or GTK4 content providers with source-bound one-shot gestures; custom drag images are not yet portable.");
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application)
     {
@@ -87,8 +87,8 @@ internal sealed class NativeOutboundDragPresenter : INeoOutboundDragPresenter, I
     {
         if (_invalidators.ContainsKey(view)) return;
         void Invalidate() { if (OperatingSystem.IsWindows()) WindowsOutboundDrag.Invalidate(); else if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Invalidate(view); }
-        void Disposing() { Invalidate(); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
-        void WindowClosed(object? sender, EventArgs args) { Invalidate();if(OperatingSystem.IsLinux())LinuxOutboundDrag.Forget(view);if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
+        void Disposing() { Invalidate(); if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Unobserve(view); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
+        void WindowClosed(object? sender, EventArgs args) { if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Forget(view); else Invalidate(); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
         var value=new ViewGestureHandlers(Invalidate,Disposing,WindowClosed);_invalidators.Add(view,value); view.NativeNavigationStarted += Invalidate; view.Disposing += Disposing; if (view.OwnedWindow is not null) view.OwnedWindow.Closed += WindowClosed;
     }
 
@@ -257,32 +257,188 @@ internal static unsafe partial class MacOutboundDrag
 
 internal static unsafe partial class LinuxOutboundDrag
 {
-    private static readonly ConcurrentDictionary<nint, State> States = new();
-    private static readonly ConcurrentDictionary<nint, (ulong Handler, long Timestamp, nint Event)> Gestures = new();
-    internal static void Observe(NeoAstra view) { var widget = view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value; if (widget == 0 || Gestures.ContainsKey(widget)) return; var handler = Native.g_signal_connect_data(widget, "button-press-event", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, int>)&ButtonPressed, 0, 0, 0); if (Gestures.TryAdd(widget, (handler, 0, 0))) view.Disposing += () => Unobserve(view); else if (handler != 0) Native.g_signal_handler_disconnect(widget, handler); }
-    internal static void Invalidate(NeoAstra view) { var widget = view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value; if (Gestures.TryGetValue(widget, out var value) && Gestures.TryUpdate(widget, (value.Handler, 0, 0), value) && value.Event != 0) Native.gdk_event_free(value.Event); }
-    internal static void Forget(NeoAstra view) { var widget=view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value;if(Gestures.TryRemove(widget,out var value)&&value.Event!=0)Native.gdk_event_free(value.Event); }
-    internal static void Unobserve(NeoAstra view) { var widget = view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value; if (Gestures.TryRemove(widget, out var value)) { if (value.Handler != 0) Native.g_signal_handler_disconnect(widget, value.Handler); if (value.Event != 0) Native.gdk_event_free(value.Event); } }
+    private static readonly ConcurrentDictionary<nint, Observation> Observations = new();
+    private static readonly ConcurrentDictionary<NeoAstra, nint> ViewWidgets = new(ReferenceEqualityComparer.Instance);
+
+    internal static void Observe(NeoAstra view)
+    {
+        var widget = TryGetWidget(view);
+        if (widget == 0 || Observations.ContainsKey(widget)) return;
+        var source = Native.gtk_drag_source_new();
+        var gesture = Native.gtk_gesture_click_new();
+        if (source == 0 || gesture == 0) return;
+        var observation = new Observation(widget, source, gesture);
+        Native.gtk_drag_source_set_actions(source, 1);
+        Native.gtk_gesture_single_set_button(gesture, 1);
+        Native.gtk_event_controller_set_propagation_phase(gesture, 1);
+        observation.Pressed = Native.g_signal_connect_data(gesture, "pressed", (nint)(delegate* unmanaged[Cdecl]<nint, int, double, double, nint, void>)&Pressed, widget, 0, 0);
+        observation.Released = Native.g_signal_connect_data(gesture, "released", (nint)(delegate* unmanaged[Cdecl]<nint, int, double, double, nint, void>)&Released, widget, 0, 0);
+        observation.Begin = Native.g_signal_connect_data(source, "drag-begin", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Begin, widget, 0, 0);
+        observation.End = Native.g_signal_connect_data(source, "drag-end", (nint)(delegate* unmanaged[Cdecl]<nint, nint, int, nint, void>)&End, widget, 0, 0);
+        observation.Cancel = Native.g_signal_connect_data(source, "drag-cancel", (nint)(delegate* unmanaged[Cdecl]<nint, nint, int, nint, int>)&Canceled, widget, 0, 0);
+        if (observation.Pressed == 0 || observation.Released == 0 || observation.Begin == 0 || observation.End == 0 || observation.Cancel == 0 || !Observations.TryAdd(widget, observation))
+        {
+            Native.g_object_unref(source);
+            Native.g_object_unref(gesture);
+            return;
+        }
+        Native.gtk_widget_add_controller(widget, source);
+        Native.gtk_widget_add_controller(widget, gesture);
+        ViewWidgets[view] = widget;
+    }
+
+    internal static void Invalidate(NeoAstra view)
+    {
+        var widget = ViewWidgets.TryGetValue(view, out var observedWidget) ? observedWidget : TryGetWidget(view);
+        if (widget != 0 && Observations.TryGetValue(widget, out var observation))
+        {
+            observation.PressedAt = 0;
+            Complete(observation, NeoDesktopStatus.Canceled, cancelNative: true);
+        }
+    }
+
+    internal static void Forget(NeoAstra view)
+    {
+        if (!ViewWidgets.TryRemove(view, out var widget) || !Observations.TryRemove(widget, out var observation)) return;
+        var operation = observation.Pending;
+        observation.Pending = null;
+        if (operation is null) return;
+        operation.Registration.Dispose();
+        operation.Completion.TrySetResult(NeoDesktopStatus.Canceled);
+    }
+
+    internal static void Unobserve(NeoAstra view)
+    {
+        var widget = ViewWidgets.TryRemove(view, out var observedWidget) ? observedWidget : TryGetWidget(view);
+        if (widget == 0 || !Observations.TryRemove(widget, out var observation)) return;
+        Complete(observation, NeoDesktopStatus.Canceled, cancelNative: true);
+        Native.gtk_widget_remove_controller(widget, observation.Source);
+        Native.gtk_widget_remove_controller(widget, observation.Gesture);
+    }
+
     internal static Task<NeoDesktopStatus> Start(NeoAstra view, IReadOnlyList<NeoOutboundDragItem> items, NeoDispatcher dispatcher, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested(); var widget = view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value; var now = Native.g_get_monotonic_time();
-        if (widget == 0 || !Gestures.TryGetValue(widget, out var gesture) || gesture.Timestamp == 0 || gesture.Event == 0 || now - gesture.Timestamp is < 0 or > 1_000_000 || !Gestures.TryUpdate(widget, (gesture.Handler, 0, 0), gesture)) return Task.FromResult(NeoDesktopStatus.Denied);
-        if (States.ContainsKey(widget)) return Task.FromResult(NeoDesktopStatus.Failed);
-        var state = new State(widget, items); var handle = GCHandle.Alloc(state); var context = GCHandle.ToIntPtr(handle); state.Data = Native.g_signal_connect_data(widget, "drag-data-get", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, uint, uint, nint, void>)&Data, context, 0, 0); state.End = Native.g_signal_connect_data(widget, "drag-end", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&End, context, 0, 0); state.Failure = Native.g_signal_connect_data(widget, "drag-failed", (nint)(delegate* unmanaged[Cdecl]<nint, nint, int, nint, int>)&Failed, context, 0, 0);
-        var targets = Native.gtk_target_list_new(0, 0); if(items.Any(static item=>item.Kind!=NeoDragDataKind.Text))Native.gtk_target_list_add_uri_targets(targets, 0);if(items.Any(static item=>item.Kind==NeoDragDataKind.Text))Native.gtk_target_list_add_text_targets(targets,1);
-        if(state.Data==0||state.End==0||state.Failure==0||targets==0||!States.TryAdd(widget,state)){if(targets!=0)Native.gtk_target_list_unref(targets);Native.gdk_event_free(gesture.Event);Cleanup(state,handle);return Task.FromResult(NeoDesktopStatus.Failed);}
-        var drag = Native.gtk_drag_begin_with_coordinates(widget, targets, 1, 1, gesture.Event, -1, -1); Native.gtk_target_list_unref(targets); Native.gdk_event_free(gesture.Event);
-        if (drag == 0) { States.TryRemove(new KeyValuePair<nint,State>(widget,state)); Cleanup(state, handle); return Task.FromResult(NeoDesktopStatus.Failed); }
-        var registration = cancellationToken.Register(() => { try { _ = dispatcher.InvokeAsync(() => { if (States.TryGetValue(widget, out var value)) { value.Canceled = true; Native.gtk_drag_cancel(drag); } }); } catch { } }); state.Registration=registration;if(!States.ContainsKey(widget))registration.Dispose();return state.Completion.Task;
+        cancellationToken.ThrowIfCancellationRequested();
+        var widget = TryGetWidget(view);
+        var now = Native.g_get_monotonic_time();
+        if (widget == 0 || !Observations.TryGetValue(widget, out var observation) || observation.PressedAt == 0 || now - observation.PressedAt is < 0 or > 1_000_000) return Task.FromResult(NeoDesktopStatus.Denied);
+        if (observation.Pending is not null) return Task.FromResult(NeoDesktopStatus.Failed);
+        var provider = CreateProvider(items);
+        if (provider == 0) return Task.FromResult(NeoDesktopStatus.Failed);
+        var operation = new Operation();
+        observation.Pending = operation;
+        observation.PressedAt = 0;
+        Native.gtk_drag_source_set_content(observation.Source, provider);
+        Native.g_object_unref(provider);
+        var registration = cancellationToken.Register(() =>
+        {
+            try { _ = dispatcher.InvokeAsync(() => Complete(observation, NeoDesktopStatus.Canceled, cancelNative: true)); }
+            catch { }
+        });
+        operation.Registration = registration;
+        if (!ReferenceEquals(observation.Pending, operation)) registration.Dispose();
+        return operation.Completion.Task;
     }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static int ButtonPressed(nint widget, nint nativeEvent, nint data) { try { if (Native.gdk_event_get_event_type(nativeEvent) == 4 && Gestures.TryGetValue(widget, out var value)) { var copy=Native.gdk_event_copy(nativeEvent); Gestures[widget] = (value.Handler, Native.g_get_monotonic_time(), copy); if(value.Event!=0)Native.gdk_event_free(value.Event); } } catch { } return 0; }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void Data(nint widget, nint context, nint selection, uint info, uint time, nint data) { try { var state = (State?)GCHandle.FromIntPtr(data).Target; if (state is null) return;if(info==1){var text=string.Join("\n",state.Items.Where(static item=>item.Kind==NeoDragDataKind.Text).Select(static item=>item.Value));_ = Native.gtk_selection_data_set_text(selection,text,-1);return;}var values=state.Items.Where(static item=>item.Kind!=NeoDragDataKind.Text).ToArray();var uris = new nint[values.Length + 1]; try { for (var index = 0; index < values.Length; index++) uris[index] = values[index].Kind==NeoDragDataKind.File?Native.g_filename_to_uri(values[index].Value, 0, 0):Marshal.StringToCoTaskMemUTF8(values[index].Value); fixed (nint* pointer = uris) Native.gtk_selection_data_set_uris(selection, pointer); } finally { for(var index=0;index<values.Length;index++)if(uris[index]!=0){if(values[index].Kind==NeoDragDataKind.File)Native.g_free(uris[index]);else Marshal.FreeCoTaskMem(uris[index]);} } } catch { } }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void End(nint widget, nint context, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is State state && States.TryRemove(widget, out _)) { Cleanup(state, handle); state.Completion.TrySetResult(state.Canceled||state.Failed==1?NeoDesktopStatus.Canceled:state.Failed==2?NeoDesktopStatus.Failed:NeoDesktopStatus.Success); } } catch { } }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static int Failed(nint widget,nint context,int result,nint data){try{var state=(State?)GCHandle.FromIntPtr(data).Target;if(state is not null)state.Failed=result==2?1:2;}catch{}return 0;}
-    private static void Cleanup(State state, GCHandle handle) { state.Registration.Dispose(); if (state.Data != 0) Native.g_signal_handler_disconnect(state.Widget, state.Data); if (state.End != 0) Native.g_signal_handler_disconnect(state.Widget, state.End);if(state.Failure!=0)Native.g_signal_handler_disconnect(state.Widget,state.Failure); if (handle.IsAllocated) handle.Free(); }
-    private sealed class State(nint widget, IReadOnlyList<NeoOutboundDragItem> items) { internal nint Widget { get; } = widget; internal IReadOnlyList<NeoOutboundDragItem> Items { get; } = items; internal TaskCompletionSource<NeoDesktopStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); internal ulong Data; internal ulong End;internal ulong Failure; internal CancellationTokenRegistration Registration; internal bool Canceled;internal int Failed; }
+
+    private static nint CreateProvider(IReadOnlyList<NeoOutboundDragItem> items)
+    {
+        var providers = new List<nint>(2);
+        try
+        {
+            var text = items.Where(static item => item.Kind == NeoDragDataKind.Text).Select(static item => item.Value).ToArray();
+            if (text.Length != 0) providers.Add(CreateBytesProvider("text/plain;charset=utf-8", System.Text.Encoding.UTF8.GetBytes(string.Join("\n", text))));
+            var transferable = items.Where(static item => item.Kind != NeoDragDataKind.Text).ToArray();
+            if (transferable.Length != 0)
+            {
+                var uris = transferable.Select(static item => item.Kind == NeoDragDataKind.File ? new Uri(item.Value).AbsoluteUri : item.Value);
+                providers.Add(CreateBytesProvider("text/uri-list", System.Text.Encoding.UTF8.GetBytes(string.Join("\r\n", uris) + "\r\n")));
+            }
+            if (providers.Count == 0 || providers.Any(static value => value == 0)) return 0;
+            if (providers.Count == 1) { var result = providers[0]; providers.Clear(); return result; }
+            var valuesArray = providers.ToArray();
+            fixed (nint* values = valuesArray)
+            {
+                var result = Native.gdk_content_provider_new_union(values, (nuint)providers.Count);
+                providers.Clear();
+                return result;
+            }
+        }
+        finally { foreach (var provider in providers) if (provider != 0) Native.g_object_unref(provider); }
+    }
+
+    private static nint CreateBytesProvider(string mimeType, byte[] content)
+    {
+        nint bytes;
+        fixed (byte* pointer = content) bytes = Native.g_bytes_new(pointer, (nuint)content.Length);
+        if (bytes == 0) return 0;
+        try { return Native.gdk_content_provider_new_for_bytes(mimeType, bytes); }
+        finally { Native.g_bytes_unref(bytes); Array.Clear(content); }
+    }
+
+    private static void Complete(Observation observation, NeoDesktopStatus status, bool cancelNative)
+    {
+        var operation = observation.Pending;
+        if (operation is null) return;
+        observation.Pending = null;
+        if (cancelNative && operation.Begun) Native.gtk_drag_source_drag_cancel(observation.Source);
+        Native.gtk_drag_source_set_content(observation.Source, 0);
+        operation.Registration.Dispose();
+        operation.Completion.TrySetResult(status);
+    }
+
+    private static nint TryGetWidget(NeoAstra view)
+    {
+        try { return view.GetNativeHandle(NeoNativeHandleKind.WebKitGtkWebView).Value; }
+        catch (ObjectDisposedException) { return 0; }
+        catch (InvalidOperationException) { return 0; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Pressed(nint gesture, int count, double x, double y, nint data) { try { if (Observations.TryGetValue(data, out var observation)) observation.PressedAt = Native.g_get_monotonic_time(); } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Released(nint gesture, int count, double x, double y, nint data) { try { if (Observations.TryGetValue(data, out var observation) && observation.Pending is { Begun: false }) Complete(observation, NeoDesktopStatus.Canceled, cancelNative: false); } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Begin(nint source, nint drag, nint data) { try { if (Observations.TryGetValue(data, out var observation) && observation.Pending is { } operation) operation.Begun = true; } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void End(nint source, nint drag, int deleteData, nint data) { try { if (Observations.TryGetValue(data, out var observation)) Complete(observation, NeoDesktopStatus.Success, cancelNative: false); } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int Canceled(nint source, nint drag, int reason, nint data) { try { if (Observations.TryGetValue(data, out var observation)) Complete(observation, reason == 0 ? NeoDesktopStatus.Canceled : NeoDesktopStatus.Failed, cancelNative: false); } catch { } return 0; }
+
+    private sealed class Observation(nint widget, nint source, nint gesture)
+    {
+        internal nint Widget { get; } = widget;
+        internal nint Source { get; } = source;
+        internal nint Gesture { get; } = gesture;
+        internal ulong Pressed, Released, Begin, End, Cancel;
+        internal long PressedAt;
+        internal Operation? Pending;
+    }
+
+    private sealed class Operation
+    {
+        internal TaskCompletionSource<NeoDesktopStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal CancellationTokenRegistration Registration;
+        internal bool Begun;
+    }
+
     private static partial class Native
     {
-        [LibraryImport("libgdk-3.so.0")] internal static partial int gdk_event_get_event_type(nint value); [LibraryImport("libgdk-3.so.0")] internal static partial nint gdk_event_copy(nint value); [LibraryImport("libgdk-3.so.0")] internal static partial void gdk_event_free(nint value); [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_target_list_new(nint values, uint count); [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_target_list_add_uri_targets(nint list, uint info); [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_target_list_add_text_targets(nint list,uint info); [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_target_list_unref(nint list); [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_drag_begin_with_coordinates(nint widget, nint targets, int actions, int button, nint nativeEvent, int x, int y); [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_drag_cancel(nint context); [LibraryImport("libgtk-3.so.0")] [return: MarshalAs(UnmanagedType.I4)] internal static partial int gtk_selection_data_set_uris(nint selection, nint* uris); [LibraryImport("libgtk-3.so.0",StringMarshalling=StringMarshalling.Utf8)] [return:MarshalAs(UnmanagedType.Bool)] internal static partial bool gtk_selection_data_set_text(nint selection,string text,int length); [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial ulong g_signal_connect_data(nint instance, string signal, nint handler, nint data, nint destroy, int flags); [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_signal_handler_disconnect(nint instance, ulong handler); [LibraryImport("libglib-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_filename_to_uri(string filename, nint hostname, nint error); [LibraryImport("libglib-2.0.so.0")] internal static partial void g_free(nint value); [LibraryImport("libglib-2.0.so.0")] internal static partial long g_get_monotonic_time();
+        private const string Gtk = "libgtk-4.so.1";
+        [LibraryImport(Gtk)] internal static partial nint gtk_drag_source_new();
+        [LibraryImport(Gtk)] internal static partial void gtk_drag_source_set_actions(nint source, int actions);
+        [LibraryImport(Gtk)] internal static partial void gtk_drag_source_set_content(nint source, nint provider);
+        [LibraryImport(Gtk)] internal static partial void gtk_drag_source_drag_cancel(nint source);
+        [LibraryImport(Gtk)] internal static partial nint gtk_gesture_click_new();
+        [LibraryImport(Gtk)] internal static partial void gtk_gesture_single_set_button(nint gesture, uint button);
+        [LibraryImport(Gtk)] internal static partial void gtk_event_controller_set_propagation_phase(nint controller, int phase);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_add_controller(nint widget, nint controller);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_remove_controller(nint widget, nint controller);
+        [LibraryImport(Gtk)] internal static partial nint gdk_content_provider_new_union(nint* providers, nuint count);
+        [LibraryImport(Gtk, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gdk_content_provider_new_for_bytes(string mimeType, nint bytes);
+        [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial ulong g_signal_connect_data(nint instance, string signal, nint handler, nint data, nint destroy, int flags);
+        [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_object_unref(nint value);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial nint g_bytes_new(byte* data, nuint size);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial void g_bytes_unref(nint bytes);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial long g_get_monotonic_time();
     }
 }

@@ -50,7 +50,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-0 libwebkit2gtk-4.1-0
+          sudo apt-get install -y libgtk-4-1 libwebkitgtk-6.0-4
       - name: Add Windows SDK tools to PATH
         if: runner.os == 'Windows'
         shell: pwsh
@@ -81,7 +81,7 @@ jobs:
           $config | Add-Member bundle ([ordered]@{
             identifier='org.neoastra.sample.advanced'; displayName='NeoAstra Advanced Sample'; version='0.1.0'; numericVersion='0.1.0.0'; publisher='CN=NeoAstra Development'; executable='NeoAstra.Sample.Advanced';
             icons=@($icon); rids=@('${{ matrix.rid }}'); targets=@('portable','installer'); files=@($files); notices=@('NOTICE.txt');
-            minimumOsVersion='10.0'; runtimeDependencies=@($(if ('${{ runner.os }}' -eq 'Linux') { 'libgtk-3-0, libwebkit2gtk-4.1-0' } elseif ('${{ runner.os }}' -eq 'Windows') { 'Evergreen WebView2 Runtime' } else { 'system WKWebView' }));
+            minimumOsVersion='10.0'; runtimeDependencies=@($(if ('${{ runner.os }}' -eq 'Linux') { 'libgtk-4-1, libwebkitgtk-6.0-4' } elseif ('${{ runner.os }}' -eq 'Windows') { 'Evergreen WebView2 Runtime' } else { 'system WKWebView' }));
             notificationIdentity='org.neoastra.sample.advanced'; fileAssociations=@([ordered]@{extension='.neoastra-sample';mimeType='application/x-neoastra-sample';role='viewer'}); urlSchemes=@('neoastra-sample'); includeSymbols=$false
           })
           $config | ConvertTo-Json -Depth 12 | Set-Content artifacts/delivery/neoastra.json

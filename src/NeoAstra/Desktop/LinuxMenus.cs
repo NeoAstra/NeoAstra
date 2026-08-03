@@ -15,129 +15,206 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     private long _generation;
     private bool _disposed;
 
-    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0, "Native GTK3 application/window menu bars and context menus with window-scope override/fallback, GTK accelerators, WebKit edit roles, generation-safe callbacks, and deterministic widget teardown. GTK3 stock resources localize Copy, Cut, Paste, Select All, Undo, Redo, Close, and Quit; Minimize requires an application-localized label. Wayland compositors choose context-menu positioning and do not expose global menu-bar export uniformly.");
+    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0, "Native GTK4 popover menu bars and context menus with window-scope override/fallback, WebKit edit roles, generation-safe callbacks, and deterministic widget teardown. GTK4 removed stock menu-item labels and GtkAccelGroup, so role labels must be supplied by the application and portable accelerator display/activation is not advertised. Wayland compositors choose context-menu positioning and do not expose global menu-bar export uniformly.");
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application)
     {
         ArgumentNullException.ThrowIfNull(application);
         if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The menu presenter is already bound to an application.");
         if (_dispatcher is not null && !ReferenceEquals(_dispatcher, application.Dispatcher)) throw new InvalidOperationException("The menu presenter is already bound to another dispatcher.");
-        _application = application; _dispatcher = application.Dispatcher;
+        _application = application;
+        _dispatcher = application.Dispatcher;
     }
 
     public void SetMenu(string targetId, IReadOnlyList<NeoMenuItem> items)
     {
-        EnsureAccess(); ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureAccess();
+        ObjectDisposedException.ThrowIf(_disposed, this);
         var target = ResolveTarget(targetId);
-        var generation = checked(++_generation); var callbacks = new List<GCHandle>(); nint accel = 0, menu = 0;
+        var generation = checked(++_generation);
+        var callbacks = new List<GCHandle>();
+        nint model = 0, actions = 0, widget = 0;
         try
         {
-            menu = Build(items, target.Kind == TargetKind.Context, target, generation, callbacks, ref accel);
-            if (target.Kind != TargetKind.Context) Attach(target, menu, accel);
-            var replacement = new Entry(target, menu, accel, callbacks, generation);
+            actions = Native.g_simple_action_group_new();
+            if (actions == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu action group.");
+            var nextAction = 0;
+            model = Build(items, target, generation, actions, callbacks, ref nextAction);
+            widget = target.Kind == TargetKind.Context ? Native.gtk_popover_menu_new_from_model(model) : Native.gtk_popover_menu_bar_new_from_model(model);
+            if (widget == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu widget.");
+            Native.gtk_widget_insert_action_group(widget, "neoastra", actions);
+            if (target.Kind == TargetKind.Context) Native.gtk_widget_set_parent(widget, target.Widget);
+            else Attach(target, widget);
+            var replacement = new Entry(target, model, actions, widget, callbacks, generation);
+            model = actions = widget = 0;
             if (_entries.Remove(targetId, out var old)) Destroy(old, detach: true);
             _entries[targetId] = replacement;
-            if(target.Kind!=TargetKind.Context)ApplyPreferred(target.Window);
+            if (target.Kind != TargetKind.Context) ApplyPreferred(target.Window);
         }
-        catch { if (menu != 0) Native.gtk_widget_destroy(menu); foreach (var callback in callbacks) if (callback.IsAllocated) callback.Free(); if (accel != 0) Native.g_object_unref(accel); throw; }
+        catch
+        {
+            if (widget != 0 && Native.gtk_widget_get_parent(widget) != 0) Native.gtk_widget_unparent(widget);
+            if (widget != 0) Native.g_object_unref(widget);
+            if (model != 0) Native.g_object_unref(model);
+            if (actions != 0) Native.g_object_unref(actions);
+            foreach (var callback in callbacks) if (callback.IsAllocated) callback.Free();
+            throw;
+        }
     }
 
-    public void RemoveMenu(string targetId) { EnsureAccess(); if (_entries.Remove(targetId, out var entry)) { Destroy(entry, true); if(entry.Target.Kind!=TargetKind.Context)ApplyPreferred(entry.Target.Window); } }
+    public void RemoveMenu(string targetId)
+    {
+        EnsureAccess();
+        if (_entries.Remove(targetId, out var entry))
+        {
+            Destroy(entry, detach: true);
+            if (entry.Target.Kind != TargetKind.Context) ApplyPreferred(entry.Target.Window);
+        }
+    }
 
     public NeoDesktopStatus ShowContextMenu(string targetId, NeoPoint position)
     {
-        EnsureAccess(); ObjectDisposedException.ThrowIf(_disposed, this); if (!_entries.TryGetValue(targetId, out var entry) || entry.Target.Kind != TargetKind.Context) return NeoDesktopStatus.NotFound;
-        try
-        {
-            if (!TryRoleWidget(entry.Target, out var widget)) return NeoDesktopStatus.NotFound;
-            var nativeWindow = Native.gtk_widget_get_window(widget); if (nativeWindow == 0) return NeoDesktopStatus.NotFound;
-            var rectangle = new Rectangle { X = position.X, Y = position.Y, Width = 1, Height = 1 }; Native.gtk_menu_popup_at_rect(entry.Menu, nativeWindow, &rectangle, 1, 1, 0); return NeoDesktopStatus.Success;
-        }
-        catch (EntryPointNotFoundException) { Native.gtk_menu_popup_at_pointer(entry.Menu, 0); return NeoDesktopStatus.Success; }
+        EnsureAccess();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_entries.TryGetValue(targetId, out var entry) || entry.Target.Kind != TargetKind.Context) return NeoDesktopStatus.NotFound;
+        if (!TryRoleWidget(entry.Target, out _)) return NeoDesktopStatus.NotFound;
+        var rectangle = new Rectangle { X = position.X, Y = position.Y, Width = 1, Height = 1 };
+        Native.gtk_popover_set_pointing_to(entry.Widget, &rectangle);
+        Native.gtk_popover_popup(entry.Widget);
+        return NeoDesktopStatus.Success;
     }
 
-    public ValueTask DisposeAsync() { var value = _dispatcher; if (value is not null && !value.CheckAccess()) return value.InvokeAsync(DisposeOnDispatcher); DisposeOnDispatcher(); return ValueTask.CompletedTask; }
-
-    private nint Build(IReadOnlyList<NeoMenuItem> items, bool popup, Target target, long generation, List<GCHandle> callbacks, ref nint acceleratorGroup)
+    public ValueTask DisposeAsync()
     {
-        var menu = popup ? Native.gtk_menu_new() : Native.gtk_menu_bar_new(); if (menu == 0) throw new InvalidOperationException("Unable to allocate a GTK menu.");
+        var value = _dispatcher;
+        if (value is not null && !value.CheckAccess()) return value.InvokeAsync(DisposeOnDispatcher);
+        DisposeOnDispatcher();
+        return ValueTask.CompletedTask;
+    }
+
+    private nint Build(IReadOnlyList<NeoMenuItem> items, Target target, long generation, nint actions, List<GCHandle> callbacks, ref int nextAction)
+    {
+        var menu = Native.g_menu_new();
+        var section = Native.g_menu_new();
+        if (menu == 0 || section == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu model.");
+        Native.g_menu_append_section(menu, null, section);
         try
         {
             foreach (var item in items)
             {
-                if (!item.IsVisible) continue; nint nativeItem;
-                if (item.Kind == NeoMenuItemKind.Separator) nativeItem = Native.gtk_separator_menu_item_new();
-                else
+                if (!item.IsVisible) continue;
+                if (item.Kind == NeoMenuItemKind.Separator)
                 {
-                    nativeItem = item.Kind == NeoMenuItemKind.Role && item.Text is null
-                        ? CreateStockRoleItem(item.Role!.Value)
-                        : item.IsChecked ? Native.gtk_check_menu_item_new_with_label(item.Text!) : Native.gtk_menu_item_new_with_label(item.Text!);
-                    if (nativeItem == 0) throw new InvalidOperationException("Unable to allocate a GTK menu item."); Native.gtk_widget_set_sensitive(nativeItem, item.IsEnabled && RoleTargetAvailable(item.Role, target));
-                    if (item.IsChecked) Native.gtk_check_menu_item_set_active(nativeItem, true);
-                    if (item.Kind == NeoMenuItemKind.Submenu) { var child = Build(item.Children, true, target, generation, callbacks, ref acceleratorGroup); Native.gtk_menu_item_set_submenu(nativeItem, child); }
-                    else
-                    {
-                        var context = new ActivationContext(this, target.Id, generation, item.CommandId, item.Role); var handle = GCHandle.Alloc(context); callbacks.Add(handle);
-                        if (Native.g_signal_connect_data(nativeItem, "activate", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&Activated, GCHandle.ToIntPtr(handle), 0, 0) == 0) throw new InvalidOperationException("Unable to attach a GTK menu callback.");
-                        if (item.Accelerator is { } accelerator && target.Window != 0)
-                        {
-                            acceleratorGroup = acceleratorGroup == 0 ? Native.gtk_accel_group_new() : acceleratorGroup; Native.gtk_accelerator_parse(accelerator.Replace("Ctrl+", "<Control>", StringComparison.Ordinal).Replace("Alt+", "<Alt>", StringComparison.Ordinal).Replace("Shift+", "<Shift>", StringComparison.Ordinal).Replace("Meta+", "<Super>", StringComparison.Ordinal), out var key, out var modifiers);
-                            if (key == 0) throw new ArgumentException("The GTK backend cannot represent the normalized accelerator.", nameof(items));
-                            Native.gtk_widget_add_accelerator(nativeItem, "activate", acceleratorGroup, key, modifiers, 1);
-                        }
-                    }
+                    Native.g_object_unref(section);
+                    section = Native.g_menu_new();
+                    Native.g_menu_append_section(menu, null, section);
+                    continue;
                 }
-                Native.gtk_menu_shell_append(menu, nativeItem); Native.gtk_widget_show(nativeItem);
+                var label = item.Text ?? throw new NotSupportedException("GTK4 does not provide localized stock menu-item labels. Supply an application-localized label with NeoMenuItem.RoleItem(id, role, localizedText).");
+                if (item.Kind == NeoMenuItemKind.Submenu)
+                {
+                    var child = Build(item.Children, target, generation, actions, callbacks, ref nextAction);
+                    Native.g_menu_append_submenu(section, label, child);
+                    Native.g_object_unref(child);
+                    continue;
+                }
+                var actionName = "item" + (++nextAction).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var detailedAction = "neoastra." + actionName;
+                var action = item.IsChecked ? Native.g_simple_action_new_stateful(actionName, 0, Native.g_variant_new_boolean(true)) : Native.g_simple_action_new(actionName, 0);
+                if (action == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu action.");
+                var context = new ActivationContext(this, target.Id, generation, item.CommandId, item.Role);
+                var handle = GCHandle.Alloc(context);
+                callbacks.Add(handle);
+                if (Native.g_signal_connect_data(action, "activate", (nint)(delegate* unmanaged[Cdecl]<nint, nint, nint, void>)&Activated, GCHandle.ToIntPtr(handle), 0, 0) == 0) throw new InvalidOperationException("Unable to attach a GTK4 menu callback.");
+                Native.g_simple_action_set_enabled(action, item.IsEnabled && RoleTargetAvailable(item.Role, target));
+                Native.g_action_map_add_action(actions, action);
+                Native.g_object_unref(action);
+                Native.g_menu_append(section, label, detailedAction);
             }
+            Native.g_object_unref(section);
             return menu;
         }
-        catch { Native.gtk_widget_destroy(menu); throw; }
+        catch
+        {
+            Native.g_object_unref(section);
+            Native.g_object_unref(menu);
+            throw;
+        }
     }
 
-    private void Attach(Target target, nint menu, nint accelerator)
+    private void Attach(Target target, nint menu)
     {
         if (!_hosts.TryGetValue(target.Window, out var host))
         {
-            var child = Native.gtk_bin_get_child(target.Window);
-            if (child != 0) { Native.g_object_ref(child); Native.gtk_container_remove(target.Window, child); }
-            var box = Native.gtk_box_new(1, 0); if (box == 0) { if (child != 0) { Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); } throw new InvalidOperationException("Unable to allocate a GTK menu host."); }
-            Native.gtk_container_add(target.Window, box); if (child != 0) { Native.gtk_box_pack_end(box, child, true, true, 0); Native.g_object_unref(child); }
-            if (child != 0)
+            var content = Native.gtk_window_get_child(target.Window);
+            if (content != 0) Native.g_object_ref(content);
+            Native.gtk_window_set_child(target.Window, 0);
+            var box = Native.gtk_box_new(1, 0);
+            if (box == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu host.");
+            Native.gtk_window_set_child(target.Window, box);
+            if (content != 0)
             {
-                var contentHandle = GCHandle.Alloc(new ContentContext(this, target.Window));
-                if (Native.g_signal_connect_data(child, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ContentDestroyed, GCHandle.ToIntPtr(contentHandle), (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseHandle, 0) == 0) { contentHandle.Free(); Native.g_object_ref(child); Native.gtk_container_remove(box, child); Native.gtk_container_remove(target.Window, box); Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); throw new InvalidOperationException("Unable to observe GTK menu-content teardown."); }
+                Native.gtk_widget_set_vexpand(content, true);
+                Native.gtk_widget_set_hexpand(content, true);
+                Native.gtk_box_append(box, content);
+                Native.g_object_unref(content);
             }
-            var ownerHandle = GCHandle.Alloc(this); if (Native.g_signal_connect_data(target.Window, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&OwnerDestroyed, GCHandle.ToIntPtr(ownerHandle), (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ReleaseHandle, 0) == 0) { ownerHandle.Free(); if (child != 0) { Native.g_object_ref(child); Native.gtk_container_remove(box, child); } Native.gtk_container_remove(target.Window, box); if (child != 0) { Native.gtk_container_add(target.Window, child); Native.g_object_unref(child); } throw new InvalidOperationException("Unable to observe GTK menu-owner teardown."); }
-            host = new(box, child, 0, null); _hosts.Add(target.Window, host);
+            target.ManagedWindow.Closed += WindowClosed;
+            host = new(box, content, 0, null, target.ManagedWindow);
+            _hosts.Add(target.Window, host);
         }
-        Native.gtk_box_pack_start(host.Box, menu, false, false, 0);Native.gtk_widget_hide(menu);_hosts[target.Window] = host with { References = host.References + 1 }; Native.gtk_widget_show_all(target.Window);Native.gtk_widget_hide(menu);
+        Native.gtk_box_prepend(host.Box, menu);
+        Native.gtk_widget_set_visible(menu, false);
+        _hosts[target.Window] = host with { References = host.References + 1 };
     }
 
     private void Destroy(Entry entry, bool detach)
     {
-        var attached = Native.gtk_widget_get_parent(entry.Menu) != 0;
         if (entry.Target.Kind != TargetKind.Context && _hosts.TryGetValue(entry.Target.Window, out var host))
         {
-            if (host.ActiveId==entry.Target.Id&&entry.AcceleratorGroup != 0) Native.gtk_window_remove_accel_group(entry.Target.Window, entry.AcceleratorGroup); if (detach && Native.gtk_widget_get_parent(entry.Menu) == host.Box) Native.gtk_container_remove(host.Box, entry.Menu);
-            var references = host.References - 1; if (references <= 0) RestoreHost(entry.Target.Window, host); else _hosts[entry.Target.Window] = host with { References = references };
+            if (detach && Native.gtk_widget_get_parent(entry.Widget) == host.Box) Native.gtk_box_remove(host.Box, entry.Widget);
+            var references = host.References - 1;
+            if (references <= 0) RestoreHost(entry.Target.Window, host);
+            else _hosts[entry.Target.Window] = host with { References = references };
         }
-        if (!attached) Native.gtk_widget_destroy(entry.Menu);
-        foreach (var callback in entry.Callbacks) if (callback.IsAllocated) callback.Free(); if (entry.AcceleratorGroup != 0) Native.g_object_unref(entry.AcceleratorGroup);
+        else if (detach && Native.gtk_widget_get_parent(entry.Widget) != 0) Native.gtk_widget_unparent(entry.Widget);
+        Native.g_object_unref(entry.Model);
+        Native.g_object_unref(entry.Actions);
+        foreach (var callback in entry.Callbacks) if (callback.IsAllocated) callback.Free();
     }
 
-    private Entry? Preferred(nint window)=>_entries.Values.LastOrDefault(value=>value.Target.Window==window&&value.Target.Kind==TargetKind.Window)??_entries.Values.LastOrDefault(value=>value.Target.Window==window&&value.Target.Kind==TargetKind.Application);
+    private Entry? Preferred(nint window) => _entries.Values.LastOrDefault(value => value.Target.Window == window && value.Target.Kind == TargetKind.Window) ?? _entries.Values.LastOrDefault(value => value.Target.Window == window && value.Target.Kind == TargetKind.Application);
+
     private void ApplyPreferred(nint window)
     {
-        if(!_hosts.TryGetValue(window,out var host))return;var preferred=Preferred(window);if(host.ActiveId is{} oldId&&_entries.TryGetValue(oldId,out var old)&&old.AcceleratorGroup!=0)Native.gtk_window_remove_accel_group(window,old.AcceleratorGroup);
-        foreach(var entry in _entries.Values.Where(value=>value.Target.Window==window&&value.Target.Kind!=TargetKind.Context))if(ReferenceEquals(entry,preferred))Native.gtk_widget_show(entry.Menu);else Native.gtk_widget_hide(entry.Menu);
-        if(preferred is{AcceleratorGroup:not 0}active)Native.gtk_window_add_accel_group(window,active.AcceleratorGroup);_hosts[window]=host with{ActiveId=preferred?.Target.Id};
+        if (!_hosts.TryGetValue(window, out var host)) return;
+        var preferred = Preferred(window);
+        foreach (var entry in _entries.Values.Where(value => value.Target.Window == window && value.Target.Kind != TargetKind.Context)) Native.gtk_widget_set_visible(entry.Widget, ReferenceEquals(entry, preferred));
+        _hosts[window] = host with { ActiveId = preferred?.Target.Id };
     }
 
     private void RestoreHost(nint window, Host host)
     {
         _hosts.Remove(window);
-        if (host.Content == 0) { if (Native.gtk_widget_get_parent(host.Box) == window) Native.gtk_container_remove(window, host.Box); return; }
-        if (Native.gtk_widget_get_parent(host.Content) == host.Box) { Native.g_object_ref(host.Content); Native.gtk_container_remove(host.Box, host.Content); Native.gtk_container_remove(window, host.Box); Native.gtk_container_add(window, host.Content); Native.g_object_unref(host.Content); Native.gtk_widget_show_all(window); }
+        host.ManagedWindow.Closed -= WindowClosed;
+        if (host.ManagedWindow.IsClosed) return;
+        if (host.Content != 0 && Native.gtk_widget_get_parent(host.Content) == host.Box) Native.g_object_ref(host.Content);
+        Native.gtk_window_set_child(window, 0);
+        if (host.Content != 0)
+        {
+            Native.gtk_window_set_child(window, host.Content);
+            Native.g_object_unref(host.Content);
+        }
+    }
+
+    private void WindowClosed(object? sender, EventArgs args)
+    {
+        if (sender is not NeoWindow managed) return;
+        var host = _hosts.FirstOrDefault(pair => ReferenceEquals(pair.Value.ManagedWindow, managed));
+        if (host.Value is null) return;
+        _hosts.Remove(host.Key);
+        foreach (var id in _entries.Where(pair => pair.Value.Target.Window == host.Key).Select(static pair => pair.Key).ToArray())
+            if (_entries.Remove(id, out var entry)) Destroy(entry, detach: false);
     }
 
     private void Activate(ActivationContext context)
@@ -154,7 +231,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
                 case NeoMenuRole.SelectAll: if (TryRoleWidget(entry.Target, out var selectAll)) Native.webkit_web_view_execute_editing_command(selectAll, "SelectAll"); break;
                 case NeoMenuRole.Undo: if (TryRoleWidget(entry.Target, out var undo)) Native.webkit_web_view_execute_editing_command(undo, "Undo"); break;
                 case NeoMenuRole.Redo: if (TryRoleWidget(entry.Target, out var redo)) Native.webkit_web_view_execute_editing_command(redo, "Redo"); break;
-                case NeoMenuRole.Minimize: if (TryWindow(entry.Target, out var minimize)) Native.gtk_window_iconify(minimize); break;
+                case NeoMenuRole.Minimize: if (TryWindow(entry.Target, out var minimize)) Native.gtk_window_minimize(minimize); break;
                 case NeoMenuRole.CloseWindow: if (TryWindow(entry.Target, out var close)) Native.gtk_window_close(close); break;
                 case NeoMenuRole.Quit: if (_application is { } app) _ = app.RequestQuitAsync(); break;
             }
@@ -164,7 +241,9 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
 
     private Target ResolveTarget(string id)
     {
-        var app = _application ?? throw new InvalidOperationException("The menu presenter must be bound to an application."); NeoWindow? window; NeoAstra? view = null;
+        var app = _application ?? throw new InvalidOperationException("The menu presenter must be bound to an application.");
+        NeoWindow? window;
+        NeoAstra? view = null;
         if (id == "application") window = app.MainWindow ?? throw new InvalidOperationException("An application menu requires a main window.");
         else if (id.StartsWith("window:", StringComparison.Ordinal)) { if (!app.TryGetWindow(id[7..], out window) || window is null) throw new ArgumentException("The window menu target does not exist.", nameof(id)); }
         else if (id.StartsWith("context:", StringComparison.Ordinal)) { if (!app.TryGetView(id[8..], out view) || view?.OwnedWindow is null) throw new ArgumentException("The context menu target does not exist.", nameof(id)); window = view.OwnedWindow; }
@@ -181,8 +260,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     private static NeoAstra? ResolveRoleView(NeoApplication application, NeoWindow window, out nint widget)
     {
         var candidates = new List<RoleCandidate>();
-        foreach (var candidate in application.GetRegisteredViews())
-            if (TryGetWidget(candidate, out var candidateWidget)) candidates.Add(new(candidate, candidate.OwnedWindow, candidate.ViewLabel, candidateWidget));
+        foreach (var candidate in application.GetRegisteredViews()) if (TryGetWidget(candidate, out var candidateWidget)) candidates.Add(new(candidate, candidate.OwnedWindow, candidate.ViewLabel, candidateWidget));
         var selected = LinuxRoleTargetSelection.Select(candidates, window, static value => value.Owner, static value => value.Label, static value => value.Widget);
         widget = selected?.Widget ?? 0;
         return selected?.View;
@@ -199,7 +277,8 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
 
     private bool TryRoleWidget(Target target, out nint widget)
     {
-        widget = 0; var app = _application;
+        widget = 0;
+        var app = _application;
         if (app is null || target.View is null || !ReferenceEquals(target.View.OwnedWindow, target.ManagedWindow)) return false;
         if (target.Kind == TargetKind.Context)
         {
@@ -225,71 +304,68 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         _ => true,
     };
 
-    private static nint CreateStockRoleItem(NeoMenuRole role)
+    private void DisposeOnDispatcher()
     {
-        var stock = role switch
-        {
-            NeoMenuRole.Copy => "gtk-copy", NeoMenuRole.Cut => "gtk-cut", NeoMenuRole.Paste => "gtk-paste", NeoMenuRole.SelectAll => "gtk-select-all",
-            NeoMenuRole.Undo => "gtk-undo", NeoMenuRole.Redo => "gtk-redo", NeoMenuRole.CloseWindow => "gtk-close", NeoMenuRole.Quit => "gtk-quit",
-            _ => throw new NotSupportedException("GTK3 does not expose a reliable localized standard label for this role. Supply an application-localized label with NeoMenuItem.RoleItem(id, role, localizedText)."),
-        };
-        return Native.gtk_image_menu_item_new_from_stock(stock, 0);
+        if (_disposed) return;
+        _disposed = true;
+        foreach (var entry in _entries.Values.ToArray()) Destroy(entry, detach: true);
+        _entries.Clear();
+        _hosts.Clear();
     }
 
-    private void OwnerClosed(nint window) { _hosts.Remove(window); foreach (var id in _entries.Where(pair => pair.Value.Target.Window == window).Select(static pair => pair.Key).ToArray()) if (_entries.Remove(id, out var entry)) { foreach (var callback in entry.Callbacks) if (callback.IsAllocated) callback.Free(); if (entry.AcceleratorGroup != 0) Native.g_object_unref(entry.AcceleratorGroup); } }
-    private void ContentClosed(nint window, nint content) { if (_hosts.TryGetValue(window, out var host) && host.Content == content) _hosts[window] = host with { Content = 0 }; }
-    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; foreach (var entry in _entries.Values.ToArray()) Destroy(entry, true); _entries.Clear(); _hosts.Clear(); }
-    private void EnsureAccess() { var value = _dispatcher ?? throw new InvalidOperationException("The native menu presenter is not bound to a UI dispatcher."); if (!value.CheckAccess()) throw new InvalidOperationException("Native menu presenter mutations require the NeoAstra UI dispatcher."); }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void Activated(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ActivationContext context) context.Presenter.Activate(context); } catch { } }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void OwnerDestroyed(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is LinuxMenuPresenter presenter) presenter.OwnerClosed(widget); } catch { } }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ContentDestroyed(nint widget, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ContentContext context) context.Presenter.ContentClosed(context.Window, widget); } catch { } }
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ReleaseHandle(nint data, nint closure) { try { var handle = GCHandle.FromIntPtr(data); if (handle.IsAllocated) handle.Free(); } catch { } }
+    private void EnsureAccess()
+    {
+        var value = _dispatcher ?? throw new InvalidOperationException("The native menu presenter is not bound to a UI dispatcher.");
+        if (!value.CheckAccess()) throw new InvalidOperationException("Native menu presenter mutations require the NeoAstra UI dispatcher.");
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void Activated(nint action, nint parameter, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ActivationContext context) context.Presenter.Activate(context); } catch { } }
 
     private enum TargetKind { Application, Window, Context }
     private sealed record Target(string Id, TargetKind Kind, NeoWindow ManagedWindow, NeoAstra? View, nint Window, nint Widget);
-    private sealed record Entry(Target Target, nint Menu, nint AcceleratorGroup, IReadOnlyList<GCHandle> Callbacks, long Generation);
+    private sealed record Entry(Target Target, nint Model, nint Actions, nint Widget, IReadOnlyList<GCHandle> Callbacks, long Generation);
     private sealed record ActivationContext(LinuxMenuPresenter Presenter, string TargetId, long Generation, string? CommandId, NeoMenuRole? Role);
-    private sealed record ContentContext(LinuxMenuPresenter Presenter, nint Window);
     private sealed record RoleCandidate(NeoAstra View, NeoWindow? Owner, string? Label, nint Widget);
-    private readonly record struct Host(nint Box, nint Content, int References, string? ActiveId);
+    private sealed record Host(nint Box, nint Content, int References, string? ActiveId, NeoWindow ManagedWindow);
     [StructLayout(LayoutKind.Sequential)] private struct Rectangle { internal int X, Y, Width, Height; }
 
     private static partial class Native
     {
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_menu_bar_new();
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_menu_new();
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gtk_menu_item_new_with_label(string label);
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gtk_check_menu_item_new_with_label(string label);
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint gtk_image_menu_item_new_from_stock(string stockId, nint acceleratorGroup);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_separator_menu_item_new();
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_check_menu_item_set_active(nint item, [MarshalAs(UnmanagedType.Bool)] bool active);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_menu_item_set_submenu(nint item, nint menu);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_menu_shell_append(nint menu, nint item);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_widget_show(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_widget_hide(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_widget_show_all(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_widget_destroy(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_widget_set_sensitive(nint widget, [MarshalAs(UnmanagedType.Bool)] bool sensitive);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_widget_get_parent(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_widget_get_window(nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_bin_get_child(nint bin);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_box_new(int orientation, int spacing);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_box_pack_start(nint box, nint child, [MarshalAs(UnmanagedType.Bool)] bool expand, [MarshalAs(UnmanagedType.Bool)] bool fill, uint padding);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_box_pack_end(nint box, nint child, [MarshalAs(UnmanagedType.Bool)] bool expand, [MarshalAs(UnmanagedType.Bool)] bool fill, uint padding);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_container_add(nint container, nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_container_remove(nint container, nint widget);
-        [LibraryImport("libgtk-3.so.0")] internal static partial nint gtk_accel_group_new();
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_add_accel_group(nint window, nint group);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_remove_accel_group(nint window, nint group);
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void gtk_accelerator_parse(string accelerator, out uint key, out uint modifiers);
-        [LibraryImport("libgtk-3.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void gtk_widget_add_accelerator(nint widget, string signal, nint group, uint key, uint modifiers, uint flags);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_iconify(nint window);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_window_close(nint window);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_menu_popup_at_rect(nint menu, nint window, Rectangle* rectangle, int rectangleAnchor, int menuAnchor, nint triggerEvent);
-        [LibraryImport("libgtk-3.so.0")] internal static partial void gtk_menu_popup_at_pointer(nint menu, nint triggerEvent);
+        private const string Gtk = "libgtk-4.so.1";
+        private const string Gio = "libgio-2.0.so.0";
+        [LibraryImport(Gio)] internal static partial nint g_menu_new();
+        [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_menu_append(nint menu, string label, string detailedAction);
+        [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_menu_append_section(nint menu, string? label, nint section);
+        [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_menu_append_submenu(nint menu, string label, nint submenu);
+        [LibraryImport(Gio)] internal static partial nint g_simple_action_group_new();
+        [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_simple_action_new(string name, nint parameterType);
+        [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_simple_action_new_stateful(string name, nint parameterType, nint state);
+        [LibraryImport(Gio)] internal static partial void g_simple_action_set_enabled(nint action, [MarshalAs(UnmanagedType.Bool)] bool enabled);
+        [LibraryImport(Gio)] internal static partial void g_action_map_add_action(nint actionMap, nint action);
+        [LibraryImport("libglib-2.0.so.0")] internal static partial nint g_variant_new_boolean([MarshalAs(UnmanagedType.Bool)] bool value);
+        [LibraryImport(Gtk)] internal static partial nint gtk_popover_menu_new_from_model(nint model);
+        [LibraryImport(Gtk)] internal static partial nint gtk_popover_menu_bar_new_from_model(nint model);
+        [LibraryImport(Gtk)] internal static partial void gtk_popover_set_pointing_to(nint popover, Rectangle* rectangle);
+        [LibraryImport(Gtk)] internal static partial void gtk_popover_popup(nint popover);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_insert_action_group(nint widget, [MarshalAs(UnmanagedType.LPUTF8Str)] string prefix, nint group);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_set_parent(nint widget, nint parent);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_unparent(nint widget);
+        [LibraryImport(Gtk)] internal static partial nint gtk_widget_get_parent(nint widget);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_set_visible(nint widget, [MarshalAs(UnmanagedType.Bool)] bool visible);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_set_vexpand(nint widget, [MarshalAs(UnmanagedType.Bool)] bool expand);
+        [LibraryImport(Gtk)] internal static partial void gtk_widget_set_hexpand(nint widget, [MarshalAs(UnmanagedType.Bool)] bool expand);
+        [LibraryImport(Gtk)] internal static partial nint gtk_window_get_child(nint window);
+        [LibraryImport(Gtk)] internal static partial void gtk_window_set_child(nint window, nint child);
+        [LibraryImport(Gtk)] internal static partial nint gtk_box_new(int orientation, int spacing);
+        [LibraryImport(Gtk)] internal static partial void gtk_box_append(nint box, nint child);
+        [LibraryImport(Gtk)] internal static partial void gtk_box_prepend(nint box, nint child);
+        [LibraryImport(Gtk)] internal static partial void gtk_box_remove(nint box, nint child);
+        [LibraryImport(Gtk)] internal static partial void gtk_window_minimize(nint window);
+        [LibraryImport(Gtk)] internal static partial void gtk_window_close(nint window);
         [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nuint g_signal_connect_data(nint instance, string signal, nint callback, nint data, nint destroyData, uint flags);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial nint g_object_ref(nint value);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_object_unref(nint value);
-        [LibraryImport("libwebkit2gtk-4.1.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void webkit_web_view_execute_editing_command(nint view, string command);
+        [LibraryImport("libwebkitgtk-6.0.so.4", StringMarshalling = StringMarshalling.Utf8)] internal static partial void webkit_web_view_execute_editing_command(nint view, string command);
     }
 }
