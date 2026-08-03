@@ -49,7 +49,7 @@
     { "name": "windows-x64-debug", "configurePreset": "windows-x64-debug", "output": { "outputOnFailure": true } },
     { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug", "output": { "outputOnFailure": true } },
     { "name": "linux-x64-asan-ubsan", "configurePreset": "linux-x64-asan-ubsan", "environment": { "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1:abort_on_error=1", "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1" }, "output": { "outputOnFailure": true } },
-    { "name": "linux-x64-tsan", "configurePreset": "linux-x64-tsan", "environment": { "TSAN_OPTIONS": "halt_on_error=1:abort_on_error=1" }, "filter": { "include": { "name": "^neoastra_(common|stress)_tests$" } }, "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "linux-x64-tsan", "configurePreset": "linux-x64-tsan", "environment": { "TSAN_OPTIONS": "halt_on_error=1:abort_on_error=1:suppressions=${sourceDir}/eng/native/tsan.supp" }, "filter": { "include": { "name": "^neoastra_(common|stress)_tests$" } }, "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
     { "name": "macos-x64-debug", "configurePreset": "macos-x64-debug", "output": { "outputOnFailure": true } },
     { "name": "macos-x64-asan-ubsan", "configurePreset": "macos-x64-asan-ubsan", "environment": { "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1:abort_on_error=1", "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1" }, "output": { "outputOnFailure": true } }
   ]
