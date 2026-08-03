@@ -1,4 +1,5 @@
-# GTK initializes Pango's fontconfig worker through the system GLib. The GLib
-# binary is not instrumented, so ThreadSanitizer cannot observe its queue
-# synchronization and reports the allocation handoff as a race.
-race:g_queue_pop_tail
+# GTK initializes Pango's fontconfig worker through the system GLib. Those
+# libraries are not TSan-instrumented, so TSan cannot observe the queue
+# synchronization around the allocation handoff. Match the Pango module that
+# remains visible in the report; GLib's g_queue_pop_tail symbol is not present.
+race:libpangoft2-1.0.so
