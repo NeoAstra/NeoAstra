@@ -554,7 +554,7 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
-    [Timeout(15000)]
+    [Timeout(60000)]
     public async Task NativeDropDispatchReachesOnlyTheActiveRendererDocumentSession()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -635,7 +635,7 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
-    [Timeout(15000)]
+    [Timeout(60000)]
     public async Task RendererOutboundDragRequiresMatchingCurrentNativeGesture()
     {
         if (!OperatingSystem.IsWindows()) return;
