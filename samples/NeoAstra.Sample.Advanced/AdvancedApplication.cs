@@ -96,7 +96,7 @@ internal sealed class AdvancedApplication(
             DisplayName,
             Version,
             privateData,
-            ["https://neoastra.dev"],
+            ["https://github.com"],
             openFileRoots,
             [assetRoot],
             [NeoOpenFileIntent.TextDocument, NeoOpenFileIntent.PdfDocument, NeoOpenFileIntent.Image],

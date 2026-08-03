@@ -78,9 +78,9 @@
           "id": "opener:url",
           "scope": {
             "schemes": ["https"],
-            "hosts": ["neoastra.dev"],
+            "hosts": ["github.com"],
             "ports": [443],
-            "pathPrefixes": ["/"]
+            "pathPrefixes": ["/NeoAstra/NeoAstra"]
           }
         },
         "drag-drop:outbound",
