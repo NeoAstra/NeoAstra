@@ -1,5 +1,6 @@
-# GTK initializes Pango's fontconfig worker through the system GLib. Those
-# libraries are not TSan-instrumented, so TSan cannot observe the queue
-# synchronization around the allocation handoff. Match the Pango module that
-# remains visible in the report; GLib's g_queue_pop_tail symbol is not present.
-race:libpangoft2-1.0.so
+# GTK initializes Pango's fontconfig worker through the system Pango and GLib
+# libraries. They are not TSan-instrumented, so TSan cannot observe the queue
+# synchronization around allocator calls. Ignore allocator interceptors called
+# from either library rather than depending on which frame gets symbolized.
+called_from_lib:libpangoft2-1.0.so
+called_from_lib:libglib-2.0.so
