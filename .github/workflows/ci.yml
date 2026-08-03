@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,3 +31,15 @@ jobs:
         run: dotnet build src/NeoAstra.slnx -c Release -p:ContinuousIntegrationBuild=true
       - name: Test solution
         run: dotnet test src/NeoAstra.slnx -c Release --no-build --no-restore
+
+  release:
+    name: Build, test, pack, and publish (Windows)
+    needs: managed
+    permissions:
+      id-token: write
+      actions: write
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - name: Build, Test, Pack and Publish
+        uses: xoofx/.github/.github/actions/dotnet-releaser-action@main
