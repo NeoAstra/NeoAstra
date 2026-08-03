@@ -48,22 +48,6 @@ jobs:
           cmake --preset linux-x64-analysis
           cmake --build --preset linux-x64-analysis
 
-  thread-sanitizer:
-    name: ThreadSanitizer (Linux x64 common code)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: lukka/get-cmake@latest
-      - name: Install Linux native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang libclang-rt-dev ninja-build libgtk-4-dev libwebkitgtk-6.0-dev xvfb
-      - name: ThreadSanitizer selected common-code tests
-        run: |
-          cmake --preset linux-x64-tsan
-          cmake --build --preset linux-x64-tsan
-          xvfb-run -a ctest --preset linux-x64-tsan
-
   macos-sanitizers:
     name: AddressSanitizer and UndefinedBehaviorSanitizer (macOS x64)
     runs-on: macos-15-intel
