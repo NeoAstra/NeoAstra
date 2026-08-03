@@ -1525,8 +1525,22 @@ neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile, n
 }
 
 void register_drop_target(neoastra_view_t* view, windows_view* state, HWND window) {
-    if (!window || std::any_of(state->drop_registrations.begin(), state->drop_registrations.end(),
-                               [window](const windows_drop_registration& value) { return value.window == window; })) return;
+    if (!window) return;
+    const auto existing = std::find_if(state->drop_registrations.begin(), state->drop_registrations.end(),
+                                       [window](const windows_drop_registration& value) { return value.window == window; });
+    if (existing != state->drop_registrations.end()) {
+        // WebView2 can replace its OLE registration without touching our window property.
+        // Re-register the retained target after navigation instead of treating the property
+        // as proof that our target is still active.
+        (void)RevokeDragDrop(window);
+        if (SUCCEEDED(RegisterDragDrop(window, existing->target.Get()))) {
+            (void)SetPropW(window, L"NeoAstra.DropTarget", existing->target.Get());
+        } else {
+            if (GetPropW(window, L"NeoAstra.DropTarget") == existing->target.Get()) RemovePropW(window, L"NeoAstra.DropTarget");
+            state->drop_registrations.erase(existing);
+        }
+        return;
+    }
     ComPtr<IDropTarget> target;
     target.Attach(new (std::nothrow) view_drop_target(view, window));
     if (!target) return;
