@@ -69,6 +69,80 @@ public sealed class NeoAppTests
         StringAssert.Contains(Assert.Throws<InvalidOperationException>(scoped.ValidateConfiguration).Message, "scoped capability manifest");
     }
 
+    [TestMethod]
+    public void ConventionalAppNavigationStaysOnItsTrustedOriginByDefault()
+    {
+        var builder = CreateBuilder(ApplicationPermission());
+        var origin = new Uri("app://neoastra");
+
+        Assert.AreEqual(NeoDecisionAction.Allow, builder.DecideNavigation(new Uri("app://neoastra/settings?tab=general#title"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("app://attacker/index.html"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("app://neoastra.evil.test/index.html"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://example.com"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://example.com"), true, false, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("app://neoastra/other"), true));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(null, true));
+    }
+
+    [TestMethod]
+    public void ConventionalAppDevelopmentNavigationRequiresTheExactConfiguredOrigin()
+    {
+        var builder = CreateBuilder(ApplicationPermission());
+        var origin = NeoAppBuilder.ValidateDevelopmentUrl("http://127.0.0.1:5173");
+
+        Assert.AreEqual(NeoDecisionAction.Allow, builder.DecideNavigation(new Uri("http://127.0.0.1:5173/dashboard#status"), true, false, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("http://127.0.0.1:5174/dashboard"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("http://localhost:5173/dashboard"), true, true, origin));
+        Assert.Throws<InvalidOperationException>(() => NeoAppBuilder.ValidateDevelopmentUrl("http://localhost:5173"));
+        Assert.Throws<InvalidOperationException>(() => NeoAppBuilder.ValidateDevelopmentUrl("http://127.0.0.1:5173/subpath"));
+        Assert.Throws<InvalidOperationException>(() => NeoAppBuilder.ValidateDevelopmentUrl("https://user@127.0.0.1:5173"));
+    }
+
+    [TestMethod]
+    public void ConventionalAppOpensOnlyConfiguredUserInitiatedExternalOrigins()
+    {
+        var builder = CreateBuilder(ApplicationPermission())
+            .OpenExternalLinksInSystemBrowser("https://docs.neoastra.dev", "http://127.0.0.1:8080");
+        var origin = new Uri("app://neoastra");
+
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, builder.DecideNavigation(new Uri("https://docs.neoastra.dev/guide?q=security"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, builder.DecideNewWindow(new Uri("http://127.0.0.1:8080/help"), true));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://docs.neoastra.dev/guide"), true, false, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://docs.neoastra.dev/guide"), false, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("https://docs.neoastra.dev/guide"), false));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://docs.neoastra.dev.evil.test"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://user@docs.neoastra.dev/guide"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("file:///tmp/document"), true));
+    }
+
+    [TestMethod]
+    public void ConventionalAppExternalLinkConfigurationIsExplicitAndBounded()
+    {
+        var builder = CreateBuilder(ApplicationPermission());
+        Assert.Throws<ArgumentException>(() => builder.OpenExternalLinksInSystemBrowser());
+        Assert.Throws<ArgumentException>(() => builder.OpenExternalLinksInSystemBrowser("mailto:"));
+        Assert.Throws<ArgumentException>(() => builder.OpenExternalLinksInSystemBrowser("https://example.com/path"));
+
+        builder.OpenExternalLinksInSystemBrowser("https://example.com");
+        Assert.Throws<InvalidOperationException>(() => builder.OpenExternalLinksInSystemBrowser("https://other.example"));
+    }
+
+    [TestMethod]
+    public void ConventionalAppUsesAuthenticatedBridgeOriginsWhereAvailable()
+    {
+        var options = NeoAppBuilder.CreateLocalViewOptions(new Uri("app://neoastra/index.html"));
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.AreEqual(NeoBridgePolicy.TrustEntireView, options.BridgePolicy);
+            Assert.AreEqual(0, options.BridgeOrigins.Count);
+        }
+        else
+        {
+            Assert.AreEqual(NeoBridgePolicy.TrustedOrigins, options.BridgePolicy);
+            CollectionAssert.AreEqual(new[] { "app://neoastra" }, options.BridgeOrigins.ToArray());
+        }
+    }
+
     private static NeoAppBuilder CreateBuilder(NeoPermissionDeclaration declaration) =>
         new NeoAppBuilder().ConfigureGeneratedRpc("contract", [declaration], static _ => { });
 

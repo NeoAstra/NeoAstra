@@ -3,6 +3,7 @@
 
 using System.Text.Json;
 using NeoAstra.Rpc;
+using NeoExternalUrlScope = NeoAstra.Desktop.Opener.NeoUrlScope;
 
 namespace NeoAstra;
 
@@ -45,6 +46,7 @@ public sealed class NeoAppBuilder
     private IReadOnlyList<NeoPermissionDeclaration>? _permissionDeclarations;
     private Action<NeoRpcBuilder>? _configureRpc;
     private string? _contractHash;
+    private NeoExternalUrlScope? _externalLinkScope;
     private Session? _session;
 
     /// <summary>Gets or sets the main window title.</summary>
@@ -73,6 +75,26 @@ public sealed class NeoAppBuilder
                 throw new ArgumentException("Permission identifiers must be non-empty and bounded.", nameof(permissions));
             _mainViewPermissions.Add(permission);
         }
+        return this;
+    }
+
+    /// <summary>Allows user-initiated links from exact HTTP(S) origins to open in the system browser.</summary>
+    /// <param name="allowedOrigins">Exact HTTP(S) origins, such as <c>https://neoastra.dev</c>.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>External links are blocked unless this method is called. Redirects and other non-user-initiated navigation remain blocked.</remarks>
+    /// <exception cref="ArgumentException">The collection is empty, contains duplicates, or contains a malformed or non-HTTP(S) origin.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="allowedOrigins"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">External-link policy was already configured.</exception>
+    public NeoAppBuilder OpenExternalLinksInSystemBrowser(params string[] allowedOrigins)
+    {
+        ArgumentNullException.ThrowIfNull(allowedOrigins);
+        if (_externalLinkScope is not null) throw new InvalidOperationException("External-link policy can be configured only once.");
+        foreach (var origin in allowedOrigins)
+        {
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                throw new ArgumentException("External-link origins must use HTTP or HTTPS.", nameof(allowedOrigins));
+        }
+        _externalLinkScope = new NeoExternalUrlScope(allowedOrigins);
         return this;
     }
 
@@ -141,13 +163,7 @@ public sealed class NeoAppBuilder
             if (developmentOrigin is not null)
             {
                 target = new Uri(developmentOrigin, "/");
-                var trustEntireView = OperatingSystem.IsLinux();
-                viewOptions = new NeoAstraOptions
-                {
-                    ViewLabel = "main",
-                    BridgePolicy = trustEntireView ? NeoBridgePolicy.TrustEntireView : NeoBridgePolicy.TrustedOrigins,
-                    BridgeOrigins = trustEntireView ? [] : [developmentOrigin.GetLeftPart(UriPartial.Authority)],
-                };
+                viewOptions = CreateLocalViewOptions(target);
                 environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions(), cancellationToken).ConfigureAwait(true);
             }
             else
@@ -161,16 +177,15 @@ public sealed class NeoAppBuilder
                     },
                     cancellationToken).ConfigureAwait(true);
                 target = new Uri("app://neoastra/index.html");
-                viewOptions = new NeoAstraOptions
-                {
-                    ViewLabel = "main",
-                    BridgePolicy = NeoBridgePolicy.TrustEntireView,
-                };
+                viewOptions = CreateLocalViewOptions(target);
             }
 
             window.Show();
             window.Activate();
             view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
+            var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
+            view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
+            view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
             binding = NeoRpcViewBinding.Bind(rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             _session = new Session(rpc, environment, view, binding);
@@ -250,9 +265,43 @@ public sealed class NeoAppBuilder
             });
     }
 
-    private static Uri ValidateDevelopmentUrl(string value)
+    internal NeoDecisionAction DecideNavigation(Uri target, bool isMainFrame, bool isUserInitiated, Uri trustedOrigin)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(uri.UserInfo) || !uri.IsDefaultPort && uri.Port is < 1 or > 65535)
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(trustedOrigin);
+        if (HasSameOrigin(target, trustedOrigin)) return NeoDecisionAction.Allow;
+        return isMainFrame && IsAllowedExternalLink(target, isUserInitiated) ? NeoDecisionAction.OpenExternal : NeoDecisionAction.Cancel;
+    }
+
+    internal NeoDecisionAction DecideNewWindow(Uri? target, bool isUserInitiated) =>
+        target is not null && IsAllowedExternalLink(target, isUserInitiated) ? NeoDecisionAction.OpenExternal : NeoDecisionAction.Cancel;
+
+    internal static NeoAstraOptions CreateLocalViewOptions(Uri target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        var trustEntireView = OperatingSystem.IsLinux();
+        return new NeoAstraOptions
+        {
+            ViewLabel = "main",
+            BridgePolicy = trustEntireView ? NeoBridgePolicy.TrustEntireView : NeoBridgePolicy.TrustedOrigins,
+            BridgeOrigins = trustEntireView ? [] : [target.GetLeftPart(UriPartial.Authority)],
+        };
+    }
+
+    private bool IsAllowedExternalLink(Uri target, bool isUserInitiated) =>
+        isUserInitiated && _externalLinkScope?.TryAuthorize(target, out _) == true;
+
+    private static bool HasSameOrigin(Uri target, Uri trustedOrigin) =>
+        target.IsAbsoluteUri && string.IsNullOrEmpty(target.UserInfo) &&
+        string.Equals(target.Scheme, trustedOrigin.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(target.IdnHost, trustedOrigin.IdnHost, StringComparison.OrdinalIgnoreCase) &&
+        target.Port == trustedOrigin.Port;
+
+    internal static Uri ValidateDevelopmentUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
+            !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) || !uri.IsDefaultPort && uri.Port is < 1 or > 65535)
             throw new InvalidOperationException("NEOASTRA_DEV_URL must be an absolute HTTP(S) loopback URL.");
         if (!string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal) && !string.Equals(uri.Host, "[::1]", StringComparison.Ordinal) && !string.Equals(uri.Host, "::1", StringComparison.Ordinal))
             throw new InvalidOperationException("NEOASTRA_DEV_URL must use the exact 127.0.0.1 or ::1 loopback address.");

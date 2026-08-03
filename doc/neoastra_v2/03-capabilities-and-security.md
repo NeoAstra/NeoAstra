@@ -148,7 +148,7 @@ Tooling SHALL provide named defaults without obscuring resolved settings.
 - bridge/RPC enabled only after explicit capabilities;
 - top-level navigation restricted to the application origin;
 - unexpected popup/new-window denied;
-- external `https` links handled by a scoped opener;
+- external HTTP(S) links denied by default and handled by a scoped system-browser opener only after explicit exact-origin opt-in and a user action;
 - no remote script by default and restrictive CSP/security headers;
 - DevTools and detailed RPC errors disabled;
 - frame/invocation/event/channel/resource limits enforced;

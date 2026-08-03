@@ -471,6 +471,7 @@ void download_decided(void* pointer,const neoastra_decision_response_t* response
 
 struct navigation_decision_context {
     ComPtr<ICoreWebView2NavigationStartingEventArgs> args;
+    std::wstring uri;
 };
 
 struct script_dialog_context { ComPtr<ICoreWebView2ScriptDialogOpeningEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; };
@@ -557,6 +558,9 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
     const bool cancel = response->action != NEOASTRA_DECISION_ALLOW && response->action != NEOASTRA_DECISION_DEFAULT;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
+    if (response->action == NEOASTRA_DECISION_OPEN_EXTERNAL) {
+        ShellExecuteW(nullptr, L"open", context->uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
 }
 
 uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
@@ -582,18 +586,21 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
         Callback<ICoreWebView2NavigationStartingEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
             LPWSTR raw_uri{};
             BOOL user_initiated{};
+            BOOL redirected{};
             args->get_Uri(&raw_uri);
             args->get_IsUserInitiated(&user_initiated);
+            args->get_IsRedirected(&redirected);
             auto uri = take_string(raw_uri);
 
             auto context = std::make_unique<navigation_decision_context>();
             context->args = args;
+            context->uri = widen(uri);
             auto* decision = new neoastra_decision;
             neo_configure_decision(decision, view, NEOASTRA_DECISION_NAVIGATION, NEOASTRA_DECISION_ALLOW);
             decision->completion = navigation_decided;
             decision->completion_context = context.release();
             neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri,
-                          1u | (user_initiated ? 2u : 0u), 0, decision);
+                          1u | (user_initiated && !redirected ? 2u : 0u), 0, decision);
             const auto decision_state = decision->state.load(std::memory_order_acquire);
             // NavigationStarting has no WebView2 deferral API. A managed handler may
             // defer the portable decision, but WebView2 requires the final Cancel

@@ -79,9 +79,11 @@ Path canonicalization is platform-sensitive. Windows comparisons are ordinal-ign
 
 ## Profiles and release validation
 
-`ProductionLocalApp` is the default: no development server, no wildcard patterns, no detailed renderer errors, and release-safe capability resolution. `DevelopmentLocalApp` requires `Release = false` and an explicit loopback HTTP(S) origin (`localhost`, `127.0.0.1`, or `::1`). It must never be selected by renderer input. Release validation rejects development-only grants, reviewed patterns, development origins, and detailed error output.
+`ProductionLocalApp` is the default: no development server, no wildcard patterns, no detailed renderer errors, and release-safe capability resolution. The conventional `NeoApp` host also allows only the exact `app://neoastra` origin, including its local routes, and denies unexpected new windows. `DevelopmentLocalApp` requires `Release = false` and an explicit loopback HTTP(S) origin; `NeoApp` accepts only the exact configured `127.0.0.1` or `::1` origin and port. Development mode must never be selected by renderer input. Release validation rejects development-only grants, reviewed patterns, development origins, and detailed error output.
 
-Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error posture, but the RPC package cannot install application navigation/popup handlers or CSP. The application must apply those values when creating the core view and serving assets. The capability layer still denies RPC independently if that integration is missing; profile metadata is not a browser sandbox.
+External navigation in `NeoApp` is blocked unless the application calls `OpenExternalLinksInSystemBrowser` with exact HTTP(S) origins. The native navigation and new-window handlers compare parsed scheme, host, and port components, require a user action, cancel the WebView navigation, and then open matching links in the system browser. Renderer JavaScript is not the policy boundary. Credentials, non-HTTP(S) schemes, redirects without a user action, and subframe navigation are not forwarded to an OS opener.
+
+Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error posture. `NeoApp` applies the conventional local-app navigation and popup policy, but applications using the low-level API must install equivalent handlers themselves. Applications must also apply CSP when serving assets. The capability layer still denies RPC independently if integration is missing; profile metadata is not a browser sandbox.
 
 ## Abuse controls and diagnostics
 

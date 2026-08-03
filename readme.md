@@ -69,6 +69,8 @@ internal static class Program
         {
             app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
             app.GrantMainView("greeting:read"); // authority is always explicit
+            // Optional: exact-origin, user-initiated links open outside the WebView.
+            app.OpenExternalLinksInSystemBrowser("https://docs.neoastra.dev");
         });
     }
 }
@@ -89,7 +91,7 @@ sealed record GreetingResponse(string Message);
 partial class AppJsonContext : JsonSerializerContext;
 ```
 
-`NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld, including a generated plain-JavaScript binding whose methods carry the contract hash automatically, and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
+`NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. It permits routes within the exact application origin but blocks other top-level navigation and unexpected new windows by default. `OpenExternalLinksInSystemBrowser` is an explicit allowlist of exact HTTP(S) origins; matching links open only after a user action, while redirects, subframe navigation, credentials, dangerous schemes, and lookalike hosts remain blocked by native host policy. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin and port. Service registration does not grant renderer authority: the `GrantMainView` line is required. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld, including a generated plain-JavaScript binding whose methods carry the contract hash automatically, and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
 NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, standalone entry points and attached host threads must use an STA apartment.
 

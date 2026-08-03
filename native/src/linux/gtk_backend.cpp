@@ -263,8 +263,8 @@ void window_size_changed(GObject* object,GParamSpec*,void* data){auto* window=st
 void window_focus_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,window->id,nullptr,nullptr,gtk_window_is_active(GTK_WINDOW(object))?1u:0u);}
 void window_state_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);auto* value=GTK_WINDOW(object);const auto state=gtk_window_is_fullscreen(value)?NEOASTRA_WINDOW_FULLSCREEN:gtk_window_is_maximized(value)?NEOASTRA_WINDOW_MAXIMIZED:gtk_window_is_suspended(value)?NEOASTRA_WINDOW_MINIMIZED:NEOASTRA_WINDOW_NORMAL;auto* native=static_cast<gtk_window*>(window->platform);const auto changed=native&&native->reported_state!=state;if(native)native->reported_state=state;{std::lock_guard lock(window->state_mutex);window->state=state;}if(changed)neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_STATE_CHANGED,window->id,nullptr,nullptr,state);}
 
-struct navigation_context { WebKitPolicyDecision* policy{}; };
-void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept { std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer)); if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT)webkit_policy_decision_use(context->policy);else webkit_policy_decision_ignore(context->policy);g_object_unref(context->policy); }
+struct navigation_context { WebKitPolicyDecision* policy{}; std::string uri; };
+void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept { std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer)); if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT)webkit_policy_decision_use(context->policy);else webkit_policy_decision_ignore(context->policy);if(response->action==NEOASTRA_DECISION_OPEN_EXTERNAL){GError* error{};g_app_info_launch_default_for_uri(context->uri.c_str(),nullptr,&error);if(error)g_error_free(error);}g_object_unref(context->policy); }
 struct permission_context { WebKitPermissionRequest* request{}; };
 void permission_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<permission_context> context(static_cast<permission_context*>(pointer));if(response->action==NEOASTRA_DECISION_ALLOW)webkit_permission_request_allow(context->request);else webkit_permission_request_deny(context->request);g_object_unref(context->request);}
 struct new_window_context { neoastra_view_t* view{}; std::string uri; };
@@ -281,7 +281,7 @@ gboolean decide_policy(WebKitWebView*, WebKitPolicyDecision* policy, WebKitPolic
     std::string uri=webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";
     auto* decision=new neoastra_decision;
     neo_configure_decision(decision,view,NEOASTRA_DECISION_NAVIGATION,NEOASTRA_DECISION_ALLOW);
-    auto* context=new navigation_context{WEBKIT_POLICY_DECISION(g_object_ref(policy))};decision->completion=navigation_decided;decision->completion_context=context;
+    auto* context=new navigation_context{WEBKIT_POLICY_DECISION(g_object_ref(policy)),uri};decision->completion=navigation_decided;decision->completion_context=context;
     const auto navigation_type=webkit_navigation_action_get_navigation_type(action);
     const uint64_t flags=1u|((navigation_type==WEBKIT_NAVIGATION_TYPE_LINK_CLICKED)?2u:0u);
     neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);

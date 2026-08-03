@@ -81,7 +81,8 @@ internal sealed class AdvancedApplication(
         CancellationToken cancellationToken)
     {
         var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
-        var development = developmentUrl is not null;
+        var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
+        var development = developmentOrigin is not null;
         var assetRoot = Path.Combine(AppContext.BaseDirectory, "assets");
         var userFiles = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string[] openFileRoots = string.IsNullOrEmpty(userFiles) ? [assetRoot] : [assetRoot, userFiles];
@@ -112,7 +113,7 @@ internal sealed class AdvancedApplication(
             CapabilityManifest = capabilityManifest,
             SecurityProfile = capabilityManifest.Profile,
             Release = !development,
-            DevelopmentOrigin = development ? new Uri(developmentUrl!) : null,
+            DevelopmentOrigin = developmentOrigin,
             AuthorizationService = new NeoCapabilityAuthorizationService(capabilityManifest),
         });
         rpcBuilder.AddTourService(new TourService(state));
@@ -167,9 +168,9 @@ internal sealed class AdvancedApplication(
             cancellationToken);
 
         var target = development
-            ? new Uri(developmentUrl!)
+            ? developmentOrigin!
             : new Uri("app://neoastra/index.html");
-        var trustEntireView = !development || OperatingSystem.IsLinux();
+        var trustEntireView = OperatingSystem.IsLinux();
 
         NeoAstraOptions ViewOptions(string label) => new()
         {
@@ -204,6 +205,22 @@ internal sealed class AdvancedApplication(
             NeoAstraHost.FillWindow(previewWindow),
             ViewOptions("preview"),
             cancellationToken);
+        var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
+
+        static bool HasSameOrigin(Uri candidate, Uri origin) =>
+            candidate.IsAbsoluteUri && string.IsNullOrEmpty(candidate.UserInfo) &&
+            string.Equals(candidate.Scheme, origin.Scheme, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.IdnHost, origin.IdnHost, StringComparison.OrdinalIgnoreCase) &&
+            candidate.Port == origin.Port;
+
+        ValueTask<NeoNavigationDecision> DecideNavigation(NeoNavigationRequest request) =>
+            ValueTask.FromResult(new NeoNavigationDecision(
+                HasSameOrigin(request.Uri, trustedOrigin) ? NeoDecisionAction.Allow : NeoDecisionAction.Cancel));
+
+        mainView.NavigationRequested = DecideNavigation;
+        previewView.NavigationRequested = DecideNavigation;
+        mainView.NewWindowRequested = static _ => ValueTask.FromResult(new NeoNewWindowDecision(NeoDecisionAction.Cancel));
+        previewView.NewWindowRequested = static _ => ValueTask.FromResult(new NeoNewWindowDecision(NeoDecisionAction.Cancel));
         var mainBinding = NeoRpcViewBinding.Bind(rpc, mainView);
         var previewBinding = NeoRpcViewBinding.Bind(rpc, previewView);
 
@@ -347,6 +364,18 @@ internal sealed class AdvancedApplication(
             "feature-tour-secret",
         },
     };
+
+    private static Uri ValidateDevelopmentUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
+            !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            (!string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal) &&
+             !string.Equals(uri.Host, "[::1]", StringComparison.Ordinal) &&
+             !string.Equals(uri.Host, "::1", StringComparison.Ordinal)))
+            throw new InvalidOperationException("NEOASTRA_DEV_URL must be an exact HTTP(S) 127.0.0.1 or ::1 origin.");
+        return uri;
+    }
 
     internal async ValueTask StopAsync()
     {

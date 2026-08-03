@@ -143,8 +143,8 @@ void fail_scheme_task(id<WKURLSchemeTask> task,NSInteger code,NSString* message)
     } @catch (NSException*) { }
 }
 
-struct navigation_context { void (^handler)(WKNavigationActionPolicy); };
-void navigation_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer));context->handler(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT?WKNavigationActionPolicyAllow:WKNavigationActionPolicyCancel);}
+struct navigation_context { void (^handler)(WKNavigationActionPolicy); std::string uri; };
+void navigation_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {@autoreleasepool{std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer));const bool allowed=response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT;context->handler(allowed?WKNavigationActionPolicyAllow:WKNavigationActionPolicyCancel);if(response->action==NEOASTRA_DECISION_OPEN_EXTERNAL){NSURL* url=[NSURL URLWithString:ns_string(context->uri)];if(url)[[NSWorkspace sharedWorkspace]openURL:url];}}}
 struct permission_context { void (^handler)(WKPermissionDecision); };
 void permission_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<permission_context> context(static_cast<permission_context*>(pointer));const auto decision=response->action==NEOASTRA_DECISION_ALLOW?WKPermissionDecisionGrant:response->action==NEOASTRA_DECISION_DEFAULT?WKPermissionDecisionPrompt:WKPermissionDecisionDeny;context->handler(decision);}
 struct new_window_context { neoastra_view_t* view{}; std::string uri; };
@@ -275,8 +275,8 @@ void report_window_state(neoastra_window_t* value,neoastra_window_state_t state)
 - (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     auto* view=self.nativeView;if(!view){handler(WKNavigationActionPolicyCancel);return;}std::string uri=utf8(action.request.URL.absoluteString);
     auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_NAVIGATION,NEOASTRA_DECISION_ALLOW);
-    decision->completion=navigation_decided;decision->completion_context=new navigation_context{[handler copy]};
-    uint64_t flags=1u|(action.navigationType==WKNavigationTypeLinkActivated?2u:0u);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);
+    decision->completion=navigation_decided;decision->completion_context=new navigation_context{[handler copy],uri};
+    uint64_t flags=(action.targetFrame.isMainFrame?1u:0u)|(action.navigationType==WKNavigationTypeLinkActivated?2u:0u);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);
     neo_finish_decision_event(view,decision);decision->release();
 }
 - (void)webView:(WKWebView*)webView didStartProvisionalNavigation:(WKNavigation*)navigation { (void)navigation;auto* view=self.nativeView;if(!view)return;std::string uri=utf8(webView.URL.absoluteString);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_STARTED,0,nullptr,&uri,1); }
