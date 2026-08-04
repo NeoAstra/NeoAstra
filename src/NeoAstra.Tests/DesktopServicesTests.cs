@@ -180,6 +180,18 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void RendererMessageDialogResultUsesClientValueContract()
+    {
+        var json = JsonSerializer.Serialize(
+            new DesktopMessageResult(NeoDesktopStatus.Success, NeoDialogButtonRole.Accept),
+            DesktopRendererJsonContext.Default.DesktopMessageResult);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.AreEqual("Accept", document.RootElement.GetProperty("value").GetString());
+        Assert.IsFalse(document.RootElement.TryGetProperty("button", out _));
+    }
+
+    [TestMethod]
     public async Task EmbeddedDesktopMetadataAndScopeSchemasMatchManagedDeclarations()
     {
         var assembly = typeof(NeoDesktopEssentialsPlugin).Assembly;

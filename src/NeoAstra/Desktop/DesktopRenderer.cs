@@ -775,7 +775,7 @@ internal sealed record DesktopBoolResult(NeoDesktopStatus Status, bool? Value, s
 internal sealed record DesktopBytesResult(NeoDesktopStatus Status, string? Base64, string? Code = null);
 internal sealed record DesktopPathResult(NeoDesktopStatus Status, string? Path, string? Code = null);
 internal sealed record DesktopPathsResult(NeoDesktopStatus Status, IReadOnlyList<string>? Paths, string? Code = null);
-internal sealed record DesktopMessageResult(NeoDesktopStatus Status, NeoDialogButtonRole? Button, string? Code = null);
+internal sealed record DesktopMessageResult(NeoDesktopStatus Status, NeoDialogButtonRole? Value, string? Code = null);
 internal sealed record DesktopThemeResult(NeoThemeSnapshot Theme);
 internal sealed record DesktopDisplaysResult(IReadOnlyList<NeoDisplaySnapshot> Displays);
 internal sealed record DesktopMetadataResult(NeoApplicationMetadata Metadata);
