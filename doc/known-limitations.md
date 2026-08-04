@@ -76,6 +76,9 @@ and native window-state transitions remain available.
   objects on the wrong thread after the host loop has stopped.
 - Linux requires a working X11 or Wayland display. A headless build, native unit test, or NativeAOT
   publish does not prove that a WebKitGTK view can be created.
+- Linux tray items use the Freedesktop StatusNotifierItem protocol. KDE Plasma provides a watcher;
+  GNOME generally requires an AppIndicator-compatible shell extension. NeoAstra can export and later
+  register the item, but cannot make a shell display tray UI when no watcher is installed.
 - Browser-engine versions and policies are controlled by the operating system or installed runtime,
   so optional behavior can differ between otherwise supported machines. Capability checks remain
   required.

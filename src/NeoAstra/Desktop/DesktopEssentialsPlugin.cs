@@ -226,8 +226,11 @@ public sealed class NeoDesktopEssentialsPlugin : INeoAstraPlugin
             Permission("opener:reveal", ["desktop.opener.reveal"], NeoPermissionRisk.Sensitive, NeoScopeFamily.Filesystem),
             Permission("drag-drop:outbound", ["desktop.drag-drop.outbound"], NeoPermissionRisk.High),
             Permission("drag-drop:receive-files", ["desktop.drag-drop.inbound", "desktop.drag-drop.resolve-file"], NeoPermissionRisk.High),
+            Permission("window:management", ["desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size", "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen", "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible"], NeoPermissionRisk.High),
+            Permission("window:close", ["desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close", "desktop.window.close-requested"], NeoPermissionRisk.High),
             Permission("window:files", ["desktop.window.set-icon", "desktop.window.set-represented-file"], NeoPermissionRisk.High, NeoScopeFamily.Filesystem),
             Permission("window:polish", ["desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme"], NeoPermissionRisk.High),
+            Permission("application:quit", ["desktop.application.request-quit"], NeoPermissionRisk.High, defaultTimeout: TimeSpan.FromSeconds(35)),
             Permission("safe-storage:store", ["desktop.safe-storage.store"], NeoPermissionRisk.High),
             Permission("safe-storage:retrieve", ["desktop.safe-storage.retrieve", "desktop.safe-storage.contains"], NeoPermissionRisk.High),
             Permission("safe-storage:delete", ["desktop.safe-storage.delete"], NeoPermissionRisk.High),
@@ -238,12 +241,12 @@ public sealed class NeoDesktopEssentialsPlugin : INeoAstraPlugin
         });
     }
 
-    private static NeoPermissionDeclaration Permission(string id, string[] commands, NeoPermissionRisk risk, NeoScopeFamily scope = NeoScopeFamily.None) => new(id, 1, commands, risk, scope)
+    private static NeoPermissionDeclaration Permission(string id, string[] commands, NeoPermissionRisk risk, NeoScopeFamily scope = NeoScopeFamily.None, TimeSpan? defaultTimeout = null) => new(id, 1, commands, risk, scope)
     {
         ScopeRequired = scope != NeoScopeFamily.None,
         UnionSafe = scope != NeoScopeFamily.None,
         MaximumConcurrency = risk == NeoPermissionRisk.High ? 1 : 4,
-        DefaultTimeout = TimeSpan.FromSeconds(30),
+        DefaultTimeout = defaultTimeout ?? TimeSpan.FromSeconds(30),
         Redaction = NeoAuditRedaction.Full,
         Documentation = "Official NeoAstra desktop essentials renderer permission. Registration and grants remain explicit.",
     };

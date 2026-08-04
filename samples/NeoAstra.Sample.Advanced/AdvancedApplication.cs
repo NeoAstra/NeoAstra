@@ -231,9 +231,6 @@ internal sealed class AdvancedApplication(
             previewWindow,
             cancellationToken);
 
-        mainWindow.CloseRequested += request =>
-            ConfirmUnsavedCloseAsync(request, mainView);
-
         await mainView.NavigateAsync(target, cancellationToken);
         await previewView.NavigateAsync(target, cancellationToken);
 
@@ -312,34 +309,6 @@ internal sealed class AdvancedApplication(
             cancellationToken);
     }
 
-    private async ValueTask ConfirmUnsavedCloseAsync(
-        NeoWindowCloseRequest request,
-        NeoAstra.NeoAstra mainView)
-    {
-        if (!state.HasUnsavedChanges || !request.CanCancel)
-        {
-            return;
-        }
-
-        try
-        {
-            var answer = await mainView.EvaluateScriptAsync(
-                "globalThis.confirm('Discard the unsaved feature-tour changes?')",
-                request.DeadlineToken);
-            if (!string.Equals(answer, "true", StringComparison.OrdinalIgnoreCase))
-            {
-                request.Cancel();
-                return;
-            }
-
-            state.SetUnsavedChanges(false);
-        }
-        catch
-        {
-            request.Cancel();
-        }
-    }
-
     private static NeoDesktopRendererOptions CreateRendererOptions(string assetRoot) => new()
     {
         FileRoots = new Dictionary<string, string>
@@ -354,6 +323,7 @@ internal sealed class AdvancedApplication(
         AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal)
         {
             "feature-tour",
+            "lifecycle-tour",
         },
         AllowedGlobalShortcuts = new HashSet<string>(StringComparer.Ordinal)
         {

@@ -216,6 +216,126 @@
       "audited": true
     },
     {
+      "name": "desktop.window.get-state",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-title",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-position",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-size",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-minimum-size",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-maximum-size",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.show",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.hide",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.focus",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.maximize",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.minimize",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.restore",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-fullscreen",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-decorations",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-resizable",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-always-on-top",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-taskbar-visible",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.close",
+      "permission": "window:close",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.intercept-close",
+      "permission": "window:close",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.complete-close",
+      "permission": "window:close",
+      "risk": "high",
+      "audited": true
+    },
+    {
       "name": "desktop.window.set-icon",
       "permission": "window:files",
       "risk": "high",
@@ -264,6 +384,12 @@
       "permission": "window:polish",
       "risk": "high",
       "audited": true
+    },
+    {
+      "name": "desktop.application.request-quit",
+      "permission": "application:quit",
+      "risk": "high",
+      "audited": true
     }
   ],
   "events": [
@@ -300,6 +426,12 @@
     {
       "name": "desktop.drag-drop.inbound",
       "permission": "drag-drop:receive-files",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.close-requested",
+      "permission": "window:close",
       "risk": "high",
       "audited": true
     }
@@ -364,8 +496,8 @@
       "id": "menus:control",
       "revision": 1,
       "operations": [
-         "desktop.menus.set",
-         "desktop.menus.popup"
+        "desktop.menus.set",
+        "desktop.menus.popup"
       ],
       "risk": "high",
       "scopeFamily": "none",
@@ -580,6 +712,58 @@
       "operations": [
         "desktop.drag-drop.inbound",
         "desktop.drag-drop.resolve-file"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "window:management",
+      "revision": 1,
+      "operations": [
+        "desktop.window.get-state",
+        "desktop.window.set-title",
+        "desktop.window.set-position",
+        "desktop.window.set-size",
+        "desktop.window.set-minimum-size",
+        "desktop.window.set-maximum-size",
+        "desktop.window.show",
+        "desktop.window.hide",
+        "desktop.window.focus",
+        "desktop.window.maximize",
+        "desktop.window.minimize",
+        "desktop.window.restore",
+        "desktop.window.set-fullscreen",
+        "desktop.window.set-decorations",
+        "desktop.window.set-resizable",
+        "desktop.window.set-always-on-top",
+        "desktop.window.set-taskbar-visible"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "window:close",
+      "revision": 1,
+      "operations": [
+        "desktop.window.close",
+        "desktop.window.intercept-close",
+        "desktop.window.complete-close",
+        "desktop.window.close-requested"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "application:quit",
+      "revision": 1,
+      "operations": [
+        "desktop.application.request-quit"
       ],
       "risk": "high",
       "scopeFamily": "none",

@@ -127,13 +127,17 @@ internal static class NeoDesktopRendererContract
         "desktop.notifications.status", "desktop.notifications.show", "desktop.notifications.remove",
         "desktop.shortcuts.register", "desktop.shortcuts.unregister", "desktop.system.theme", "desktop.system.displays", "desktop.system.metadata",
         "desktop.opener.url", "desktop.opener.file", "desktop.opener.reveal", "desktop.drag-drop.outbound", "desktop.drag-drop.resolve-file",
+        "desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size",
+        "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen",
+        "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible", "desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close",
         "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
+        "desktop.application.request-quit",
         "desktop.safe-storage.store", "desktop.safe-storage.retrieve", "desktop.safe-storage.delete", "desktop.safe-storage.contains",
     ];
     internal static readonly string[] Events =
     [
         "desktop.tray.activated", "desktop.notifications.activated", "desktop.shortcuts.activated",
-        "desktop.system.theme-changed", "desktop.system.displays-changed", "desktop.drag-drop.inbound",
+        "desktop.system.theme-changed", "desktop.system.displays-changed", "desktop.drag-drop.inbound", "desktop.window.close-requested",
     ];
 }
 
@@ -146,6 +150,8 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private readonly Dictionary<(string Session, string Id), long> _ownedNotifications = [];
     private readonly Dictionary<string, (string Session, long Generation)> _ownedMenus = new(StringComparer.Ordinal);
     private readonly HashSet<string> _trackedDropSessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<NeoWindow, CloseInterception> _closeInterceptions = [];
+    private readonly Dictionary<ulong, PendingClose> _pendingCloses = [];
     private long _nextGeneration;
     private NeoRpcEvent<DesktopIdEvent>? _trayActivated;
     private NeoRpcEvent<DesktopNotificationActivatedEvent>? _notificationActivated;
@@ -153,6 +159,8 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private NeoRpcEvent<DesktopThemeChangedEvent>? _themeChanged;
     private NeoRpcEvent<DesktopDisplaysChangedEvent>? _displaysChanged;
     private NeoRpcEvent<DesktopDropEvent>? _dropInbound;
+    private NeoRpcEvent<DesktopWindowCloseRequestedEvent>? _windowCloseRequested;
+    private ulong _nextCloseRequest;
     private bool _dragDropRegistered;
     private bool _disposed;
 
@@ -188,6 +196,26 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.opener.reveal", "opener:reveal", RevealAsync, json.DesktopScopedPathRequest, json.DesktopStatusResult);
         Add(builder, "desktop.drag-drop.outbound", "drag-drop:outbound", OutboundDragAsync, json.DesktopOutboundDragRequest, json.DesktopStatusResult);
         Add(builder, "desktop.drag-drop.resolve-file", "drag-drop:receive-files", ResolveDropFileAsync, json.DesktopDropFileRequest, json.DesktopPathResult);
+        Add(builder, "desktop.window.get-state", "window:management", GetWindowStateAsync, json.DesktopEmptyRequest, json.DesktopWindowStateResult);
+        Add(builder, "desktop.window.set-title", "window:management", SetWindowTitleAsync, json.DesktopTextRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-position", "window:management", SetWindowPositionAsync, json.DesktopPointRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-size", "window:management", SetWindowSizeAsync, json.DesktopSizeRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-minimum-size", "window:management", SetWindowMinimumSizeAsync, json.DesktopSizeRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-maximum-size", "window:management", SetWindowMaximumSizeAsync, json.DesktopSizeRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.show", "window:management", ShowWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.hide", "window:management", HideWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.focus", "window:management", FocusWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.maximize", "window:management", MaximizeWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.minimize", "window:management", MinimizeWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.restore", "window:management", RestoreWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-fullscreen", "window:management", SetWindowFullscreenAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-decorations", "window:management", SetWindowDecorationsAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-resizable", "window:management", SetWindowResizableAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-always-on-top", "window:management", SetWindowAlwaysOnTopAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-taskbar-visible", "window:management", SetWindowTaskbarVisibleAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.close", "window:close", CloseWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.intercept-close", "window:close", InterceptWindowCloseAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.complete-close", "window:close", CompleteWindowCloseAsync, json.DesktopWindowCloseResponse, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-icon", "window:files", SetWindowIconAsync, json.DesktopScopedPathRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-represented-file", "window:files", SetRepresentedFileAsync, json.DesktopOptionalScopedPathRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.request-attention", "window:polish", RequestWindowAttentionAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
@@ -196,6 +224,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.window.set-document-edited", "window:polish", SetWindowDocumentEditedAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-content-protection", "window:polish", SetWindowContentProtectionAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-titlebar-theme", "window:polish", SetWindowTitleBarThemeAsync, json.DesktopWindowThemeRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.application.request-quit", "application:quit", RequestApplicationQuitAsync, json.DesktopEmptyRequest, json.DesktopStatusResult, TimeSpan.FromSeconds(35));
         Add(builder, "desktop.safe-storage.store", "safe-storage:store", StoreSecretAsync, json.DesktopSecretWriteRequest, json.DesktopStatusResult);
         Add(builder, "desktop.safe-storage.retrieve", "safe-storage:retrieve", RetrieveSecretAsync, json.DesktopIdRequest, json.DesktopBytesResult);
         Add(builder, "desktop.safe-storage.delete", "safe-storage:delete", DeleteSecretAsync, json.DesktopIdRequest, json.DesktopStatusResult);
@@ -207,6 +236,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         _themeChanged = builder.AddEvent("desktop.system.theme-changed", json.DesktopThemeChangedEvent, new() { Permission = "system-info:theme" });
         _displaysChanged = builder.AddEvent("desktop.system.displays-changed", json.DesktopDisplaysChangedEvent, new() { Permission = "system-info:displays" });
         _dropInbound = builder.AddEvent("desktop.drag-drop.inbound", json.DesktopDropEvent, new() { Permission = "drag-drop:receive-files" });
+        _windowCloseRequested = builder.AddEvent("desktop.window.close-requested", json.DesktopWindowCloseRequestedEvent, new() { Permission = "window:close" });
         services.Tray.Activated += OnTrayActivated;
         services.Notifications.Activated += OnNotificationActivated;
         services.GlobalShortcuts.Activated += OnShortcutActivated;
@@ -218,8 +248,8 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     }
 
     private static void Add<TRequest, TResult>(NeoRpcBuilder builder, string command, string permission, NeoRpcCommandHandler<TRequest, TResult> handler,
-        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest> request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResult> result)
-        => builder.AddCommand(command, handler, request, result, new NeoRpcCommandOptions { Permission = permission, Dispatch = permission.StartsWith("shortcuts:", StringComparison.Ordinal) ? NeoRpcDispatchMode.UiThread : NeoRpcDispatchMode.Background, MaximumConcurrency = permission.StartsWith("system-info:", StringComparison.Ordinal) ? 4 : 1, Timeout = TimeSpan.FromSeconds(30) });
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<TRequest> request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResult> result, TimeSpan? timeout = null)
+        => builder.AddCommand(command, handler, request, result, new NeoRpcCommandOptions { Permission = permission, Dispatch = permission.StartsWith("shortcuts:", StringComparison.Ordinal) ? NeoRpcDispatchMode.UiThread : NeoRpcDispatchMode.Background, MaximumConcurrency = permission.StartsWith("system-info:", StringComparison.Ordinal) ? 4 : 1, Timeout = timeout ?? TimeSpan.FromSeconds(30) });
 
     private NeoFileDialogOptions DialogOptions(DesktopDialogRequest request, NeoRpcContext context, bool save)
     {
@@ -440,6 +470,102 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         if (!services.DragDrop.TryResolveFile(request.Token, NeoPluginOwner.DocumentSession(context.DocumentSessionId), out var path)) return ValueTask.FromResult(new DesktopPathResult(NeoDesktopStatus.NotFound, null, "drop_token_unavailable"));
         return ValueTask.FromResult(new DesktopPathResult(NeoDesktopStatus.Success, path));
     }
+    private ValueTask<DesktopWindowStateResult> GetWindowStateAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => InvokeWindowAsync(context, window =>
+        {
+            bool? taskbarVisible;
+            try { taskbarVisible = window.ShowInTaskbar; } catch (NotSupportedException) { taskbarVisible = null; }
+            return new DesktopWindowStateResult(new(window.Title, window.Position, window.ClientSize, window.MinimumClientSize, window.MaximumClientSize,
+                window.IsVisible, window.IsFocused, window.IsClosed, window.ScaleFactor, window.State, window.HasDecorations, window.IsResizable,
+                window.IsAlwaysOnTop, taskbarVisible, window.IsModal));
+        }, token);
+    private ValueTask<DesktopStatusResult> SetWindowTitleAsync(DesktopTextRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        if (request.Value.Length > 4096 || request.Value.Any(static value => value == '\0')) throw new ArgumentException("The window title is malformed.", nameof(request));
+        return MutateWindowAsync(context, window => window.Title = request.Value, token);
+    }
+    private ValueTask<DesktopStatusResult> SetWindowPositionAsync(DesktopPointRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.Position = new(request.X, request.Y), token);
+    private ValueTask<DesktopStatusResult> SetWindowSizeAsync(DesktopSizeRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.ClientSize = new(request.Width, request.Height), token);
+    private ValueTask<DesktopStatusResult> SetWindowMinimumSizeAsync(DesktopSizeRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.MinimumClientSize = new(request.Width, request.Height), token);
+    private ValueTask<DesktopStatusResult> SetWindowMaximumSizeAsync(DesktopSizeRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.MaximumClientSize = new(request.Width, request.Height), token);
+    private ValueTask<DesktopStatusResult> ShowWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Show(), token);
+    private ValueTask<DesktopStatusResult> HideWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Hide(), token);
+    private ValueTask<DesktopStatusResult> FocusWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Activate(), token);
+    private ValueTask<DesktopStatusResult> MaximizeWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Maximize(), token);
+    private ValueTask<DesktopStatusResult> MinimizeWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Minimize(), token);
+    private ValueTask<DesktopStatusResult> RestoreWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Restore(), token);
+    private ValueTask<DesktopStatusResult> SetWindowFullscreenAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => { if (request.Value) window.EnterFullscreen(); else window.ExitFullscreen(); }, token);
+    private ValueTask<DesktopStatusResult> SetWindowDecorationsAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.HasDecorations = request.Value, token);
+    private ValueTask<DesktopStatusResult> SetWindowResizableAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.IsResizable = request.Value, token);
+    private ValueTask<DesktopStatusResult> SetWindowAlwaysOnTopAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.IsAlwaysOnTop = request.Value, token);
+    private ValueTask<DesktopStatusResult> SetWindowTaskbarVisibleAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, window => window.ShowInTaskbar = request.Value, token);
+    private ValueTask<DesktopStatusResult> CloseWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => MutateWindowAsync(context, static window => window.Close(), token);
+    private async ValueTask<DesktopStatusResult> InterceptWindowCloseAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        var window = RequiredWindow(context);
+        if (!request.Value)
+        {
+            await RemoveCloseInterceptionAsync(window, context.DocumentSessionId).ConfigureAwait(false);
+            return Status(NeoDesktopStatus.Success);
+        }
+
+        CloseInterception? created = null;
+        var status = await window.Application.Dispatcher.InvokeAsync(() =>
+        {
+            lock (_sync)
+            {
+                if (_disposed) return NeoDesktopStatus.Canceled;
+                if (_closeInterceptions.TryGetValue(window, out var current)) return current.SessionId == context.DocumentSessionId ? NeoDesktopStatus.Success : NeoDesktopStatus.Conflict;
+                var generation = checked(++_nextGeneration);
+                created = new(window, context.DocumentSessionId, generation);
+                created.Handler = request => HandleWindowCloseRequestedAsync(created, request);
+                created.ClosedHandler = (_, _) => _ = RemoveCloseInterceptionAsync(window, created.SessionId, created.Generation);
+                _closeInterceptions.Add(window, created);
+                window.CloseRequested += created.Handler;
+                window.Closed += created.ClosedHandler;
+                return NeoDesktopStatus.Success;
+            }
+        }, token).ConfigureAwait(false);
+        if (created is not null)
+        {
+            try { context.Resources.Add(new AsyncAction(() => RemoveCloseInterceptionAsync(window, context.DocumentSessionId, created.Generation))); }
+            catch { await RemoveCloseInterceptionAsync(window, context.DocumentSessionId, created.Generation).ConfigureAwait(false); throw; }
+        }
+        return Status(status);
+    }
+    private ValueTask<DesktopStatusResult> CompleteWindowCloseAsync(DesktopWindowCloseResponse response, NeoRpcContext context, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        PendingClose? pending;
+        lock (_sync)
+        {
+            if (!_pendingCloses.TryGetValue(response.RequestId, out pending) || pending.SessionId != context.DocumentSessionId) return ValueTask.FromResult(Status(NeoDesktopStatus.NotFound));
+            _pendingCloses.Remove(response.RequestId);
+        }
+        pending.Completion.TrySetResult(response.PreventDefault);
+        return ValueTask.FromResult(Status(NeoDesktopStatus.Success));
+    }
+    private async ValueTask<DesktopStatusResult> RequestApplicationQuitAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        var result = await RequiredWindow(context).Application.RequestQuitAsync(options: new NeoQuitOptions { Timeout = TimeSpan.FromSeconds(30) }, cancellationToken: token).ConfigureAwait(false);
+        return Status(result == NeoQuitResult.Canceled ? NeoDesktopStatus.Canceled : NeoDesktopStatus.Success);
+    }
     private async ValueTask<DesktopStatusResult> SetWindowIconAsync(DesktopScopedPathRequest request, NeoRpcContext context, CancellationToken token)
     {
         if (request.Operation != "read") throw NeoDesktopRendererOptions.Denied("The window icon operation is invalid.");
@@ -501,7 +627,62 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         try { lock (_sync) if (!_ownedNotifications.TryGetValue(key, out var current) || current != generation) return; try { await services.Notifications.RemoveAsync(key.Id).ConfigureAwait(false); } catch { } lock (_sync) if (_ownedNotifications.TryGetValue(key, out var current) && current == generation) _ownedNotifications.Remove(key); services.DragDrop.ReleaseOwner(NeoPluginOwner.DocumentSession(key.Session)); }
         finally { _ownershipGate.Release(); }
     }
-    private void OnTrayActivated(object? sender, NeoTrayActivation e) { if (!IsDisposed()) _ = PublishContainedAsync(_trayActivated, new(e.ItemId), context => IsOwned(_ownedTray, context, e.ItemId)); }
+    private async ValueTask HandleWindowCloseRequestedAsync(CloseInterception interception, NeoWindowCloseRequest request)
+    {
+        ulong requestId;
+        PendingClose pending;
+        lock (_sync)
+        {
+            if (_disposed || !_closeInterceptions.TryGetValue(interception.Window, out var current) || current.Generation != interception.Generation) return;
+            requestId = checked(++_nextCloseRequest);
+            pending = new(interception.SessionId, interception.Generation, new(TaskCreationOptions.RunContinuationsAsynchronously));
+            _pendingCloses.Add(requestId, pending);
+        }
+
+        try
+        {
+            await PublishContainedAsync(_windowCloseRequested, new(requestId, request.Reason, request.CanCancel), context => context.DocumentSessionId == interception.SessionId).ConfigureAwait(false);
+            if (!request.CanCancel) return;
+            bool preventDefault;
+            try { preventDefault = await pending.Completion.Task.WaitAsync(request.DeadlineToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { preventDefault = true; }
+            if (preventDefault) request.Cancel();
+        }
+        finally
+        {
+            lock (_sync) _pendingCloses.Remove(requestId);
+        }
+    }
+    private ValueTask RemoveCloseInterceptionAsync(NeoWindow window, string sessionId, long? generation = null)
+    {
+        void Remove()
+        {
+            CloseInterception? interception;
+            PendingClose[] pending;
+            lock (_sync)
+            {
+                if (!_closeInterceptions.TryGetValue(window, out interception) || interception.SessionId != sessionId || generation is { } expected && interception.Generation != expected) return;
+                _closeInterceptions.Remove(window);
+                pending = _pendingCloses.Where(pair => pair.Value.SessionId == sessionId && pair.Value.Generation == interception.Generation).Select(static pair => pair.Value).ToArray();
+                foreach (var id in _pendingCloses.Where(pair => pair.Value.SessionId == sessionId && pair.Value.Generation == interception.Generation).Select(static pair => pair.Key).ToArray()) _pendingCloses.Remove(id);
+            }
+            window.CloseRequested -= interception.Handler;
+            window.Closed -= interception.ClosedHandler;
+            foreach (var item in pending) item.Completion.TrySetResult(true);
+        }
+        var dispatcher = window.Application.Dispatcher;
+        if (!dispatcher.CheckAccess()) return dispatcher.InvokeAsync(Remove);
+        Remove();
+        return ValueTask.CompletedTask;
+    }
+    private static ValueTask<TResult> InvokeWindowAsync<TResult>(NeoRpcContext context, Func<NeoWindow, TResult> action, CancellationToken token)
+    {
+        var window = RequiredWindow(context);
+        return window.Application.Dispatcher.InvokeAsync(() => action(window), token);
+    }
+    private static ValueTask<DesktopStatusResult> MutateWindowAsync(NeoRpcContext context, Action<NeoWindow> action, CancellationToken token)
+        => InvokeWindowAsync(context, window => { action(window); return Status(NeoDesktopStatus.Success); }, token);
+    private void OnTrayActivated(object? sender, NeoTrayActivation e) { if (!IsDisposed()) _ = PublishContainedAsync(_trayActivated, new(e.ItemId, e.Secondary), context => IsOwned(_ownedTray, context, e.ItemId)); }
     private void OnNotificationActivated(object? sender, NeoNotificationActivation e) { if (!IsDisposed()) _ = PublishContainedAsync(_notificationActivated, new(e.NotificationId, e.ActionId, e.ActivationData), context => IsOwned(_ownedNotifications, context, e.NotificationId)); }
     private void OnShortcutActivated(object? sender, string e) { if (!IsDisposed()) _ = PublishContainedAsync(_shortcutActivated, new(e), context => IsOwned(_ownedShortcuts, context, e)); }
     private void OnThemeChanged(object? sender, NeoThemeSnapshot e) { if (!IsDisposed()) _ = PublishContainedAsync(_themeChanged, new(e), null); }
@@ -524,12 +705,12 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         await _ownershipGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            (string Target, (string Session, long Generation) Owner)[] menus; ((string Session, string Id) Key, long Generation)[] tray, shortcuts, notifications; string[] sessions, trackedSessions;
+            (string Target, (string Session, long Generation) Owner)[] menus; ((string Session, string Id) Key, long Generation)[] tray, shortcuts, notifications; string[] sessions, trackedSessions; CloseInterception[] closeInterceptions; PendingClose[] pendingCloses;
             lock (_sync)
             {
                 if (_disposed) return; _disposed = true;
                 menus = _ownedMenus.Select(static pair => (pair.Key, pair.Value)).ToArray(); tray = _ownedTray.Select(static pair => (pair.Key, pair.Value)).ToArray(); shortcuts = _ownedShortcuts.Select(static pair => (pair.Key, pair.Value)).ToArray(); notifications = _ownedNotifications.Select(static pair => (pair.Key, pair.Value)).ToArray();
-                trackedSessions = _trackedDropSessions.ToArray();
+                trackedSessions = _trackedDropSessions.ToArray(); closeInterceptions = _closeInterceptions.Values.ToArray(); pendingCloses = _pendingCloses.Values.ToArray(); _closeInterceptions.Clear(); _pendingCloses.Clear();
                 sessions = menus.Select(static item => item.Owner.Session).Concat(tray.Select(static item => item.Key.Session)).Concat(shortcuts.Select(static item => item.Key.Session)).Concat(notifications.Select(static item => item.Key.Session)).Concat(trackedSessions).Distinct(StringComparer.Ordinal).ToArray();
             }
             foreach (var menu in menus) try { await services.Menus.RemoveMenuAsync(menu.Target).ConfigureAwait(false); } catch { }
@@ -538,6 +719,8 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
             foreach (var item in notifications) try { await services.Notifications.RemoveAsync(item.Key.Id).ConfigureAwait(false); } catch { }
             foreach (var session in sessions) services.DragDrop.ReleaseOwner(NeoPluginOwner.DocumentSession(session));
             foreach (var session in trackedSessions) services.DragDrop.UnregisterRendererSession(session);
+            foreach (var interception in closeInterceptions) { interception.Window.CloseRequested -= interception.Handler; interception.Window.Closed -= interception.ClosedHandler; }
+            foreach (var pending in pendingCloses) pending.Completion.TrySetResult(true);
             lock (_sync) { _ownedMenus.Clear(); _ownedTray.Clear(); _ownedShortcuts.Clear(); _ownedNotifications.Clear(); _trackedDropSessions.Clear(); }
         }
         finally { _ownershipGate.Release(); }
@@ -574,6 +757,15 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     }
 
     private sealed class AsyncAction(Func<ValueTask> action) : IAsyncDisposable { private Func<ValueTask>? _action = action; public ValueTask DisposeAsync() => Interlocked.Exchange(ref _action, null)?.Invoke() ?? ValueTask.CompletedTask; }
+    private sealed class CloseInterception(NeoWindow window, string sessionId, long generation)
+    {
+        internal NeoWindow Window { get; } = window;
+        internal string SessionId { get; } = sessionId;
+        internal long Generation { get; } = generation;
+        internal Func<NeoWindowCloseRequest, ValueTask> Handler { get; set; } = null!;
+        internal EventHandler ClosedHandler { get; set; } = null!;
+    }
+    private sealed record PendingClose(string SessionId, long Generation, TaskCompletionSource<bool> Completion);
 }
 
 internal sealed record DesktopEmptyRequest;
@@ -590,6 +782,13 @@ internal sealed record DesktopMetadataResult(NeoApplicationMetadata Metadata);
 internal sealed record DesktopNotificationStatusResult(NeoNotificationPermissionStatus Status);
 internal sealed record DesktopBoolValue(bool Value);
 internal sealed record DesktopBoolRequest(bool Value);
+internal sealed record DesktopTextRequest(string Value);
+internal sealed record DesktopPointRequest(int X, int Y);
+internal sealed record DesktopSizeRequest(int Width, int Height);
+internal sealed record DesktopWindowSnapshot(string Title, NeoPoint Position, NeoSize Size, NeoSize MinimumSize, NeoSize MaximumSize, bool Visible, bool Focused, bool Closed, double ScaleFactor, NeoWindowState State, bool Decorations, bool Resizable, bool AlwaysOnTop, bool? TaskbarVisible, bool Modal);
+internal sealed record DesktopWindowStateResult(DesktopWindowSnapshot Value);
+internal sealed record DesktopWindowCloseResponse(ulong RequestId, bool PreventDefault);
+internal sealed record DesktopWindowCloseRequestedEvent(ulong RequestId, NeoWindowCloseReason Reason, bool CanCancel);
 internal sealed record DesktopOptionalTextRequest(string? Value);
 internal sealed record DesktopFileFilterDto(string Name, IReadOnlyList<string> Extensions, IReadOnlyList<string> MimeTypes);
 internal sealed record DesktopDialogRequest(string Kind, string InitialLocation, string? InitialRelativePath, IReadOnlyList<string> Extensions, string? Title, string? SuggestedFileName, bool AllowMultiple, IReadOnlyList<DesktopFileFilterDto> Filters);
@@ -614,7 +813,7 @@ internal sealed record DesktopSecretWriteRequest(string Id, [property: JsonPrope
 internal sealed record DesktopDropFileRequest(string Token);
 internal sealed record DesktopWindowProgressRequest(NeoWindowProgressState State, double Value);
 internal sealed record DesktopWindowThemeRequest(NeoWindowTitleBarTheme Theme);
-internal sealed record DesktopIdEvent(string Id);
+internal sealed record DesktopIdEvent(string Id, bool Secondary = false);
 internal sealed record DesktopNotificationActivatedEvent(string Id, string? ActionId, string? Payload);
 internal sealed record DesktopThemeChangedEvent(NeoThemeSnapshot Theme);
 internal sealed record DesktopDisplaysChangedEvent(IReadOnlyList<NeoDisplaySnapshot> Displays);
@@ -634,6 +833,12 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopMetadataResult))]
 [JsonSerializable(typeof(DesktopNotificationStatusResult))]
 [JsonSerializable(typeof(DesktopBoolRequest))]
+[JsonSerializable(typeof(DesktopTextRequest))]
+[JsonSerializable(typeof(DesktopPointRequest))]
+[JsonSerializable(typeof(DesktopSizeRequest))]
+[JsonSerializable(typeof(DesktopWindowStateResult))]
+[JsonSerializable(typeof(DesktopWindowCloseResponse))]
+[JsonSerializable(typeof(DesktopWindowCloseRequestedEvent))]
 [JsonSerializable(typeof(DesktopOptionalTextRequest))]
 [JsonSerializable(typeof(DesktopDialogRequest))]
 [JsonSerializable(typeof(DesktopMessageRequest))]

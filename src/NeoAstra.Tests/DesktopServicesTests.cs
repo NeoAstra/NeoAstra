@@ -129,12 +129,13 @@ public sealed class DesktopServicesTests
         try
         {
             var metadata = new NeoDesktopEssentialsPlugin(services).Metadata;
+            var pluginPermissions = metadata.PermissionCatalog!;
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Commands, metadata.Commands.Select(static value => value.Name).ToArray());
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Events, metadata.Events.Select(static value => value.Name).ToArray());
-            var allOperations = metadata.PermissionCatalog!.Permissions.SelectMany(static value => value.Commands).ToArray();
+            var allOperations = pluginPermissions.Permissions.SelectMany(static value => value.Commands).ToArray();
             CollectionAssert.AreEquivalent(allOperations, metadata.Commands.Select(static value => value.Name).Concat(metadata.Events.Select(static value => value.Name)).ToArray());
-            Assert.IsTrue(metadata.Commands.All(command => metadata.PermissionCatalog.Permissions.Single(permission => permission.Id == command.Permission).Commands.Contains(command.Name, StringComparer.Ordinal)));
-            Assert.IsTrue(metadata.Events.All(pluginEvent => metadata.PermissionCatalog.Permissions.Single(permission => permission.Id == pluginEvent.Permission).Commands.Contains(pluginEvent.Name, StringComparer.Ordinal)));
+            Assert.IsTrue(metadata.Commands.All(command => pluginPermissions.Permissions.Single(permission => permission.Id == command.Permission).Commands.Contains(command.Name, StringComparer.Ordinal)));
+            Assert.IsTrue(metadata.Events.All(pluginEvent => pluginPermissions.Permissions.Single(permission => permission.Id == pluginEvent.Permission).Commands.Contains(pluginEvent.Name, StringComparer.Ordinal)));
 
             var backendOnly = new NeoRpcBuilder().Build();
             Assert.IsFalse(backendOnly.TryGetCommand(NeoDesktopRendererContract.Commands[0], out _));
@@ -153,7 +154,27 @@ public sealed class DesktopServicesTests
             var renderer = rendererBuilder.Build();
             Assert.IsTrue(metadata.Commands.All(command => renderer.TryGetCommand(command.Name, out var descriptor) && descriptor!.Options.Permission == command.Permission));
             Assert.IsTrue(metadata.Events.All(pluginEvent => renderer.TryGetEvent(pluginEvent.Name, out var descriptor) && descriptor!.Options.Permission == pluginEvent.Permission));
+            foreach (var command in metadata.Commands)
+            {
+                Assert.IsTrue(renderer.TryGetCommand(command.Name, out var descriptor));
+                Assert.IsNotNull(descriptor);
+                var permission = pluginPermissions.Permissions.Single(item => item.Id == command.Permission);
+                Assert.IsTrue(descriptor.Options.Timeout <= permission.DefaultTimeout, $"Command '{command.Name}' exceeds permission '{permission.Id}' timeout policy.");
+                Assert.IsTrue(descriptor.Options.MaximumConcurrency <= permission.MaximumConcurrency, $"Command '{command.Name}' exceeds permission '{permission.Id}' concurrency policy.");
+            }
             await renderer.DisposeAsync();
+
+            var quitManifest = NeoCapabilityManifest.Resolve("""
+                {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"sample-main","views":["main"],"permissions":["application:quit"]}]}
+                """u8, new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().Build(), new() { Platform = NeoCapabilityPlatform.Windows, Release = true, Profile = NeoSecurityProfile.ProductionLocalApp });
+            var authorizedBuilder = new NeoRpcBuilder(new NeoRpcOptions
+            {
+                CapabilityManifest = quitManifest,
+                AuthorizationService = new NeoCapabilityAuthorizationService(quitManifest),
+            });
+            authorizedBuilder.AddNeoAstraDesktopHandlers(services, new NeoDesktopRendererOptions());
+            await using var authorizedRenderer = authorizedBuilder.Build();
+            Assert.IsTrue(authorizedRenderer.TryGetCommand("desktop.application.request-quit", out _));
         }
         finally { await services.DisposeAsync(); Directory.Delete(root, recursive: true); }
     }

@@ -48,8 +48,11 @@ Without the development URL, the application serves the current production `Clie
   events emitted by a lightweight application-owned background pulse.
 - **Capabilities:** open, close, and reopen the restricted preview window. It can call the read-only tour RPC
   but a desktop call is denied before dispatch; user-close hides the reusable preview until application exit.
-- **Lifecycle:** mark work as unsaved and close the main window; the asynchronous renderer confirmation can
-  cancel close. Relaunch the executable to exercise authenticated single-instance routing.
+- **Lifecycle:** enable the recovery tray, close the main window to hide its still-live browser session,
+  and left-click the tray item to restore and focus it. Use the tray's **Quit NeoAstra…** role or the
+  renderer-facing negotiated-quit button to test asynchronous confirmation and cancellation. Mark work as
+  unsaved to include document state in that question. Relaunch the executable to exercise authenticated
+  single-instance routing.
 - **Desktop essentials:** native dialogs, window and context menus, tray/status items, clipboard, notifications,
   global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish. Drop an
   existing local file into the main window to observe its document-session-scoped token in the activity log.
@@ -62,6 +65,11 @@ Native results are intentionally displayed as returned. For example, notificatio
 items, content protection, and safe storage can report `Unsupported`, `Denied`, or another platform-specific
 status when the operating system, desktop session, application identity, or packaging does not provide the
 feature.
+
+On Linux, tray display requires a desktop StatusNotifierItem watcher. KDE Plasma includes one; GNOME
+normally needs an AppIndicator-compatible shell extension. The sample enables close-to-tray only after
+its renderer-owned recovery item has been accepted, and a missing session D-Bus connection is reported
+rather than leaving the browser hidden without a recovery path.
 
 ## Validation and publish
 

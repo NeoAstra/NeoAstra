@@ -47,6 +47,51 @@ test("window polish uses scoped files and focused typed payloads", async () => {
   ]);
 });
 
+test("window management exposes state and completes close negotiation", async () => {
+  const mock = createMockDesktop();
+  mock.setResult(desktopCommands.window.getState, { value: { visible: true, state: "Normal" } });
+  mock.setResult(desktopCommands.window.hide, { status: "Success" });
+  mock.setResult(desktopCommands.window.interceptClose, { status: "Success" });
+  mock.setResult(desktopCommands.window.completeClose, { status: "Success" });
+  const state = await mock.client.window.state();
+  await mock.client.window.hide();
+  let secondListenerCalled = false;
+  const [unsubscribe, unsubscribeSecond] = await Promise.all([
+    mock.client.window.onCloseRequested(event => {
+      assert.equal(event.reason, "User");
+      event.preventDefault();
+    }),
+    mock.client.window.onCloseRequested(async event => {
+      await Promise.resolve();
+      secondListenerCalled = event.canCancel;
+    }),
+  ]);
+  mock.emit(desktopCommands.window.closeRequested, { requestId: 7, reason: "User", canCancel: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await unsubscribe();
+  await unsubscribeSecond();
+
+  assert.equal(state.value.visible, true);
+  assert.equal(secondListenerCalled, true);
+  assert.deepEqual(mock.invocations, [
+    { command: "desktop.window.get-state", args: {} },
+    { command: "desktop.window.hide", args: {} },
+    { command: "desktop.window.intercept-close", args: { value: true } },
+    { command: "desktop.window.complete-close", args: { requestId: 7, preventDefault: true } },
+    { command: "desktop.window.intercept-close", args: { value: false } },
+  ]);
+});
+
+test("application quit uses the negotiated renderer command", async () => {
+  const mock = createMockDesktop();
+  mock.setResult(desktopCommands.application.requestQuit, { status: "Canceled" });
+
+  assert.deepEqual(await mock.client.application.requestQuit(), { status: "Canceled" });
+  assert.deepEqual(mock.invocations, [
+    { command: "desktop.application.request-quit", args: {} },
+  ]);
+});
+
 test("renderer outbound drag uses host-native gesture authority without a renderer token", async () => {
   const mock = createMockDesktop();
   mock.setResult(desktopCommands.dragDrop.outbound, { status: "Success" });

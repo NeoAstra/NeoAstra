@@ -62,6 +62,19 @@ export const menuItems: readonly DesktopMenuItem[] = [
   },
 ];
 
+export const lifecycleTrayMenu: readonly DesktopMenuItem[] = [
+  {
+    id: "quit",
+    kind: "Role",
+    text: "Quit NeoAstra…",
+    enabled: true,
+    visible: true,
+    checked: false,
+    role: "Quit",
+    children: [],
+  },
+];
+
 // Keep the primary tour request within the portable notification baseline. Windows
 // notification-area balloons cannot represent actions without packaged toast identity.
 export const tourNotification: DesktopNotificationRequest = {

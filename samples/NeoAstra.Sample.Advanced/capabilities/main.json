@@ -85,7 +85,10 @@
         },
         "drag-drop:outbound",
         "drag-drop:receive-files",
+        "window:management",
+        "window:close",
         "window:polish",
+        "application:quit",
         "safe-storage:store",
         "safe-storage:retrieve",
         "safe-storage:delete"

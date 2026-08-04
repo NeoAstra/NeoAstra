@@ -113,6 +113,16 @@ Support create/update/dispose, icon/template-image policy, tooltip, native menu,
 
 Renderer creation/control requires separate permissions; normal templates SHOULD create tray items from trusted C# startup. App quit from tray uses normal quit negotiation.
 
+Linux uses the Freedesktop `StatusNotifierItem` and `DBusMenu` protocols over the GIO session bus because
+GTK4 has no `GtkStatusIcon` replacement. Support is `Limited` only while an
+`org.kde.StatusNotifierWatcher` host is present (native on KDE Plasma and commonly supplied through a
+GNOME AppIndicator extension); otherwise creation is explicitly unsupported.
+
+The official renderer surface exposes capability-gated current-window management and bounded close
+negotiation. Visibility/state mutation requires `window:management`, close interception requires
+`window:close`, and normal application quit requires `application:quit`. Native handles and synchronous
+pointer-gesture drag/resize remain backend-only.
+
 ## 8. Clipboard (`NeoAstra.Desktop.Clipboard`)
 
 Initial formats: plain text, HTML with documented sanitization responsibility, common image representation, and file-list where supported. Read and write permissions are separate by format. APIs MUST define thread affinity, delayed rendering/ownership, maximum bytes, image encoding, line-ending/HTML metadata behavior, and clear operation.

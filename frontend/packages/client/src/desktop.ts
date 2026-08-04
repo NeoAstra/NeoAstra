@@ -28,6 +28,18 @@ export interface DesktopNotificationRequest {
 }
 export interface DesktopScopedPath { readonly root: string; readonly relativePath: string; }
 export interface DesktopOutboundDragItem { readonly kind: "Text" | "File" | "Url"; readonly value?: string; readonly root?: string; readonly relativePath?: string; }
+export type DesktopWindowState = "Normal" | "Minimized" | "Maximized" | "Fullscreen";
+export type DesktopWindowCloseReason = "User" | "Owner" | "ApplicationQuit" | "SessionEnd" | "System" | "Programmatic";
+export interface DesktopWindowSnapshot {
+  readonly title: string; readonly position: { readonly x: number; readonly y: number }; readonly size: { readonly width: number; readonly height: number };
+  readonly minimumSize: { readonly width: number; readonly height: number }; readonly maximumSize: { readonly width: number; readonly height: number };
+  readonly visible: boolean; readonly focused: boolean; readonly closed: boolean; readonly scaleFactor: number; readonly state: DesktopWindowState;
+  readonly decorations: boolean; readonly resizable: boolean; readonly alwaysOnTop: boolean; readonly taskbarVisible?: boolean; readonly modal: boolean;
+}
+export interface DesktopWindowCloseRequestedEvent {
+  readonly reason: DesktopWindowCloseReason; readonly canCancel: boolean;
+  preventDefault(): void;
+}
 
 export const desktopCommands = Object.freeze({
   dialogs: Object.freeze({ openFile: "desktop.dialogs.open-file", openFolder: "desktop.dialogs.open-folder", saveFile: "desktop.dialogs.save-file", message: "desktop.dialogs.message" }),
@@ -40,7 +52,14 @@ export const desktopCommands = Object.freeze({
   opener: Object.freeze({ url: "desktop.opener.url", file: "desktop.opener.file", reveal: "desktop.opener.reveal" }),
   dragDrop: Object.freeze({ outbound: "desktop.drag-drop.outbound", resolveFile: "desktop.drag-drop.resolve-file", inbound: "desktop.drag-drop.inbound" }),
   safeStorage: Object.freeze({ store: "desktop.safe-storage.store", retrieve: "desktop.safe-storage.retrieve", delete: "desktop.safe-storage.delete", contains: "desktop.safe-storage.contains" }),
-  window: Object.freeze({ setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme" }),
+  window: Object.freeze({
+    getState: "desktop.window.get-state", setTitle: "desktop.window.set-title", setPosition: "desktop.window.set-position", setSize: "desktop.window.set-size", setMinimumSize: "desktop.window.set-minimum-size", setMaximumSize: "desktop.window.set-maximum-size",
+    show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
+    setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
+    interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
+    setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
+  }),
+  application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 } as const);
 
 export function createDesktopClient(rpc: DesktopRpc) {
@@ -48,6 +67,66 @@ export function createDesktopClient(rpc: DesktopRpc) {
   const invoke = <T>(command: string, args: unknown, options?: NeoRpcCallOptions): Promise<T> => rpc.invoke(command, args, options);
   const subscribe = <T>(event: string, handler: (value: T) => void, options?: NeoRpcCallOptions) => rpc.subscribe(event, handler, options);
   const dialog = (kind: string, value: DesktopFileDialogRequest) => ({ kind, ...value });
+  type CloseWireEvent = { readonly requestId: number; readonly reason: DesktopWindowCloseReason; readonly canCancel: boolean };
+  const closeHandlers = new Set<(event: DesktopWindowCloseRequestedEvent) => void | Promise<void>>();
+  let closeSubscription: Promise<NeoRpcUnsubscribe> | undefined;
+  let closeSetup: Promise<void> | undefined;
+  let closeOptions: NeoRpcCallOptions | undefined;
+  async function dispatchClose(value: CloseWireEvent) {
+    let prevented = false;
+    const event: DesktopWindowCloseRequestedEvent = Object.freeze({
+      reason: value.reason,
+      canCancel: value.canCancel,
+      preventDefault: () => { if (value.canCancel) prevented = true; },
+    });
+    for (const handler of [...closeHandlers]) {
+      try { await handler(event); } catch { prevented = value.canCancel; }
+    }
+    await invoke<DesktopResult>(desktopCommands.window.completeClose, { requestId: value.requestId, preventDefault: prevented }, closeOptions);
+  }
+  async function onCloseRequested(handler: (event: DesktopWindowCloseRequestedEvent) => void | Promise<void>, options?: NeoRpcCallOptions): Promise<NeoRpcUnsubscribe> {
+    if (typeof handler !== "function") throw new TypeError("A window close-request handler is required.");
+    closeHandlers.add(handler);
+    let setup: Promise<void> | undefined;
+    try {
+      if (closeSetup === undefined) {
+        closeOptions = options;
+        closeSubscription = subscribe<CloseWireEvent>(desktopCommands.window.closeRequested, value => { void dispatchClose(value).catch(() => { /* The host deadline preserves the window. */ }); }, options);
+        closeSetup = (async () => {
+          await closeSubscription;
+          const enabled = await invoke<DesktopResult>(desktopCommands.window.interceptClose, { value: true }, options);
+          if (enabled.status !== "Success") throw new Error(`Could not intercept window close requests: ${enabled.status}`);
+        })();
+      }
+      setup = closeSetup;
+      await setup;
+    } catch (error) {
+      closeHandlers.delete(handler);
+      if (closeSetup === setup) {
+        const failedSubscription = closeSubscription;
+        closeSubscription = undefined;
+        closeSetup = undefined;
+        closeOptions = undefined;
+        if (failedSubscription !== undefined) {
+          try { await (await failedSubscription)(); } catch { /* Preserve the setup failure. */ }
+        }
+      }
+      throw error;
+    }
+    let listening = true;
+    return async () => {
+      if (!listening) return;
+      listening = false;
+      closeHandlers.delete(handler);
+      if (closeHandlers.size !== 0 || closeSubscription === undefined) return;
+      await closeSetup;
+      const unsubscribe = await closeSubscription;
+      closeSubscription = undefined;
+      closeSetup = undefined;
+      try { await invoke<DesktopResult>(desktopCommands.window.interceptClose, { value: false }, closeOptions); }
+      finally { await unsubscribe(); closeOptions = undefined; }
+    };
+  }
   return Object.freeze({
     dialogs: Object.freeze({
       openFile: (value: DesktopFileDialogRequest, options?: NeoRpcCallOptions) => invoke<DesktopPathsResult>(desktopCommands.dialogs.openFile, dialog("openFile", value), options),
@@ -64,7 +143,7 @@ export function createDesktopClient(rpc: DesktopRpc) {
       create: (value: DesktopTrayRequest, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.tray.create, value, options),
       update: (value: DesktopTrayRequest, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.tray.update, value, options),
       remove: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.tray.remove, { id }, options),
-      onActivated: (handler: (value: { readonly id: string }) => void, options?: NeoRpcCallOptions) => subscribe(desktopCommands.tray.activated, handler, options),
+      onActivated: (handler: (value: { readonly id: string; readonly secondary: boolean }) => void, options?: NeoRpcCallOptions) => subscribe(desktopCommands.tray.activated, handler, options),
     }),
     clipboard: Object.freeze({
       read: (format: "text" | "html" | "image" | "files", options?: NeoRpcCallOptions) => invoke<DesktopBytesResult>(format === "text" ? desktopCommands.clipboard.readText : desktopCommands.clipboard.readRich, { format, operation: "read" }, options),
@@ -106,6 +185,25 @@ export function createDesktopClient(rpc: DesktopRpc) {
       delete: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.safeStorage.delete, { id }, options),
     }),
     window: Object.freeze({
+      state: (options?: NeoRpcCallOptions) => invoke<{ readonly value: DesktopWindowSnapshot }>(desktopCommands.window.getState, {}, options),
+      setTitle: (value: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTitle, { value }, options),
+      setPosition: (x: number, y: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setPosition, { x, y }, options),
+      setSize: (width: number, height: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setSize, { width, height }, options),
+      setMinimumSize: (width: number, height: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setMinimumSize, { width, height }, options),
+      setMaximumSize: (width: number, height: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setMaximumSize, { width, height }, options),
+      show: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.show, {}, options),
+      hide: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.hide, {}, options),
+      focus: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.focus, {}, options),
+      maximize: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.maximize, {}, options),
+      minimize: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.minimize, {}, options),
+      restore: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.restore, {}, options),
+      setFullscreen: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setFullscreen, { value }, options),
+      setDecorations: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setDecorations, { value }, options),
+      setResizable: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setResizable, { value }, options),
+      setAlwaysOnTop: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setAlwaysOnTop, { value }, options),
+      setTaskbarVisible: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTaskbarVisible, { value }, options),
+      close: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.close, {}, options),
+      onCloseRequested,
       setIcon: (path: DesktopScopedPath, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setIcon, { ...path, operation: "read" }, options),
       setRepresentedFile: (path?: DesktopScopedPath, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setRepresentedFile, path === undefined ? { operation: "read" } : { ...path, operation: "read" }, options),
       requestAttention: (critical = false, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.requestAttention, { value: critical }, options),
@@ -114,6 +212,9 @@ export function createDesktopClient(rpc: DesktopRpc) {
       setDocumentEdited: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setDocumentEdited, { value }, options),
       setContentProtection: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setContentProtection, { value }, options),
       setTitleBarTheme: (theme: "System" | "Light" | "Dark", options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTitleBarTheme, { theme }, options),
+    }),
+    application: Object.freeze({
+      requestQuit: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.application.requestQuit, {}, options),
     }),
   });
 }

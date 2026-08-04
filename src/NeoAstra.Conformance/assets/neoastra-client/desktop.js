@@ -9,7 +9,14 @@ export const desktopCommands = Object.freeze({
     opener: Object.freeze({ url: "desktop.opener.url", file: "desktop.opener.file", reveal: "desktop.opener.reveal" }),
     dragDrop: Object.freeze({ outbound: "desktop.drag-drop.outbound", resolveFile: "desktop.drag-drop.resolve-file", inbound: "desktop.drag-drop.inbound" }),
     safeStorage: Object.freeze({ store: "desktop.safe-storage.store", retrieve: "desktop.safe-storage.retrieve", delete: "desktop.safe-storage.delete", contains: "desktop.safe-storage.contains" }),
-    window: Object.freeze({ setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme" }),
+    window: Object.freeze({
+        getState: "desktop.window.get-state", setTitle: "desktop.window.set-title", setPosition: "desktop.window.set-position", setSize: "desktop.window.set-size", setMinimumSize: "desktop.window.set-minimum-size", setMaximumSize: "desktop.window.set-maximum-size",
+        show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
+        setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
+        interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
+        setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
+    }),
+    application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 });
 export function createDesktopClient(rpc) {
     if (rpc === null || typeof rpc !== "object" || typeof rpc.invoke !== "function" || typeof rpc.subscribe !== "function")
@@ -17,6 +24,84 @@ export function createDesktopClient(rpc) {
     const invoke = (command, args, options) => rpc.invoke(command, args, options);
     const subscribe = (event, handler, options) => rpc.subscribe(event, handler, options);
     const dialog = (kind, value) => ({ kind, ...value });
+    const closeHandlers = new Set();
+    let closeSubscription;
+    let closeSetup;
+    let closeOptions;
+    async function dispatchClose(value) {
+        let prevented = false;
+        const event = Object.freeze({
+            reason: value.reason,
+            canCancel: value.canCancel,
+            preventDefault: () => { if (value.canCancel)
+                prevented = true; },
+        });
+        for (const handler of [...closeHandlers]) {
+            try {
+                await handler(event);
+            }
+            catch {
+                prevented = value.canCancel;
+            }
+        }
+        await invoke(desktopCommands.window.completeClose, { requestId: value.requestId, preventDefault: prevented }, closeOptions);
+    }
+    async function onCloseRequested(handler, options) {
+        if (typeof handler !== "function")
+            throw new TypeError("A window close-request handler is required.");
+        closeHandlers.add(handler);
+        let setup;
+        try {
+            if (closeSetup === undefined) {
+                closeOptions = options;
+                closeSubscription = subscribe(desktopCommands.window.closeRequested, value => { void dispatchClose(value).catch(() => { }); }, options);
+                closeSetup = (async () => {
+                    await closeSubscription;
+                    const enabled = await invoke(desktopCommands.window.interceptClose, { value: true }, options);
+                    if (enabled.status !== "Success")
+                        throw new Error(`Could not intercept window close requests: ${enabled.status}`);
+                })();
+            }
+            setup = closeSetup;
+            await setup;
+        }
+        catch (error) {
+            closeHandlers.delete(handler);
+            if (closeSetup === setup) {
+                const failedSubscription = closeSubscription;
+                closeSubscription = undefined;
+                closeSetup = undefined;
+                closeOptions = undefined;
+                if (failedSubscription !== undefined) {
+                    try {
+                        await (await failedSubscription)();
+                    }
+                    catch { /* Preserve the setup failure. */ }
+                }
+            }
+            throw error;
+        }
+        let listening = true;
+        return async () => {
+            if (!listening)
+                return;
+            listening = false;
+            closeHandlers.delete(handler);
+            if (closeHandlers.size !== 0 || closeSubscription === undefined)
+                return;
+            await closeSetup;
+            const unsubscribe = await closeSubscription;
+            closeSubscription = undefined;
+            closeSetup = undefined;
+            try {
+                await invoke(desktopCommands.window.interceptClose, { value: false }, closeOptions);
+            }
+            finally {
+                await unsubscribe();
+                closeOptions = undefined;
+            }
+        };
+    }
     return Object.freeze({
         dialogs: Object.freeze({
             openFile: (value, options) => invoke(desktopCommands.dialogs.openFile, dialog("openFile", value), options),
@@ -75,6 +160,25 @@ export function createDesktopClient(rpc) {
             delete: (id, options) => invoke(desktopCommands.safeStorage.delete, { id }, options),
         }),
         window: Object.freeze({
+            state: (options) => invoke(desktopCommands.window.getState, {}, options),
+            setTitle: (value, options) => invoke(desktopCommands.window.setTitle, { value }, options),
+            setPosition: (x, y, options) => invoke(desktopCommands.window.setPosition, { x, y }, options),
+            setSize: (width, height, options) => invoke(desktopCommands.window.setSize, { width, height }, options),
+            setMinimumSize: (width, height, options) => invoke(desktopCommands.window.setMinimumSize, { width, height }, options),
+            setMaximumSize: (width, height, options) => invoke(desktopCommands.window.setMaximumSize, { width, height }, options),
+            show: (options) => invoke(desktopCommands.window.show, {}, options),
+            hide: (options) => invoke(desktopCommands.window.hide, {}, options),
+            focus: (options) => invoke(desktopCommands.window.focus, {}, options),
+            maximize: (options) => invoke(desktopCommands.window.maximize, {}, options),
+            minimize: (options) => invoke(desktopCommands.window.minimize, {}, options),
+            restore: (options) => invoke(desktopCommands.window.restore, {}, options),
+            setFullscreen: (value, options) => invoke(desktopCommands.window.setFullscreen, { value }, options),
+            setDecorations: (value, options) => invoke(desktopCommands.window.setDecorations, { value }, options),
+            setResizable: (value, options) => invoke(desktopCommands.window.setResizable, { value }, options),
+            setAlwaysOnTop: (value, options) => invoke(desktopCommands.window.setAlwaysOnTop, { value }, options),
+            setTaskbarVisible: (value, options) => invoke(desktopCommands.window.setTaskbarVisible, { value }, options),
+            close: (options) => invoke(desktopCommands.window.close, {}, options),
+            onCloseRequested,
             setIcon: (path, options) => invoke(desktopCommands.window.setIcon, { ...path, operation: "read" }, options),
             setRepresentedFile: (path, options) => invoke(desktopCommands.window.setRepresentedFile, path === undefined ? { operation: "read" } : { ...path, operation: "read" }, options),
             requestAttention: (critical = false, options) => invoke(desktopCommands.window.requestAttention, { value: critical }, options),
@@ -83,6 +187,9 @@ export function createDesktopClient(rpc) {
             setDocumentEdited: (value, options) => invoke(desktopCommands.window.setDocumentEdited, { value }, options),
             setContentProtection: (value, options) => invoke(desktopCommands.window.setContentProtection, { value }, options),
             setTitleBarTheme: (theme, options) => invoke(desktopCommands.window.setTitleBarTheme, { theme }, options),
+        }),
+        application: Object.freeze({
+            requestQuit: (options) => invoke(desktopCommands.application.requestQuit, {}, options),
         }),
     });
 }
