@@ -130,7 +130,7 @@ internal static class NeoDesktopRendererContract
         "desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size",
         "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen",
         "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible", "desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close",
-        "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
+        "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
         "desktop.application.request-quit",
         "desktop.safe-storage.store", "desktop.safe-storage.retrieve", "desktop.safe-storage.delete", "desktop.safe-storage.contains",
     ];
@@ -218,6 +218,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.window.complete-close", "window:close", CompleteWindowCloseAsync, json.DesktopWindowCloseResponse, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-icon", "window:files", SetWindowIconAsync, json.DesktopScopedPathRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-represented-file", "window:files", SetRepresentedFileAsync, json.DesktopOptionalScopedPathRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.get-extra-support", "window:polish", GetWindowExtraSupportAsync, json.DesktopEmptyRequest, json.DesktopWindowExtraSupportResult);
         Add(builder, "desktop.window.request-attention", "window:polish", RequestWindowAttentionAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-progress", "window:polish", SetWindowProgressAsync, json.DesktopWindowProgressRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-badge", "window:polish", SetWindowBadgeAsync, json.DesktopOptionalTextRequest, json.DesktopStatusResult);
@@ -580,6 +581,11 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     }
     private async ValueTask<DesktopStatusResult> RequestWindowAttentionAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
         => Status(await services.WindowPolish.RequestAttentionAsync(RequiredWindow(context), request.Value, token).ConfigureAwait(false));
+    private ValueTask<DesktopWindowExtraSupportResult> GetWindowExtraSupportAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(DesktopWindowExtraSupportResult.From(services.WindowPolish));
+    }
     private async ValueTask<DesktopStatusResult> SetWindowProgressAsync(DesktopWindowProgressRequest request, NeoRpcContext context, CancellationToken token)
         => Status(await services.WindowPolish.SetProgressAsync(RequiredWindow(context), request.State, request.Value, token).ConfigureAwait(false));
     private async ValueTask<DesktopStatusResult> SetWindowBadgeAsync(DesktopOptionalTextRequest request, NeoRpcContext context, CancellationToken token)
@@ -776,6 +782,20 @@ internal sealed record DesktopBytesResult(NeoDesktopStatus Status, string? Base6
 internal sealed record DesktopPathResult(NeoDesktopStatus Status, string? Path, string? Code = null);
 internal sealed record DesktopPathsResult(NeoDesktopStatus Status, IReadOnlyList<string>? Paths, string? Code = null);
 internal sealed record DesktopMessageResult(NeoDesktopStatus Status, NeoDialogButtonRole? Value, string? Code = null);
+internal sealed record DesktopSupportInfo(NeoSupportLevel SupportLevel, string? Details)
+{
+    internal static DesktopSupportInfo From(NeoCapabilityInfo value) => new(value.SupportLevel, value.Details);
+}
+internal sealed record DesktopWindowExtraSupportResult(DesktopSupportInfo Attention, DesktopSupportInfo Progress, DesktopSupportInfo Badge, DesktopSupportInfo Document, DesktopSupportInfo ContentProtection, DesktopSupportInfo TitleBarTheme)
+{
+    internal static DesktopWindowExtraSupportResult From(NeoWindowPolishService service) => new(
+        DesktopSupportInfo.From(service.AttentionSupport),
+        DesktopSupportInfo.From(service.ProgressSupport),
+        DesktopSupportInfo.From(service.BadgeSupport),
+        DesktopSupportInfo.From(service.DocumentSupport),
+        DesktopSupportInfo.From(service.ContentProtectionSupport),
+        DesktopSupportInfo.From(service.TitleBarThemeSupport));
+}
 internal sealed record DesktopThemeResult(NeoThemeSnapshot Theme);
 internal sealed record DesktopDisplaysResult(IReadOnlyList<NeoDisplaySnapshot> Displays);
 internal sealed record DesktopMetadataResult(NeoApplicationMetadata Metadata);
@@ -828,6 +848,7 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopPathResult))]
 [JsonSerializable(typeof(DesktopPathsResult))]
 [JsonSerializable(typeof(DesktopMessageResult))]
+[JsonSerializable(typeof(DesktopWindowExtraSupportResult))]
 [JsonSerializable(typeof(DesktopThemeResult))]
 [JsonSerializable(typeof(DesktopDisplaysResult))]
 [JsonSerializable(typeof(DesktopMetadataResult))]

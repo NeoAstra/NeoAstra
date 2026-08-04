@@ -79,6 +79,7 @@ public sealed class DesktopServicesTests
     public async Task WindowPolishReportsPerFeatureSemanticsAndValidatesBeforeNativeUse()
     {
         await using var service = new NeoWindowPolishService();
+        Assert.AreEqual(new Guid("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF"), NeoWindowPolishService.TaskbarList3InterfaceId);
         Assert.IsFalse(string.IsNullOrWhiteSpace(service.IconSupport.Details));
         Assert.IsFalse(string.IsNullOrWhiteSpace(service.ContentProtectionSupport.Details));
         Assert.IsFalse(string.IsNullOrWhiteSpace(service.EnabledSupport.Details));
@@ -86,6 +87,12 @@ public sealed class DesktopServicesTests
         Assert.Throws<ArgumentOutOfRangeException>(() => service.SetProgressAsync(null!, NeoWindowProgressState.Normal, double.NaN));
         Assert.Throws<ArgumentException>(() => service.SetBadgeAsync(null!, new string('x', 17)));
         Assert.Throws<ArgumentOutOfRangeException>(() => service.SetTitleBarThemeAsync(null!, (NeoWindowTitleBarTheme)99));
+
+        var rendererSupport = DesktopWindowExtraSupportResult.From(service);
+        var supportJson = JsonSerializer.Serialize(rendererSupport, DesktopRendererJsonContext.Default.DesktopWindowExtraSupportResult);
+        using var supportDocument = JsonDocument.Parse(supportJson);
+        Assert.AreEqual(service.ProgressSupport.SupportLevel.ToString(), supportDocument.RootElement.GetProperty("progress").GetProperty("supportLevel").GetString());
+        Assert.AreEqual(service.BadgeSupport.Details, supportDocument.RootElement.GetProperty("badge").GetProperty("details").GetString());
 
         if (OperatingSystem.IsWindows())
         {

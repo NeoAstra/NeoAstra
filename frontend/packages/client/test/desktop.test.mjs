@@ -30,15 +30,19 @@ test("desktop mock is grant-free and contains event listener exceptions", async 
   assert.equal(received, undefined);
 });
 
-test("window polish uses scoped files and focused typed payloads", async () => {
+test("window extras use scoped files and focused typed payloads", async () => {
   const mock = createMockDesktop();
   for (const command of Object.values(desktopCommands.window)) mock.setResult(command, { status: "Success" });
+  const support = { progress: { supportLevel: "Native", details: "Native taskbar progress." } };
+  mock.setResult(desktopCommands.window.getExtraSupport, support);
+  assert.deepEqual(await mock.client.window.extraSupport(), support);
   await mock.client.window.setIcon({ root: "assets", relativePath: "app.ico" });
   await mock.client.window.setRepresentedFile();
   await mock.client.window.setProgress("Paused", 0.5);
   await mock.client.window.setContentProtection(true);
   await mock.client.window.setTitleBarTheme("Dark");
   assert.deepEqual(mock.invocations, [
+    { command: "desktop.window.get-extra-support", args: {} },
     { command: "desktop.window.set-icon", args: { root: "assets", relativePath: "app.ico", operation: "read" } },
     { command: "desktop.window.set-represented-file", args: { operation: "read" } },
     { command: "desktop.window.set-progress", args: { state: "Paused", value: 0.5 } },

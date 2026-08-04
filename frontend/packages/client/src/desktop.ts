@@ -40,6 +40,12 @@ export interface DesktopWindowCloseRequestedEvent {
   readonly reason: DesktopWindowCloseReason; readonly canCancel: boolean;
   preventDefault(): void;
 }
+export type DesktopSupportLevel = "None" | "Native" | "Emulated" | "Limited";
+export interface DesktopSupportInfo { readonly supportLevel: DesktopSupportLevel; readonly details?: string; }
+export interface DesktopWindowExtraSupport {
+  readonly attention: DesktopSupportInfo; readonly progress: DesktopSupportInfo; readonly badge: DesktopSupportInfo;
+  readonly document: DesktopSupportInfo; readonly contentProtection: DesktopSupportInfo; readonly titleBarTheme: DesktopSupportInfo;
+}
 
 export const desktopCommands = Object.freeze({
   dialogs: Object.freeze({ openFile: "desktop.dialogs.open-file", openFolder: "desktop.dialogs.open-folder", saveFile: "desktop.dialogs.save-file", message: "desktop.dialogs.message" }),
@@ -57,7 +63,7 @@ export const desktopCommands = Object.freeze({
     show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
     setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
     interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
-    setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
+    setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", getExtraSupport: "desktop.window.get-extra-support", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
   }),
   application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 } as const);
@@ -206,6 +212,7 @@ export function createDesktopClient(rpc: DesktopRpc) {
       onCloseRequested,
       setIcon: (path: DesktopScopedPath, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setIcon, { ...path, operation: "read" }, options),
       setRepresentedFile: (path?: DesktopScopedPath, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setRepresentedFile, path === undefined ? { operation: "read" } : { ...path, operation: "read" }, options),
+      extraSupport: (options?: NeoRpcCallOptions) => invoke<DesktopWindowExtraSupport>(desktopCommands.window.getExtraSupport, {}, options),
       requestAttention: (critical = false, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.requestAttention, { value: critical }, options),
       setProgress: (state: "None" | "Normal" | "Paused" | "Error" | "Indeterminate", value: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setProgress, { state, value }, options),
       setBadge: (value?: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setBadge, { value }, options),

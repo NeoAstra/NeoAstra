@@ -8,10 +8,15 @@ import {
   createMockRpcHarness,
 } from "@neoastra/client/testing";
 import { neoRpcContractHash } from "#neoastra";
+import { isWindowExtraAvailable } from "./DesktopTour";
 import { tourNotification, withAdvancedContract } from "./tour-api";
 
 if (tourNotification.actions.length !== 0) {
   throw new Error("The primary notification tour must use the action-free portable baseline.");
+}
+if (isWindowExtraAvailable(undefined) || isWindowExtraAvailable({ supportLevel: "None" }) ||
+    !isWindowExtraAvailable({ supportLevel: "Limited", details: "Available with limitations." })) {
+  throw new Error("Window-extra controls must be shown only for available platform features.");
 }
 
 const observedContractHashes: Array<string | undefined> = [];

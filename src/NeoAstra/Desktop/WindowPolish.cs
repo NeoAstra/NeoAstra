@@ -35,6 +35,7 @@ public enum NeoWindowTitleBarTheme
 /// <summary>Provides capability-gated platform window polish using only borrowed native handles on the UI dispatcher.</summary>
 public sealed partial class NeoWindowPolishService : IAsyncDisposable
 {
+    internal static readonly Guid TaskbarList3InterfaceId = new("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF");
     private readonly Dictionary<NeoWindow, WindowIconEntry> _windowsIcons = new(ReferenceEqualityComparer.Instance);
     private readonly object _sync = new();
     private bool _disposed;
@@ -232,7 +233,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
 
     private static unsafe nint CreateTaskbar()
     {
-        var clsid = new Guid("56FDF344-FD6D-11d0-958A-006097C9A090"); var iid = new Guid("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEA84"); nint value = 0;
+        var clsid = new Guid("56FDF344-FD6D-11d0-958A-006097C9A090"); var iid = TaskbarList3InterfaceId; nint value = 0;
         if (Native.CoCreateInstance(ref clsid, 0, 1, ref iid, &value) < 0 || value == 0) return 0; var table = *(nint**)value; if (((delegate* unmanaged[Stdcall]<nint, int>)table[3])(value) >= 0) return value; Release(value); return 0;
     }
     private static unsafe void Release(nint value) { var table = *(nint**)value; _ = ((delegate* unmanaged[Stdcall]<nint, uint>)table[2])(value); }

@@ -350,6 +350,12 @@
       "scopeSchema": "schemas/filesystem.scope.schema.json"
     },
     {
+      "name": "desktop.window.get-extra-support",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
       "name": "desktop.window.request-attention",
       "permission": "window:polish",
       "risk": "high",

@@ -14,7 +14,7 @@ export const desktopCommands = Object.freeze({
         show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
         setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
         interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
-        setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
+        setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", getExtraSupport: "desktop.window.get-extra-support", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
     }),
     application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 });
@@ -181,6 +181,7 @@ export function createDesktopClient(rpc) {
             onCloseRequested,
             setIcon: (path, options) => invoke(desktopCommands.window.setIcon, { ...path, operation: "read" }, options),
             setRepresentedFile: (path, options) => invoke(desktopCommands.window.setRepresentedFile, path === undefined ? { operation: "read" } : { ...path, operation: "read" }, options),
+            extraSupport: (options) => invoke(desktopCommands.window.getExtraSupport, {}, options),
             requestAttention: (critical = false, options) => invoke(desktopCommands.window.requestAttention, { value: critical }, options),
             setProgress: (state, value, options) => invoke(desktopCommands.window.setProgress, { state, value }, options),
             setBadge: (value, options) => invoke(desktopCommands.window.setBadge, { value }, options),

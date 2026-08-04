@@ -1,4 +1,5 @@
 import React from "react";
+import type { DesktopSupportInfo, DesktopWindowExtraSupport } from "@neoastra/client";
 import { FeatureCard, ResultPanel } from "./FeatureCard";
 import {
   decodeText,
@@ -19,17 +20,22 @@ interface DesktopTourProps {
 
 type ResultGroup = "dialogs" | "shell" | "system" | "storage" | "window";
 
+export function isWindowExtraAvailable(support: DesktopSupportInfo | undefined) {
+  return support !== undefined && support.supportLevel !== "None";
+}
+
 export function DesktopTour({ report }: DesktopTourProps) {
   const [results, setResults] = React.useState<Record<ResultGroup, string>>({
     dialogs: "Choose an action to invoke a native dialog.",
     shell: "Native surfaces are capability-gated and report platform support.",
     system: "Query immutable OS and application snapshots.",
     storage: "Secrets are never displayed or logged by this tour.",
-    window: "Window polish reports unsupported features instead of pretending success.",
+    window: "Window extras report unsupported features instead of pretending success.",
   });
   const [clipboardText, setClipboardText] = React.useState("Hello from NeoAstra clipboard");
   const [secret, setSecret] = React.useState("small sample secret");
   const [contentProtected, setContentProtected] = React.useState(false);
+  const [extraSupport, setExtraSupport] = React.useState<DesktopWindowExtraSupport>();
 
   React.useEffect(() => {
     const unsubscribers: Array<() => Promise<void>> = [];
@@ -66,6 +72,19 @@ export function DesktopTour({ report }: DesktopTourProps) {
       disposed = true;
       void Promise.all(unsubscribers.map(unsubscribe => unsubscribe()));
     };
+  }, [report]);
+
+  React.useEffect(() => {
+    let disposed = false;
+    void desktop.window.extraSupport().then(value => {
+      if (!disposed) setExtraSupport(value);
+    }).catch(error => {
+      if (disposed) return;
+      const message = describeError(error);
+      setResults(current => ({ ...current, window: message }));
+      report("window-extra-support", message);
+    });
+    return () => { disposed = true; };
   }, [report]);
 
   async function run(
@@ -114,6 +133,24 @@ export function DesktopTour({ report }: DesktopTourProps) {
         },
       ]));
   }
+
+  function supports(feature: keyof DesktopWindowExtraSupport) {
+    return isWindowExtraAvailable(extraSupport?.[feature]);
+  }
+
+  function extraLabel(label: string, feature: keyof DesktopWindowExtraSupport) {
+    return extraSupport?.[feature].supportLevel === "None" ? `${label} (unsupported)` : label;
+  }
+
+  const unavailableExtras = extraSupport === undefined
+    ? []
+    : [
+        ["attention", "attention"],
+        ["progress", "taskbar progress"],
+        ["badge", "badges"],
+        ["titleBarTheme", "title-bar themes"],
+        ["contentProtection", "content protection"],
+      ].filter(([feature]) => !supports(feature as keyof DesktopWindowExtraSupport)).map(([, label]) => label);
 
   return (
     <>
@@ -282,52 +319,60 @@ export function DesktopTour({ report }: DesktopTourProps) {
 
       <FeatureCard
         eyebrow="Native window"
-        title="Window polish and platform support"
+        title="Window extras and platform support"
         description={
           "Attention, taskbar progress, badges, title-bar theme, document state, " +
-          "and content protection all return truthful capability-aware statuses."
+          "and content protection are enabled only when the current platform supports them."
         }
       >
         <div className="button-row">
-          <button type="button" onClick={() => void run("window", "attention", () =>
+          <button type="button" disabled={!supports("attention")} title={extraSupport?.attention.details} onClick={() => void run("window", "attention", () =>
             desktop.window.requestAttention(true))}
-          >Request attention</button>
-          <button type="button" onClick={() => void run("window", "progress", () =>
+          >{extraLabel("Request attention", "attention")}</button>
+          <button type="button" disabled={!supports("progress")} title={extraSupport?.progress.details} onClick={() => void run("window", "progress", () =>
             desktop.window.setProgress("Normal", 0.65))}
-          >Set progress</button>
-          <button type="button" className="secondary" onClick={() => void run(
+          >{extraLabel("Set progress", "progress")}</button>
+          <button type="button" disabled={!supports("progress")} className="secondary" title={extraSupport?.progress.details} onClick={() => void run(
             "window",
             "progress-clear",
             () => desktop.window.setProgress("None", 0),
-          )}>Clear progress</button>
-          <button type="button" onClick={() => void run("window", "badge", () =>
+          )}>{extraLabel("Clear progress", "progress")}</button>
+          <button type="button" disabled={!supports("badge")} title={extraSupport?.badge.details} onClick={() => void run("window", "badge", () =>
             desktop.window.setBadge("2"))}
-          >Set badge</button>
-          <button type="button" className="secondary" onClick={() => void run(
+          >{extraLabel("Set badge", "badge")}</button>
+          <button type="button" disabled={!supports("badge")} className="secondary" title={extraSupport?.badge.details} onClick={() => void run(
             "window",
             "badge-clear",
             () => desktop.window.setBadge(),
-          )}>Clear badge</button>
+          )}>{extraLabel("Clear badge", "badge")}</button>
         </div>
         <div className="button-row">
-          <button type="button" onClick={() => void run("window", "theme-dark", () =>
+          <button type="button" disabled={!supports("titleBarTheme")} title={extraSupport?.titleBarTheme.details} onClick={() => void run("window", "theme-dark", () =>
             desktop.window.setTitleBarTheme("Dark"))}
-          >Dark title bar</button>
-          <button type="button" onClick={() => void run("window", "theme-light", () =>
+          >{extraLabel("Dark title bar", "titleBarTheme")}</button>
+          <button type="button" disabled={!supports("titleBarTheme")} title={extraSupport?.titleBarTheme.details} onClick={() => void run("window", "theme-light", () =>
             desktop.window.setTitleBarTheme("Light"))}
-          >Light title bar</button>
-          <button type="button" className="secondary" onClick={() => void run(
+          >{extraLabel("Light title bar", "titleBarTheme")}</button>
+          <button type="button" disabled={!supports("titleBarTheme")} className="secondary" title={extraSupport?.titleBarTheme.details} onClick={() => void run(
             "window",
             "theme-system",
             () => desktop.window.setTitleBarTheme("System"),
-          )}>System title bar</button>
-          <button type="button" onClick={() => {
+          )}>{extraLabel("System title bar", "titleBarTheme")}</button>
+          <button type="button" disabled={!supports("contentProtection")} title={extraSupport?.contentProtection.details} onClick={() => {
             const next = !contentProtected;
             setContentProtected(next);
             void run("window", "content-protection", () =>
               desktop.window.setContentProtection(next));
           }}
-          >{contentProtected ? "Disable" : "Enable"} content protection</button>
+          >{extraLabel(`${contentProtected ? "Disable" : "Enable"} content protection`, "contentProtection")}</button>
+        </div>
+        <div className="instruction">
+          <strong>Platform support</strong>
+          <span>{extraSupport === undefined
+            ? "Loading available native window features…"
+            : unavailableExtras.length === 0
+              ? "All window-extra controls in this tour are available."
+              : `Unavailable controls are disabled: ${unavailableExtras.join(", ")}.`}</span>
         </div>
         <ResultPanel label="Window result">{results.window}</ResultPanel>
       </FeatureCard>

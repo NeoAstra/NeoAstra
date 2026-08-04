@@ -427,8 +427,11 @@ export type {
   DesktopRpc,
   DesktopScopedPath,
   DesktopStatus,
+  DesktopSupportInfo,
+  DesktopSupportLevel,
   DesktopTrayRequest,
   DesktopValueResult,
+  DesktopWindowExtraSupport,
   NeoDesktopClient,
 } from "./desktop.js";
 
