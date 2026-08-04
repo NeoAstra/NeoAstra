@@ -4,6 +4,7 @@ import {
   subscribe,
   type DesktopFileDialogRequest,
   type DesktopMenuItem,
+  type DesktopNotificationRequest,
   type DesktopRpc,
   type NeoRpcCallOptions,
 } from "@neoastra/client";
@@ -60,6 +61,20 @@ export const menuItems: readonly DesktopMenuItem[] = [
     children: [],
   },
 ];
+
+// Keep the primary tour request within the portable notification baseline. Windows
+// notification-area balloons cannot represent actions without packaged toast identity.
+export const tourNotification: DesktopNotificationRequest = {
+  appIdentity: "org.neoastra.sample.advanced",
+  category: "tour",
+  urgency: "normal",
+  persistent: false,
+  payload: "feature-tour",
+  id: "feature-tour",
+  title: "NeoAstra feature tour",
+  body: "A renderer request reached the native notification adapter.",
+  actions: [],
+};
 
 export const fileDialog: DesktopFileDialogRequest = {
   initialLocation: "assets",

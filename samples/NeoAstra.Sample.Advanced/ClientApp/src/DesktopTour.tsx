@@ -10,6 +10,7 @@ import {
   folderDialog,
   menuItems,
   saveDialog,
+  tourNotification,
 } from "./tour-api";
 
 interface DesktopTourProps {
@@ -162,17 +163,7 @@ export function DesktopTour({ report }: DesktopTourProps) {
             desktop.notifications.status())}
           >Notification status</button>
           <button type="button" onClick={() => void run("shell", "notification-show", () =>
-            desktop.notifications.show({
-              appIdentity: "org.neoastra.sample.advanced",
-              category: "tour",
-              urgency: "normal",
-              persistent: false,
-              payload: "feature-tour",
-              id: "feature-tour",
-              title: "NeoAstra feature tour",
-              body: "A renderer request reached the native notification adapter.",
-              actions: [{ id: "open", title: "Open" }],
-            }))}
+            desktop.notifications.show(tourNotification))}
           >Show notification</button>
           <button type="button" className="secondary" onClick={() => void run(
             "shell",

@@ -8,7 +8,11 @@ import {
   createMockRpcHarness,
 } from "@neoastra/client/testing";
 import { neoRpcContractHash } from "#neoastra";
-import { withAdvancedContract } from "./tour-api";
+import { tourNotification, withAdvancedContract } from "./tour-api";
+
+if (tourNotification.actions.length !== 0) {
+  throw new Error("The primary notification tour must use the action-free portable baseline.");
+}
 
 const observedContractHashes: Array<string | undefined> = [];
 const contractRpc = withAdvancedContract({

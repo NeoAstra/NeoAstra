@@ -470,6 +470,15 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void MacNotificationPermissionFailuresRemainTruthful()
+    {
+        Assert.AreEqual(NeoDesktopStatus.Denied, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Denied));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Unsupported));
+        Assert.AreEqual(NeoDesktopStatus.Failed, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Unknown));
+        Assert.AreEqual(NeoDesktopStatus.Failed, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.NotRequested));
+    }
+
+    [TestMethod]
     public async Task OpenerRejectsTargetsOutsideExactScopesBeforeLaunch()
     {
         var root = CreateTemporaryDirectory();

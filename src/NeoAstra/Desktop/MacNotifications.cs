@@ -22,6 +22,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     private readonly HashSet<string> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ShowState> _pendingShows = new(StringComparer.Ordinal);
     private readonly HashSet<SettingsState> _pendingSettings = [];
+    private readonly HashSet<AuthorizationState> _pendingAuthorizations = [];
     private NeoDispatcher? _dispatcher;
     private NeoApplication? _application;
     private nint _center, _delegate;
@@ -36,7 +37,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
         _nativePrefix = "neoastra." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(applicationId)))[..24].ToLowerInvariant();
     }
 
-    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0, "Modern UNUserNotificationCenter authorization status, identifier replacement, action/default activation, custom dismissal, explicit pending/delivered removal, generation routing, and deterministic delegate/category teardown.");
+    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0, "Modern UNUserNotificationCenter authorization status and first-display request, identifier replacement, action/default activation, custom dismissal, explicit pending/delivered removal, generation routing, and deterministic delegate/category teardown.");
     public event EventHandler<NeoNotificationActivation>? Activated;
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; }
@@ -50,7 +51,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     public ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate(); var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
-        return dispatcher.CheckAccess() ? new(MacNotificationTasks.WaitAsync(StartShow(request), TimeSpan.FromSeconds(15), cancellationToken)) : new(MacNotificationTasks.DispatchAndWaitAsync(dispatcher.InvokeAsync(() => StartShow(request), cancellationToken), TimeSpan.FromSeconds(15), cancellationToken));
+        return new(MacNotificationTasks.ShowWithAuthorizationAsync(dispatcher, StartSettingsQuery, StartAuthorizationRequest, () => StartShow(request), cancellationToken));
     }
 
     public ValueTask<NeoDesktopStatus> RemoveAsync(string id, CancellationToken cancellationToken = default)
@@ -65,6 +66,20 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     {
         ObjectDisposedException.ThrowIf(_disposed, this); EnsureCenter();if(_pendingSettings.Count>=256)return Task.FromResult(NeoNotificationPermissionStatus.Unknown); var state = new SettingsState(this); _pendingSettings.Add(state); var handle = GCHandle.Alloc(state); try { var block = CreateBlock((nint)(delegate* unmanaged[Cdecl]<Block*, nint, void>)&SettingsCompleted, GCHandle.ToIntPtr(handle)); Native.SendBlock(_center, Native.GetSelector("getNotificationSettingsWithCompletionHandler:"), &block); return state.Completion.Task; } catch { _pendingSettings.Remove(state); handle.Free(); throw; }
     }
+
+    private Task<NeoNotificationPermissionStatus> StartAuthorizationRequest()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this); EnsureCenter(); if (_pendingAuthorizations.Count >= 256) return Task.FromResult(NeoNotificationPermissionStatus.Unknown); var state = new AuthorizationState(this); _pendingAuthorizations.Add(state); var handle = GCHandle.Alloc(state);
+        try { var block = CreateBlock((nint)(delegate* unmanaged[Cdecl]<Block*, byte, nint, void>)&AuthorizationCompleted, GCHandle.ToIntPtr(handle)); Native.SendAuthorization(_center, Native.GetSelector("requestAuthorizationWithOptions:completionHandler:"), 0x6, &block); return state.Completion.Task; }
+        catch { _pendingAuthorizations.Remove(state); handle.Free(); throw; }
+    }
+
+    internal static NeoDesktopStatus PermissionFailureStatus(NeoNotificationPermissionStatus status) => status switch
+    {
+        NeoNotificationPermissionStatus.Denied => NeoDesktopStatus.Denied,
+        NeoNotificationPermissionStatus.Unsupported => NeoDesktopStatus.Unsupported,
+        _ => NeoDesktopStatus.Failed,
+    };
 
     private Task<NeoDesktopStatus> StartShow(NeoNotificationRequest request)
     {
@@ -157,6 +172,12 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
         var dispatcher = _dispatcher; if (dispatcher is not null && !dispatcher.CheckAccess()) { try { _ = dispatcher.InvokeAsync(Complete); } catch { state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); } } else Complete();
     }
 
+    private void CompleteAuthorization(AuthorizationState state, NeoNotificationPermissionStatus status)
+    {
+        void Complete() { if (!_pendingAuthorizations.Remove(state) || _disposed) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); else state.Completion.TrySetResult(status); }
+        var dispatcher = _dispatcher; if (dispatcher is not null && !dispatcher.CheckAccess()) { try { _ = dispatcher.InvokeAsync(Complete); } catch { state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); } } else Complete();
+    }
+
     private void EnsureCenter()
     {
         if (_center != 0) return; EnsureDelegateClass(); EnsureBlockRuntime(); _center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); _delegate = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (_center == 0 || _delegate == 0 || !Owners.TryAdd(_delegate, this)) throw new PlatformNotSupportedException("UNUserNotificationCenter is unavailable."); Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), _delegate);
@@ -181,9 +202,10 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
         finally { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, void>)((Block*)completion)->Invoke)((nint)completion); } catch { } }
     }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void SettingsCompleted(Block* block, nint settings) { var handle = GCHandle.FromIntPtr(block->Context); try { var status = (long)Native.Send(settings, Native.GetSelector("authorizationStatus")); if (handle.Target is SettingsState state) state.Owner.CompleteSettings(state, status switch { 0 => NeoNotificationPermissionStatus.NotRequested, 1 => NeoNotificationPermissionStatus.Denied, 2 or 3 or 4 => NeoNotificationPermissionStatus.Granted, _ => NeoNotificationPermissionStatus.Unknown }); } catch (Exception exception) { if (handle.Target is SettingsState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void AuthorizationCompleted(Block* block, byte granted, nint error) { var handle = GCHandle.FromIntPtr(block->Context); try { if (handle.Target is AuthorizationState state) state.Owner.CompleteAuthorization(state, error != 0 ? NeoNotificationPermissionStatus.Unknown : granted != 0 ? NeoNotificationPermissionStatus.Granted : NeoNotificationPermissionStatus.Denied); } catch (Exception exception) { if (handle.Target is AuthorizationState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ShowCompleted(Block* block, nint error) { var handle = GCHandle.FromIntPtr(block->Context); try { if (handle.Target is ShowState state) state.Owner.CompleteShow(state, error == 0); } catch (Exception exception) { if (handle.Target is ShowState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
 
-    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; if (_center != 0) foreach (var id in _entries.Keys) RemoveNative(id); _entries.Clear(); _pending.Clear(); foreach (var state in _pendingShows.Values) { if (state.PreviousCategory != 0) Native.SendVoid(state.PreviousCategory, Native.GetSelector("release")); state.Completion.TrySetResult(NeoDesktopStatus.Canceled); } _pendingShows.Clear(); foreach (var state in _pendingSettings) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingSettings.Clear(); foreach (var value in _categories.Values) Native.SendVoid(value, Native.GetSelector("release")); _categories.Clear(); if (_center != 0) RebuildCategories(); if (_delegate != 0) { Owners.TryRemove(_delegate, out _); if (_center != 0) Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), Owners.Keys.FirstOrDefault()); Native.SendVoid(_delegate, Native.GetSelector("release")); } _delegate = 0; _center = 0; }
+    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; if (_center != 0) foreach (var id in _entries.Keys) RemoveNative(id); _entries.Clear(); _pending.Clear(); foreach (var state in _pendingShows.Values) { if (state.PreviousCategory != 0) Native.SendVoid(state.PreviousCategory, Native.GetSelector("release")); state.Completion.TrySetResult(NeoDesktopStatus.Canceled); } _pendingShows.Clear(); foreach (var state in _pendingSettings) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingSettings.Clear(); foreach (var state in _pendingAuthorizations) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingAuthorizations.Clear(); foreach (var value in _categories.Values) Native.SendVoid(value, Native.GetSelector("release")); _categories.Clear(); if (_center != 0) RebuildCategories(); if (_delegate != 0) { Owners.TryRemove(_delegate, out _); if (_center != 0) Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), Owners.Keys.FirstOrDefault()); Native.SendVoid(_delegate, Native.GetSelector("release")); } _delegate = 0; _center = 0; }
     private string NativeId(string id) => _nativePrefix + "." + id;
     private static nint Allocate(string className) { var result = Native.Send(Native.Send(Native.GetClass(className), Native.GetSelector("alloc")), Native.GetSelector("init")); return result != 0 ? result : throw new InvalidOperationException($"Unable to allocate {className}."); }
     private static void SetString(nint target, string selector, string value) { using var text = NativeString.Create(value); Native.SendVoidArg(target, Native.GetSelector(selector), text.Value); }
@@ -191,6 +213,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
 
     private sealed record Entry(long Generation, NeoNotificationRequest Request);
     private sealed class SettingsState(MacNotifications owner) { internal MacNotifications Owner { get; } = owner; internal TaskCompletionSource<NeoNotificationPermissionStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+    private sealed class AuthorizationState(MacNotifications owner) { internal MacNotifications Owner { get; } = owner; internal TaskCompletionSource<NeoNotificationPermissionStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); }
     private sealed class ShowState(MacNotifications owner, string id, long generation, Entry? previousEntry, nint previousCategory) { internal MacNotifications Owner { get; } = owner; internal string Id { get; } = id; internal long Generation { get; } = generation; internal Entry? PreviousEntry { get; } = previousEntry; internal nint PreviousCategory { get; } = previousCategory; internal TaskCompletionSource<NeoDesktopStatus> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); }
     [StructLayout(LayoutKind.Sequential)] private struct Block { internal nint Isa; internal int Flags, Reserved; internal nint Invoke; internal BlockDescriptor* Descriptor; internal nint Context; }
     [StructLayout(LayoutKind.Sequential)] private struct BlockDescriptor { internal nuint Reserved, Size; }
@@ -200,13 +223,30 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     {
         [LibraryImport("/usr/lib/libSystem.B.dylib", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint dlsym(nint handle, string symbol);
         [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_lookUpClass(byte* name); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_allocateClassPair(nint superclass, byte* name, nuint extra); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial void objc_registerClassPair(nint value); [LibraryImport("/usr/lib/libobjc.A.dylib")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool class_addMethod(nint type, nint selector, nint callback, byte* encoding); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_getClass(byte* name); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint sel_registerName(byte* name);
-        [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send2(nint target, nint selector, nint first, nint second); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send3(nint target, nint selector, nint first, nint second, nint third); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send4(nint target, nint selector, nint first, nint second, nint third, nuint fourth); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendPointerCount(nint target, nint selector, nint* values, nuint count); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendUtf8(nint target, nint selector, byte* value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoid(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoidArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendBlock(nint target, nint selector, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendRequest(nint target, nint selector, nint request, Block* block);
+        [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send2(nint target, nint selector, nint first, nint second); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send3(nint target, nint selector, nint first, nint second, nint third); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send4(nint target, nint selector, nint first, nint second, nint third, nuint fourth); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendPointerCount(nint target, nint selector, nint* values, nuint count); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendUtf8(nint target, nint selector, byte* value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoid(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoidArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendBlock(nint target, nint selector, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendAuthorization(nint target, nint selector, nuint options, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendRequest(nint target, nint selector, nint request, Block* block);
         internal static nint GetClass(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return objc_getClass(pointer); } internal static nint GetSelector(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return sel_registerName(pointer); }
     }
 }
 
 internal static class MacNotificationTasks
 {
+    internal static async Task<NeoDesktopStatus> ShowWithAuthorizationAsync(NeoDispatcher dispatcher, Func<Task<NeoNotificationPermissionStatus>> query, Func<Task<NeoNotificationPermissionStatus>> authorize, Func<Task<NeoDesktopStatus>> show, CancellationToken cancellationToken)
+    {
+        var permission = dispatcher.CheckAccess()
+            ? await WaitAsync(query(), TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false)
+            : await DispatchAndWaitAsync(dispatcher.InvokeAsync(query, cancellationToken), TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+        if (permission == NeoNotificationPermissionStatus.NotRequested)
+        {
+            permission = dispatcher.CheckAccess()
+                ? await WaitAsync(authorize(), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false)
+                : await DispatchAndWaitAsync(dispatcher.InvokeAsync(authorize, cancellationToken), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+        }
+        if (permission != NeoNotificationPermissionStatus.Granted) return MacNotifications.PermissionFailureStatus(permission);
+        return dispatcher.CheckAccess()
+            ? await WaitAsync(show(), TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false)
+            : await DispatchAndWaitAsync(dispatcher.InvokeAsync(show, cancellationToken), TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+    }
+
     internal static async Task<T> DispatchAndWaitAsync<T>(ValueTask<Task<T>> dispatch, TimeSpan timeout, CancellationToken cancellationToken)
         => await (await dispatch.ConfigureAwait(false)).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
 

@@ -53,6 +53,8 @@ Without the development URL, the application serves the current production `Clie
 - **Desktop essentials:** native dialogs, window and context menus, tray/status items, clipboard, notifications,
   global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window polish. Drop an
   existing local file into the main window to observe its document-session-scoped token in the activity log.
+  The primary notification request is action-free so it also works with Windows notification-area balloons;
+  notification actions remain available from application code on macOS and supported Linux desktops.
 - **Frontend/release path:** React, dynamic imports, a module worker, manifest-backed local assets, restrictive
   CSP, generated contracts, NativeAOT, and the bundle workflow.
 
