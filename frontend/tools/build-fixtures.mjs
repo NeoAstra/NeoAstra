@@ -27,7 +27,7 @@ const sourceAliases = [
   { find: /^vue$/, replacement: path.join(root, "node_modules/vue/dist/vue.esm-bundler.js") },
 ];
 for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [react()]], ["neoastra-vue", [vue()]]]) {
-  const templateRoot = path.join(repositoryRoot, "templates", name, "ClientApp");
+  const templateRoot = path.join(repositoryRoot, "templates", name, "frontend");
   const generatedRoot = path.join(templateRoot, "src/generated");
   const generatedFile = path.join(generatedRoot, "neoastra.ts");
   let generated = false;
@@ -43,7 +43,7 @@ for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [rea
   }
 }
 
-const referenceRoot = path.join(repositoryRoot, "samples/NeoAstra.Sample.Advanced/ClientApp");
+const referenceRoot = path.join(repositoryRoot, "samples/NeoAstra.Sample.Advanced/frontend");
 const referenceCheckRoot = path.join(referenceRoot, ".neoastra-check-dist");
 const referenceAliases = [
   { find: /^#neoastra$/, replacement: path.join(root, "fixtures/generated/advanced.ts") },

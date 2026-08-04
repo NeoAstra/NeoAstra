@@ -26,7 +26,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
-            samples/NeoAstra.Sample.Advanced/ClientApp/package-lock.json
+            samples/NeoAstra.Sample.Advanced/frontend/package-lock.json
       - name: Build solution
         run: dotnet build src/NeoAstra.slnx -c Release -p:ContinuousIntegrationBuild=true
       - name: Test solution

@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <NeoAstraProjectConfig Condition="'$(NeoAstraProjectConfig)' == ''">$(MSBuildProjectDirectory)/neoastra.json</NeoAstraProjectConfig>
-    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/ClientApp/package.json'))">true</NeoAstraFrontendEnabled>
+    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/frontend/package.json'))">true</NeoAstraFrontendEnabled>
     <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == ''">false</NeoAstraFrontendEnabled>
     <NeoAstraBuildFrontend Condition="'$(NeoAstraBuildFrontend)' == ''">true</NeoAstraBuildFrontend>
     <NeoAstraRestoreFrontendDependencies Condition="'$(NeoAstraRestoreFrontendDependencies)' == ''">true</NeoAstraRestoreFrontendDependencies>
@@ -13,7 +13,7 @@
     <NeoAstraFrontendClientSourceDirectory Condition="'$(NeoAstraFrontendClientSourceDirectory)' == '' and Exists('$(_NeoAstraFrontendClientSourceCandidate)/package.json')">$(_NeoAstraFrontendClientSourceCandidate)</NeoAstraFrontendClientSourceDirectory>
     <NeoAstraFrontendClientPackageDirectory Condition="'$(NeoAstraFrontendClientPackageDirectory)' == '' and Exists('$(_NeoAstraFrontendClientPackageCandidate)/package.json')">$(_NeoAstraFrontendClientPackageCandidate)</NeoAstraFrontendClientPackageDirectory>
     <NeoAstraFrontendClientStageDirectory Condition="'$(NeoAstraFrontendClientStageDirectory)' == ''">$(MSBuildProjectDirectory)/$(BaseIntermediateOutputPath)neoastra/client</NeoAstraFrontendClientStageDirectory>
-    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == '' and Exists('$(MSBuildProjectDirectory)/ClientApp/package.json')">true</NeoAstraStageFrontendClient>
+    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == '' and Exists('$(MSBuildProjectDirectory)/frontend/package.json')">true</NeoAstraStageFrontendClient>
     <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == ''">false</NeoAstraStageFrontendClient>
     <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
     <NeoRpcIntermediateOutputPath Condition="'$(NeoRpcIntermediateOutputPath)' == ''">$(MSBuildProjectExtensionsPath)neoastra</NeoRpcIntermediateOutputPath>

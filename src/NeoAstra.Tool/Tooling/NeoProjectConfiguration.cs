@@ -169,9 +169,9 @@ internal static class NeoProjectConfiguration
     private static NeoResolvedProject LoadConventions(string configurationPath, IReadOnlyDictionary<string, string>? overrides)
     {
         var directory = Path.GetDirectoryName(configurationPath)!;
-        var frontendRoot = Path.Combine(directory, "ClientApp");
+        var frontendRoot = Path.Combine(directory, "frontend");
         if (!File.Exists(Path.Combine(frontendRoot, "package.json")))
-            throw new NeoToolException("configuration_file", "neoastra.json is absent and the conventional ClientApp/package.json was not found.");
+            throw new NeoToolException("configuration_file", "neoastra.json is absent and the conventional frontend/package.json was not found.");
         var candidates = new[]
         {
             (Name: "npm", File: "package-lock.json"),
@@ -180,7 +180,7 @@ internal static class NeoProjectConfiguration
             (Name: "bun", File: File.Exists(Path.Combine(frontendRoot, "bun.lock")) ? "bun.lock" : "bun.lockb"),
         }.Where(candidate => File.Exists(Path.Combine(frontendRoot, candidate.File))).ToArray();
         if (candidates.Length != 1)
-            throw new NeoToolException("configuration_lockfile", "Convention mode requires exactly one supported lockfile in ClientApp.");
+            throw new NeoToolException("configuration_lockfile", "Convention mode requires exactly one supported lockfile in frontend.");
         var packageManager = candidates[0].Name;
         var packageManagerCommand = NeoPackageManagerCommandResolver.Discover(packageManager, frontendRoot);
         var executable = packageManager;

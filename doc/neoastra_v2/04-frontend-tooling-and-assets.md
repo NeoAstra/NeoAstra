@@ -23,11 +23,11 @@ A project SHALL be representable by a versioned `neoastra.json` equivalent to:
     "displayName": "Acme Notes"
   },
   "frontend": {
-    "root": "ClientApp",
+    "root": "frontend",
     "devCommand": ["pnpm", "dev", "--host", "127.0.0.1"],
     "devUrl": "http://127.0.0.1:5173",
     "buildCommand": ["pnpm", "build"],
-    "dist": "ClientApp/dist",
+    "dist": "frontend/dist",
     "spaFallback": "index.html"
   },
   "assets": {

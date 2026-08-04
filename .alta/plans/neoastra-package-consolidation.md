@@ -168,11 +168,11 @@ Rules:
 
 Make `neoastra.json` optional for HelloWorld/development while retaining it for overrides, advanced security policy, and delivery metadata. With one unambiguous frontend lockfile, defaults are:
 
-- root: `ClientApp`;
-- generated contract: `ClientApp/src/generated/neoastra.ts`;
+- root: `frontend`;
+- generated contract: `frontend/src/generated/neoastra.ts`;
 - dev URL: `http://127.0.0.1:5173`;
 - dev/build commands: the detected locked package manager's normal `run dev` / `run build` commands;
-- dist: `ClientApp/dist`;
+- dist: `frontend/dist`;
 - SPA fallback: `index.html`;
 - production origin: `app://neoastra`;
 - existing restrictive CSP, referrer, cache, file-count, and byte limits;

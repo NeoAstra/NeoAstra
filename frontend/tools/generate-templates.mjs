@@ -9,8 +9,8 @@ let drift = false;
 for (const [name, extension] of variants) {
   const output = path.join(root, "templates", name);
   const expected = new Map();
-  expected.set("ClientApp/index.html", (await readFile(path.join(root, "templates/shared/index.html"), "utf8")).replace("__EXT__", extension));
-  for (const fragment of fragments) expected.set(`ClientApp/${fragment}`, await readFile(path.join(root, "templates/shared", fragment), "utf8"));
+  expected.set("frontend/index.html", (await readFile(path.join(root, "templates/shared/index.html"), "utf8")).replace("__EXT__", extension));
+  for (const fragment of fragments) expected.set(`frontend/${fragment}`, await readFile(path.join(root, "templates/shared", fragment), "utf8"));
   for (const fragment of ["NeoAstraApp.csproj", "Program.cs"])
     expected.set(fragment, await readFile(path.join(root, "templates/shared", fragment), "utf8"));
   for (const [relative, content] of expected) {

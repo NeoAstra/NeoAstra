@@ -6,7 +6,7 @@
     "displayName": "NeoAstra Advanced Sample"
   },
   "frontend": {
-    "root": "ClientApp",
+    "root": "frontend",
     "devCommand": [
       "npm",
       "run",
@@ -26,10 +26,10 @@
       "run",
       "build"
     ],
-    "dist": "ClientApp/dist",
+    "dist": "frontend/dist",
     "spaFallback": "index.html",
     "packageManager": "npm",
-    "lockfile": "ClientApp/package-lock.json",
+    "lockfile": "frontend/package-lock.json",
     "generatedContract": "obj/neoastra/neoastra.ts"
   },
   "assets": {

@@ -48,7 +48,7 @@ public sealed class ToolingTests
         var root = Path.Combine(Path.GetTempPath(), "neoastra-conventions-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var frontend = Path.Combine(root, "ClientApp");
+            var frontend = Path.Combine(root, "frontend");
             Directory.CreateDirectory(frontend);
             File.WriteAllText(Path.Combine(frontend, "package.json"), "{}");
             File.WriteAllText(Path.Combine(frontend, "package-lock.json"), "{}");
@@ -551,7 +551,7 @@ public sealed class ToolingTests
         internal IntegratedBuildFixture()
         {
             Root = Path.Combine(Path.GetTempPath(), "neoastra-integrated-build-" + Guid.NewGuid().ToString("N"));
-            FrontendRoot = Path.Combine(Root, "ClientApp");
+            FrontendRoot = Path.Combine(Root, "frontend");
             DistDirectory = Path.Combine(FrontendRoot, "dist");
             SourcePath = Path.Combine(FrontendRoot, "source.txt");
             DistIndex = Path.Combine(DistDirectory, "index.html");
@@ -581,9 +581,9 @@ public sealed class ToolingTests
                   "version": 1,
                   "app": { "identifier": "dev.neoastra.integrated", "displayName": "Integrated fixture" },
                   "frontend": {
-                    "root": "ClientApp", "devCommand": ["dotnet", "--info"], "devUrl": "http://127.0.0.1:5173",
+                    "root": "frontend", "devCommand": ["dotnet", "--info"], "devUrl": "http://127.0.0.1:5173",
                     "buildCommand": ["dotnet", "msbuild", "frontend.proj", "-nologo", "-v:minimal", "-t:BuildFrontend"],
-                    "dist": "ClientApp/dist", "spaFallback": "index.html", "packageManager": "none"
+                    "dist": "frontend/dist", "spaFallback": "index.html", "packageManager": "none"
                   },
                   "assets": {
                     "origin": "app://integrated", "cacheHashedAssets": true,
@@ -650,7 +650,7 @@ public sealed class ToolingTests
             File.WriteAllText(Path.Combine(FrontendRoot, "package.json"), "{\"name\":\"msbuild-error-fixture\"}");
             File.WriteAllText(Path.Combine(FrontendRoot, "package-lock.json"), "{\"lockfileVersion\":3}");
             File.WriteAllText(ConfigurationPath, File.ReadAllText(ConfigurationPath)
-                .Replace("\"packageManager\": \"none\"", "\"packageManager\": \"npm\", \"lockfile\": \"ClientApp/package-lock.json\"", StringComparison.Ordinal));
+                .Replace("\"packageManager\": \"none\"", "\"packageManager\": \"npm\", \"lockfile\": \"frontend/package-lock.json\"", StringComparison.Ordinal));
         }
 
         internal async Task<(int ExitCode, string Output)> BuildWithoutPathAsync()

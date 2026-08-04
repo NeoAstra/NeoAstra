@@ -12,7 +12,7 @@ From the repository root:
 dotnet run --project samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj
 ```
 
-The committed `ClientApp/package-lock.json` makes this a single-command clean-checkout build: NeoAstra runs
+The committed `frontend/package-lock.json` makes this a single-command clean-checkout build: NeoAstra runs
 locked `npm ci` when dependencies are absent or stale, runs the configured Vite production build when frontend
 inputs changed, validates/stages exact assets, and copies them to the regular managed output. Node.js 20.19 or later
 and npm must be directly available or exposed through a detected executable manager such as fnm; NeoAstra does not install Node or the package manager itself. Use `frontend.packageManagerCommand` in `neoastra.json` when an explicit invocation prefix is required.
@@ -37,9 +37,9 @@ the tool directly from this source checkout, the equivalent command is:
 dotnet run --project src/NeoAstra.Tool -- dev --config samples/NeoAstra.Sample.Advanced/neoastra.json
 ```
 
-Without the development URL, the application serves the current production `ClientApp/dist` graph through
+Without the development URL, the application serves the current production `frontend/dist` graph through
 `app://neoastra`. For reviewed offline builds, pass `NeoAstraPrebuiltAssets=true` and set
-`NeoAstraPrebuiltAssetDirectory` to the checked `ClientApp/dist`; prebuilt mode performs no npm restore or build.
+`NeoAstraPrebuiltAssetDirectory` to the checked `frontend/dist`; prebuilt mode performs no npm restore or build.
 
 ## What to try
 
@@ -89,5 +89,5 @@ manifest, two-view capability model, and generated RPC contract without opening 
 - `AdvancedCapabilities.cs` and `capabilities/main.json` — explicit permission catalog and per-view grants.
 - `AdvancedRpc.cs` — generated RPC service, channel, event, cancellation, and state.
 - `AdvancedValidation.cs` — noninteractive release validation.
-- `ClientApp/src/App.tsx` — tour shell and restricted preview.
-- `ClientApp/src/*Tour.tsx` — focused, readable feature demonstrations.
+- `frontend/src/App.tsx` — tour shell and restricted preview.
+- `frontend/src/*Tour.tsx` — focused, readable feature demonstrations.
