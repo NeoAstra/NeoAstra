@@ -458,16 +458,28 @@ public sealed class ToolingTests
         Assert.IsFalse(File.Exists(Path.Combine(fixture.PreparedAssets, "stale.js")));
         Assert.IsFalse(File.Exists(Path.Combine(Path.GetDirectoryName(fixture.BuiltIndex)!, "stale.js")));
 
-        File.WriteAllText(fixture.DistIndex, "explicit prebuilt");
-        var prebuilt = await fixture.BuildAsync("-p:NeoAstraPrebuiltAssets=true", $"-p:NeoAstraPrebuiltAssetDirectory={fixture.DistDirectory}");
-        Assert.IsFalse(prebuilt.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
-        Assert.AreEqual("explicit prebuilt", File.ReadAllText(fixture.BuiltIndex));
-
         await fixture.RunDotNetAsync("clean", fixture.ProjectPath, "--nologo", "-c", "Debug");
         StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
 
         await fixture.RunDotNetAsync("restore", fixture.DisabledProjectPath, "--nologo");
         await fixture.RunDotNetAsync("build", fixture.DisabledProjectPath, "--no-restore", "--nologo", "-c", "Debug");
+    }
+
+    [TestMethod]
+    public async Task IntegratedFrontendBuild_UsesExplicitPrebuiltAssetsWithoutRunningFrontendBuild()
+    {
+        using var fixture = new IntegratedBuildFixture();
+        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+        Directory.CreateDirectory(fixture.DistDirectory);
+        File.WriteAllText(fixture.DistIndex, "explicit prebuilt");
+
+        var output = await fixture.BuildAsync(
+            "-p:NeoAstraPrebuiltAssets=true",
+            $"-p:NeoAstraPrebuiltAssetDirectory={fixture.DistDirectory}");
+
+        Assert.IsFalse(output.Contains("FRONTEND_EXECUTED", StringComparison.Ordinal));
+        Assert.AreEqual("explicit prebuilt", File.ReadAllText(fixture.BuiltIndex));
+        Assert.IsTrue(File.Exists(Path.Combine(fixture.BuildOutput, "assets", "neoastra-assets.json")));
     }
 
     [TestMethod]

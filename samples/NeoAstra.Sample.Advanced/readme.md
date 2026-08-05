@@ -37,9 +37,10 @@ the tool directly from this source checkout, the equivalent command is:
 dotnet run --project src/NeoAstra.Tool -- dev --config samples/NeoAstra.Sample.Advanced/neoastra.json
 ```
 
-Without the development URL, the application serves the current production `frontend/dist` graph through
-`app://neoastra`. For reviewed offline builds, pass `NeoAstraPrebuiltAssets=true` and set
-`NeoAstraPrebuiltAssetDirectory` to the checked `frontend/dist`; prebuilt mode performs no npm restore or build.
+Without the development URL, the normal .NET build runs the configured frontend build and serves its validated
+asset graph through `app://neoastra`. Generated `frontend/dist` output is not committed. For a reviewed offline
+build, prepare that directory separately, pass `NeoAstraPrebuiltAssets=true`, and set
+`NeoAstraPrebuiltAssetDirectory` to `frontend/dist`; prebuilt mode performs no npm restore or build.
 
 ## What to try
 
