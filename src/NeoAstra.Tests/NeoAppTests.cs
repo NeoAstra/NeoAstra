@@ -36,10 +36,10 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
-    public void CodeFirstCapabilitiesRemainDefaultDenyUntilExplicitlyGranted()
+    public void GrantMainViewIsOptionalAndCanEnableExplicitPermissions()
     {
         var builder = CreateBuilder(ApplicationPermission());
-        StringAssert.Contains(Assert.Throws<InvalidOperationException>(builder.ValidateConfiguration).Message, "GrantMainView");
+        builder.ValidateConfiguration();
 
         builder.GrantMainView("greeting:read");
         builder.ValidateConfiguration();

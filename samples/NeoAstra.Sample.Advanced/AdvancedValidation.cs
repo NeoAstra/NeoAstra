@@ -52,7 +52,7 @@ internal static class AdvancedValidation
         }
 
         Console.WriteLine(
-            "NeoAstra React feature tour, restricted preview, desktop grants, " +
+            "NeoAstra React feature tour, restricted preview, opt-in desktop boundary, " +
             $"and generated contract {NeoRpcGeneratedContract.Hash} validated.");
         return 0;
     }
@@ -184,7 +184,7 @@ internal static class AdvancedValidation
             CapabilityManifest = capabilities,
             SecurityProfile = capabilities.Profile,
             Release = true,
-            AuthorizationService = new NeoCapabilityAuthorizationService(capabilities),
+            AuthorizationService = new NeoCapabilityAuthorizationService(capabilities, trustUnconfiguredViews: true),
         });
         rpcBuilder.AddTourService(new TourService(new TourState()));
         _ = rpcBuilder.AddTourEventsActivityEvent();
@@ -193,21 +193,17 @@ internal static class AdvancedValidation
 
         using var document = JsonDocument.Parse(capabilities.Json);
         var grants = document.RootElement.GetProperty("capabilities");
-        if (grants.GetArrayLength() != 2)
+        if (grants.GetArrayLength() != 1)
         {
             return false;
         }
 
-        var main = grants.EnumerateArray().Single(grant =>
-            grant.GetProperty("id").GetString() == "main-feature-tour");
         var preview = grants.EnumerateArray().Single(grant =>
             grant.GetProperty("id").GetString() == "restricted-preview");
-        var mainPermissions = main.GetProperty("permissions");
         var previewPermissions = preview.GetProperty("permissions");
 
-        return main.GetProperty("views")[0].GetString() == "main" &&
-               mainPermissions.GetArrayLength() >= 25 &&
-               preview.GetProperty("views")[0].GetString() == "preview" &&
-               previewPermissions.GetArrayLength() == 2;
+        return preview.GetProperty("views")[0].GetString() == "preview" &&
+               previewPermissions.GetArrayLength() == 1 &&
+               previewPermissions[0].GetProperty("id").GetString() == "system-info:theme";
     }
 }

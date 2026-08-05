@@ -160,7 +160,7 @@ export function LifecycleTour({ report }: LifecycleTourProps) {
   async function showPreview() {
     try {
       await tour.showPreview({});
-      setStatus("Opened a second view with a deliberately smaller capability grant.");
+      setStatus("Opened a second view with an explicit restricted desktop policy.");
     } catch (error) {
       setStatus(describeError(error));
     }
@@ -171,7 +171,7 @@ export function LifecycleTour({ report }: LifecycleTourProps) {
       eyebrow="Application lifecycle"
       title="Close to tray, negotiated quit, and view identity"
       description={
-        "The renderer uses capability-gated window and application APIs to distinguish hiding " +
+        "The renderer uses registered window and application APIs to distinguish hiding " +
         "the browser from quitting the process, while close requests remain asynchronous and bounded."
       }
     >

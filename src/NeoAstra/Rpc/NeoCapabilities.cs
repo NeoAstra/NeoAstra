@@ -425,13 +425,11 @@ public sealed class NeoCapabilityManifest
 #if !NEOASTRA_TOOL
     internal NeoCapabilityMatch Match(NeoRpcAuthorizationRequest request)
     {
-        if (request.Context.Platform != Platform) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.PlatformMismatch);
-        if (!request.Context.IsMainFrame && !(Platform == NeoCapabilityPlatform.Linux && request.Context.WholeViewTrust)) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.OriginUnavailable);
+        if (GetInvocationContextDenial(request.Context) is { } contextDenial) return NeoCapabilityMatch.Deny(contextDenial);
         var view = _capabilities.Where(item => item.Selectors.Any(selector => selector.IsMatch(request.Context.ViewLabel))).ToArray();
         if (view.Length == 0) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.NoMatchingCapability);
         var platform = view.Where(static item => item.PlatformMatch).ToArray();
         if (platform.Length == 0) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.PlatformMismatch);
-        if (Platform == NeoCapabilityPlatform.Linux && !request.Context.WholeViewTrust) return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.OriginUnavailable);
         var originUnavailable = false; var originMismatch = false;
         var origin = platform.Where(item =>
         {
@@ -455,6 +453,17 @@ public sealed class NeoCapabilityManifest
             catch { return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.ScopeInvalid); }
         }
         return NeoCapabilityMatch.Deny(NeoCapabilityDecisionCodes.ScopeDenied);
+    }
+
+    internal bool HasCapabilityForView(string viewLabel) =>
+        _capabilities.Any(item => item.Selectors.Any(selector => selector.IsMatch(viewLabel)));
+
+    internal string? GetInvocationContextDenial(NeoRpcContext context)
+    {
+        if (context.Platform != Platform) return NeoCapabilityDecisionCodes.PlatformMismatch;
+        if (Platform == NeoCapabilityPlatform.Linux)
+            return context.WholeViewTrust ? null : NeoCapabilityDecisionCodes.OriginUnavailable;
+        return context.IsMainFrame ? null : NeoCapabilityDecisionCodes.OriginUnavailable;
     }
 #endif
 

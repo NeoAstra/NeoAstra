@@ -49,12 +49,14 @@ public sealed class RpcGeneratorTests
     }
 
     [TestMethod]
-    public void GeneratorRequiresBoundedPermissionsForEveryRendererCallableOperation()
+    public void GeneratorAcceptsTrustedOperationsAndValidatesExplicitPermissions()
     {
         var missingMethod = Run(ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"open\")]"));
-        Assert.IsTrue(missingMethod.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        Assert.IsFalse(missingMethod.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"), string.Join(Environment.NewLine, missingMethod.Diagnostics));
+        StringAssert.Contains(missingMethod.Generated, "documents.open");
         var missingEvent = Run(ValidSource.Replace("[NeoRpcEvent(\"documents.changed\", Permission = \"test:event\")]", "[NeoRpcEvent(\"documents.changed\")]"));
-        Assert.IsTrue(missingEvent.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
+        Assert.IsFalse(missingEvent.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"), string.Join(Environment.NewLine, missingEvent.Diagnostics));
+        StringAssert.Contains(missingEvent.Generated, "documents.changed");
         var malformed = Run(ValidSource.Replace("Permission = \"test:invoke\"", "Permission = \"Test.Invoke\""));
         Assert.IsTrue(malformed.Diagnostics.Any(static diagnostic => diagnostic.Id == "NEORPC015"));
         var emptySegment = Run(ValidSource.Replace("Permission = \"test:invoke\"", "Permission = \"test:\""));

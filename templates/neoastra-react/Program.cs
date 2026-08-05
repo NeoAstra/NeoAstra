@@ -13,7 +13,6 @@ internal static class Program
         {
             app.Title = "NeoAstra App";
             app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
-            app.GrantMainView("greeting:read");
         });
     }
 }
@@ -21,7 +20,7 @@ internal static class Program
 [NeoRpcService("greeting", Version = 1)]
 public sealed class GreetingService
 {
-    [NeoRpcMethod("hello", Permission = "greeting:read")]
+    [NeoRpcMethod("hello")]
     public ValueTask<GreetingResponse> HelloAsync(GreetingRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

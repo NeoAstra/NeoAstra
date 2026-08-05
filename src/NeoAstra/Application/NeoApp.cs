@@ -61,7 +61,7 @@ public sealed class NeoAppBuilder
     /// <summary>Gets or sets the production asset directory.</summary>
     public string AssetsDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "assets");
 
-    /// <summary>Explicitly grants generated application permissions to the main view.</summary>
+    /// <summary>Opts the main view into capability authorization and grants exact generated application permissions.</summary>
     /// <param name="permissions">Exact generated permission identifiers.</param>
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentException">A permission is empty or malformed.</exception>
@@ -144,12 +144,12 @@ public sealed class NeoAppBuilder
             var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
             var release = developmentOrigin is null;
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
-            var manifest = CreateCapabilityManifest(profile, release);
+            var manifest = _mainViewPermissions.Count == 0 ? null : CreateCapabilityManifest(profile, release);
             var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions
             {
                 ContractHash = _contractHash!,
                 CapabilityManifest = manifest,
-                AuthorizationService = new NeoCapabilityAuthorizationService(manifest),
+                AuthorizationService = manifest is null ? null : new NeoCapabilityAuthorizationService(manifest),
                 SecurityProfile = profile,
                 Release = release,
                 DevelopmentOrigin = developmentOrigin,
@@ -220,8 +220,6 @@ public sealed class NeoAppBuilder
             throw new InvalidOperationException("Register generated RPC services by calling the generated UseRpc extension.");
 
         var declarations = _permissionDeclarations.ToDictionary(static permission => permission.Id, StringComparer.Ordinal);
-        if (declarations.Count != 0 && _mainViewPermissions.Count == 0)
-            throw new InvalidOperationException("Generated RPC permissions remain denied until GrantMainView is called explicitly.");
         foreach (var permission in _mainViewPermissions)
         {
             if (!declarations.TryGetValue(permission, out var declaration))

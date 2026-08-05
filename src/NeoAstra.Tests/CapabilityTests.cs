@@ -145,7 +145,7 @@ public sealed class CapabilityTests
     }
 
     [TestMethod]
-    public async Task DefaultDenialLinuxProvenanceRateAndResourceLimitsAreStable()
+    public async Task TrustedApplicationRpcAndExplicitDefaultDenialAreStable()
     {
         var catalog = Catalog();
         const string capability = """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"linux","views":["main"],"platforms":["linux"],"permissions":["documents:open"]}]}""";
@@ -169,14 +169,54 @@ public sealed class CapabilityTests
 
         var defaultBuilder = new NeoRpcBuilder();
         defaultBuilder.AddCommand<JsonElement, JsonElement>("documents.open", (request, _, _) => { invoked++; return ValueTask.FromResult(request); }, CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open" });
+        defaultBuilder.AddCommand<JsonElement, JsonElement>("documents.list", (request, _, _) => { invoked++; return ValueTask.FromResult(request); }, CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement);
         await using var defaultHost = defaultBuilder.Build(); var defaultFrames = new ConcurrentQueue<string>();
-        await using var defaultSession = defaultHost.OpenSession(new NeoRpcSessionIdentity("main", "default-denied"), (frame, _) => { defaultFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await using var defaultSession = defaultHost.OpenSession(new NeoRpcSessionIdentity("main", "mixed-default"), (frame, _) => { defaultFrames.Enqueue(frame); return ValueTask.CompletedTask; });
         await defaultSession.ReceiveAsync(Invoke("denied", "documents.open", "{}"));
-        Assert.AreEqual("permission_denied", ErrorCode(defaultFrames.Single()));
+        await defaultSession.ReceiveAsync(Invoke("allowed", "documents.list", "{}"));
+        Assert.AreEqual(2, invoked);
+        Assert.AreEqual("permission_denied", ErrorCode(defaultFrames.First()));
+        Assert.IsNull(ErrorCode(defaultFrames.Last()));
 
         var snapshot = host.GetDiagnosticSnapshot();
         Assert.AreEqual(linuxManifest.Hash, snapshot.ManifestHash);
         Assert.IsFalse(string.Join(',', snapshot.Grants).Contains("spoofed.example", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task ConfiguredViewRestrictionsCanLeaveOtherViewsTrusted()
+    {
+        const string capability = """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"preview","views":["preview"],"permissions":["documents:open"]}]}""";
+        var manifest = Resolve(capability, Catalog(includeUrl: true), CurrentPlatform());
+        var invoked = 0;
+        var builder = new NeoRpcBuilder(new NeoRpcOptions
+        {
+            AuthorizationService = new NeoCapabilityAuthorizationService(manifest, trustUnconfiguredViews: true),
+            CapabilityManifest = manifest,
+        });
+        builder.AddCommand<JsonElement, JsonElement>("documents.open", (request, _, _) => { invoked++; return ValueTask.FromResult(request); }, CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open" });
+        builder.AddCommand<JsonElement, JsonElement>("opener.open", (request, _, _) => { invoked++; return ValueTask.FromResult(request); }, CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "opener:open" });
+        await using var host = builder.Build();
+
+        var mainFrames = new ConcurrentQueue<string>();
+        await using var main = host.OpenSession(new NeoRpcSessionIdentity("main", "trusted-main") { IsMainFrame = true, Platform = CurrentPlatform(), WholeViewTrust = true }, (frame, _) => { mainFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await main.ReceiveAsync(Invoke("main-opener", "opener.open", "{}"));
+        Assert.IsNull(ErrorCode(mainFrames.Single()));
+
+        if (!OperatingSystem.IsLinux())
+        {
+            var subframeFrames = new ConcurrentQueue<string>();
+            await using var subframe = host.OpenSession(new NeoRpcSessionIdentity("main", "untrusted-subframe") { IsMainFrame = false, Platform = CurrentPlatform(), WholeViewTrust = false }, (frame, _) => { subframeFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+            await subframe.ReceiveAsync(Invoke("subframe-opener", "opener.open", "{}"));
+            Assert.AreEqual("permission_denied", ErrorCode(subframeFrames.Single()));
+        }
+
+        var previewFrames = new ConcurrentQueue<string>();
+        await using var preview = host.OpenSession(new NeoRpcSessionIdentity("preview", "restricted-preview") { IsMainFrame = true, Platform = CurrentPlatform(), WholeViewTrust = true }, (frame, _) => { previewFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await preview.ReceiveAsync(Invoke("preview-document", "documents.open", "{}"));
+        await preview.ReceiveAsync(Invoke("preview-opener", "opener.open", "{}"));
+        Assert.AreEqual(2, invoked);
+        Assert.AreEqual("permission_denied", ErrorCode(previewFrames.Last()));
     }
 
     [TestMethod]

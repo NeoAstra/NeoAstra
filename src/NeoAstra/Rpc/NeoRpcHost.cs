@@ -742,15 +742,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     private async ValueTask<(NeoRpcError? Error, NeoRpcContext Context)> AuthorizeAsync(NeoRpcContext context, string operation, string? permission, bool isSubscription, JsonElement arguments, CancellationToken cancellationToken)
     {
-        if (permission is null)
-        {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.PermissionMissing, "An RPC operation omitted its required permission declaration.", context.CorrelationId);
-            return (FrameworkError(NeoRpcErrorCodes.PermissionDenied, "Permission was denied.", context.CorrelationId), context);
-        }
+        if (permission is null) return (null, context);
         var service = _host.Options.AuthorizationService;
         if (service is null)
         {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.NoMatchingCapability, "No capability authorization service is configured; RPC dispatch was denied.", context.CorrelationId);
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.NoMatchingCapability, "No capability authorization service is configured for this explicitly restricted RPC operation.", context.CorrelationId);
             return (FrameworkError(NeoRpcErrorCodes.PermissionDenied, "Permission was denied.", context.CorrelationId), context);
         }
         NeoRpcAuthorizationResult decision;

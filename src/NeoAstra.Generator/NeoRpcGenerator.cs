@@ -37,7 +37,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor NamingPolicy = Error("NEORPC012", "Incompatible RPC naming policy", "The RPC JSON context requires [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)] for generated TypeScript/schema parity");
     private static readonly DiagnosticDescriptor UnsupportedSerializerOptions = Error("NEORPC013", "Incompatible RPC serializer options", "The RPC JSON context cannot enable field inclusion or conditional global member omission because generated TypeScript/schema contracts are property-based and deterministic");
     private static readonly DiagnosticDescriptor GeneratedSymbolCollision = Error("NEORPC014", "Generated RPC symbol collision", "Generated {0} symbol '{1}' is ambiguous; rename one declaration or assign a distinct wire/member name");
-    private static readonly DiagnosticDescriptor MissingPermission = Error("NEORPC015", "RPC permission declaration required", "Renderer-callable operation '{0}' must declare one bounded colon-separated Permission ID");
+    private static readonly DiagnosticDescriptor InvalidPermission = Error("NEORPC015", "Invalid RPC permission declaration", "Renderer-callable operation '{0}' declares a malformed Permission ID; omit it for a trusted application operation or use a bounded colon-separated ID");
 
     /// <inheritdoc />
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -131,7 +131,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
             {
                 var command = service.Name + "." + method.Name;
                 if (!IsWireName(method.Name)) { context.ReportDiagnostic(Diagnostic.Create(InvalidName, method.Symbol.Locations.FirstOrDefault(), method.Name)); hasErrors = true; continue; }
-                if (!IsPermission(method.Permission)) { context.ReportDiagnostic(Diagnostic.Create(MissingPermission, method.Symbol.Locations.FirstOrDefault(), command)); hasErrors = true; continue; }
+                if (method.Permission is not null && !IsPermission(method.Permission)) { context.ReportDiagnostic(Diagnostic.Create(InvalidPermission, method.Symbol.Locations.FirstOrDefault(), command)); hasErrors = true; continue; }
                 if (!commandNames.Add(command)) { context.ReportDiagnostic(Diagnostic.Create(DuplicateCommand, method.Symbol.Locations.FirstOrDefault(), command)); hasErrors = true; continue; }
                 if (!ValidateMethod(context, method, contractTypes)) { hasErrors = true; continue; }
                 validMethods.Add(method);
@@ -142,7 +142,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
         foreach (var item in events)
         {
             if (!IsWireName(item.Name)) { context.ReportDiagnostic(Diagnostic.Create(InvalidName, item.Symbol.Locations.FirstOrDefault(), item.Name)); hasErrors = true; continue; }
-            if (!IsPermission(item.Permission)) { context.ReportDiagnostic(Diagnostic.Create(MissingPermission, item.Symbol.Locations.FirstOrDefault(), item.Name)); hasErrors = true; continue; }
+            if (item.Permission is not null && !IsPermission(item.Permission)) { context.ReportDiagnostic(Diagnostic.Create(InvalidPermission, item.Symbol.Locations.FirstOrDefault(), item.Name)); hasErrors = true; continue; }
             if (!commandNames.Add(item.Name)) { context.ReportDiagnostic(Diagnostic.Create(DuplicateCommand, item.Symbol.Locations.FirstOrDefault(), item.Name)); hasErrors = true; continue; }
             if (item.Overflow is < 0 or > 3) { context.ReportDiagnostic(Diagnostic.Create(InvalidSignature, item.Symbol.Locations.FirstOrDefault(), item.Symbol.Name, "event overflow policy is invalid")); hasErrors = true; continue; }
             AddContractDirection(contractTypes, item.PayloadType, ContractDirection.Output);

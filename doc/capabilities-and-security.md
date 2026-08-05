@@ -1,10 +1,12 @@
 # Capabilities and security
 
-NeoAstra RPC is fail-closed. Every renderer-callable command and event has one compile-time permission ID, every production session has immutable trusted backend identity, and every invocation is authorized before user code runs. Registration alone never grants a permission.
+NeoAstra trusts registered application RPC in a controlled local application view by default. Ordinary app methods and events therefore need no permission ID or capability file. Transport admission, immutable backend-created session identity, navigation policy, CSP, payload limits, and remote-content isolation still apply before application code runs. Remote content is never made trusted by this default.
+
+Explicit capabilities are an opt-in boundary for restricted views, plugin/native services, argument scopes, or applications that want operations reviewed individually. Set a bounded `Permission` on each operation in that boundary and configure an authorization service; a permission-bearing operation remains fail-closed if the service is absent.
 
 ## Permission catalog and capability file
 
-Applications build a `NeoPermissionCatalog` from explicit `NeoPermissionDeclaration` records. A declaration binds a versioned, colon-separated ID to command/event names, risk, scope family, platform availability, timeout, concurrency, redaction, and documentation. Plugin catalogs are registered explicitly with an ID and compatibility range. Their permissions and permission sets become discoverable, but **grant nothing** until the application capability file names them.
+Applications that use an explicit boundary build a `NeoPermissionCatalog` from `NeoPermissionDeclaration` records. A declaration binds a versioned, colon-separated ID to command/event names, risk, scope family, platform availability, timeout, concurrency, redaction, and documentation. Plugin catalogs are registered explicitly with an ID and compatibility range. Their permissions and permission sets become discoverable, but **grant nothing** until the application capability file names them. Application-owned RPC without a permission declaration is not added to this catalog.
 
 Catalog and capability files are each limited to 1 MiB by the resolver tool. Catalog parsing uses depth and structural-node bounds, rejects duplicate JSON properties recursively, and caps application permissions, plugins, plugin permissions, permission sets, and set entries before expansion. Programmatic catalog builders enforce the same count families so generated or plugin-provided enumerables cannot bypass tool limits.
 
@@ -24,6 +26,8 @@ Capability files use [`neoastra-capabilities-v1.schema.json`](../schemas/neoastr
 ```
 
 Selectors are exact by default. Reviewed `prefix:*` view patterns are development-only and never accepted in release resolution. Origin selectors are canonical exact `(scheme, IDN host, explicit/default port)` tuples; paths, fragments, wildcards, opaque origins, user information, and renderer claims are rejected. Overlapping capabilities that could union the same permission fail resolution unless the permission explicitly declares a union-safe scope family.
+
+When a manifest is used to restrict only selected views, construct `NeoCapabilityAuthorizationService` with `trustUnconfiguredViews: true`. A view label that has any matching capability record is then governed entirely by that record, while controlled local views absent from the manifest retain the normal trusted-application behavior. The strict constructor remains default-deny for every unlisted view.
 
 Resolve at build/CI time with the source-generated, reflection-free tool:
 
@@ -52,7 +56,7 @@ var identity = new NeoRpcSessionIdentity("main", generatedSessionId)
 
 `ViewId`, `SessionId`, platform, authenticated top-level source origin, and Linux whole-view trust come only from native/application lifecycle code. A command argument named `origin`, the browser's current URL, redirects, iframe data, or renderer-provided identity never changes this metadata. Navigations must call the trusted `ReceiveAsync(..., trustedOrigin, topLevelDocument)` path; subframes are denied by default. Sessions are invalid after disposal and capabilities cannot be changed by navigation.
 
-Configure `NeoCapabilityAuthorizationService` and the same manifest on `NeoRpcOptions`. Missing authorization, unknown commands/permissions, unmatched view/platform/origin, absent authenticated origin, malformed arguments, scope mismatch, cancellation, rate exhaustion, and resource exhaustion all deny before dispatch. Denials use stable codes such as `permission_denied`, `scope_denied`, `too_many_requests`, and `cancelled` without leaking policy detail.
+Configure `NeoCapabilityAuthorizationService` and the same manifest on `NeoRpcOptions` when using explicit capabilities. Within that boundary, unknown permissions, unmatched view/platform/origin, absent authenticated origin, malformed arguments, scope mismatch, cancellation, rate exhaustion, and resource exhaustion all deny before dispatch. Unknown commands always deny. Denials use stable codes such as `permission_denied`, `scope_denied`, `too_many_requests`, and `cancelled` without leaking policy detail.
 
 ### Platform provenance
 
@@ -83,7 +87,7 @@ Path canonicalization is platform-sensitive. Windows comparisons are ordinal-ign
 
 External navigation in `NeoApp` is blocked unless the application calls `OpenExternalLinksInSystemBrowser` with exact HTTP(S) origins. The native navigation and new-window handlers compare parsed scheme, host, and port components, require a user action, cancel the WebView navigation, and then open matching links in the system browser. Renderer JavaScript is not the policy boundary. Credentials, non-HTTP(S) schemes, redirects without a user action, and subframe navigation are not forwarded to an OS opener.
 
-Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error posture. `NeoApp` applies the conventional local-app navigation and popup policy, but applications using the low-level API must install equivalent handlers themselves. Applications must also apply CSP when serving assets. The capability layer still denies RPC independently if integration is missing; profile metadata is not a browser sandbox.
+Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error posture. `NeoApp` applies the conventional local-app navigation and popup policy, but applications using the low-level API must install equivalent handlers themselves. Applications must also apply CSP when serving assets. Trusted RPC assumes that this controlled-content boundary is intact; capability policy is not a browser sandbox and cannot protect a privileged command from script already executing in the same trusted document.
 
 ## Abuse controls and diagnostics
 

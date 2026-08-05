@@ -37,7 +37,7 @@ export function isNativeMenuVisibleByDefault(platform: NeoAstraRuntimeInfo["plat
 export function DesktopTour({ platform, report }: DesktopTourProps) {
   const [results, setResults] = React.useState<Record<ResultGroup, string>>({
     dialogs: "Choose an action to invoke a native dialog.",
-    shell: "Native surfaces are capability-gated and report platform support.",
+    shell: "Registered native surfaces report platform support explicitly.",
     system: "Query immutable OS and application snapshots.",
     storage: "Secrets are never displayed or logged by this tour.",
     window: "Window extras report unsupported features instead of pretending success.",
@@ -199,8 +199,8 @@ export function DesktopTour({ platform, report }: DesktopTourProps) {
         eyebrow="Desktop essentials"
         title="Dialogs, menus, tray, and notifications"
         description={
-          "Each call crosses typed RPC, capability authorization, application policy, " +
-          "and a platform adapter before displaying native UI."
+          "Each call crosses typed RPC, bounded host validation, application policy, and a " +
+          "platform adapter before displaying native UI."
         }
       >
         <div className="button-row">
@@ -271,8 +271,8 @@ export function DesktopTour({ platform, report }: DesktopTourProps) {
         eyebrow="OS integration"
         title="Clipboard, shortcuts, system information, and opener"
         description={
-          "Sensitive operations have distinct permissions and bounded scopes. " +
-          "Unsupported behavior remains visible in the result."
+          "Sensitive operations use narrow typed APIs and bounded inputs. Restricted views can " +
+          "layer explicit permissions and scopes; unsupported behavior remains visible."
         }
       >
         <label className="field">

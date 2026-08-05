@@ -79,7 +79,7 @@ internal sealed class TourEventHub
 [NeoRpcService("tour", Version = 1)]
 internal sealed class TourService(TourState state)
 {
-    [NeoRpcMethod("hello", Permission = "tour:read")]
+    [NeoRpcMethod("hello")]
     public ValueTask<TourHelloResponse> HelloAsync(
         TourHelloRequest request,
         NeoRpcContext context,
@@ -92,7 +92,7 @@ internal sealed class TourService(TourState state)
             context.ViewLabel));
     }
 
-    [NeoRpcMethod("delay", Permission = "tour:control", TimeoutMilliseconds = 15_000)]
+    [NeoRpcMethod("delay", TimeoutMilliseconds = 15_000)]
     public async ValueTask<TourDelayResponse> DelayAsync(
         TourDelayRequest request,
         CancellationToken cancellationToken)
@@ -102,7 +102,7 @@ internal sealed class TourService(TourState state)
         return new TourDelayResponse(milliseconds, "The cancelable C# operation completed.");
     }
 
-    [NeoRpcMethod("stream", Permission = "tour:control")]
+    [NeoRpcMethod("stream")]
     public NeoRpcChannel<TourStreamItem> Stream(
         TourStreamRequest request,
         CancellationToken cancellationToken)
@@ -113,18 +113,18 @@ internal sealed class TourService(TourState state)
             AdvancedJsonContext.Default.TourStreamItem);
     }
 
-    [NeoRpcMethod("setDirty", Permission = "tour:control")]
+    [NeoRpcMethod("setDirty")]
     public TourStateResponse SetDirty(TourDirtyRequest request)
     {
         state.SetUnsavedChanges(request.Value);
         return new TourStateResponse(request.Value);
     }
 
-    [NeoRpcMethod("nativeMenuState", Permission = "tour:control")]
+    [NeoRpcMethod("nativeMenuState")]
     public TourNativeMenuResponse NativeMenuState(TourEmptyRequest request) =>
         new(state.NativeMenuVisible);
 
-    [NeoRpcMethod("setNativeMenuVisible", Permission = "tour:control")]
+    [NeoRpcMethod("setNativeMenuVisible")]
     public async ValueTask<TourNativeMenuResponse> SetNativeMenuVisibleAsync(
         TourNativeMenuRequest request,
         CancellationToken cancellationToken)
@@ -135,7 +135,7 @@ internal sealed class TourService(TourState state)
         return new TourNativeMenuResponse(visible);
     }
 
-    [NeoRpcMethod("showPreview", Permission = "tour:control", Dispatch = NeoRpcDispatchMode.UiThread)]
+    [NeoRpcMethod("showPreview", Dispatch = NeoRpcDispatchMode.UiThread)]
     public TourStateResponse ShowPreview(TourEmptyRequest request)
     {
         state.ShowPreview();
@@ -158,7 +158,6 @@ public sealed class TourEvents
 {
     [NeoRpcEvent(
         "tour.activity",
-        Permission = "tour:events",
         OverflowBehavior = NeoRpcOverflowBehavior.DropOldest)]
     public TourActivity Activity { get; } = new(string.Empty, string.Empty, string.Empty);
 }

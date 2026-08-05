@@ -179,8 +179,12 @@ public sealed class NeoRpcBuilder
         EnsureMutable();
         if (_options.CapabilityManifest is { } manifest)
         {
-            foreach (var pair in _commands) manifest.ValidateRegistration(pair.Key, pair.Value.Options.Permission!, pair.Value.Options.MaximumConcurrency, pair.Value.Options.Timeout, _options.InvocationTimeout);
-            foreach (var pair in _events) manifest.ValidateRegistration(pair.Key, pair.Value.Options.Permission!, null, null, _options.InvocationTimeout);
+            foreach (var pair in _commands)
+                if (pair.Value.Options.Permission is { } permission)
+                    manifest.ValidateRegistration(pair.Key, permission, pair.Value.Options.MaximumConcurrency, pair.Value.Options.Timeout, _options.InvocationTimeout);
+            foreach (var pair in _events)
+                if (pair.Value.Options.Permission is { } permission)
+                    manifest.ValidateRegistration(pair.Key, permission, null, null, _options.InvocationTimeout);
         }
         _built = true;
         var host = new NeoRpcHost(_options, _commands, _events, _serviceLifetimes);

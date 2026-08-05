@@ -62,7 +62,8 @@ public sealed class NeoRpcOptions
     public Uri? DevelopmentOrigin { get; set; }
     /// <summary>Gets or sets whether a non-loopback development origin was explicitly reviewed.</summary>
     public bool AllowRemoteDevelopmentOrigin { get; set; }
-    /// <summary>Gets or sets the configured authorization service.</summary>
+    /// <summary>Gets or sets the optional authorization service used for operations that declare a permission.</summary>
+    /// <remarks>Operations without a permission are application-authorized. An operation that declares a permission is denied when this is <see langword="null"/>.</remarks>
     public INeoRpcAuthorizationService? AuthorizationService { get; set; }
     /// <summary>Gets or sets application exception mappers, evaluated in order.</summary>
     public IReadOnlyList<INeoRpcErrorMapper> ErrorMappers { get; set; } = Array.Empty<INeoRpcErrorMapper>();
@@ -147,7 +148,8 @@ public sealed class NeoRpcOptions
 /// <summary>Configures one registered command.</summary>
 public sealed class NeoRpcCommandOptions
 {
-    /// <summary>Gets or sets the permission checked before dispatch.</summary>
+    /// <summary>Gets or sets the optional permission checked before dispatch.</summary>
+    /// <remarks>A <see langword="null"/> permission trusts the explicitly registered application command.</remarks>
     public string? Permission { get; set; }
     /// <summary>Gets or sets the dispatch scheduler.</summary>
     public NeoRpcDispatchMode Dispatch { get; set; }
@@ -158,7 +160,7 @@ public sealed class NeoRpcCommandOptions
 
     internal NeoRpcCommandOptions CloneValidated()
     {
-        if (Permission is null || !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("Every renderer-callable command requires one permission declaration.", nameof(Permission));
+        if (Permission is not null && !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("A command permission must be a bounded colon-separated ASCII identifier.", nameof(Permission));
         if (!Enum.IsDefined(Dispatch)) throw new ArgumentOutOfRangeException(nameof(Dispatch));
         if (Timeout is { } timeout && (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(10))) throw new ArgumentOutOfRangeException(nameof(Timeout));
         if (MaximumConcurrency is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumConcurrency));
@@ -169,14 +171,15 @@ public sealed class NeoRpcCommandOptions
 /// <summary>Configures one registered event.</summary>
 public sealed class NeoRpcEventOptions
 {
-    /// <summary>Gets or sets the permission checked before subscription.</summary>
+    /// <summary>Gets or sets the optional permission checked before subscription.</summary>
+    /// <remarks>A <see langword="null"/> permission trusts the explicitly registered application event.</remarks>
     public string? Permission { get; set; }
     /// <summary>Gets or sets the declaration-owned bounded queue overflow behavior.</summary>
     public NeoRpcOverflowBehavior OverflowBehavior { get; set; } = NeoRpcOverflowBehavior.DropOldest;
 
     internal NeoRpcEventOptions CloneValidated()
     {
-        if (Permission is null || !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("Every renderer-callable event requires one permission declaration.", nameof(Permission));
+        if (Permission is not null && !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("An event permission must be a bounded colon-separated ASCII identifier.", nameof(Permission));
         if (!Enum.IsDefined(OverflowBehavior)) throw new ArgumentOutOfRangeException(nameof(OverflowBehavior));
         return new NeoRpcEventOptions { Permission = Permission, OverflowBehavior = OverflowBehavior };
     }

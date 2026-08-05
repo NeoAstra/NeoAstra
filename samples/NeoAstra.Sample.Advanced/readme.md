@@ -47,8 +47,9 @@ build, prepare that directory separately, pass `NeoAstraPrebuiltAssets=true`, an
 - **Portable transport:** inspect negotiated protocol, backend, platform, view label, and document session.
 - **Generated RPC:** invoke a typed C# method, cancel an invocation, consume an ordered channel, and watch
   events emitted by a lightweight application-owned background pulse.
-- **Capabilities:** open, close, and reopen the restricted preview window. It can call the read-only tour RPC
-  but a desktop call is denied before dispatch; user-close hides the reusable preview until application exit.
+- **Capabilities:** ordinary application RPC needs no permission declarations. Open, close, and reopen the
+  restricted preview window to see one advanced boundary: its theme query is explicitly allowed while another
+  desktop call is denied before dispatch. User-close hides the reusable preview until application exit.
 - **Lifecycle:** enable the recovery tray, close the main window to hide its still-live browser session,
   and left-click the tray item to restore and focus it. Use the tray's **Quit NeoAstra…** role or the
   renderer-facing negotiated-quit button to test asynchronous confirmation and cancellation. Mark work as
@@ -89,7 +90,7 @@ manifest, two-view capability model, and generated RPC contract without opening 
 
 - `Program.cs` — standalone NeoAstra process entry point and deterministic cleanup.
 - `AdvancedApplication.cs` — windows, views, lifecycle, native menu, plugins, and bindings.
-- `AdvancedCapabilities.cs` and `capabilities/main.json` — explicit permission catalog and per-view grants.
+- `AdvancedCapabilities.cs` and `capabilities/main.json` — native-service catalog and one restricted-view grant.
 - `AdvancedRpc.cs` — generated RPC service, channel, event, cancellation, and state.
 - `AdvancedValidation.cs` — noninteractive release validation.
 - `frontend/src/App.tsx` — tour shell and restricted preview.

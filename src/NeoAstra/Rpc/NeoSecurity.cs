@@ -105,19 +105,46 @@ public readonly record struct NeoCapabilityDiagnostic
     public string CorrelationId { get; }
 }
 
-/// <summary>Fail-closed RPC authorization backed by one immutable resolved capability manifest.</summary>
+/// <summary>RPC authorization backed by one immutable resolved capability manifest, with an optional trusted fallback for unconfigured views.</summary>
 public sealed class NeoCapabilityAuthorizationService : INeoRpcAuthorizationService
 {
-    private readonly NeoCapabilityManifest _manifest; private readonly INeoCapabilityDiagnosticSink? _diagnostics;
+    private readonly NeoCapabilityManifest _manifest; private readonly INeoCapabilityDiagnosticSink? _diagnostics; private readonly bool _trustUnconfiguredViews;
     /// <summary>Initializes authorization. The manifest grants only its explicit records.</summary><param name="manifest">Resolved immutable manifest.</param>
     public NeoCapabilityAuthorizationService(NeoCapabilityManifest manifest) : this(manifest, null) { }
     /// <summary>Initializes authorization and redacted auditing.</summary><param name="manifest">Resolved immutable manifest.</param><param name="diagnostics">Optional redacted diagnostic sink.</param>
-    public NeoCapabilityAuthorizationService(NeoCapabilityManifest manifest, INeoCapabilityDiagnosticSink? diagnostics) { ArgumentNullException.ThrowIfNull(manifest); _manifest = manifest; _diagnostics = diagnostics; }
+    public NeoCapabilityAuthorizationService(NeoCapabilityManifest manifest, INeoCapabilityDiagnosticSink? diagnostics) : this(manifest, trustUnconfiguredViews: false, diagnostics) { }
+    /// <summary>Initializes authorization with an optional trusted fallback for views absent from the manifest.</summary>
+    /// <param name="manifest">Resolved immutable manifest.</param>
+    /// <param name="trustUnconfiguredViews">Whether registered operations remain trusted for view labels that have no capability record.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="manifest"/> is <see langword="null"/>.</exception>
+    public NeoCapabilityAuthorizationService(NeoCapabilityManifest manifest, bool trustUnconfiguredViews) : this(manifest, trustUnconfiguredViews, null) { }
+    /// <summary>Initializes authorization with redacted auditing and an optional trusted fallback for views absent from the manifest.</summary>
+    /// <param name="manifest">Resolved immutable manifest.</param>
+    /// <param name="trustUnconfiguredViews">Whether registered operations remain trusted for view labels that have no capability record.</param>
+    /// <param name="diagnostics">Optional redacted diagnostic sink.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="manifest"/> is <see langword="null"/>.</exception>
+    public NeoCapabilityAuthorizationService(NeoCapabilityManifest manifest, bool trustUnconfiguredViews, INeoCapabilityDiagnosticSink? diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(manifest); _manifest = manifest; _trustUnconfiguredViews = trustUnconfiguredViews; _diagnostics = diagnostics;
+    }
     internal NeoCapabilityManifest Manifest => _manifest;
     /// <inheritdoc />
     public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested(); var match = _manifest.Match(request); Write(request, match.Code);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_trustUnconfiguredViews && !_manifest.HasCapabilityForView(request.Context.ViewLabel))
+        {
+            if (_manifest.GetInvocationContextDenial(request.Context) is { } contextDenial)
+            {
+                Write(request, contextDenial);
+                return ValueTask.FromResult(NeoRpcAuthorizationResult.DenyPermission(contextDenial));
+            }
+            Write(request, NeoCapabilityDecisionCodes.Allowed);
+            return ValueTask.FromResult(request.Permission is null
+                ? NeoRpcAuthorizationResult.Allow()
+                : NeoRpcAuthorizationResult.Allow(new NeoRpcAuthorizationDecision(request.Permission, NeoCapabilityDecisionCodes.Allowed, Array.Empty<NeoCapabilityScope>())));
+        }
+        var match = _manifest.Match(request); Write(request, match.Code);
         return ValueTask.FromResult(match.Allowed
             ? NeoRpcAuthorizationResult.Allow(new NeoRpcAuthorizationDecision(match.Permission!, match.Code, match.Scopes!))
             : match.Code is NeoCapabilityDecisionCodes.ScopeDenied or NeoCapabilityDecisionCodes.ScopeInvalid ? NeoRpcAuthorizationResult.DenyScope(match.Code) : NeoRpcAuthorizationResult.DenyPermission(match.Code));

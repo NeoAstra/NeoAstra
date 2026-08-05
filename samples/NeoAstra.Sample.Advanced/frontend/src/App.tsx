@@ -104,7 +104,7 @@ export function App() {
           <h1>NeoAstra Feature tour</h1>
           <p>
             A React application running in the operating system WebView, backed by
-            generated C# RPC and capability-gated native desktop services.
+            generated C# RPC and explicitly registered native desktop services.
           </p>
           <div className="badge-row" aria-label="Active platform features">
             <span>React + Vite</span>
@@ -171,14 +171,24 @@ interface RestrictedPreviewProps {
 
 function RestrictedPreview({ runtime, report, activities }: RestrictedPreviewProps) {
   const [result, setResult] = React.useState(
-    "This view may call tour.hello and subscribe to tour.activity only.",
+    "Application RPC is trusted by default; this view limits only selected desktop operations.",
   );
 
   async function callAllowedRpc() {
     try {
       const response = await tour.hello({ name: "restricted preview" });
       setResult(response.message);
-      report("preview", "The read-only RPC grant succeeded.");
+      report("preview", "The trusted application RPC succeeded without a permission grant.");
+    } catch (error) {
+      setResult(describeError(error));
+    }
+  }
+
+  async function callAllowedDesktop() {
+    try {
+      const value = await desktop.system.theme();
+      setResult(describe(value));
+      report("preview-security", "The explicitly allowed theme query succeeded.");
     } catch (error) {
       setResult(describeError(error));
     }
@@ -186,7 +196,7 @@ function RestrictedPreview({ runtime, report, activities }: RestrictedPreviewPro
 
   async function proveDesktopDenial() {
     try {
-      const value = await desktop.system.theme();
+      const value = await desktop.system.metadata();
       setResult(describe(value));
     } catch (error) {
       setResult(`Expected denial: ${describeError(error)}`);
@@ -202,20 +212,21 @@ function RestrictedPreview({ runtime, report, activities }: RestrictedPreviewPro
           <h1>Restricted preview</h1>
           <p>
             The same React bundle is running in view <strong>{runtime.viewLabel}</strong>,
-            but its immutable capability grant intentionally excludes desktop authority.
+            but one small capability record intentionally limits its desktop authority.
           </p>
         </div>
         <img className="hero-mark" src={markUrl} alt="" />
       </header>
       <FeatureCard
-        title="Different view, different permissions"
+        title="Restrictions are opt-in"
         description={
-          "Try one allowed generated RPC command and one denied desktop command. " +
-          "Renderer-controlled values cannot expand this grant."
+          "Application RPC stays trusted without permission declarations. This view explicitly " +
+          "allows the theme query while another desktop command remains denied."
         }
       >
         <div className="button-row">
           <button type="button" onClick={() => void callAllowedRpc()}>Allowed typed RPC</button>
+          <button type="button" onClick={() => void callAllowedDesktop()}>Allowed theme query</button>
           <button type="button" className="danger" onClick={() => void proveDesktopDenial()}>
             Prove desktop denial
           </button>

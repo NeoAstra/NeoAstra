@@ -57,7 +57,7 @@ NeoAstra v2 MUST provide:
 1. A small framework-neutral TypeScript/JavaScript client hiding all backend-specific WebView globals.
 2. A versioned, bounded RPC protocol with invocation, structured errors, cancellation, events, ordered channels, and owned resource handles.
 3. A C# incremental source generator producing an AOT-safe dispatcher, `System.Text.Json` metadata, TypeScript DTOs, and typed frontend methods.
-4. Default-deny command permissions, per-view capability grants, argument scopes, and immutable trusted invocation context.
+4. Trusted controlled-local application RPC, with opt-in per-view capability grants, argument scopes, and immutable trusted invocation context for restricted boundaries.
 5. A framework-neutral frontend dev/build contract, Vite-first templates, SPA asset hosting, and secure release defaults.
 6. Cancelable close and quit negotiation, activation/reopen/open-file/open-URL delivery, and secure single-instance routing.
 7. Optional, statically composed desktop-service plugins for commonly required native features.
@@ -208,7 +208,7 @@ The sequence is dependency-ordered. A later step MUST NOT bypass incomplete secu
 | ---: | --- | --- | --- |
 | 1 | [Portable frontend transport and secure bootstrap](neoastra_v2/01-frontend-transport.md) | One backend-neutral frontend connection and lifecycle contract | v1 transport |
 | 2 | [Typed RPC runtime and generated bindings](neoastra_v2/02-rpc-and-bindings.md) | Typed invoke/error/cancel/events/channels/resources under JIT and NativeAOT | Step 1 |
-| 3 | [Capabilities, permissions, scopes, and security profiles](neoastra_v2/03-capabilities-and-security.md) | Default-deny, per-view command authority with validated scopes | Steps 1–2 |
+| 3 | [Capabilities, permissions, scopes, and security profiles](neoastra_v2/03-capabilities-and-security.md) | Trusted local app RPC plus opt-in per-view authority with validated scopes | Steps 1–2 |
 | 4 | [Frontend tooling, asset hosting, SDK, and templates](neoastra_v2/04-frontend-tooling-and-assets.md) | One-command dev/HMR and deterministic secure publish | Steps 1–3 |
 | 5 | [Application lifecycle, launch routing, and hosting](neoastra_v2/05-application-lifecycle-and-hosting.md) | Cancelable close/quit, activation, early launch events, single instance, Generic Host integration | Core plus Step 3 |
 | 6 | [Plugin model and desktop essentials](neoastra_v2/06-plugins-and-desktop-services.md) | Statically composed, capability-gated native desktop services | Steps 3 and 5 |

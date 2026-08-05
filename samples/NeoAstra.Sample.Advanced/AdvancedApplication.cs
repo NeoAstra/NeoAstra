@@ -114,7 +114,7 @@ internal sealed class AdvancedApplication(
             SecurityProfile = capabilityManifest.Profile,
             Release = !development,
             DevelopmentOrigin = developmentOrigin,
-            AuthorizationService = new NeoCapabilityAuthorizationService(capabilityManifest),
+            AuthorizationService = new NeoCapabilityAuthorizationService(capabilityManifest, trustUnconfiguredViews: true),
         });
         rpcBuilder.AddTourService(new TourService(state));
         events.Attach(rpcBuilder.AddTourEventsActivityEvent());
@@ -127,7 +127,7 @@ internal sealed class AdvancedApplication(
         {
             Label = "preview",
             Owner = mainWindow,
-            Title = "Restricted preview — read-only grant",
+            Title = "Restricted preview — opt-in desktop boundary",
             Width = 620,
             Height = 560,
             IsVisible = false,

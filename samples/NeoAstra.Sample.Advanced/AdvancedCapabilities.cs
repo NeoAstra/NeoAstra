@@ -25,31 +25,6 @@ internal static class AdvancedCapabilities
 
     internal static NeoPermissionCatalog CreateCatalog() =>
         new NeoPermissionCatalogBuilder()
-            .Add(new NeoPermissionDeclaration(
-                "tour:read",
-                1,
-                ["tour.hello"],
-                NeoPermissionRisk.Low,
-                NeoScopeFamily.None))
-            .Add(new NeoPermissionDeclaration(
-                "tour:control",
-                1,
-                [
-                    "tour.delay",
-                    "tour.stream",
-                    "tour.setDirty",
-                    "tour.nativeMenuState",
-                    "tour.setNativeMenuVisible",
-                    "tour.showPreview",
-                ],
-                NeoPermissionRisk.Low,
-                NeoScopeFamily.None))
-            .Add(new NeoPermissionDeclaration(
-                "tour:events",
-                1,
-                ["tour.activity"],
-                NeoPermissionRisk.Low,
-                NeoScopeFamily.None))
             .AddNeoAstraDesktopPermissions()
             .Build();
 

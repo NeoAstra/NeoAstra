@@ -2,13 +2,14 @@
 
 ## Assets and boundaries
 
-Protected assets include native filesystem/process/network/clipboard/dialog/notification access, RPC data, backend credentials, persistent grants, and host availability. The renderer, loaded web content, subframes, JavaScript dependencies, message payloads, current URL, redirects, and plugin packages are untrusted. Native platform adapters and application code that create views/sessions and resolve reviewed capability files are trusted. OS and web-engine sandboxing are independent defense layers, not replacements for RPC authorization.
+Protected assets include native filesystem/process/network/clipboard/dialog/notification access, RPC data, backend credentials, persistent grants, and host availability. NeoAstra treats code in an immutable, application-owned local view as part of the application and trusts its registered application RPC by default. Remote content, unapproved navigation, subframes, renderer-supplied identity, message payloads, redirects, and plugin packages remain untrusted. Native platform adapters and application code that create views/sessions and resolve reviewed capability files are trusted. OS and web-engine sandboxing are independent defense layers, not replacements for content isolation or explicit authorization around advanced boundaries.
 
 ## Threats and controls
 
 | Threat | Required control |
 | --- | --- |
-| Compromised renderer invokes native functionality | explicit versioned permission on every command/event; default-deny authorization before dispatch |
+| XSS or compromised dependency invokes application RPC | immutable local assets, restrictive CSP, dependency review, navigation/subframe denial, narrow registered application APIs; use explicit capabilities or separate views for stronger boundaries |
+| Restricted view invokes plugin/native functionality | explicit versioned permission, validated scope where applicable, and default-deny authorization before dispatch |
 | Renderer spoofs view, session, origin, platform, or plugin | immutable backend-created session identity; never derive identity from payload/current URL; plugin registration grants nothing |
 | Navigation or iframe retains privilege | authenticate top-level source per message where supported; reject subframes/unknown origin; Linux uses explicit whole-view trust only |
 | Selector confusion / manifest broadening | exact canonical selectors, no release wildcards, overlap detection, strict unknown-field/version rejection, deterministic reviewed manifest/hash |
@@ -28,9 +29,9 @@ Capability checks constrain RPC. They do not sanitize HTML, guarantee browser sa
 
 ## Security review checklist
 
-- Review catalog changes, permission risk/scope/version, plugin compatibility, and exact capability diff.
-- Confirm release resolution for all Windows/macOS/Linux targets and compare canonical bytes/hash.
-- Confirm every generated operation has a bounded permission ID and runtime registration matches the catalog.
+- Review registered application RPC as trusted application attack surface. Review catalog changes, permission risk/scope/version, plugin compatibility, and exact capability diff for explicit boundaries.
+- When capabilities are used, confirm release resolution for all Windows/macOS/Linux targets and compare canonical bytes/hash.
+- Confirm every explicitly restricted operation has a bounded permission ID and runtime registration matches the catalog.
 - Exercise wrong view/platform/origin, unknown origin, subframe, spoofed argument, out-of-scope values, rate/concurrency/resource races, cancellation, and disposal.
 - Inspect renderer errors, diagnostics, crash reports, snapshots, and build logs for sensitive values.
 - Reassess platform provenance whenever web-engine/native adapters change.

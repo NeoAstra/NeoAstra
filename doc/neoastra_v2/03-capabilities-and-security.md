@@ -2,15 +2,15 @@
 
 **Parent:** [`neoastra_v2_specs.md`](../neoastra_v2_specs.md)
 **Depends on:** [Step 1](01-frontend-transport.md), [Step 2](02-rpc-and-bindings.md)
-**Outcome:** Renderer authority is explicit, default-denied, per-view, session-bound, and constrained by validated scopes.
+**Outcome:** Controlled local application RPC is trusted by default; explicit renderer authority remains available for restricted views, plugins/native services, and validated scopes.
 
 ## 1. Scope
 
-This step adds command-level authorization above v1 bridge admission. Browser permissions such as camera access remain separate. Referencing a service/plugin or generating a frontend API MUST NOT grant any renderer permission.
+This step adds optional command-level authorization above v1 bridge admission. Browser permissions such as camera access remain separate. Registering application-owned RPC makes it callable from the controlled local app by default. Referencing a plugin or generating a frontend API MUST NOT implicitly grant restricted native authority.
 
 ## 2. Security principles
 
-1. **Deny by default.** Every renderer-originated command, including application-defined commands, requires a grant.
+1. **Trust the controlled application, restrict explicit boundaries.** Registered application RPC is trusted in controlled local views; restricted views and plugin/native operations require grants.
 2. **Authenticate before authorize.** Invalid transport/session frames never enter capability evaluation.
 3. **Use trusted identity.** Match immutable view labels and authenticated origin metadata, never titles or current URLs.
 4. **Constrain dangerous values.** A command grant does not imply unrestricted paths, URLs, executables, formats, or persistence.
@@ -21,7 +21,7 @@ This step adds command-level authorization above v1 bridge admission. Browser pe
 
 ## 3. Configuration model
 
-Applications SHALL declare versioned capability documents. A project MAY split them into files, but the resolved model is equivalent to:
+Applications MAY declare versioned capability documents for restricted views or advanced security boundaries. A project MAY split them into files, but the resolved model is equivalent to:
 
 ```json
 {
@@ -60,7 +60,7 @@ Release build MUST validate all capability files against generated schemas. Unkn
 
 ## 4. Permission declarations
 
-Every renderer-callable method MUST declare one permission ID. Plugins MAY define permission sets that expand to individual permissions, but diagnostics and generated resolved manifests MUST show the expansion.
+Every operation inside an explicit capability boundary MUST declare one permission ID. Ordinary application-owned RPC MAY omit it. Plugins MAY define permission sets that expand to individual permissions, but diagnostics and generated resolved manifests MUST show the expansion.
 
 A declaration contains:
 
@@ -112,13 +112,14 @@ Scopes do not replace application-domain authorization. A filesystem scope can p
 For an accepted invocation, the runtime SHALL:
 
 1. obtain the trusted immutable view label, document session, platform, origin proof (possibly absent), and whole-view-trust flag;
-2. select capability records whose view selector and platform match;
-3. if a capability declares origins, require authenticated origin equality after normalized URI comparison; unknown origin does not match;
-4. union only explicitly granted permissions/scopes according to documented merge rules;
-5. reject the command when no matching permission exists;
-6. validate command arguments against all relevant scopes using deny-on-error semantics;
-7. attach the resulting authorization decision to `NeoRpcContext` for application checks;
-8. execute only after the decision is final.
+2. allow registered application RPC when the host and operation do not require an explicit capability;
+3. otherwise select capability records whose view selector and platform match;
+4. if a capability declares origins, require authenticated origin equality after normalized URI comparison; unknown origin does not match;
+5. union only explicitly granted permissions/scopes according to documented merge rules;
+6. reject the restricted command when no matching permission exists;
+7. validate command arguments against all relevant scopes using deny-on-error semantics;
+8. attach the resulting authorization decision to `NeoRpcContext` for application checks;
+9. execute only after the decision is final.
 
 Origin matching MUST be exact origin (`scheme`, host, effective port) unless a permission's reviewed schema explicitly supports narrower/broader forms. Paths, query strings, fragments, redirects, and the top-level view URI are not origin authentication.
 
@@ -145,7 +146,7 @@ Tooling SHALL provide named defaults without obscuring resolved settings.
 ### 8.1 Production local-app profile
 
 - controlled application-scheme assets only;
-- bridge/RPC enabled only after explicit capabilities;
+- bridge/RPC enabled only for controlled application content; registered application RPC trusted by default;
 - top-level navigation restricted to the application origin;
 - unexpected popup/new-window denied;
 - external HTTP(S) links denied by default and handled by a scoped system-browser opener only after explicit exact-origin opt-in and a user action;
@@ -249,4 +250,4 @@ Native/browser security tests MUST prove source metadata cannot be supplied by J
 
 ## 15. Exit criteria
 
-All application and plugin commands are default-denied. Build-time schemas autocomplete and validate grants. Runtime authorization is bound to trusted view/session metadata and validated scopes. Security tests pass across all backends, including explicit Linux provenance behavior, and release diagnostics reveal policy posture without exposing sensitive data.
+Registered application commands are trusted in controlled local views by default; plugin commands and explicitly restricted operations are default-denied. Build-time schemas autocomplete and validate grants. Runtime authorization is bound to trusted view/session metadata and validated scopes. Security tests pass across all backends, including explicit Linux provenance behavior, and release diagnostics reveal policy posture without exposing sensitive data.

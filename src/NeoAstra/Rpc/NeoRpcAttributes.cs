@@ -46,7 +46,7 @@ public sealed class NeoRpcMethodAttribute : Attribute
     /// <summary>Gets the stable method wire name.</summary>
     public string Name { get; }
 
-    /// <summary>Gets or sets the permission checked before dispatch, or <see langword="null"/> for an application-authorized command.</summary>
+    /// <summary>Gets or sets the permission checked before dispatch, or <see langword="null"/> to trust the explicitly registered application command.</summary>
     public string? Permission { get; set; }
 
     /// <summary>Gets or sets the scheduler used to invoke the method.</summary>
@@ -72,7 +72,7 @@ public sealed class NeoRpcEventAttribute : Attribute
     /// <summary>Gets the stable event wire name.</summary>
     public string Name { get; }
 
-    /// <summary>Gets or sets the permission checked before subscription.</summary>
+    /// <summary>Gets or sets the permission checked before subscription, or <see langword="null"/> to trust the explicitly registered application event.</summary>
     public string? Permission { get; set; }
 
     /// <summary>Gets or sets the bounded-queue overflow behavior fixed by the declaration.</summary>
