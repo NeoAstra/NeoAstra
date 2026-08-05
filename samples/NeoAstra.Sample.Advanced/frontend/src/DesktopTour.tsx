@@ -1,5 +1,10 @@
 import React from "react";
-import type { DesktopSupportInfo, DesktopWindowExtraSupport } from "@neoastra/client";
+import type {
+  DesktopSupportInfo,
+  DesktopWindowExtraSupport,
+  NeoAstraRuntimeInfo,
+} from "@neoastra/client";
+import { tour } from "#neoastra";
 import { FeatureCard, ResultPanel } from "./FeatureCard";
 import {
   decodeText,
@@ -15,6 +20,7 @@ import {
 } from "./tour-api";
 
 interface DesktopTourProps {
+  readonly platform: NeoAstraRuntimeInfo["platform"];
   readonly report: (source: string, message: string) => void;
 }
 
@@ -24,7 +30,11 @@ export function isWindowExtraAvailable(support: DesktopSupportInfo | undefined) 
   return support !== undefined && support.supportLevel !== "None";
 }
 
-export function DesktopTour({ report }: DesktopTourProps) {
+export function isNativeMenuVisibleByDefault(platform: NeoAstraRuntimeInfo["platform"]) {
+  return platform === "macos";
+}
+
+export function DesktopTour({ platform, report }: DesktopTourProps) {
   const [results, setResults] = React.useState<Record<ResultGroup, string>>({
     dialogs: "Choose an action to invoke a native dialog.",
     shell: "Native surfaces are capability-gated and report platform support.",
@@ -36,6 +46,10 @@ export function DesktopTour({ report }: DesktopTourProps) {
   const [secret, setSecret] = React.useState("small sample secret");
   const [contentProtected, setContentProtected] = React.useState(false);
   const [extraSupport, setExtraSupport] = React.useState<DesktopWindowExtraSupport>();
+  const [nativeMenuVisible, setNativeMenuVisible] = React.useState(
+    isNativeMenuVisibleByDefault(platform),
+  );
+  const [nativeMenuPending, setNativeMenuPending] = React.useState(false);
 
   React.useEffect(() => {
     const unsubscribers: Array<() => Promise<void>> = [];
@@ -72,6 +86,16 @@ export function DesktopTour({ report }: DesktopTourProps) {
       disposed = true;
       void Promise.all(unsubscribers.map(unsubscribe => unsubscribe()));
     };
+  }, [report]);
+
+  React.useEffect(() => {
+    let disposed = false;
+    void tour.nativeMenuState({}).then(value => {
+      if (!disposed) setNativeMenuVisible(value.visible);
+    }).catch(error => {
+      if (!disposed) report("native-menu-state", describeError(error));
+    });
+    return () => { disposed = true; };
   }, [report]);
 
   React.useEffect(() => {
@@ -121,6 +145,23 @@ export function DesktopTour({ report }: DesktopTourProps) {
       }
       return desktop.menus.popup("main", event.clientX, event.clientY);
     });
+  }
+
+  async function updateNativeMenu(visible: boolean) {
+    setNativeMenuPending(true);
+    try {
+      const value = await tour.setNativeMenuVisible({ visible });
+      setNativeMenuVisible(value.visible);
+      const message = `Native application menu ${value.visible ? "shown" : "hidden"}.`;
+      setResults(current => ({ ...current, shell: message }));
+      report("native-menu", message);
+    } catch (error) {
+      const message = describeError(error);
+      setResults(current => ({ ...current, shell: message }));
+      report("native-menu", message);
+    } finally {
+      setNativeMenuPending(false);
+    }
   }
 
   async function beginOutboundDrag(event: React.DragEvent) {
@@ -208,6 +249,17 @@ export function DesktopTour({ report }: DesktopTourProps) {
             () => desktop.notifications.remove("feature-tour"),
           )}>Remove notification</button>
         </div>
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={nativeMenuVisible}
+            disabled={nativeMenuPending}
+            onChange={event => void updateNativeMenu(event.target.checked)}
+          />
+          {platform === "macos"
+            ? "Show native application menu (shown by default on macOS)"
+            : "Show native application menu (hidden by default on Windows and Linux)"}
+        </label>
         <button type="button" className="context-target" onContextMenu={showContextMenu}>
           Right-click for a renderer-owned native context menu
         </button>

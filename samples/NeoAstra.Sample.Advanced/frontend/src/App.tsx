@@ -155,7 +155,7 @@ export function App() {
       <section className="tour-grid" aria-label="NeoAstra feature demonstrations">
         <RpcTour report={report} />
         <LifecycleTour report={report} />
-        <DesktopTour report={report} />
+        <DesktopTour platform={runtime.platform} report={report} />
       </section>
 
       <ActivityLog activities={activities} />

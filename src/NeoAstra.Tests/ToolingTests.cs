@@ -191,7 +191,7 @@ public sealed class ToolingTests
         var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.Sample.Advanced", "capabilities", "main.json"));
         var catalog = new NeoPermissionCatalogBuilder()
             .Add(new NeoPermissionDeclaration("tour:read", 1, ["tour.hello"], NeoPermissionRisk.Low, NeoScopeFamily.None))
-            .Add(new NeoPermissionDeclaration("tour:control", 1, ["tour.delay", "tour.stream", "tour.setDirty", "tour.showPreview"], NeoPermissionRisk.Low, NeoScopeFamily.None))
+            .Add(new NeoPermissionDeclaration("tour:control", 1, ["tour.delay", "tour.stream", "tour.setDirty", "tour.nativeMenuState", "tour.setNativeMenuVisible", "tour.showPreview"], NeoPermissionRisk.Low, NeoScopeFamily.None))
             .Add(new NeoPermissionDeclaration("tour:events", 1, ["tour.activity"], NeoPermissionRisk.Low, NeoScopeFamily.None))
             .AddNeoAstraDesktopPermissions()
             .Build();
@@ -200,9 +200,13 @@ public sealed class ToolingTests
         NeoRpcContext Context(string view) => new(new NeoRpcSessionIdentity(view, "reference-session") { IsMainFrame = true, WholeViewTrust = true, Platform = platform }, "reference-correlation", default, null!);
         var main = manifest.Match(new(Context("main"), "tour.hello", "tour:read", false, default));
         var preview = manifest.Match(new(Context("preview"), "tour.hello", "tour:read", false, default));
+        var mainMenuState = manifest.Match(new(Context("main"), "tour.nativeMenuState", "tour:control", false, default));
+        var deniedPreviewMenuState = manifest.Match(new(Context("preview"), "tour.nativeMenuState", "tour:control", false, default));
         var deniedDesktop = manifest.Match(new(Context("preview"), "desktop.system.theme", "system-info:theme", false, default));
         Assert.IsTrue(main.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, main.Code);
         Assert.IsTrue(preview.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, preview.Code);
+        Assert.IsTrue(mainMenuState.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.Allowed, mainMenuState.Code);
+        Assert.IsFalse(deniedPreviewMenuState.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.PermissionMissing, deniedPreviewMenuState.Code);
         Assert.IsFalse(deniedDesktop.Allowed); Assert.AreEqual(NeoCapabilityDecisionCodes.PermissionMissing, deniedDesktop.Code);
     }
 

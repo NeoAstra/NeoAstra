@@ -34,7 +34,14 @@ internal static class AdvancedCapabilities
             .Add(new NeoPermissionDeclaration(
                 "tour:control",
                 1,
-                ["tour.delay", "tour.stream", "tour.setDirty", "tour.showPreview"],
+                [
+                    "tour.delay",
+                    "tour.stream",
+                    "tour.setDirty",
+                    "tour.nativeMenuState",
+                    "tour.setNativeMenuVisible",
+                    "tour.showPreview",
+                ],
                 NeoPermissionRisk.Low,
                 NeoScopeFamily.None))
             .Add(new NeoPermissionDeclaration(

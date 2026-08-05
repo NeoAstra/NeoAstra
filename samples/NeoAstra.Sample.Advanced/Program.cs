@@ -39,6 +39,8 @@ internal static class Program
 [JsonSerializable(typeof(TourEmptyRequest))]
 [JsonSerializable(typeof(TourHelloRequest))]
 [JsonSerializable(typeof(TourHelloResponse))]
+[JsonSerializable(typeof(TourNativeMenuRequest))]
+[JsonSerializable(typeof(TourNativeMenuResponse))]
 [JsonSerializable(typeof(TourStateResponse))]
 [JsonSerializable(typeof(TourStreamItem))]
 [JsonSerializable(typeof(TourStreamRequest))]

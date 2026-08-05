@@ -1,5 +1,6 @@
 using System.Text.Json;
 using NeoAstra;
+using NeoAstra.Rpc;
 
 internal static class AdvancedValidation
 {
@@ -177,6 +178,19 @@ internal static class AdvancedValidation
     private static bool ValidateCapabilities()
     {
         var capabilities = AdvancedCapabilities.Load(development: false);
+        var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions
+        {
+            ContractHash = NeoRpcGeneratedContract.Hash,
+            CapabilityManifest = capabilities,
+            SecurityProfile = capabilities.Profile,
+            Release = true,
+            AuthorizationService = new NeoCapabilityAuthorizationService(capabilities),
+        });
+        rpcBuilder.AddTourService(new TourService(new TourState()));
+        _ = rpcBuilder.AddTourEventsActivityEvent();
+        var rpc = rpcBuilder.Build();
+        rpc.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
         using var document = JsonDocument.Parse(capabilities.Json);
         var grants = document.RootElement.GetProperty("capabilities");
         if (grants.GetArrayLength() != 2)

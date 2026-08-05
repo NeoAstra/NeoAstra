@@ -3,10 +3,22 @@ using NeoAstra.Rpc;
 
 internal sealed class TourState
 {
+    private Func<bool, CancellationToken, ValueTask>? _setNativeMenuVisible;
     private Action? _showPreview;
     private int _hasUnsavedChanges;
+    private int _nativeMenuVisible;
 
     internal bool HasUnsavedChanges => Volatile.Read(ref _hasUnsavedChanges) != 0;
+    internal bool NativeMenuVisible => Volatile.Read(ref _nativeMenuVisible) != 0;
+
+    internal void ConfigureNativeMenu(Func<bool, CancellationToken, ValueTask> setNativeMenuVisible)
+    {
+        ArgumentNullException.ThrowIfNull(setNativeMenuVisible);
+        if (Interlocked.CompareExchange(ref _setNativeMenuVisible, setNativeMenuVisible, null) is not null)
+        {
+            throw new InvalidOperationException("The native menu controller is already configured.");
+        }
+    }
 
     internal void ConfigurePreview(Action showPreview)
     {
@@ -16,6 +28,17 @@ internal sealed class TourState
 
     internal void SetUnsavedChanges(bool value) =>
         Interlocked.Exchange(ref _hasUnsavedChanges, value ? 1 : 0);
+
+    internal async ValueTask<bool> SetNativeMenuVisibleAsync(
+        bool value,
+        CancellationToken cancellationToken)
+    {
+        var setNativeMenuVisible = Volatile.Read(ref _setNativeMenuVisible) ??
+            throw new InvalidOperationException("The native menu controller is not configured.");
+        await setNativeMenuVisible(value, cancellationToken).ConfigureAwait(false);
+        Interlocked.Exchange(ref _nativeMenuVisible, value ? 1 : 0);
+        return value;
+    }
 
     internal void ShowPreview() =>
         Volatile.Read(ref _showPreview)?.Invoke();
@@ -97,6 +120,21 @@ internal sealed class TourService(TourState state)
         return new TourStateResponse(request.Value);
     }
 
+    [NeoRpcMethod("nativeMenuState", Permission = "tour:control")]
+    public TourNativeMenuResponse NativeMenuState(TourEmptyRequest request) =>
+        new(state.NativeMenuVisible);
+
+    [NeoRpcMethod("setNativeMenuVisible", Permission = "tour:control")]
+    public async ValueTask<TourNativeMenuResponse> SetNativeMenuVisibleAsync(
+        TourNativeMenuRequest request,
+        CancellationToken cancellationToken)
+    {
+        var visible = await state.SetNativeMenuVisibleAsync(
+            request.Visible,
+            cancellationToken).ConfigureAwait(false);
+        return new TourNativeMenuResponse(visible);
+    }
+
     [NeoRpcMethod("showPreview", Permission = "tour:control", Dispatch = NeoRpcDispatchMode.UiThread)]
     public TourStateResponse ShowPreview(TourEmptyRequest request)
     {
@@ -132,6 +170,8 @@ public sealed record TourDirtyRequest(bool Value);
 public sealed record TourEmptyRequest;
 public sealed record TourHelloRequest(string Name);
 public sealed record TourHelloResponse(string Message, string ViewLabel);
+public sealed record TourNativeMenuRequest(bool Visible);
+public sealed record TourNativeMenuResponse(bool Visible);
 public sealed record TourStateResponse(bool HasUnsavedChanges);
 public sealed record TourStreamItem(int Index, string Message);
 public sealed record TourStreamRequest(int Count);

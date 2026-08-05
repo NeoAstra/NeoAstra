@@ -57,6 +57,8 @@ build, prepare that directory separately, pass `NeoAstraPrebuiltAssets=true`, an
 - **Desktop essentials:** native dialogs, window and context menus, tray/status items, clipboard, notifications,
   global shortcuts, system metadata, scoped URL opening, safe storage, drag-and-drop, and window extras. Drop an
   existing local file into the main window to observe its document-session-scoped token in the activity log.
+  The native application menu is shown by default on macOS and hidden by default on Windows and Linux, where an
+  application would commonly provide a themed HTML/JS menu; use the Desktop Tour toggle to show or hide it.
   The primary notification request is action-free so it also works with Windows notification-area balloons;
   notification actions remain available from application code on macOS and supported Linux desktops.
 - **Frontend/release path:** React, dynamic imports, a module worker, manifest-backed local assets, restrictive

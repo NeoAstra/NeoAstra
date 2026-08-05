@@ -303,9 +303,19 @@ internal sealed class AdvancedApplication(
             NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy, "Copy"),
             NeoMenuItem.RoleItem("paste", NeoMenuRole.Paste, "Paste"),
         };
-        await desktop.Menus.SetMenuAsync(
-            "window:main",
-            menu,
+        state.ConfigureNativeMenu(async (visible, token) =>
+        {
+            if (visible)
+            {
+                await desktop.Menus.SetMenuAsync("window:main", menu, token);
+            }
+            else
+            {
+                _ = await desktop.Menus.RemoveMenuAsync("window:main", token);
+            }
+        });
+        _ = await state.SetNativeMenuVisibleAsync(
+            OperatingSystem.IsMacOS(),
             cancellationToken);
     }
 

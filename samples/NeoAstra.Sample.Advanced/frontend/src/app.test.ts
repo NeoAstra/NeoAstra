@@ -8,7 +8,7 @@ import {
   createMockRpcHarness,
 } from "@neoastra/client/testing";
 import { neoRpcContractHash } from "#neoastra";
-import { isWindowExtraAvailable } from "./DesktopTour";
+import { isNativeMenuVisibleByDefault, isWindowExtraAvailable } from "./DesktopTour";
 import { tourNotification, withAdvancedContract } from "./tour-api";
 
 if (tourNotification.actions.length !== 0) {
@@ -17,6 +17,10 @@ if (tourNotification.actions.length !== 0) {
 if (isWindowExtraAvailable(undefined) || isWindowExtraAvailable({ supportLevel: "None" }) ||
     !isWindowExtraAvailable({ supportLevel: "Limited", details: "Available with limitations." })) {
   throw new Error("Window-extra controls must be shown only for available platform features.");
+}
+if (isNativeMenuVisibleByDefault("windows") || isNativeMenuVisibleByDefault("linux") ||
+    !isNativeMenuVisibleByDefault("macos")) {
+  throw new Error("The native menu must be opt-in on Windows/Linux and default-on on macOS.");
 }
 
 const observedContractHashes: Array<string | undefined> = [];
