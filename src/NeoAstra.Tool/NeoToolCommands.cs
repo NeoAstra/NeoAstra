@@ -41,15 +41,17 @@ internal static class NeoToolCommands
         var project = Load(configurationPath);
         var findings = new List<(string Id, string Status, string Detail)>();
         CheckCommand("dotnet", new NeoCommand(["dotnet", "--version"]), project.ProjectDirectory, findings);
-        CheckCommand("dev-command", NeoPackageManagerCommandResolver.Apply(project, project.DevCommand), project.FrontendRoot, findings);
+        if (!project.IsStaticFrontend)
+            CheckCommand("dev-command", NeoPackageManagerCommandResolver.Apply(project, project.DevCommand), project.FrontendRoot, findings);
         if (project.PackageManager != "none")
         {
             CheckCommand("package-manager", new NeoCommand([.. project.PackageManagerCommand.Arguments, "--version"]), project.FrontendRoot, findings);
         }
 
         findings.Add(("dev-origin", project.AllowRemoteDevServer ? "warning" : "ok", project.AllowRemoteDevServer ? "Remote/LAN development opt-in is enabled; use only on a trusted network." : "Exact IP-literal loopback origin is enforced."));
-        var fallback = Path.Combine(project.DistDirectory, project.SpaFallback.Replace('/', Path.DirectorySeparatorChar));
-        findings.Add(("dist", Directory.Exists(project.DistDirectory) && File.Exists(fallback) ? "ok" : "warning", "Run the configured frontend build or select an explicit validated prebuilt directory."));
+        var frontendOutput = project.IsStaticFrontend ? project.FrontendRoot : project.DistDirectory;
+        var fallback = Path.Combine(frontendOutput, project.SpaFallback.Replace('/', Path.DirectorySeparatorChar));
+        findings.Add(("dist", Directory.Exists(frontendOutput) && File.Exists(fallback) ? "ok" : "warning", project.IsStaticFrontend ? "The static frontend entry document must exist." : "Run the configured frontend build or select an explicit validated prebuilt directory."));
         findings.Add(("lockfile", project.PackageManager == "none" || project.Lockfile is not null && File.Exists(project.Lockfile) ? "ok" : "error", "Configure and commit the package-manager lockfile; npm projects are restored incrementally with npm ci."));
         findings.Add(("csp", project.ContentSecurityPolicy.Contains("http:", StringComparison.OrdinalIgnoreCase) || project.ContentSecurityPolicy.Contains("https:", StringComparison.OrdinalIgnoreCase) ? "warning" : "ok", "Production CSP should avoid remote scripts."));
         findings.Add(("service-workers", "info", "Custom-scheme service workers are not portable and are unsupported by WebKitGTK; templates do not register one."));
@@ -73,6 +75,8 @@ internal static class NeoToolCommands
     internal static async Task<int> DevAsync(string? configurationPath, string? devUrl)
     {
         var project = Load(configurationPath, devUrl);
+        if (project.IsStaticFrontend)
+            throw new NeoToolException("static_frontend_dev", "Static frontends are rebuilt by dotnet build; use dotnet watch run for development.");
         using var source = new CancellationTokenSource();
         Console.CancelKeyPress += Cancel;
         try
@@ -93,7 +97,7 @@ internal static class NeoToolCommands
         }
     }
 
-    internal static async Task<int> AssetsAsync(string? configurationPath, string? devUrl, string manifest, string? copy, string? prebuilt, bool allowDevelopmentSettings)
+    internal static async Task<int> AssetsAsync(string? configurationPath, string? devUrl, string manifest, string? copy, string? prebuilt, string? staticRoot, bool allowDevelopmentSettings)
     {
         var project = Load(configurationPath, devUrl);
         if (project.AllowRemoteDevServer && !allowDevelopmentSettings)
@@ -101,9 +105,20 @@ internal static class NeoToolCommands
             throw new NeoToolException("release_development_setting", "Release asset preparation rejects allowRemoteDevServer unless --allow-development-settings is explicitly supplied.");
         }
 
+        if (staticRoot is not null)
+        {
+            if (prebuilt is not null)
+                throw new NeoToolException("static_frontend_root", "Static frontend materialization and explicit prebuilt mode cannot be combined.");
+            project = project with { DistDirectory = Path.GetFullPath(staticRoot), IsStaticFrontend = true };
+        }
+        else if (project.IsStaticFrontend && prebuilt is null)
+        {
+            throw new NeoToolException("static_frontend_root", "Static frontend preparation requires the SDK materialized asset directory.");
+        }
+
         ValidatePrebuiltDirectory(project, prebuilt);
         ValidateLockfile(project);
-        if (prebuilt is null)
+        if (prebuilt is null && !project.IsStaticFrontend)
         {
             NeoCommandPolicy.EnsureProductionBuildDoesNotInstall(project);
             var buildCommand = NeoPackageManagerCommandResolver.Apply(project, project.BuildCommand);

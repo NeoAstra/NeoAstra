@@ -8,7 +8,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../NeoAstra/NeoAstra.csproj" />
-    <Content Include="assets/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="../NeoAstra/Build/Sdk/NeoAstra.props" />
+  <Import Project="../NeoAstra/Build/Sdk/NeoAstra.Build.targets" />
 
 </Project>

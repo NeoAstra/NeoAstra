@@ -34,9 +34,10 @@ package handshake is active, managed transport application frames are unwrapped 
 Generated RPC bindings own those application frame kinds; application code should not
 invent transport control kinds (`hello`, `hello_ack`, `close`, or `diagnostic`).
 
-The sample and browser harnesses copy the built ESM files under `assets/neoastra-client`; this is a
-checked deployment copy of `@neoastra/client`, not separate bridge glue. Run `npm run build` from
-`frontend/` to rebuild and synchronize those files.
+The `NeoAstra` SDK supplies these ESM files. Package-based frontends consume the local package staged
+under `obj/neoastra/client`; plain static frontends are materialized with the runtime under
+`obj/.../neoastra/frontend` during `dotnet build`. Samples and applications do not keep deployment
+copies of `@neoastra/client` in their source trees.
 
 ## Lifecycle and limits
 

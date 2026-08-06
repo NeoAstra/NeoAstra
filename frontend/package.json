@@ -5,7 +5,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @neoastra/client && node tools/sync-embedded-client.mjs",
+    "build": "npm run build --workspace @neoastra/client",
     "test": "npm run build && node --test packages/client/test/*.test.mjs",
     "check:size": "node tools/check-size.mjs",
     "check:package": "node tools/check-package.mjs && node tools/check-licenses.mjs",

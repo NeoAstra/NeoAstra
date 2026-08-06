@@ -12,7 +12,8 @@ public sealed class NeoAppTests
     [TestMethod]
     public void SampleAssetsMatchTheirManifestAndContainTheImportedModuleGraph()
     {
-        var manifestPath = FindRepositoryFile("samples", "NeoAstra.Sample", "assets", "neoastra-assets.json");
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var manifestPath = FindRepositoryFile("samples", "NeoAstra.Sample", "bin", configuration, "net10.0", "assets", "neoastra-assets.json");
         var root = Path.GetDirectoryName(manifestPath)!;
         var manifest = NeoAssetManifest.Load(manifestPath);
         var provider = new NeoManifestResourceProvider(root, manifest);

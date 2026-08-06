@@ -124,6 +124,7 @@ internal static class NeoToolApplication
         string? manifest = null;
         string? copy = null;
         string? prebuilt = null;
+        string? staticRoot = null;
         var allowDevelopmentSettings = false;
         return new Command("assets", "Build or validate production frontend assets.")
         {
@@ -154,12 +155,17 @@ internal static class NeoToolApplication
                 value => prebuilt = value
             },
             {
+                "static-root=",
+                "Use an SDK-materialized static frontend {DIRECTORY}.",
+                value => staticRoot = value
+            },
+            {
                 "allow-development-settings",
                 "Allow explicitly reviewed development settings.",
                 value => allowDevelopmentSettings = value is not null
             },
             new HelpOption(),
-            (_, _) => new ValueTask<int>(NeoToolCommands.AssetsAsync(config, devUrl, NeoToolCommands.Required(manifest, "--manifest"), copy, prebuilt, allowDevelopmentSettings)),
+            (_, _) => new ValueTask<int>(NeoToolCommands.AssetsAsync(config, devUrl, NeoToolCommands.Required(manifest, "--manifest"), copy, prebuilt, staticRoot, allowDevelopmentSettings)),
         };
     }
 

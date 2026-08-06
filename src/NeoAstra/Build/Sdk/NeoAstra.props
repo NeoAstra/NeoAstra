@@ -1,7 +1,10 @@
 <Project>
   <PropertyGroup>
     <NeoAstraProjectConfig Condition="'$(NeoAstraProjectConfig)' == ''">$(MSBuildProjectDirectory)/neoastra.json</NeoAstraProjectConfig>
-    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/frontend/package.json'))">true</NeoAstraFrontendEnabled>
+    <NeoAstraStaticFrontend Condition="'$(NeoAstraStaticFrontend)' == '' and !Exists('$(NeoAstraProjectConfig)') and !Exists('$(MSBuildProjectDirectory)/frontend/package.json') and Exists('$(MSBuildProjectDirectory)/frontend/index.html')">true</NeoAstraStaticFrontend>
+    <NeoAstraStaticFrontend Condition="'$(NeoAstraStaticFrontend)' == ''">false</NeoAstraStaticFrontend>
+    <NeoAstraStaticFrontendSourceDirectory Condition="'$(NeoAstraStaticFrontendSourceDirectory)' == ''">$(MSBuildProjectDirectory)/frontend</NeoAstraStaticFrontendSourceDirectory>
+    <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == '' and (Exists('$(NeoAstraProjectConfig)') or Exists('$(MSBuildProjectDirectory)/frontend/package.json') or '$(NeoAstraStaticFrontend)' == 'true')">true</NeoAstraFrontendEnabled>
     <NeoAstraFrontendEnabled Condition="'$(NeoAstraFrontendEnabled)' == ''">false</NeoAstraFrontendEnabled>
     <NeoAstraBuildFrontend Condition="'$(NeoAstraBuildFrontend)' == ''">true</NeoAstraBuildFrontend>
     <NeoAstraRestoreFrontendDependencies Condition="'$(NeoAstraRestoreFrontendDependencies)' == ''">true</NeoAstraRestoreFrontendDependencies>
@@ -13,11 +16,13 @@
     <NeoAstraFrontendClientSourceDirectory Condition="'$(NeoAstraFrontendClientSourceDirectory)' == '' and Exists('$(_NeoAstraFrontendClientSourceCandidate)/package.json')">$(_NeoAstraFrontendClientSourceCandidate)</NeoAstraFrontendClientSourceDirectory>
     <NeoAstraFrontendClientPackageDirectory Condition="'$(NeoAstraFrontendClientPackageDirectory)' == '' and Exists('$(_NeoAstraFrontendClientPackageCandidate)/package.json')">$(_NeoAstraFrontendClientPackageCandidate)</NeoAstraFrontendClientPackageDirectory>
     <NeoAstraFrontendClientStageDirectory Condition="'$(NeoAstraFrontendClientStageDirectory)' == ''">$(MSBuildProjectDirectory)/$(BaseIntermediateOutputPath)neoastra/client</NeoAstraFrontendClientStageDirectory>
-    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == '' and Exists('$(MSBuildProjectDirectory)/frontend/package.json')">true</NeoAstraStageFrontendClient>
+    <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == '' and (Exists('$(MSBuildProjectDirectory)/frontend/package.json') or '$(NeoAstraStaticFrontend)' == 'true')">true</NeoAstraStageFrontendClient>
     <NeoAstraStageFrontendClient Condition="'$(NeoAstraStageFrontendClient)' == ''">false</NeoAstraStageFrontendClient>
     <NeoAstraDotNetHost Condition="'$(NeoAstraDotNetHost)' == ''">dotnet</NeoAstraDotNetHost>
     <NeoRpcIntermediateOutputPath Condition="'$(NeoRpcIntermediateOutputPath)' == ''">$(MSBuildProjectExtensionsPath)neoastra</NeoRpcIntermediateOutputPath>
     <NeoRpcTypeScriptOutput Condition="'$(NeoRpcTypeScriptOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.ts</NeoRpcTypeScriptOutput>
+    <NeoRpcJavaScriptOutput Condition="'$(NeoRpcJavaScriptOutput)' == '' and '$(NeoAstraStaticFrontend)' == 'true'">$(NeoRpcIntermediateOutputPath)/neoastra.js</NeoRpcJavaScriptOutput>
+    <NeoRpcJavaScriptImport Condition="'$(NeoRpcJavaScriptImport)' == '' and '$(NeoAstraStaticFrontend)' == 'true'">./neoastra-client/index.js</NeoRpcJavaScriptImport>
     <NeoRpcJavaScriptImport Condition="'$(NeoRpcJavaScriptImport)' == ''">@neoastra/client</NeoRpcJavaScriptImport>
     <NeoRpcManifestOutput Condition="'$(NeoRpcManifestOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.manifest.json</NeoRpcManifestOutput>
     <NeoRpcSchemaOutput Condition="'$(NeoRpcSchemaOutput)' == ''">$(NeoRpcIntermediateOutputPath)/neoastra.schema.json</NeoRpcSchemaOutput>

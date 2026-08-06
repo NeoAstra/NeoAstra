@@ -1,4 +1,4 @@
-import { greeting } from "./generated/neoastra.js";
+import { greeting } from "./neoastra.js";
 
 const form = document.querySelector("#greeting-form");
 const name = document.querySelector("#name");

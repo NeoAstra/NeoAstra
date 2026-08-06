@@ -22,7 +22,7 @@ for (const required of ["LICENSE", "README.md", "provenance.json", "dist/index.j
 }
 
 const repository = path.resolve(root, "..");
-const frontendRoots = ["samples", "src/NeoAstra.Conformance/assets", "src/NeoAstra.Benchmarks/assets"];
+const frontendRoots = ["samples", "src/NeoAstra.Conformance/frontend", "src/NeoAstra.Benchmarks/frontend"];
 for (const relativeRoot of frontendRoots) {
   const directory = path.join(repository, relativeRoot);
   for (const name of await readdir(directory, { recursive: true })) {

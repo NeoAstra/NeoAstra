@@ -68,6 +68,30 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void ProjectConfiguration_UsesStaticFrontendConventionsWithoutNode()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-static-conventions-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var frontend = Path.Combine(root, "frontend");
+            Directory.CreateDirectory(frontend);
+            File.WriteAllText(Path.Combine(frontend, "index.html"), "<!doctype html>");
+
+            var project = NeoProjectConfiguration.Load(Path.Combine(root, "neoastra.json"));
+
+            Assert.IsTrue(project.IsStaticFrontend);
+            Assert.AreEqual("none", project.PackageManager);
+            Assert.IsNull(project.Lockfile);
+            Assert.IsNull(project.GeneratedContract);
+            Assert.AreEqual(frontend, project.FrontendRoot);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public void PackageManagerCommand_PrefersDirectNpmThenKnownManagersAndSupportsOverride()
     {
         var direct = NeoPackageManagerCommandResolver.Discover(
@@ -526,6 +550,27 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task StaticFrontend_IsMaterializedWithSdkClientUnderObj()
+    {
+        using var fixture = new IntegratedBuildFixture();
+        await fixture.RunDotNetAsync("restore", fixture.StaticProjectPath, "--nologo");
+
+        var first = await fixture.BuildStaticAsync();
+        StringAssert.Contains(first, "Validated");
+        Assert.AreEqual("static source", File.ReadAllText(Path.Combine(fixture.StaticBuildOutput, "assets", "index.html")));
+        Assert.AreEqual("export const sdkClient = true;", File.ReadAllText(Path.Combine(fixture.StaticBuildOutput, "assets", "neoastra-client", "index.js")));
+        Assert.IsFalse(File.Exists(Path.Combine(fixture.StaticBuildOutput, "assets", "neoastra-client", "testing.js")));
+        Assert.IsTrue(File.Exists(Path.Combine(fixture.StaticBuildOutput, "assets", "neoastra-assets.json")));
+
+        var unchanged = await fixture.BuildStaticAsync();
+        Assert.DoesNotContain("Validated", unchanged, StringComparison.Ordinal);
+
+        File.WriteAllText(fixture.StaticIndex, "changed source");
+        StringAssert.Contains(await fixture.BuildStaticAsync(), "Validated");
+        Assert.AreEqual("changed source", File.ReadAllText(Path.Combine(fixture.StaticBuildOutput, "assets", "index.html")));
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_OrdersReadinessBeforeBackendAndStopsBothOnFailure()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -567,6 +612,7 @@ public sealed class ToolingTests
             ConfigurationPath = Path.Combine(Root, "neoastra.json");
             ProjectPath = Path.Combine(Root, "Fixture.csproj");
             DisabledProjectPath = Path.Combine(Root, "Disabled", "Disabled.csproj");
+            StaticProjectPath = Path.Combine(Root, "Static", "Static.csproj");
             var repository = FindRepositoryRoot();
             var propsPath = Path.Combine(repository, "src", "NeoAstra", "Build", "Sdk", "NeoAstra.props");
             _targetsPath = Path.Combine(repository, "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets");
@@ -627,6 +673,31 @@ public sealed class ToolingTests
                   <Import Project="{{Xml(_targetsPath)}}" />
                 </Project>
                 """);
+
+            var staticRoot = Path.GetDirectoryName(StaticProjectPath)!;
+            var staticFrontend = Path.Combine(staticRoot, "frontend");
+            var staticClient = Path.Combine(staticRoot, "sdk-client");
+            Directory.CreateDirectory(staticFrontend);
+            Directory.CreateDirectory(Path.Combine(staticClient, "dist"));
+            StaticIndex = Path.Combine(staticFrontend, "index.html");
+            File.WriteAllText(StaticIndex, "static source");
+            File.WriteAllText(Path.Combine(staticClient, "package.json"), "{\"name\":\"@neoastra/client\",\"version\":\"1.0.0\"}");
+            File.WriteAllText(Path.Combine(staticClient, "LICENSE"), "license");
+            File.WriteAllText(Path.Combine(staticClient, "README.md"), "readme");
+            File.WriteAllText(Path.Combine(staticClient, "provenance.json"), "{}");
+            foreach (var name in new[] { "index", "shared", "rpc", "desktop", "updates", "testing" })
+                File.WriteAllText(Path.Combine(staticClient, "dist", name + ".js"), name == "index" ? "export const sdkClient = true;" : "export {};");
+            File.WriteAllText(StaticProjectPath, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <Import Project="{{Xml(propsPath)}}" />
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <NeoAstraToolPath>{{Xml(_toolPath)}}</NeoAstraToolPath>
+                    <NeoAstraFrontendClientSourceDirectory>{{Xml(staticClient)}}</NeoAstraFrontendClientSourceDirectory>
+                  </PropertyGroup>
+                  <Import Project="{{Xml(_targetsPath)}}" />
+                </Project>
+                """);
         }
 
         internal string Root { get; }
@@ -637,9 +708,12 @@ public sealed class ToolingTests
         internal string SourcePath { get; }
         internal string ProjectPath { get; }
         internal string DisabledProjectPath { get; }
+        internal string StaticProjectPath { get; }
+        internal string StaticIndex { get; }
         internal string BuiltIndex => Path.Combine(Root, "bin", "Debug", "net10.0", "assets", "index.html");
         internal string BuildOutput => Path.Combine(Root, "bin", "Debug", "net10.0");
         internal string PreparedAssets => Path.Combine(Root, "obj", "Debug", "net10.0", "neoastra", "frontend", "assets");
+        internal string StaticBuildOutput => Path.Combine(Root, "Static", "bin", "Debug", "net10.0");
 
         internal void WriteContract(int version)
         {
@@ -651,6 +725,9 @@ public sealed class ToolingTests
 
         internal Task<string> BuildAsync(params string[] additionalArguments) =>
             RunDotNetCoreAsync(["build", ProjectPath, "--no-restore", "--nologo", "-c", "Debug", .. additionalArguments]);
+
+        internal Task<string> BuildStaticAsync() =>
+            RunDotNetCoreAsync(["build", StaticProjectPath, "--no-restore", "--nologo", "-c", "Debug"]);
 
         internal Task<string> RunDotNetAsync(params string[] arguments) => RunDotNetCoreAsync(arguments);
 

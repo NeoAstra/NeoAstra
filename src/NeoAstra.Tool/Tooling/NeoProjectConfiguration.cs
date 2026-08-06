@@ -72,6 +72,7 @@ internal sealed record NeoResolvedProject(
     IReadOnlyList<string> SpaRoutePrefixes,
     IReadOnlyList<string> ExcludedPrefixes,
     IReadOnlyList<string> Capabilities,
+    bool IsStaticFrontend,
     NeoBundleConfiguration? Bundle)
 {
     internal string ToInspectJson(bool redactSecrets)
@@ -91,6 +92,7 @@ internal sealed record NeoResolvedProject(
             writer.WriteString("displayName", DisplayName);
             writer.WriteEndObject();
             writer.WriteStartObject("frontend");
+            writer.WriteString("mode", IsStaticFrontend ? "static" : "build");
             writer.WriteString("root", FrontendRoot);
             WriteArray(writer, "devCommand", DevCommand.Arguments);
             WriteArray(writer, "backendCommand", BackendCommand.Arguments);
@@ -171,7 +173,44 @@ internal static class NeoProjectConfiguration
         var directory = Path.GetDirectoryName(configurationPath)!;
         var frontendRoot = Path.Combine(directory, "frontend");
         if (!File.Exists(Path.Combine(frontendRoot, "package.json")))
-            throw new NeoToolException("configuration_file", "neoastra.json is absent and the conventional frontend/package.json was not found.");
+        {
+            if (!File.Exists(Path.Combine(frontendRoot, "index.html")))
+                throw new NeoToolException("configuration_file", "neoastra.json is absent and neither conventional frontend/package.json nor frontend/index.html was found.");
+            var staticDevUrl = NeoOriginPolicy.ValidateDevelopmentUrl(Override(overrides, "NeoAstraDevUrl") ?? "http://127.0.0.1:5173", allowRemote: false);
+            return new NeoResolvedProject(
+                configurationPath,
+                directory,
+                "dev.neoastra.app",
+                new DirectoryInfo(directory).Name,
+                frontendRoot,
+                new NeoCommand(["dotnet", "--version"]),
+                new NeoCommand(["dotnet", "watch", "run"]),
+                new NeoCommand(["dotnet", "build", "--no-restore"]),
+                staticDevUrl,
+                new NeoCommand(["dotnet", "--version"]),
+                Path.Combine(directory, "obj", "neoastra", "frontend", "materialized"),
+                "index.html",
+                "none",
+                new NeoCommand(["none"]),
+                null,
+                null,
+                false,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                new Uri("app://neoastra"),
+                true,
+                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                "no-referrer",
+                false,
+                10_000,
+                64L * 1024 * 1024,
+                256L * 1024 * 1024,
+                [],
+                ["/api", "/_neoastra"],
+                [],
+                true,
+                null);
+        }
         var candidates = new[]
         {
             (Name: "npm", File: "package-lock.json"),
@@ -240,6 +279,7 @@ internal static class NeoProjectConfiguration
             [],
             ["/api", "/_neoastra"],
             [],
+            false,
             null);
     }
 
@@ -329,6 +369,7 @@ internal static class NeoProjectConfiguration
                 ReadRoutes(assets, "spaRoutePrefixes"),
                 ReadRoutes(assets, "excludedPrefixes", ["/api", "/_neoastra"]),
                 capabilities,
+                false,
                 root.TryGetProperty("bundle", out var bundle)
                     ? NeoBundleConfiguration.Parse(bundle, directory, identifier, displayName)
                     : null);
