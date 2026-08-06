@@ -16,6 +16,7 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     private const uint OfnAllowMultiSelect = 0x00000200;
     private const uint OfnCreatePrompt = 0x00002000;
     private const uint OfnEnableHook = 0x00000020;
+    private const uint OfnEnableSizing = 0x00800000;
     private const uint OfnExplorer = 0x00080000;
     private const uint OfnFileMustExist = 0x00001000;
     private const uint OfnNoChangeDir = 0x00000008;
@@ -32,7 +33,7 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     private NeoDispatcher? _dispatcher = dispatcher;
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0,
-        "Win32 common file/folder dialogs and TaskDialog with explicit HWND ownership, cancellation, native standard role labels, filters, and canonical scope checks. Folder multi-select is unavailable in the reviewed Win32 folder presenter.");
+        "Win32 common file/folder dialogs that are resizable by default, and TaskDialog with explicit HWND ownership, cancellation, native standard role labels, filters, and canonical scope checks. Folder multi-select is unavailable in the reviewed Win32 folder presenter.");
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application)
     {
@@ -97,9 +98,7 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
                 MaximumFileCharacters = maximumCharacters,
                 InitialDirectory = initial,
                 Title = title,
-                Flags = OfnExplorer | OfnEnableHook | OfnNoChangeDir | OfnPathMustExist |
-                    (save ? OfnOverwritePrompt | OfnCreatePrompt : OfnFileMustExist) |
-                    (!save && options.AllowMultiple ? OfnAllowMultiSelect : 0),
+                Flags = BuildFileDialogFlags(options, save),
                 Hook = &FileDialogHook,
                 CustomData = GCHandle.ToIntPtr(stateHandle),
             };
@@ -281,6 +280,14 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     }
 
     private static NativeDialogState? State(nint handle) => handle == 0 ? null : GCHandle.FromIntPtr(handle).Target as NativeDialogState;
+
+    internal static uint BuildFileDialogFlags(NeoFileDialogOptions options, bool save)
+    {
+        // A hook procedure suppresses the common dialog's default resizing unless OFN_ENABLESIZING is explicit.
+        return OfnExplorer | OfnEnableHook | OfnEnableSizing | OfnNoChangeDir | OfnPathMustExist |
+            (save ? OfnOverwritePrompt | OfnCreatePrompt : OfnFileMustExist) |
+            (!save && options.AllowMultiple ? OfnAllowMultiSelect : 0);
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static nint OwnerSubclass(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)

@@ -352,6 +352,17 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void WindowsFileDialogsExplicitlyEnableResizingWhenUsingHook()
+    {
+        const uint ofnEnableSizing = 0x00800000;
+        var scope = new NeoFileScope([Path.GetTempPath()]);
+        var options = new NeoFileDialogOptions { AllowMultiple = true, Scope = scope };
+
+        Assert.AreNotEqual(0u, WindowsDialogs.BuildFileDialogFlags(options, save: false) & ofnEnableSizing);
+        Assert.AreNotEqual(0u, WindowsDialogs.BuildFileDialogFlags(new NeoFileDialogOptions { Scope = scope }, save: true) & ofnEnableSizing);
+    }
+
+    [TestMethod]
     public void MacDialogScriptsUseLiteralMultipleSelectionClause()
     {
         var scope = new NeoFileScope([Path.GetTempPath()]);
