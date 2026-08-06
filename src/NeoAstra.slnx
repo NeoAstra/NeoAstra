@@ -1,11 +1,19 @@
 <Solution>
+  <Folder Name="/ci/">
+    <File Path="../.github/workflows/ci.yml" />
+    <File Path="../.github/workflows/conformance.yml" />
+    <File Path="../.github/workflows/delivery.yml" />
+    <File Path="../.github/workflows/frontend.yml" />
+    <File Path="../.github/workflows/native.yml" />
+    <File Path="../.github/workflows/package.yml" />
+    <File Path="../.github/workflows/validation.yml" />
+  </Folder>
   <Folder Name="/doc/">
     <File Path="../doc/readme.md" />
   </Folder>
   <Folder Name="/general/">
     <File Path="../.editorconfig" />
     <File Path="../.gitattributes" />
-    <File Path="../.github/workflows/ci.yml" />
     <File Path="../.gitignore" />
     <File Path="../AGENTS.md" />
     <File Path="../license.txt" />
