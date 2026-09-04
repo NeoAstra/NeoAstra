@@ -1,7 +1,9 @@
 # NeoAstra v1 readiness for a CodeAlta GUI
 
-**Assessment:** 2026-09-04  
-**NeoAstra baseline:** `d9703f7520894a7ece8cde3024ba937fb3570c49`  
+**Assessment:** 2026-09-04
+
+**NeoAstra baseline:** `d9703f7520894a7ece8cde3024ba937fb3570c49`
+
 **Execution checklist:** [neoastra_next_improvements_for_v1.md](neoastra_next_improvements_for_v1.md)
 
 ## Decision

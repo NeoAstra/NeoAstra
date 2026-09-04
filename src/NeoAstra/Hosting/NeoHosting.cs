@@ -12,10 +12,11 @@ namespace NeoAstra.Hosting;
 /// <summary>Runs application-specific startup after the native loop is dispatchable and before NeoAstra becomes ready.</summary>
 public interface INeoHostedApplication
 {
-    /// <summary>Initializes windows, views, and application services on the UI dispatcher.</summary>
+    /// <summary>Initializes windows, views, and application services on the UI dispatcher before application readiness.</summary>
     /// <param name="application">The owned native application.</param>
     /// <param name="cancellationToken">Cancels host startup.</param>
     /// <returns>A task representing startup.</returns>
+    /// <remarks>The injectable <see cref="INeoUiDispatcher"/> is available during this callback. Observe cancellation and preserve the UI context when accessing native objects after an await.</remarks>
     ValueTask StartAsync(NeoApplication application, CancellationToken cancellationToken);
 }
 
@@ -46,6 +47,7 @@ public sealed class NeoHostingOptions
 }
 
 /// <summary>Injectable native-handle-free UI dispatcher abstraction.</summary>
+/// <remarks>Dispatch becomes available before hosted application startup completes; it does not imply that the application is ready.</remarks>
 public interface INeoUiDispatcher
 {
     /// <summary>Invokes work on the NeoAstra UI thread.</summary>
@@ -54,7 +56,9 @@ public interface INeoUiDispatcher
     /// <param name="cancellationToken">Cancels queued work.</param>
     /// <returns>The callback result.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="callback"/> is <see langword="null"/>.</exception>
-    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is canceled or the native loop exits before dispatch becomes available.</exception>
+    /// <exception cref="NeoAstraNativeLibraryException">The native host cannot be initialized.</exception>
+    /// <exception cref="ObjectDisposedException">Native application shutdown has started.</exception>
     ValueTask<T> InvokeAsync<T>(Func<T> callback, CancellationToken cancellationToken = default);
 }
 
@@ -179,6 +183,7 @@ internal sealed class NeoHostedService : IHostedService, INeoUiDispatcher
     private readonly INeoHostedApplication _startup;
     private readonly IHostApplicationLifetime _hostLifetime;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly TaskCompletionSource<NeoApplication> _dispatchable = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<NeoApplication> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _hostStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -218,6 +223,11 @@ internal sealed class NeoHostedService : IHostedService, INeoUiDispatcher
             // the UI thread publishes the original exception. Preserve that original failure.
             await _ready.Task.WaitAsync(_options.Quit.Timeout).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            RequestQuitFromHost();
+            throw;
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -229,7 +239,7 @@ internal sealed class NeoHostedService : IHostedService, INeoUiDispatcher
     public async ValueTask<T> InvokeAsync<T>(Func<T> callback, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        var application = await _ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var application = await _dispatchable.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         return await application.Dispatcher.InvokeAsync(callback, cancellationToken).ConfigureAwait(false);
     }
 
@@ -239,18 +249,45 @@ internal sealed class NeoHostedService : IHostedService, INeoUiDispatcher
         {
             NeoApplication.Run(_options.Application, async application =>
             {
-                _application = application;
                 application.Stopping += OnNeoAstraStopping;
                 application.StoppingAsync += WaitForHostServicesAsync;
+                Volatile.Write(ref _application, application);
+                _dispatchable.TrySetResult(application);
+                // A host stop may have been recorded before the native application existed.
+                if (_hostStopped.Task.IsCompleted)
+                {
+                    application.ForceShutdown(_options.QuitExitCode);
+                    return;
+                }
+                if (Volatile.Read(ref _hostStopRequested) != 0)
+                    _ = application.RequestQuitAsync(NeoQuitReason.HostStopping, _options.QuitExitCode, _options.Quit);
                 await _startup.StartAsync(application, _startupCancellation).ConfigureAwait(true);
+                _startupCancellation.ThrowIfCancellationRequested();
+                if (Volatile.Read(ref _hostStopRequested) != 0)
+                {
+                    _ready.TrySetCanceled();
+                    return;
+                }
                 application.NotifyReady();
                 _ready.TrySetResult(application);
             });
+            // The native loop can exit during startup without the callback reaching readiness.
+            _dispatchable.TrySetCanceled();
+            _ready.TrySetCanceled();
             _exited.TrySetResult();
         }
         catch (Exception exception)
         {
-            _ready.TrySetException(exception);
+            _dispatchable.TrySetException(exception);
+            if (!_ready.TrySetException(exception) && _ready.Task.IsCompletedSuccessfully)
+            {
+                try
+                {
+                    _loggerFactory.CreateLogger<NeoHostedService>().LogError(exception,
+                        "The native application failed after hosted startup completed.");
+                }
+                catch { /* Logging providers must not unwind through the native thread. */ }
+            }
             _exited.TrySetException(exception);
         }
     }
@@ -280,10 +317,18 @@ internal sealed class NeoHostedService : IHostedService, INeoUiDispatcher
             application.ForceShutdown(_options.QuitExitCode);
         if (application?.Dispatcher.CheckAccess() == true) return;
         var wait = _options.Quit.Timeout + TimeSpan.FromSeconds(5);
-        if (!_exited.Task.Wait(wait))
+        try
         {
-            application?.ForceShutdown(_options.QuitExitCode);
-            _ = _exited.Task.Wait(TimeSpan.FromSeconds(5));
+            if (!_exited.Task.Wait(wait))
+            {
+                application?.ForceShutdown(_options.QuitExitCode);
+                _ = _exited.Task.Wait(TimeSpan.FromSeconds(5));
+            }
+        }
+        catch (AggregateException) when (_exited.Task.IsFaulted)
+        {
+            // Exit is complete. Startup failures are already reported through the readiness task,
+            // and must not be rethrown through the host's ApplicationStopped callback.
         }
     }
 

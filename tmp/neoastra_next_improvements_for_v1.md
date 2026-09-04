@@ -1,8 +1,11 @@
 # NeoAstra next improvements for v1
 
-**Started:** 2026-09-04  
-**Baseline:** `d9703f7520894a7ece8cde3024ba937fb3570c49`  
-**Goal:** a small, dependable .NET/system-WebView application platform for CodeAlta, not feature parity with Electron.  
+**Started:** 2026-09-04
+
+**Baseline:** `d9703f7520894a7ece8cde3024ba937fb3570c49`
+
+**Goal:** a small, dependable .NET/system-WebView application platform for CodeAlta, not feature parity with Electron.
+
 **Status:** assessment and implementation in progress; **not a v1 release certification**.
 
 This is the execution checklist requested by the user. The historical v2 analysis remains unchanged;
@@ -31,10 +34,15 @@ remain ignored. Each implementation step includes this checklist update in its c
   v3 records current source baselines, corrects historical default-deny/package claims, and includes
   CodeAlta streaming/interaction/content-isolation requirements. Research exposed streaming lifetime
   defects; steps 2b/2c were added before implementation, alongside the small simple-host lifecycle hook.
-- [ ] **2 — Hosted UI startup.** Reproduce awaiting the injectable dispatcher from application startup;
+- [x] **2 — Hosted UI startup.** Reproduce awaiting the injectable dispatcher from application startup;
   separate dispatchability from application readiness without prematurely publishing `Ready`.
   Cover startup failure/cancellation and retain bounded teardown; update lifecycle XML docs/guide.
   Verify focused hosting tests with the staged Windows native runtime, then review and commit.
+  Reproduced the five-second startup deadlock before the fix. All 11 hosting cases now pass on
+  Windows (independently rerun by the parent); ten child repeat runs also passed. Added early-stop,
+  pre-dispatch failure, and post-dispatch failure/cancellation coverage; old native skips are now
+  inconclusive. Post-readiness failure logging is source-reviewed, not fault-injected. Noncooperative
+  startup callbacks and macOS/Linux native-thread qualification remain limitations, not solved claims.
 - [ ] **2b — Streaming service ownership.** Reproduce lazy channel enumeration after premature
   per-invocation service disposal. Retain the service lease until channel termination (including
   failed admission/cancellation), preserving scoped teardown and generated/AOT-safe registration.
@@ -103,3 +111,9 @@ useful follow-up; do not confuse their absence with a need to redesign the typed
   not a comparison to InfiniFrame/Tauri and not total browser-process memory measurements.
 - Cross-platform, real package distribution, and CodeAlta GUI qualification require target-host and
   application work; these gates cannot safely be checked off by this Windows-only repository pass.
+- Additional baseline checks: advanced deterministic validation passes; Windows browser `--stress`
+  passes 15 cases (including 100,000 messages), with 19 explicit skips. All four existing native
+  CTest executables pass from `artifacts/native/win-x64` (prebuilt assets, not a fresh native build).
+  An initial CTest attempt in the old `windows-x64-release` directory could not run its four tests:
+  that stale generated configuration points to the former `NeoWebView` checkout. It was preserved;
+  using the current `win-x64` directory resolved the verification-path error.

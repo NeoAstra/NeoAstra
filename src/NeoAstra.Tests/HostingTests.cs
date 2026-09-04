@@ -23,9 +23,195 @@ public sealed class HostingTests
     }
 
     [TestMethod]
+    public async Task HostedStartupCanAwaitInjectedDispatcherBeforeBecomingReady()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
+        using var cancellation = new CancellationTokenSource();
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NeoApplication? application = null;
+        var builder = Host.CreateApplicationBuilder();
+        builder.UseNeoAstra(options =>
+        {
+            options.Application.QueueInitialLaunchEvent = false;
+            options.Application.ShutdownMode = NeoApplicationShutdownMode.Explicit;
+            options.Quit.Timeout = TimeSpan.FromSeconds(1);
+        });
+        builder.Services.AddNeoAstraApplication(services => new CallbackStartup(async (app, token) =>
+        {
+            application = app;
+            await Task.Yield();
+            var state = await services.GetRequiredService<INeoUiDispatcher>().InvokeAsync(() =>
+            {
+                Assert.IsTrue(app.Dispatcher.CheckAccess());
+                return app.State;
+            }, token);
+            Assert.AreEqual(NeoApplicationState.Starting, state);
+            dispatched.TrySetResult();
+            await release.Task.WaitAsync(token);
+        }));
+        using var host = builder.Build();
+        var start = host.StartAsync(cancellation.Token);
+        try
+        {
+            // Observe native-load/startup failures instead of mistaking them for dispatcher timeouts.
+            var first = await Task.WhenAny(start, dispatched.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            if (first == start) await start;
+            await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(start.IsCompleted, "Dispatchability must not publish host readiness.");
+            Assert.IsNotNull(application);
+            Assert.AreEqual(NeoApplicationState.Starting, application.State);
+            release.TrySetResult();
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(NeoApplicationState.Ready, application.State);
+        }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            release.TrySetResult();
+            application?.ForceShutdown();
+            await host.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            try { await start.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
+            catch (NeoAstraNativeLibraryException) { }
+        }
+    }
+
+    [TestMethod]
+    public async Task NativeCreationFailureCompletesPendingDispatcherAndStartup()
+    {
+        var options = new NeoHostingOptions();
+        options.Application.MaximumPendingDispatches = 0; // Rejected before native loading on every OS.
+        options.Quit.Timeout = TimeSpan.FromSeconds(1);
+        var lifetime = new TrackingHostLifetime();
+        var service = new NeoHostedService(options, new TrackingStartup(), lifetime, NullLoggerFactory.Instance);
+        var dispatch = service.InvokeAsync(() => true).AsTask();
+        var start = service.StartAsync(CancellationToken.None);
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => dispatch.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            await FinishHostedServiceTestAsync(service, lifetime, null, start);
+        }
+    }
+
+    [TestMethod]
+    public async Task HostStopRecordedBeforeStartupIsReplayedAndRetainsStopOrdering()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
+        var options = new NeoHostingOptions();
+        options.Application.QueueInitialLaunchEvent = false;
+        options.Application.ShutdownMode = NeoApplicationShutdownMode.Explicit;
+        options.Quit.Timeout = TimeSpan.FromSeconds(2);
+        var lifetime = new TrackingHostLifetime();
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NeoApplication? application = null;
+        var startup = new CallbackStartup((app, _) =>
+        {
+            application = app;
+            app.Stopping += (_, _) => stopping.TrySetResult();
+            app.Stopped += (_, _) => stopped.TrySetResult();
+            return ValueTask.CompletedTask;
+        });
+        var service = new NeoHostedService(options, startup, lifetime, NullLoggerFactory.Instance);
+        lifetime.StopApplication(); // Registration observes this before the native application exists.
+        var start = service.StartAsync(CancellationToken.None);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<Exception>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (exception is NeoAstraNativeLibraryException native) Assert.Inconclusive($"Native hosting assets are unavailable: {native.Message}");
+            Assert.IsInstanceOfType<OperationCanceledException>(exception);
+            await stopping.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(stopped.Task.IsCompleted, "Native teardown must still wait for the host's stopped signal.");
+            await Task.Run(lifetime.NotifyStopped).WaitAsync(TimeSpan.FromSeconds(15));
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            await FinishHostedServiceTestAsync(service, lifetime, application, start);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task HostedStartupFailureOrCancellationAfterDispatchNeverBecomesReady(bool cancel)
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
+        using var cancellation = new CancellationTokenSource();
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NeoApplication? application = null;
+        var becameReady = false;
+        var lifetime = new TrackingHostLifetime();
+        var options = new NeoHostingOptions();
+        options.Application.QueueInitialLaunchEvent = false;
+        options.Application.ShutdownMode = NeoApplicationShutdownMode.Explicit;
+        options.Quit.Timeout = TimeSpan.FromSeconds(1);
+        NeoHostedService? service = null;
+        var startup = new CallbackStartup(async (app, token) =>
+        {
+            application = app;
+            app.StateChanged += (_, args) => becameReady |= args.Current == NeoApplicationState.Ready;
+            app.Stopped += (_, _) => stopped.TrySetResult();
+            await Task.Yield();
+            Assert.IsTrue(await service!.InvokeAsync(() => app.Dispatcher.CheckAccess(), token));
+            dispatched.TrySetResult();
+            try { await release.Task.WaitAsync(token); }
+            catch (OperationCanceledException) when (cancel && token.IsCancellationRequested)
+            {
+                // Startup may finish its own cancellation cleanup successfully. The host must
+                // still observe the canceled token rather than publish readiness afterward.
+                return;
+            }
+            throw new InvalidOperationException("startup after dispatch failed");
+        });
+        service = new NeoHostedService(options, startup, lifetime, NullLoggerFactory.Instance);
+        var start = service.StartAsync(cancellation.Token);
+        try
+        {
+            var first = await Task.WhenAny(start, dispatched.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            if (first == start) await start;
+            await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (cancel) cancellation.Cancel();
+            else release.TrySetResult();
+            var exception = await Assert.ThrowsAsync<Exception>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (cancel) Assert.IsInstanceOfType<OperationCanceledException>(exception);
+            else
+            {
+                Assert.IsInstanceOfType<InvalidOperationException>(exception);
+                Assert.AreEqual("startup after dispatch failed", exception.Message);
+            }
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(becameReady);
+            // In particular, a faulted native exit must not escape this host-lifetime callback.
+            await Task.Run(lifetime.NotifyStopped).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await FinishHostedServiceTestAsync(service, lifetime, application, start);
+        }
+    }
+
+    [TestMethod]
     public async Task NeoAstraQuitStopsHostExactlyOnceAndJoinsNativeExit()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
         try
         {
             var lifetime = new TrackingHostLifetime();
@@ -42,16 +228,16 @@ public sealed class HostingTests
             Assert.AreEqual(NeoQuitResult.Completed, await quit.WaitAsync(TimeSpan.FromSeconds(10)));
             Assert.AreEqual(1, lifetime.StopCalls);
         }
-        catch (NeoAstraNativeLibraryException)
+        catch (NeoAstraNativeLibraryException exception)
         {
-            // Managed CI does not stage native assets; native-enabled Windows validation executes this path.
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
         }
     }
 
     [TestMethod]
     public async Task ExternalHostStopFinishesServicesOnBothSidesBeforeNativeExit()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
         try
         {
             var events = new List<string>();
@@ -87,13 +273,16 @@ public sealed class HostingTests
                 "before-start", "after-start", "after-stop-start", "after-stop-end", "before-stop-start", "before-stop-end",
             }, events);
         }
-        catch (NeoAstraNativeLibraryException) { }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
     }
 
     [TestMethod]
     public async Task HostedServiceStopExceptionDoesNotDeadlockNativeTeardown()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
         try
         {
             var startup = new TrackingStartup();
@@ -114,13 +303,16 @@ public sealed class HostingTests
             await Assert.ThrowsAsync<Exception>(async () => await host.StopAsync().WaitAsync(TimeSpan.FromSeconds(10)));
             await exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }
-        catch (NeoAstraNativeLibraryException) { }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
     }
 
     [TestMethod]
     public async Task HostedApplicationStartupExceptionDoesNotLeakNativeLoop()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
         try
         {
             var builder = Host.CreateApplicationBuilder();
@@ -128,16 +320,19 @@ public sealed class HostingTests
             builder.Services.AddSingleton<INeoHostedApplication>(new ThrowingStartup());
             using var host = builder.Build();
             var exception = await Assert.ThrowsAsync<Exception>(async () => await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10)));
-            if (exception is NeoAstraNativeLibraryException) return;
+            if (exception is NeoAstraNativeLibraryException native) Assert.Inconclusive($"Native hosting assets are unavailable: {native.Message}");
             Assert.IsInstanceOfType<InvalidOperationException>(exception);
         }
-        catch (NeoAstraNativeLibraryException) { }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
     }
 
     [TestMethod]
     public async Task CanceledHostStopDoesNotDeadlockNativeTeardown()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Native hosting is currently qualified by these tests only on Windows.");
         try
         {
             var startup = new TrackingStartup();
@@ -158,7 +353,10 @@ public sealed class HostingTests
             await Assert.ThrowsAsync<OperationCanceledException>(async () => await host.StopAsync(cancellation.Token));
             await exited.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
-        catch (NeoAstraNativeLibraryException) { }
+        catch (NeoAstraNativeLibraryException exception)
+        {
+            Assert.Inconclusive($"Native hosting assets are unavailable: {exception.Message}");
+        }
     }
 
     private static async Task VerifyAsync(AsyncServiceScope scope, TrackingScopeFactory source)
@@ -167,6 +365,18 @@ public sealed class HostingTests
         await scope.DisposeAsync();
         await scope.DisposeAsync();
         Assert.AreEqual(before + 1, source.Disposed);
+    }
+
+    private static async Task FinishHostedServiceTestAsync(NeoHostedService service, TrackingHostLifetime lifetime,
+        NeoApplication? application, Task start)
+    {
+        // Even assertion failures must release the foreground native thread. This is test cleanup,
+        // not the normal host stop path whose ordering is asserted by the tests above.
+        application?.ForceShutdown();
+        await service.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Run(lifetime.NotifyStopped).WaitAsync(TimeSpan.FromSeconds(15));
+        try { await start.WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (Exception) when (start.IsFaulted || start.IsCanceled) { /* The test observes startup failures. */ }
     }
 
     private sealed class TrackingScopeFactory : IServiceScopeFactory
@@ -204,6 +414,12 @@ public sealed class HostingTests
             Application = application;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class CallbackStartup(Func<NeoApplication, CancellationToken, ValueTask> callback) : INeoHostedApplication
+    {
+        public ValueTask StartAsync(NeoApplication application, CancellationToken cancellationToken)
+            => callback(application, cancellationToken);
     }
 
     private sealed class RecordingHostedService(string name, List<string> events) : IHostedService
