@@ -316,11 +316,11 @@ internal sealed record ValueCommandResult(byte[] Json) : CommandResult;
 internal sealed record VoidCommandResult : CommandResult { internal static VoidCommandResult Instance { get; } = new(); }
 internal interface IChannelCommandResult
 {
-    ValueTask StartAsync(NeoRpcSession session, string channelId, CancellationToken cancellationToken);
+    NeoRpcSession.ChannelState Prepare(NeoRpcSession session, string channelId);
 }
 
 internal sealed record ChannelCommandResult<T>(NeoRpcChannel<T> Channel) : CommandResult, IChannelCommandResult
 {
-    public ValueTask StartAsync(NeoRpcSession session, string channelId, CancellationToken cancellationToken)
-        => session.StartChannelAsync(channelId, Channel, cancellationToken);
+    public NeoRpcSession.ChannelState Prepare(NeoRpcSession session, string channelId)
+        => session.PrepareChannel(channelId, Channel);
 }

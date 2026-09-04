@@ -355,8 +355,12 @@ public readonly struct NeoRpcContext
 
 /// <summary>Represents a generated or direct bounded JSON channel source.</summary>
 /// <typeparam name="T">The declared channel item type.</typeparam>
-public sealed class NeoRpcChannel<T>
+public sealed class NeoRpcChannel<T> : IAsyncDisposable, INeoRpcChannel
 {
+    private readonly IAsyncDisposable? _serviceLease;
+    private readonly INeoRpcChannel? _sourceOwner;
+    private TaskCompletionSource? _disposeCompletion;
+
     /// <summary>Initializes a channel result.</summary>
     /// <param name="items">The asynchronous item source.</param>
     /// <param name="itemTypeInfo">Source-generated JSON metadata for items.</param>
@@ -373,6 +377,46 @@ public sealed class NeoRpcChannel<T>
     public IAsyncEnumerable<T> Items { get; }
     /// <summary>Gets source-generated item serialization metadata.</summary>
     public JsonTypeInfo<T> ItemTypeInfo { get; }
+
+    private NeoRpcChannel(NeoRpcChannel<T> source, IAsyncDisposable serviceLease) : this(source.Items, source.ItemTypeInfo)
+    {
+        _sourceOwner = source;
+        _serviceLease = serviceLease;
+    }
+
+    object INeoRpcChannel.WithServiceLease(IAsyncDisposable lease) => new NeoRpcChannel<T>(this, lease);
+
+    /// <summary>Releases retained service leases without enumerating the item source.</summary>
+    /// <returns>A task representing exactly-once lease cleanup, shared by concurrent callers.</returns>
+    /// <remarks>The RPC host calls this after enumerator disposal or when a result is abandoned. Direct callers must finish disposing their enumerator before disposing the channel. An unenumerated channel must also be disposed.</remarks>
+    /// <exception cref="Exception">An application service's disposal failed.</exception>
+    public ValueTask DisposeAsync()
+    {
+        var completion = Volatile.Read(ref _disposeCompletion);
+        if (completion is null)
+        {
+            var candidate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            completion = Interlocked.CompareExchange(ref _disposeCompletion, candidate, null) ?? candidate;
+            if (ReferenceEquals(completion, candidate)) _ = DisposeCoreAsync(completion);
+        }
+        return new(completion.Task);
+    }
+
+    private async Task DisposeCoreAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            try { if (_sourceOwner is not null) await _sourceOwner.DisposeAsync().ConfigureAwait(false); }
+            finally { if (_serviceLease is not null) await _serviceLease.DisposeAsync().ConfigureAwait(false); }
+            completion.TrySetResult();
+        }
+        catch (Exception exception) { completion.TrySetException(exception); }
+    }
+}
+
+internal interface INeoRpcChannel : IAsyncDisposable
+{
+    object WithServiceLease(IAsyncDisposable lease);
 }
 
 /// <summary>Represents an opaque session-owned resource identifier.</summary>

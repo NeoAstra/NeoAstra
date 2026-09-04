@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using NeoAstra.Rpc;
 
 namespace NeoAstra.Tests;
@@ -148,6 +149,422 @@ public sealed class RpcTests
         await invocation;
         AssertSingleTerminal(frames, "commit-race", null);
     }
+
+    [TestMethod]
+    public async Task PerInvocationServiceRemainsAliveUntilLazyChannelCleanup()
+    {
+        var disposed = 0;
+        var enumeratorDisposed = false;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activator = new NeoRpcServiceActivator<ConcurrentService>(_ => new ConcurrentService(1, () =>
+        {
+            Assert.IsTrue(enumeratorDisposed, "The service must outlive its enumerator.");
+            Interlocked.Increment(ref disposed);
+        }), NeoRpcServiceLifetime.PerInvocation);
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddServiceActivator(activator);
+            builder.AddChannelCommand<Request, Response>("service.stream", (_, context, _) =>
+                activator.InvokeAsync(context, service => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(service), RpcTestJsonContext.Default.Response))), RpcTestJsonContext.Default.Request);
+        });
+        await using (host) await using (session)
+        {
+            try
+            {
+                await session.ReceiveAsync(Invoke("lazy", "service.stream", "{\"id\":\"x\"}"));
+                Assert.IsTrue(Parse(frames.First()).GetProperty("ok").GetBoolean(), "Returning a lazy channel must not dispose its service.");
+                Assert.AreEqual(0, disposed);
+            }
+            finally { release.TrySetResult(); }
+            await WaitUntilAsync(() => frames.Any(frame => Kind(frame) == "channel_complete"));
+            Assert.AreEqual(1, disposed);
+        }
+
+        async IAsyncEnumerable<Response> Items(ConcurrentService service, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await release.Task.WaitAsync(cancellationToken);
+                Assert.AreEqual(0, disposed);
+                yield return new Response(service.Id.ToString(), "alive");
+            }
+            finally { enumeratorDisposed = true; }
+        }
+    }
+
+    [TestMethod]
+    public async Task ChannelServiceScopesDrainEnumeratorsBeforeDisposingServices()
+    {
+        foreach (var lifetime in Enum.GetValues<NeoRpcServiceLifetime>())
+        {
+            var service = new ChannelService { HoldCleanup = true };
+            var activator = new NeoRpcServiceActivator<ChannelService>(_ => service, lifetime);
+            var (host, session, _) = Create(builder => RegisterChannelService(builder, activator));
+            await using (host) await using (session)
+            {
+                try
+                {
+                    await session.ReceiveAsync(Invoke("scope-stream", "service.stream", "{\"id\":\"x\"}"));
+                    await service.EnumerationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                    var closing = session.DisposeAsync().AsTask();
+                    await service.CleanupEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.IsFalse(closing.IsCompleted, lifetime.ToString());
+                    Assert.AreEqual(1, session.ActiveChannelCount, "A closing channel must remain tracked through enumerator cleanup.");
+                    Assert.AreEqual(0, service.DisposeCount, lifetime.ToString());
+                    service.ReleaseCleanup.TrySetResult();
+                    await closing.WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.AreEqual(1, service.EnumeratorDisposeCount);
+                    Assert.AreEqual(lifetime is NeoRpcServiceLifetime.PerInvocation or NeoRpcServiceLifetime.PerDocumentSession ? 1 : 0, service.DisposeCount);
+                    if (lifetime == NeoRpcServiceLifetime.PerView) await host.CloseViewServicesAsync("fixture");
+                    await host.DisposeAsync();
+                    Assert.AreEqual(1, service.DisposeCount);
+                }
+                finally { service.ReleaseCleanup.TrySetResult(); service.ReleaseItems.TrySetResult(); }
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task UnstartedChannelResultsReleaseServicesOnEveryAbandonmentPath()
+    {
+        foreach (var mode in new[] { "cancel", "timeout", "receive-cancel", "send-failure", "reentrant-close", "null", "throw", "session-close" })
+        {
+            var service = new ChannelService();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var activator = new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation);
+            var builder = new NeoRpcBuilder();
+            builder.AddServiceActivator(activator);
+            builder.AddChannelCommand<Request, Response>("service.stream", (_, context, _) => activator.InvokeAsync<NeoRpcChannel<Response>>(context, async instance =>
+            {
+                entered.TrySetResult();
+                await release.Task; // Deliberately return a late result even if invocation cancellation already won.
+                return mode switch { "null" => null!, "throw" => throw new InvalidOperationException("handler failed"), _ => instance.CreateChannel() };
+            }), RpcTestJsonContext.Default.Request, new() { Timeout = mode == "timeout" ? TimeSpan.FromMilliseconds(30) : TimeSpan.FromSeconds(5) });
+            await using var host = builder.Build();
+            var frames = new ConcurrentQueue<string>();
+            NeoRpcSession? session = null;
+            session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "abandon-" + mode), async (json, _) =>
+            {
+                frames.Enqueue(json);
+                if (Kind(json) == "result" && Parse(json).GetProperty("ok").GetBoolean())
+                {
+                    if (mode == "send-failure") throw new InvalidOperationException("send failed");
+                    if (mode == "reentrant-close")
+                    {
+                        var channelId = Parse(json).GetProperty("value").GetProperty("channel").GetString();
+                        await session!.ReceiveAsync(ChannelClose(channelId!));
+                        await session.ReceiveAsync(ChannelClose(channelId!));
+                    }
+                }
+            });
+            await using (session)
+            using (var receiveCancellation = new CancellationTokenSource())
+            {
+                var invocation = session.ReceiveAsync(Invoke("abandoned", "service.stream", "{\"id\":\"x\"}"), receiveCancellation.Token).AsTask();
+                Task? closing = null;
+                try
+                {
+                    await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                    if (mode == "cancel") await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"cancel\",\"id\":\"abandoned\"}");
+                    if (mode == "receive-cancel") receiveCancellation.Cancel();
+                    if (mode == "session-close") closing = session.DisposeAsync().AsTask();
+                    if (mode is "cancel" or "timeout" or "receive-cancel" or "session-close") await WaitUntilAsync(() => !frames.IsEmpty);
+                    release.TrySetResult();
+                    if (mode == "send-failure") await Assert.ThrowsAsync<InvalidOperationException>(() => invocation.WaitAsync(TimeSpan.FromSeconds(2)));
+                    else await invocation.WaitAsync(TimeSpan.FromSeconds(2));
+                    if (closing is not null) await closing.WaitAsync(TimeSpan.FromSeconds(2));
+                    await WaitUntilAsync(() => service.DisposeCount == 1 && session.ActiveChannelCount == 0);
+                    Assert.AreEqual(0, service.EnumerationCount, mode);
+                    Assert.AreEqual(1, service.DisposeCount, mode);
+                    Assert.AreEqual(0, session.ActiveChannelCount, mode);
+                    Assert.AreEqual(0, session.ActiveInvocationCount, mode);
+                    Assert.AreEqual(1, frames.Count(frame => Kind(frame) == "result"), mode);
+                }
+                finally { release.TrySetResult(); service.ReleaseItems.TrySetResult(); }
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ConcurrentChannelAdmissionReservesCapacityBeforeSendingResults()
+    {
+        var services = new ConcurrentBag<ChannelService>();
+        var firstSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activator = new NeoRpcServiceActivator<ChannelService>(_ => { var service = new ChannelService(); services.Add(service); return service; }, NeoRpcServiceLifetime.PerInvocation);
+        var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumChannelsPerSession = 1 });
+        RegisterChannelService(builder, activator);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "capacity"), async (json, _) =>
+        {
+            frames.Enqueue(json);
+            if (Kind(json) == "result" && Parse(json).GetProperty("ok").GetBoolean())
+            {
+                firstSend.TrySetResult();
+                await releaseSend.Task;
+            }
+        });
+        var invocations = Enumerable.Range(0, 8).Select(index => session.ReceiveAsync(Invoke("capacity-" + index, "service.stream", "{\"id\":\"x\"}")).AsTask()).ToArray();
+        try
+        {
+            await firstSend.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitUntilAsync(() => services.Count == 8);
+            Assert.AreEqual(1, session.ActiveChannelCount);
+            Assert.IsTrue(services.All(service => service.EnumerationCount == 0));
+            releaseSend.TrySetResult();
+            await Task.WhenAll(invocations).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(7, services.Sum(service => service.DisposeCount));
+            Assert.AreEqual(7, frames.Count(frame => ErrorCode(frame) == NeoRpcErrorCodes.TooManyRequests));
+            var channel = frames.Select(Parse).Single(root => root.GetProperty("ok").GetBoolean()).GetProperty("value").GetProperty("channel").GetString();
+            await session.ReceiveAsync(ChannelClose(channel!)).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitUntilAsync(() => session.ActiveChannelCount == 0);
+            Assert.AreEqual(8, services.Sum(service => service.DisposeCount));
+            Assert.AreEqual(0, session.ActiveChannelCount);
+        }
+        finally
+        {
+            releaseSend.TrySetResult();
+            foreach (var service in services) service.ReleaseItems.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    public async Task ChannelTerminationAlwaysReleasesItsLeaseAndTracksCleanup()
+    {
+        foreach (var mode in new[] { "complete", "source-failure", "enumerator-failure", "item-serialization-failure", "item-send-failure", "dispose-failure", "credit-close" })
+        {
+            var service = new ChannelService
+            {
+                ThrowOnMove = mode == "source-failure", ThrowOnDispose = mode == "dispose-failure",
+                ThrowOnGetEnumerator = mode == "enumerator-failure", ThrowOnSerialize = mode == "item-serialization-failure",
+                ItemCount = mode == "credit-close" ? 3 : 1
+            };
+            service.ReleaseItems.TrySetResult();
+            var diagnostics = new RpcDiagnosticSink();
+            var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 1, DiagnosticSink = diagnostics });
+            RegisterChannelService(builder, new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation));
+            await using var host = builder.Build();
+            var frames = new ConcurrentQueue<string>();
+            await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "terminal-" + mode), (json, _) =>
+            {
+                frames.Enqueue(json);
+                if (mode == "item-send-failure" && Kind(json) == "channel_item") throw new InvalidOperationException("send failed");
+                return ValueTask.CompletedTask;
+            });
+            await session.ReceiveAsync(Invoke("terminal", "service.stream", "{\"id\":\"x\"}"));
+            if (mode == "credit-close")
+            {
+                await WaitUntilAsync(() => service.YieldCount == 2);
+                Assert.AreEqual(0, service.DisposeCount);
+                var channel = Parse(frames.First()).GetProperty("value").GetProperty("channel").GetString();
+                await Task.WhenAll(session.ReceiveAsync(ChannelClose(channel!)).AsTask(), session.ReceiveAsync(ChannelClose(channel!)).AsTask()).WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            await WaitUntilAsync(() => session.ActiveChannelCount == 0);
+            Assert.AreEqual(mode == "enumerator-failure" ? 0 : 1, service.EnumeratorDisposeCount, mode);
+            Assert.AreEqual(1, service.DisposeCount, mode);
+            if (mode == "dispose-failure")
+            {
+                Assert.IsTrue(diagnostics.Values.Any(value => value.Code == "channel_cleanup_failed"));
+                Assert.IsTrue(frames.Any(frame => Kind(frame) == "channel_error"));
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ReentrantChannelCloseFromPumpSendsDoesNotAwaitItsOwnPump()
+    {
+        foreach (var sendKind in new[] { "channel_item", "channel_complete" })
+        {
+            var service = new ChannelService();
+            service.ReleaseItems.TrySetResult();
+            var builder = new NeoRpcBuilder();
+            RegisterChannelService(builder, new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation));
+            await using var host = builder.Build();
+            var closeAccepted = false;
+            var closeTimedOut = false;
+            NeoRpcSession? session = null;
+            session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "reentrant-" + sendKind), async (json, _) =>
+            {
+                if (Kind(json) != sendKind) return;
+                var channel = Parse(json).GetProperty("channel").GetString();
+                try
+                {
+                    await session!.ReceiveAsync(ChannelClose(channel!)).AsTask().WaitAsync(TimeSpan.FromMilliseconds(500));
+                    closeAccepted = true;
+                }
+                catch (TimeoutException)
+                {
+                    // Break the transport cycle so a failed regression does not leave test teardown hanging.
+                    closeTimedOut = true;
+                    throw;
+                }
+            });
+            await using (session)
+            {
+                await session.ReceiveAsync(Invoke("reentrant", "service.stream", "{\"id\":\"x\"}"));
+                await WaitUntilAsync(() => session.ActiveChannelCount == 0);
+                Assert.IsFalse(closeTimedOut, "A reentrant close deadlocked the " + sendKind + " send.");
+                Assert.IsTrue(closeAccepted, sendKind);
+                Assert.AreEqual(1, service.DisposeCount);
+                Assert.AreEqual(1, service.EnumeratorDisposeCount);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ChannelOwnershipIsCapturedBeforeResultConversion()
+    {
+        var service = new ChannelService();
+        var activator = new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation);
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddServiceActivator(activator);
+            // Deliberately use a value descriptor whose conversion fails after activation has returned the channel.
+            builder.AddCommand<Request, NeoRpcChannel<Response>>("service.convert", (_, context, _) =>
+                activator.InvokeAsync(context, instance => ValueTask.FromResult(instance.CreateChannel())), RpcTestJsonContext.Default.Request,
+                JsonMetadataServices.CreateValueInfo<NeoRpcChannel<Response>>(new JsonSerializerOptions(), new FailingConverter<NeoRpcChannel<Response>>()));
+        });
+        await using (host) await using (session)
+        {
+            await session.ReceiveAsync(Invoke("convert", "service.convert", "{\"id\":\"x\"}"));
+            Assert.AreEqual(NeoRpcErrorCodes.SerializationFailed, ErrorCode(frames.Single()));
+            Assert.AreEqual(0, service.EnumerationCount);
+            Assert.AreEqual(1, service.DisposeCount);
+            Assert.AreEqual(0, session.ActiveInvocationCount);
+        }
+    }
+
+    [TestMethod]
+    public async Task ChannelCloseTracksAndAwaitsAsynchronousServiceDisposal()
+    {
+        var service = new BlockingAsyncDisposable();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activator = new NeoRpcServiceActivator<BlockingAsyncDisposable>(_ => service, NeoRpcServiceLifetime.PerInvocation);
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddServiceActivator(activator);
+            builder.AddChannelCommand<Request, Response>("service.stream", (_, context, _) => activator.InvokeAsync(context, _ =>
+                ValueTask.FromResult(new NeoRpcChannel<Response>(Items(), RpcTestJsonContext.Default.Response))), RpcTestJsonContext.Default.Request);
+        });
+        await using (host) await using (session)
+        {
+            try
+            {
+                await session.ReceiveAsync(Invoke("async-dispose", "service.stream", "{\"id\":\"x\"}"));
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                var channel = Parse(frames.First()).GetProperty("value").GetProperty("channel").GetString();
+                var firstClose = session.ReceiveAsync(ChannelClose(channel!)).AsTask();
+                await service.DisposeEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                var secondClose = session.ReceiveAsync(ChannelClose(channel!)).AsTask();
+                var sessionClose = session.DisposeAsync().AsTask();
+                var hostClose = host.DisposeAsync().AsTask();
+                Assert.IsTrue(firstClose.IsCompletedSuccessfully, "A close control frame acknowledges cancellation without waiting for service cleanup.");
+                Assert.IsTrue(secondClose.IsCompletedSuccessfully);
+                Assert.IsFalse(sessionClose.IsCompleted);
+                Assert.IsFalse(hostClose.IsCompleted);
+                Assert.AreEqual(1, session.ActiveChannelCount);
+                Assert.AreEqual(1, service.DisposeCount);
+                service.ReleaseDispose.TrySetResult();
+                await Task.WhenAll(firstClose, secondClose, sessionClose, hostClose).WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.AreEqual(0, session.ActiveChannelCount);
+                Assert.AreEqual(1, service.DisposeCount);
+            }
+            finally { service.ReleaseDispose.TrySetResult(); }
+        }
+
+        async IAsyncEnumerable<Response> Items([EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            yield break;
+        }
+    }
+
+    [TestMethod]
+    public async Task NoncooperativeChannelKeepsItsServiceAliveAfterTeardownWarning()
+    {
+        var service = new ChannelService { IgnoreCancellation = true };
+        var diagnostics = new RpcDiagnosticSink();
+        var (host, session, _) = Create(builder => RegisterChannelService(builder,
+            new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation)), new NeoRpcOptions { DiagnosticSink = diagnostics });
+        await using (host) await using (session)
+        {
+            try
+            {
+                await session.ReceiveAsync(Invoke("uncooperative", "service.stream", "{\"id\":\"x\"}"));
+                await service.EnumerationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                var closing = session.DisposeAsync().AsTask();
+                await diagnostics.TeardownWarning.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                Assert.IsFalse(closing.IsCompleted);
+                Assert.AreEqual(0, service.DisposeCount);
+                Assert.AreEqual(1, session.ActiveChannelCount);
+                service.ReleaseItems.TrySetResult();
+                await closing.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.AreEqual(1, service.DisposeCount);
+            }
+            finally { service.ReleaseItems.TrySetResult(); }
+        }
+    }
+
+    [TestMethod]
+    public async Task DirectUnenumeratedChannelCopiesReleaseTheirOwnLeasesExactlyOnce()
+    {
+        var services = new ConcurrentBag<BlockingAsyncDisposable>();
+        var activator = new NeoRpcServiceActivator<BlockingAsyncDisposable>(_ => { var service = new BlockingAsyncDisposable(); services.Add(service); return service; }, NeoRpcServiceLifetime.PerInvocation);
+        NeoRpcChannel<Response>? first = null;
+        NeoRpcChannel<Response>? second = null;
+        var source = new NeoRpcChannel<Response>(Items(), RpcTestJsonContext.Default.Response);
+        var (host, session, _) = Create(builder =>
+        {
+            builder.AddServiceActivator(activator);
+            builder.AddCommand<Request>("service.capture", async (_, context, _) =>
+            {
+                first = await activator.InvokeAsync(context, _ => ValueTask.FromResult(source));
+                second = await activator.InvokeAsync(context, _ => ValueTask.FromResult(source));
+            }, RpcTestJsonContext.Default.Request);
+        });
+        await using (host) await using (session)
+        {
+            try
+            {
+                await session.ReceiveAsync(Invoke("copies", "service.capture", "{\"id\":\"x\"}"));
+                Assert.AreNotSame(source, first);
+                Assert.AreNotSame(first, second);
+                var firstDispose = first!.DisposeAsync().AsTask();
+                Assert.AreSame(firstDispose, first.DisposeAsync().AsTask());
+                Assert.IsFalse(firstDispose.IsCompleted);
+                Assert.AreEqual(1, services.Sum(service => service.DisposeCount));
+                foreach (var service in services) service.ReleaseDispose.TrySetResult();
+                await firstDispose.WaitAsync(TimeSpan.FromSeconds(2));
+                await second!.DisposeAsync();
+                Assert.AreEqual(2, services.Sum(service => service.DisposeCount));
+            }
+            finally
+            {
+                foreach (var service in services) service.ReleaseDispose.TrySetResult();
+                if (first is not null) await first.DisposeAsync();
+                if (second is not null) await second.DisposeAsync();
+            }
+        }
+
+        static async IAsyncEnumerable<Response> Items()
+        {
+            await Task.CompletedTask;
+            Assert.Fail("An abandoned channel must never be enumerated.");
+            yield break;
+        }
+    }
+
+    private static void RegisterChannelService(NeoRpcBuilder builder, NeoRpcServiceActivator<ChannelService> activator)
+    {
+        builder.AddServiceActivator(activator);
+        builder.AddChannelCommand<Request, Response>("service.stream", (_, context, _) =>
+            activator.InvokeAsync(context, service => ValueTask.FromResult(service.CreateChannel())), RpcTestJsonContext.Default.Request);
+    }
+
+    private static string ChannelClose(string id) => $"{{\"neoastra\":1,\"kind\":\"channel_close\",\"channel\":\"{id}\"}}";
 
     [TestMethod]
     public async Task ScopedServiceActivationIsExactlyOnceAndDisposesAtItsBoundary()
@@ -771,6 +1188,81 @@ public sealed class RpcTests
         internal static int NextId;
         internal int Id { get; } = id;
         public void Dispose() => dispose();
+    }
+
+    private sealed class ChannelService : IAsyncDisposable
+    {
+        internal TaskCompletionSource EnumerationEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseItems { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CleanupEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseCleanup { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int EnumerationCount;
+        internal int EnumeratorDisposeCount;
+        internal int DisposeCount;
+        internal int YieldCount;
+        internal int ItemCount = 1;
+        internal bool HoldCleanup;
+        internal bool IgnoreCancellation;
+        internal bool ThrowOnMove;
+        internal bool ThrowOnDispose;
+        internal bool ThrowOnGetEnumerator;
+        internal bool ThrowOnSerialize;
+
+        internal NeoRpcChannel<Response> CreateChannel() => new(ThrowOnGetEnumerator ? new FailingEnumerable() : Items(),
+            ThrowOnSerialize ? JsonMetadataServices.CreateValueInfo<Response>(new JsonSerializerOptions(), new FailingConverter<Response>()) : RpcTestJsonContext.Default.Response);
+
+        private async IAsyncEnumerable<Response> Items([EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref EnumerationCount);
+            EnumerationEntered.TrySetResult();
+            try
+            {
+                await ReleaseItems.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : cancellationToken);
+                Assert.AreEqual(0, DisposeCount, "A channel enumerated a disposed service.");
+                if (ThrowOnMove) throw new InvalidOperationException("source failed");
+                for (var index = 0; index < ItemCount; index++)
+                {
+                    Interlocked.Increment(ref YieldCount);
+                    yield return new Response(index.ToString(), "fixture");
+                }
+            }
+            finally
+            {
+                CleanupEntered.TrySetResult();
+                if (HoldCleanup) await ReleaseCleanup.Task;
+                Interlocked.Increment(ref EnumeratorDisposeCount);
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Assert.AreEqual(EnumerationCount, EnumeratorDisposeCount, "Service disposal preceded enumerator disposal.");
+            Interlocked.Increment(ref DisposeCount);
+            if (ThrowOnDispose) throw new InvalidOperationException("service disposal failed");
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FailingEnumerable : IAsyncEnumerable<Response>
+    {
+        public IAsyncEnumerator<Response> GetAsyncEnumerator(CancellationToken cancellationToken = default) => throw new InvalidOperationException("enumerator creation failed");
+    }
+
+    private sealed class FailingConverter<T> : JsonConverter<T>
+    {
+        public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => throw new NotSupportedException();
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) => throw new JsonException("serialization failed");
+    }
+
+    private sealed class RpcDiagnosticSink : INeoRpcDiagnosticSink
+    {
+        internal ConcurrentQueue<NeoRpcDiagnostic> Values { get; } = new();
+        internal TaskCompletionSource TeardownWarning { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Write(NeoRpcDiagnostic diagnostic)
+        {
+            Values.Enqueue(diagnostic);
+            if (diagnostic.Code == "teardown_timeout") TeardownWarning.TrySetResult();
+        }
     }
 }
 

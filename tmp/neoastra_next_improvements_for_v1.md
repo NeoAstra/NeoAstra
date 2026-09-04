@@ -43,10 +43,17 @@ remain ignored. Each implementation step includes this checklist update in its c
   pre-dispatch failure, and post-dispatch failure/cancellation coverage; old native skips are now
   inconclusive. Post-readiness failure logging is source-reviewed, not fault-injected. Noncooperative
   startup callbacks and macOS/Linux native-thread qualification remain limitations, not solved claims.
-- [ ] **2b — Streaming service ownership.** Reproduce lazy channel enumeration after premature
+- [x] **2b — Streaming service ownership.** Reproduce lazy channel enumeration after premature
   per-invocation service disposal. Retain the service lease until channel termination (including
   failed admission/cancellation), preserving scoped teardown and generated/AOT-safe registration.
   Add focused lifecycle regressions, update RPC docs, verify generated fixtures, and commit.
+  Reproduced premature disposal, then retained invocation-specific leases through enumerator cleanup.
+  Admission now reserves capacity before ID delivery, and abandoned results release their lease.
+  Parent review also reproduced reentrant-close deadlock during pump sends; close now accepts
+  cancellation without awaiting its own pump. All 41 RPC/generator tests pass (parent rerun plus
+  child repeats), covering all lifetimes, cancellation, admission, conversion/send/enumeration/disposal
+  failures, and concurrent teardown. Direct callers must dispose owned channels. Noncooperative
+  enumeration/send can keep teardown pending after the warning; no forced safe teardown is claimed.
 - [x] **2c — Frontend channel cancellation.** Keep an `invokeChannel` abort signal effective after
   opening the channel, remove listeners on every terminal path, and test cancellation/open races.
   Preserve the existing bounded overflow policy; document that transport ACKs are not durable

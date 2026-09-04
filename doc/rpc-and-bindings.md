@@ -24,7 +24,7 @@ public sealed class DocumentsService
 internal partial class ApplicationJsonContext : JsonSerializerContext;
 ```
 
-The `NeoAstra` package carries `NeoAstra.Generator` as an analyzer automatically; applications must not add a generator package reference. Generated extensions support a direct singleton instance and an AOT-safe factory with `ApplicationSingleton`, `PerView`, `PerDocumentSession`, or `PerInvocation` lifetime. The latter three are canceled before scope disposal. Build without DI:
+The `NeoAstra` package carries `NeoAstra.Generator` as an analyzer automatically; applications must not add a generator package reference. Generated extensions support a direct singleton instance and an AOT-safe factory with `ApplicationSingleton`, `PerView`, `PerDocumentSession`, or `PerInvocation` lifetime. Owned work is canceled before scope disposal. Build without DI:
 
 ```csharp
 var builder = new NeoRpcBuilder(options).AddDocumentsService(new DocumentsService());
@@ -32,6 +32,19 @@ var changed = builder.AddDocumentEventsChangedEvent();
 var rpc = builder.Build();
 await using var binding = NeoRpcViewBinding.Bind(rpc, view);
 ```
+
+Factory-activated channel methods retain a service lease beyond the method's return. The host
+disposes the asynchronous enumerator before releasing that lease on completion, failure, or close.
+`PerInvocation` services are then disposed; document/view/application services remain alive until
+their scope closes and all active leases drain. A rejected, canceled, or undeliverable channel result
+also releases its lease without starting enumeration. Ordinary DTO and void results keep their
+invocation-scoped cleanup. Sync, `Task`, and `ValueTask` channel factories use the same generated
+activation path; no reflection or separate streaming service registration is required.
+
+The RPC host owns returned channels. Direct users of `NeoRpcServiceActivator<TService>.InvokeAsync`
+must dispose their returned `NeoRpcChannel<T>` after disposing its enumerator, including when they
+abandon a channel without enumerating it. Channel disposal is idempotent and concurrent callers await
+the same cleanup. Do not dispose a channel while its enumerator is still using the service.
 
 The generator requires an explicit `NeoRpcJsonContext` because Roslyn generators cannot feed generated attributes into the built-in `System.Text.Json` generator during the same compiler pass. It verifies that every request, result, event, and channel root has a matching `[JsonSerializable]` declaration. Missing metadata is a compile error (`NEORPC009`), not a runtime reflection fallback. Other diagnostics reject invalid/duplicate names, collisions in generated TypeScript and C# member names, overload collisions, invalid framework parameters, unsafe types, cycles, non-string dictionary keys, duplicate or hidden JSON properties, indexers, inaccessible serialization constructors or required members, contradictory omission/nullability metadata, and incompletely configured 64-bit integers.
 
@@ -47,6 +60,16 @@ The host snapshots trusted view/session identity, source origin, main-frame stat
 Request deserialization, application execution, and response serialization are separate phases. Malformed or JSON `null` request DTOs fail with `invalid_request` before application code; an application-thrown serialization exception follows normal application mapping/redaction; an unserializable result fails with `serialization_failed`. Errors use bounded lowercase colon-separated identifiers, bounded control-free client messages, and optional bounded printable-ASCII correlation IDs. `NeoRpcException` is an explicit safe application error; `INeoRpcErrorMapper` handles other known failures, but malformed mapper output is rejected. Release defaults redact exception types, stack traces, paths, and nested messages. `IncludeDevelopmentErrorDetails` is an explicit bounded development-only switch.
 
 Events are ordered per subscription and use declaration-owned `DropOldest`, `DropNewest`, `Coalesce`, or `Fail` overflow. Bounded JSON channels use monotonic sequence numbers and acknowledgements to bound unacknowledged transport items. The frontend acknowledges admission into its buffer, not consumption by the application iterator: a slow reader can still exhaust its bounded buffer and receive `too_many_requests`. Applications that observe durable work need a snapshot/resynchronization policy rather than treating the channel as a lossless event log. Resources are opaque session-owned handles closed by `resource_close` or teardown. These channel/resource frames reserve room for a future scalable binary extension.
+
+Channel capacity is reserved before the result ID is sent; enumeration starts only after successful
+delivery. A `channel_close` control frame accepts cancellation without waiting for the pump inside
+the receive callback, so transports may deliver close reentrantly during an outbound send. The
+session continues tracking the channel until cleanup finishes, and session/host disposal awaits it.
+Cancellation is cooperative: after a five-second drain warning, a noncooperative enumerator keeps
+teardown pending and its service alive rather than being force-disposed while in use. Application
+iterators, disposers, and transport callbacks must cooperate with cancellation and avoid blocking;
+the warning is not a guaranteed shutdown deadline. Service-lease cleanup failures are contained and
+diagnosed as `channel_cleanup_failed` (and reported as a channel error when delivery is possible).
 
 UI commands use the originating application's `NeoDispatcher`; background commands never invoke application callbacks while native/core locks are held. The portable integration is managed and shared across WebView2, WKWebView, and WebKitGTK.
 

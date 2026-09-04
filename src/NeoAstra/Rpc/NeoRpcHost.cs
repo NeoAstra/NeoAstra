@@ -350,7 +350,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     ReceiveChannelAck(root);
                     break;
                 case "channel_close":
-                    await ReceiveChannelCloseAsync(root).ConfigureAwait(false);
+                    ReceiveChannelClose(root);
                     break;
                 case "resource_close":
                     await ReceiveResourceCloseAsync(root).ConfigureAwait(false);
@@ -389,20 +389,39 @@ public sealed class NeoRpcSession : IAsyncDisposable
             try { request.Cancel(); }
             catch (Exception exception) { (failures ??= []).Add(exception); }
         }
+        foreach (var channel in _channels.Values)
+        {
+            try { channel.Close(); }
+            catch (Exception exception) { (failures ??= []).Add(exception); }
+        }
         if (Volatile.Read(ref _activeInvocations) == 0) _invocationsDrained.TrySetResult();
         try { await _invocationsDrained.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
         catch (TimeoutException) { _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_timeout", "RPC invocation teardown exceeded five seconds."); }
         foreach (var subscription in _subscriptions.Values) subscription.Close();
-        foreach (var channel in _channels.Values) channel.Close();
+        var channels = _channels.Values.Select(static value => value.Completion).ToArray();
+        if (channels.Length != 0)
+        {
+            var drained = Task.WhenAll(channels);
+            try
+            {
+                try { await drained.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+                catch (TimeoutException)
+                {
+                    _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_timeout", "RPC channel cleanup is still pending; services remain alive until enumeration stops.");
+                    await drained.ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_pump_failure", "An RPC pump failed while the session was closing."); }
+        }
         try { await _resources.DisposeAsync().ConfigureAwait(false); }
         catch (Exception exception) { (failures ??= []).Add(exception); }
         try { await _host.CloseSessionServicesAsync(DocumentSessionId).ConfigureAwait(false); }
         catch (Exception exception) { (failures ??= []).Add(exception); }
-        var pumps = _subscriptions.Values.Select(static value => value.Completion)
-            .Concat(_channels.Values.Select(static value => value.Completion)).ToArray();
-        if (pumps.Length != 0)
+        var subscriptions = _subscriptions.Values.Select(static value => value.Completion).ToArray();
+        if (subscriptions.Length != 0)
         {
-            try { await Task.WhenAll(pumps).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+            try { await Task.WhenAll(subscriptions).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
             catch (Exception exception) when (exception is OperationCanceledException or TimeoutException) { }
             catch (Exception) { _host.Diagnose(NeoRpcDiagnosticLevel.Warning, "teardown_pump_failure", "An RPC pump failed while the session was closing."); }
         }
@@ -441,12 +460,17 @@ public sealed class NeoRpcSession : IAsyncDisposable
         return accepted;
     }
 
-    internal ValueTask StartChannelAsync<T>(string channelId, NeoRpcChannel<T> channel, CancellationToken invocationToken)
+    internal ChannelState PrepareChannel<T>(string channelId, NeoRpcChannel<T> channel)
+        => new ChannelState<T>(this, channelId, channel);
+
+    private bool TryRegisterChannel(string channelId, ChannelState state)
     {
-        var state = new ChannelState<T>(this, channelId, channel, invocationToken);
-        if (!_channels.TryAdd(channelId, state)) throw new InvalidOperationException("A generated channel ID collided.");
-        state.Start();
-        return ValueTask.CompletedTask;
+        lock (_disposeLock)
+        {
+            if (_disposed != 0 || _closed.IsCancellationRequested || _channels.Count >= _host.Options.MaximumChannelsPerSession) return false;
+            if (!_channels.TryAdd(channelId, state)) throw new InvalidOperationException("A generated channel ID collided.");
+            return true;
+        }
     }
 
     internal async ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, CancellationToken cancellationToken)
@@ -540,6 +564,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
             return;
         }
         var context = CreateContext(correlationId, state.Token, sourceOrigin, isMainFrame);
+        INeoRpcChannel? returnedChannel = null;
+        ChannelState? preparedChannel = null;
         try
         {
             var authorization = await AuthorizeAsync(context, command, descriptor.Options.Permission, isSubscription: false, args, state.Token).ConfigureAwait(false);
@@ -573,11 +599,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 {
                     var dispatcher = context.Dispatcher ?? throw new NeoRpcException(NeoRpcErrorCodes.InternalError, "A UI dispatcher is unavailable.");
                     applicationResult = await dispatcher.InvokeAsync(
-                        async () => await descriptor.InvokeHandlerAsync(request, context, state.Token).ConfigureAwait(false), state.Token).ConfigureAwait(false);
+                        () => InvokeHandlerAsync(request), state.Token).ConfigureAwait(false);
                 }
                 else
                 {
-                    applicationResult = await descriptor.InvokeHandlerAsync(request, context, state.Token).ConfigureAwait(false);
+                    applicationResult = await InvokeHandlerAsync(request).ConfigureAwait(false);
                 }
             }
             catch (Exception exception)
@@ -598,14 +624,20 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
             if (result is IChannelCommandResult channelResult)
             {
-                if (_channels.Count >= _host.Options.MaximumChannelsPerSession)
+                var channelId = $"ch-{Interlocked.Increment(ref _nextChannelId):x}";
+                preparedChannel = channelResult.Prepare(this, channelId);
+                returnedChannel = null; // The prepared state owns cleanup even if it is never registered or started.
+                if (!TryRegisterChannel(channelId, preparedChannel))
                 {
                     await state.TryCommitAsync(() => SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The channel limit is exhausted.", correlationId, true))).ConfigureAwait(false);
                     return;
                 }
-                var channelId = $"ch-{Interlocked.Increment(ref _nextChannelId):x}";
                 var committed = await state.TryCommitAsync(() => SendChannelResultAsync(id, channelId)).ConfigureAwait(false);
-                if (committed) await channelResult.StartAsync(this, channelId, _closed.Token).ConfigureAwait(false);
+                if (committed)
+                {
+                    preparedChannel.Start();
+                    preparedChannel = null; // The session tracks the running (or already closed) state through cleanup.
+                }
             }
             else
             {
@@ -616,9 +648,26 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             await state.TerminalCompletion.ConfigureAwait(false);
         }
+        catch (Exception exception)
+        {
+            // Preparation/registration failures must also choose a terminal state before the cleanup guard awaits it.
+            await state.TryCommitAsync(() => SendTerminalErrorResultAsync(id, MapException(exception, context, state))).ConfigureAwait(false);
+        }
         finally
         {
-            try { await state.TerminalCompletion.ConfigureAwait(false); }
+            try
+            {
+                try
+                {
+                    if (preparedChannel is not null)
+                    {
+                        try { preparedChannel.Close(); }
+                        finally { await preparedChannel.Completion.ConfigureAwait(false); }
+                    }
+                    if (returnedChannel is not null) await returnedChannel.DisposeAsync().ConfigureAwait(false);
+                }
+                finally { await state.TerminalCompletion.ConfigureAwait(false); }
+            }
             finally
             {
                 _requests.TryRemove(new KeyValuePair<string, InvocationState>(id, state));
@@ -626,6 +675,13 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 if (enteredCommand) descriptor.Exit();
                 ExitInvocation();
             }
+        }
+
+        async ValueTask<object?> InvokeHandlerAsync(object request)
+        {
+            var value = await descriptor.InvokeHandlerAsync(request, context, state.Token).ConfigureAwait(false);
+            returnedChannel = value as INeoRpcChannel;
+            return value;
         }
     }
 
@@ -725,14 +781,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (_channels.TryGetValue(id, out var state)) state.Acknowledge(value);
     }
 
-    private async ValueTask ReceiveChannelCloseAsync(JsonElement root)
+    private void ReceiveChannelClose(JsonElement root)
     {
         if (!TryValidId(root, "channel", out var id)) return;
-        if (_channels.TryRemove(id, out var state))
-        {
-            state.Close();
-            await state.Completion.ConfigureAwait(false);
-        }
+        // This acknowledges cancellation, not completed cleanup: the transport can reenter while a pump is sending.
+        // The session retains the state and awaits its stable completion during teardown instead.
+        if (_channels.TryGetValue(id, out var state)) state.Close();
     }
 
     private async ValueTask ReceiveResourceCloseAsync(JsonElement root)
@@ -1126,6 +1180,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
     internal abstract class ChannelState
     {
         internal abstract Task Completion { get; }
+        internal abstract void Start();
         internal abstract void Acknowledge(long sequence);
         internal abstract void Close();
     }
@@ -1137,17 +1192,19 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private readonly NeoRpcChannel<T> _channel;
         private readonly CancellationTokenSource _closed;
         private readonly SemaphoreSlim _credits;
+        private readonly TaskCompletionSource<bool> _start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Task _completion;
         private long _sent;
         private long _acknowledged;
-        internal ChannelState(NeoRpcSession session, string id, NeoRpcChannel<T> channel, CancellationToken token)
+        internal ChannelState(NeoRpcSession session, string id, NeoRpcChannel<T> channel)
         {
             _session = session; _id = id; _channel = channel;
-            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closed.Token, token);
+            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closed.Token);
             _credits = new SemaphoreSlim(session._host.Options.MaximumUnacknowledgedChannelItems, session._host.Options.MaximumUnacknowledgedChannelItems);
+            _completion = PumpAsync();
         }
-        private Task _completion = Task.CompletedTask;
         internal override Task Completion => _completion;
-        internal void Start() => _completion = PumpAsync();
+        internal override void Start() => _start.TrySetResult(true);
         internal override void Acknowledge(long sequence)
         {
             while (true)
@@ -1157,17 +1214,27 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 if (target <= current) return;
                 if (Interlocked.CompareExchange(ref _acknowledged, target, current) == current)
                 {
-                    _credits.Release(checked((int)(target - current)));
+                    try { _credits.Release(checked((int)(target - current))); }
+                    catch (ObjectDisposedException) { }
                     return;
                 }
             }
         }
-        internal override void Close() { if (!_closed.IsCancellationRequested) _closed.Cancel(); }
+        internal override void Close()
+        {
+            try { _closed.Cancel(); }
+            catch (ObjectDisposedException) { }
+            finally { _start.TrySetResult(false); }
+        }
         private async Task PumpAsync()
         {
             NeoRpcError? error = null;
+            var started = false;
             try
             {
+                started = await _start.Task.ConfigureAwait(false);
+                if (!started) return;
+                _closed.Token.ThrowIfCancellationRequested();
                 await foreach (var item in _channel.Items.WithCancellation(_closed.Token).ConfigureAwait(false))
                 {
                     await _credits.WaitAsync(_closed.Token).ConfigureAwait(false);
@@ -1184,8 +1251,23 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
             finally
             {
-                try { if (!_session._closed.IsCancellationRequested) await _session.SendChannelTerminalAsync(_id, error is null ? "channel_complete" : "channel_error", error, _session._closed.Token).ConfigureAwait(false); } catch { }
-                _session.RemoveChannel(_id, this); _credits.Dispose(); _closed.Dispose();
+                try
+                {
+                    // await foreach has already disposed its enumerator. Never release a service while it is still in use.
+                    try { await _channel.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception)
+                    {
+                        error = FrameworkError(NeoRpcErrorCodes.InternalError, "The channel failed.", NewCorrelationId());
+                        _session._host.Diagnose(NeoRpcDiagnosticLevel.Error, "channel_cleanup_failed", "A channel service lease failed to dispose safely.", error.Value.CorrelationId);
+                    }
+                    // Abandoning an unstarted result must not send: a reentrant close may be inside the result send itself.
+                    try { if (started && !_session._closed.IsCancellationRequested) await _session.SendChannelTerminalAsync(_id, error is null ? "channel_complete" : "channel_error", error, _session._closed.Token).ConfigureAwait(false); } catch { }
+                }
+                finally
+                {
+                    _credits.Dispose(); _closed.Dispose();
+                    _session.RemoveChannel(_id, this);
+                }
             }
         }
     }

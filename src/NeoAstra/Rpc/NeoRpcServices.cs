@@ -39,21 +39,40 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
     /// <param name="context">The immutable invocation context.</param>
     /// <param name="callback">The generated strongly typed callback.</param>
     /// <returns>The callback result.</returns>
+    /// <remarks>A returned channel retains the service lease until the RPC host closes it. Direct callers must dispose returned channels, including channels they never enumerate.</remarks>
     /// <exception cref="ArgumentNullException"><paramref name="callback"/> is <see langword="null"/>.</exception>
     /// <exception cref="ObjectDisposedException">The RPC host or scope is disposed.</exception>
     public async ValueTask<TResult> InvokeAsync<TResult>(NeoRpcContext context, Func<TService, ValueTask<TResult>> callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        TService service;
+        IAsyncDisposable? lease;
         if (_lifetime == NeoRpcServiceLifetime.PerInvocation)
         {
-            var transient = Create(context);
-            try { return await callback(transient).ConfigureAwait(false); }
-            finally { await DisposeServiceAsync(transient).ConfigureAwait(false); }
+            service = Create(context);
+            lease = new TransientLease(service);
         }
-
-        await using var lease = GetScope(context).Acquire(context);
-        return await callback(lease.Service).ConfigureAwait(false);
+        else
+        {
+            var scoped = GetScope(context).Acquire(context);
+            service = scoped.Service;
+            lease = scoped;
+        }
+        try
+        {
+            var result = await callback(service).ConfigureAwait(false);
+            if (result is INeoRpcChannel channel)
+            {
+                result = (TResult)channel.WithServiceLease(lease);
+                lease = null;
+            }
+            return result;
+        }
+        finally
+        {
+            if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <summary>Invokes a void callback with an instance resolved according to the explicit lifetime.</summary>
@@ -127,6 +146,13 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
     {
         if (service is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
         else if (service is IDisposable disposable) disposable.Dispose();
+    }
+
+    private sealed class TransientLease(TService service) : IAsyncDisposable
+    {
+        private TService? _service = service;
+        public ValueTask DisposeAsync() => Interlocked.Exchange(ref _service, null) is { } instance
+            ? DisposeServiceAsync(instance) : ValueTask.CompletedTask;
     }
 
     private sealed class ScopeEntry(NeoRpcServiceActivator<TService> owner)
