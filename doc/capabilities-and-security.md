@@ -4,6 +4,13 @@ NeoAstra trusts registered application RPC in a controlled local application vie
 
 Explicit capabilities are an opt-in boundary for restricted views, plugin/native services, argument scopes, or applications that want operations reviewed individually. Set a bounded `Permission` on each operation in that boundary and configure an authorization service; a permission-bearing operation remains fail-closed if the service is absent.
 
+A restrictive manifest alone does not hide permissionless application methods registered on the same
+RPC host. For a restricted trusted view, register only its intended operations on a separate host or
+make every operation in the restricted surface explicitly permissioned. Active untrusted previews
+should have no bridge at all. Do not bind a preview to the main application's unrestricted registry.
+Capability checks also do not establish application project/session ownership; validate that in the
+backend for every command, read, subscription, and approval response.
+
 ## Permission catalog and capability file
 
 Applications that use an explicit boundary build a `NeoPermissionCatalog` from `NeoPermissionDeclaration` records. A declaration binds a versioned, colon-separated ID to command/event names, risk, scope family, platform availability, timeout, concurrency, redaction, and documentation. Plugin catalogs are registered explicitly with an ID and compatibility range. Their permissions and permission sets become discoverable, but **grant nothing** until the application capability file names them. Application-owned RPC without a permission declaration is not added to this catalog.

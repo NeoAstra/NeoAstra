@@ -87,12 +87,17 @@ remain ignored. Each implementation step includes this checklist update in its c
   and XML docs. All 11 NeoApp tests pass; two native Windows cases verify UI-thread/hidden-window
   ordering, original failure propagation, and window cleanup without creating a browser. Other OS
   guards are inconclusive. The callback attaches existing typed async lifecycle handlers, not async void.
-- [ ] **5b — CodeAlta adoption guide and golden-path documentation.** Correct the stale mandatory-RPC
+- [x] **5b — CodeAlta adoption guide and golden-path documentation.** Correct the stale mandatory-RPC
   permission claim, explain restricted-view registrations, remove template lockfile/version ambiguity,
   and provide a concrete headless-host integration recipe and
   ownership/security/testing contract: one backend event consumer, bounded per-view fan-out,
   replay/resync, cancellation versus durable agent work, safe untrusted content, and UI dispatch.
   Separate NeoAstra responsibilities from CodeAlta follow-up. Link it from public docs; commit.
+  Added `doc/codealta-integration.md` against the reviewed CodeAlta source, not an executable GUI.
+  It names actual composition/runtime/provider/approval APIs and their cancellation/ownership limits;
+  records missing approval recovery and bootstrap rollback, and requires one runtime event consumer.
+  Corrected permissionless RPC wording, template lockfile/bootstrap advice and unqualified version
+  examples; linked the consumer path and lifecycle hook. No CodeAlta edits or dependency installations.
 - [ ] **6 — Final verification and review.** Re-run managed build/tests, frontend checks, engineering
   tests, advanced deterministic validation, and Windows browser conformance/stress as practical.
   Record actual results and outstanding gates here and in the assessment; leave worktree clean.

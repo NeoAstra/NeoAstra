@@ -1,6 +1,40 @@
 # Frontend tooling, production assets, and templates
 
-The frontend targets included in the `NeoAstra` package, the `dotnet neoastra` tool, and the production manifest host keep frontend framework choices ordinary. For npm projects with an explicitly configured committed `package-lock.json`, NeoAstra runs an incremental locked `npm ci` before the configured frontend build. It never installs Node.js or npm themselves, never enables telemetry, and never requires Node.js at application runtime. The checked optional configuration schema is [`schemas/neoastra-project-v1.schema.json`](../schemas/neoastra-project-v1.schema.json).
+The frontend targets included in the `NeoAstra` package, the `dotnet neoastra` tool, and the production manifest host keep frontend framework choices ordinary. For npm projects with a reviewed committed `package-lock.json` resolved by conventions or configuration, NeoAstra runs an incremental locked `npm ci` before the configured frontend build. It never installs Node.js or npm themselves, never enables telemetry, and never requires Node.js at application runtime. The checked optional configuration schema is [`schemas/neoastra-project-v1.schema.json`](../schemas/neoastra-project-v1.schema.json).
+
+## Consumer path: create, run, develop, publish
+
+The project is pre-release. Use an exact reviewed version available from your chosen feed, and keep
+the application package, tool, and templates aligned; replace every `<VERSION>` below. The template's
+`1.0.0` default is not evidence of a published or qualified v1. These are explicit consumer installation
+commands, not actions the build silently performs:
+
+```sh
+dotnet new install NeoAstra.Templates::<VERSION>
+dotnet new neoastra-react -n DesktopApp --neoAstraVersion <VERSION>
+cd DesktopApp
+dotnet new tool-manifest
+dotnet tool install NeoAstra.Tool --version <VERSION>
+dotnet restore
+dotnet neoastra doctor
+dotnet build
+dotnet run --no-build
+dotnet neoastra dev
+```
+
+Use `neoastra` or `neoastra-vue` instead for vanilla TypeScript or Vue. Review and commit the generated
+source, lockfile, and tool manifest. `dotnet build` stages the package-owned client and restores the
+locked npm graph; do not replace the template lockfile with an unnecessary unlocked install. Node/npm
+are build/development dependencies for these templates, not application runtime dependencies. A plain
+static `frontend/index.html` consumer of the package does not need Node at all.
+
+For a first local run **from this checkout** without assuming published packages, use
+`dotnet run --project samples/NeoAstra.Sample -c Release` after provisioning the repository build
+prerequisites (including Node for compiling NeoAstra's own frontend SDK). See the [project readme](../readme.md#building).
+For distribution, use `dotnet publish -c Release -r <RID> --self-contained`, then the reviewed
+[delivery workflow](delivery-and-updates.md). Publish success is not installer or target-host acceptance.
+The [CodeAlta guide](codealta-integration.md) adds backend ownership and security requirements; it is
+not a completed CodeAlta GUI migration.
 
 ## Configuration and inspection
 
@@ -18,7 +52,15 @@ dotnet neoastra doctor --json
 
 ## Development
 
-For a freshly generated npm project, run `npm install` (or the equivalent manager-prefixed invocation) from `frontend` once to create `package-lock.json`, review it, and commit it. After that, `dotnet build` and `dotnet neoastra dev` run `npm ci --no-audit --no-fund` automatically only when the package manifest or lockfile changed, `node_modules` was removed, or the successful-restore marker is absent. A missing lockfile fails with an actionable diagnostic instead of performing an unlocked install. The committed lockfile is a supply-chain trust boundary: `npm ci` may download packages and execute their lifecycle scripts, so review dependency and lockfile changes like build code. Then run:
+Generated templates already include a lockfile: review and commit it. For a hand-authored npm project
+without one, first restore the .NET package and stage its local client with
+`dotnet build -t:NeoAstraStageFrontendClient`; then explicitly run a reviewed `npm install` from
+`frontend` once to create `package-lock.json`, review it, and commit it. Normal `dotnet build` and
+`dotnet neoastra dev` run `npm ci --no-audit --no-fund` automatically only when the package manifest or
+lockfile changed, `node_modules` was removed, or the successful-restore marker is absent. A missing
+lockfile fails with an actionable diagnostic instead of performing an unlocked install. The committed
+lockfile is a supply-chain trust boundary: `npm ci` may download packages and execute their lifecycle
+scripts, so review dependency and lockfile changes like build code. Then run:
 
 ```sh
 dotnet neoastra dev
@@ -35,7 +77,7 @@ listening on that port.
 
 Reference only the `NeoAstra` package. The package carries the compiled, framework-neutral `@neoastra/client` runtime under its SDK tools; repository `ProjectReference` builds compile the same runtime as part of the `NeoAstra` project. For package-based `frontend` projects, the transitive targets stage that package under `obj/neoastra/client` before locked npm restore, so `"@neoastra/client": "file:../obj/neoastra/client"` remains offline and version-aligned with the .NET package without compiling NeoAstra's TypeScript source in each application. For static `frontend/index.html` projects, the targets copy the browser runtime modules and an optional generated JavaScript RPC binding directly into the materialized frontend under `obj`; SDK files never appear in the project tree. When frontend work is configured, normal `dotnet build` runs preparation after C# compilation, generates `neoastra-assets.json`, and re-verifies every hash while copying an exact staging directory under `obj`. The same prepared assets are copied to `bin/.../assets`, so ordinary `dotnet run` consumes regular build output. Publish reuses that preparation instead of requiring a publish-only frontend build.
 
-For configured package projects, the production command is framework-neutral: it is exactly the `frontend.buildCommand` argument array. It may invoke any locally available build tool and does not imply Vite, React, TypeScript, Node.js, or a package manager. Static convention projects perform no frontend command: the SDK fingerprints `frontend`, assembles project and SDK files under `obj`, validates the result, and synchronizes exact build/publish assets. `packageManager: "none"` never invokes Node. Automatic dependency restore is currently limited to explicitly configured npm projects whose `frontend.lockfile` is `frontend.root/package-lock.json`; other package managers remain explicit.
+For configured package projects, the production command is framework-neutral: it is exactly the `frontend.buildCommand` argument array. It may invoke any locally available build tool and does not imply Vite, React, TypeScript, Node.js, or a package manager. Static convention projects perform no frontend command: the SDK fingerprints `frontend`, assembles project and SDK files under `obj`, validates the result, and synchronizes exact build/publish assets. `packageManager: "none"` never invokes Node. Automatic dependency restore is currently limited to npm projects whose resolved `frontend.lockfile` is `frontend.root/package-lock.json`; other package managers remain explicit.
 
 The targets fingerprint the effective configuration, configuration name, frontend tree, lockfile, generated RPC contract outputs, declared extra inputs, and NeoAstra tool version. The configured `dist` directory, `node_modules`, and VCS metadata are excluded from normal-build inputs. Content changes, additions, and deletions therefore rerun preparation, while an unchanged build skips the production command. Preparation and output copies synchronize exact directories so removed assets do not survive a rerun; `dotnet clean` removes tracked preparation/output files and causes the next build to prepare again.
 

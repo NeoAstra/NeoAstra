@@ -5,7 +5,7 @@
 Build native desktop applications with .NET and web technologies using the platform browser: WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux.
 
 > [!WARNING]
-> NeoAstra is under construction and not yet available.
+> NeoAstra is pre-release. Its APIs, ABI, and distribution are not yet qualified for v1.
 
 See [platform support and runtime dependencies](doc/platform-support.md) for the distinction between v1 support intent, implemented backends, configured workflow coverage, and runtime validation. Review the [known limitations](doc/known-limitations.md) before shipping an application.
 
@@ -44,13 +44,20 @@ NeoAstra has not shipped a stable release. Earlier repository-only package and p
 
 ## Quick start
 
-Install one package for the complete application platform:
+Reference one package for the complete application platform. Set the application-defined
+`NeoAstraVersion` MSBuild property to an exact reviewed version available from your feed; this example
+does not assume a published stable `1.0.0`:
 
 ```xml
-<PackageReference Include="NeoAstra" Version="1.0.0" />
+<PackageReference Include="NeoAstra" Version="$(NeoAstraVersion)" />
 ```
 
 The package includes RPC, secure capabilities, desktop services, hosting integration, the incremental RPC generator, and frontend build targets. Use `NeoAstra.Core` instead when you want only the low-level cross-platform WebView/window API; its public types remain in the `NeoAstra` namespace.
+
+For concrete create/run/dev/publish commands, follow the
+[consumer path](doc/frontend-tooling-and-assets.md#consumer-path-create-run-develop-publish).
+To try the source checkout without assuming a published package, run
+`dotnet run --project samples/NeoAstra.Sample -c Release` with the [build prerequisites](#building).
 
 ```csharp
 using System;
@@ -93,6 +100,9 @@ partial class AppJsonContext : JsonSerializerContext;
 `NeoApp` creates a secure one-window local application, serves manifest-backed `assets/`, selects a safe bridge policy for the current platform, binds RPC, and tears resources down deterministically. Registered application RPC is trusted for this controlled local view by default, so ordinary application methods need no permission declarations. Explicit capabilities remain available for restricted views, plugins/native services, scoped arguments, and other advanced boundaries. Remote content remains bridge-disabled and untrusted. `NeoApp` permits routes within the exact application origin but blocks other top-level navigation and unexpected new windows by default. `OpenExternalLinksInSystemBrowser` is an explicit allowlist of exact HTTP(S) origins; matching links open only after a user action, while redirects, subframe navigation, credentials, dangerous schemes, and lookalike hosts remain blocked by native host policy. `NEOASTRA_DEV_URL` accepts only an exact loopback IP origin and port. See [`samples/NeoAstra.Sample`](samples/NeoAstra.Sample) for the complete HelloWorld, including a generated plain-JavaScript binding whose methods carry the contract hash automatically, and [`samples/NeoAstra.Core.Sample`](samples/NeoAstra.Core.Sample) for direct use of the low-level API.
 
 NeoAstra application and browser operations must begin on the platform UI thread. `NeoApplication.Run` installs a dispatcher synchronization context so continuations return to that thread. On Windows, standalone entry points and attached host threads must use an STA apartment.
+
+Use `app.ConfigureMainWindow((application, window) => { ... })` to attach existing close/quit/launch
+handlers before the simple host shows its window. See [lifecycle policy in the simple host](doc/application-lifecycle-and-hosting.md#lifecycle-policy-in-the-simple-host).
 
 ## Window management
 
@@ -157,6 +167,9 @@ Use [the plugins and desktop services guide](doc/desktop-services.md) for static
 desktop support/degradation by platform, scoped open/drag operations, safe storage, and recoverable window-state persistence.
 Use [the delivery and authenticated update guide](doc/delivery-and-updates.md) for schema-validated deterministic bundles,
 inspectable host package inputs, signing adapters, SBOM/provenance, and the experimental fail-closed updater threat model.
+Use [the CodeAlta integration guide](doc/codealta-integration.md) for a .NET-backed agent GUI's service,
+streaming, approval, document-lifetime, and untrusted-content contract. It is a source-reviewed adoption
+recipe, not a completed or qualified CodeAlta GUI.
 
 An embedded host created with `NeoApplication.AttachToCurrentThread` must await `DisposeAsync` while its owning UI loop is still pumping. Disposal marshals explicit detach to that thread, rejects new work, cancels accepted managed dispatcher waits that have not started, drains their native callbacks, and completes child-before-application platform teardown. Native hosts must call `neoastra_app_detach` on the owning UI thread before stopping their loop. Final release from another thread only requests UI teardown; if the host has already stopped pumping, NeoAstra intentionally leaves that application pending rather than running COM, Cocoa, or GTK teardown on the wrong thread.
 

@@ -102,7 +102,10 @@ The provenance differences above are source observations, **not demonstrated exp
 projects. They reinforce NeoAstra's existing threat model rather than justify competitive security
 superlatives. There is no reason to port InfiniFrame's Blazor model into a frontend-neutral platform.
 
-## Prioritized findings
+## Prioritized baseline findings
+
+These findings describe the starting revision, not the fixed working tree. See the implementation
+outcome and companion checklist for completed changes and their verification.
 
 ### P0 before CodeAlta relies on the affected path
 
@@ -164,6 +167,14 @@ owned (`CodeAltaOwnedServices.cs:95–176`); a web-ready application host is not
 Keep provider initialization separate from history/session browsing so a slow/offline provider does
 not block the shell. All CodeAlta work remains outside this NeoAstra-only implementation pass.
 
+The [public adoption recipe](../doc/codealta-integration.md) records the source-verified API shapes:
+interactive GUI flags even though the reusable seam is called headless, plugins disabled explicitly
+for a minimal baseline, fresh owned provider-runtime factories, and independently observed provider
+initialization. Cancellation of the initialization wait does not stop the probe. The inspected host
+lacks encompassing creation rollback and failure-aggregating disposal, so failure-injected ownership
+qualification is still CodeAlta work. Stored history should use `TryReadStoredHistoryAsync` before
+considering provider-dependent attach/resume operations.
+
 ### Stream projections, not the runtime object graph
 
 CodeAlta's `SessionRuntimeService.StreamEventsAsync` has one bounded competing-reader stream;
@@ -183,9 +194,14 @@ Measure real transcript latency/allocation/DOM costs before adding native binary
 - A durable CodeAlta session/run is not a replaceable NeoAstra document session or frontend tab.
 - Closing/reloading an observation releases RPC resources; it does not implicitly abort durable work.
   An explicit Stop action calls the backend abort command after ownership/policy validation.
+  `SendAsync` is not universally an immediate acceptance response; its raw agent path can await the
+  turn and link the supplied token to run cancellation. Keep that task/token application-owned.
 - Agent permission/input requests need an application-owned exact-once registry correlated by
   session/run/interaction, not just events on a lossy transcript stream (`SessionExecutionOptions.cs:70–78`,
   `SessionPermissionRequestCoordinator.cs:32–72`). Decide explicitly what window loss does to them.
+  No public pending-approval list/resolve API was found in the inspected host/runtime;
+  `ReconcileRecoverableSessionCacheAsync` is not approval reconciliation. Backend authorization must
+  resolve project/session ownership for reads, subscriptions and decisions as well as commands.
 - Browser capability, agent/tool approval and provider policy are separate gates. A capability grant
   must never become blanket approval of tool actions.
 - CodeAlta's existing “sanitized” event projection strips scheduling markup, not HTML. Markdown,
