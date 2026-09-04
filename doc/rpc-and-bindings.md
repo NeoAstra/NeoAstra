@@ -46,7 +46,7 @@ The host snapshots trusted view/session identity, source origin, main-frame stat
 
 Request deserialization, application execution, and response serialization are separate phases. Malformed or JSON `null` request DTOs fail with `invalid_request` before application code; an application-thrown serialization exception follows normal application mapping/redaction; an unserializable result fails with `serialization_failed`. Errors use bounded lowercase colon-separated identifiers, bounded control-free client messages, and optional bounded printable-ASCII correlation IDs. `NeoRpcException` is an explicit safe application error; `INeoRpcErrorMapper` handles other known failures, but malformed mapper output is rejected. Release defaults redact exception types, stack traces, paths, and nested messages. `IncludeDevelopmentErrorDetails` is an explicit bounded development-only switch.
 
-Events are ordered per subscription and use declaration-owned `DropOldest`, `DropNewest`, `Coalesce`, or `Fail` overflow. Bounded JSON channels use monotonic sequence numbers and acknowledgements for backpressure. Resources are opaque session-owned handles closed by `resource_close` or teardown. These channel/resource frames reserve room for a future scalable binary extension.
+Events are ordered per subscription and use declaration-owned `DropOldest`, `DropNewest`, `Coalesce`, or `Fail` overflow. Bounded JSON channels use monotonic sequence numbers and acknowledgements to bound unacknowledged transport items. The frontend acknowledges admission into its buffer, not consumption by the application iterator: a slow reader can still exhaust its bounded buffer and receive `too_many_requests`. Applications that observe durable work need a snapshot/resynchronization policy rather than treating the channel as a lossless event log. Resources are opaque session-owned handles closed by `resource_close` or teardown. These channel/resource frames reserve room for a future scalable binary extension.
 
 UI commands use the originating application's `NeoDispatcher`; background commands never invoke application callbacks while native/core locks are held. The portable integration is managed and shared across WebView2, WKWebView, and WebKitGTK.
 
@@ -61,6 +61,16 @@ const unsubscribe = await documents.onChanged(value => render(value));
 ```
 
 `NeoRpcClient` supplies `invoke`, `invokeChannel`, `subscribe`, ordered channels, typed stable `NeoRpcError`, `AbortSignal` cancellation, resource close, and connection teardown. `NeoRpcCallOptions.timeoutMilliseconds` bounds invocation completion and pending subscription acknowledgement; a subscription timeout atomically removes pending state, sends `unsubscribe`, and rejects with `timeout`. Generated channel calls use `invokeChannel`, which claims the channel state pre-created by the result frame. Items are retained across that result/claim window, frontend buffering is bounded (overflow fails and closes the channel rather than dropping), and channel or connection errors reject waiting iterators. An already-aborted signal sends no frame. `@neoastra/client/testing` provides `createMockRpcHarness` with handlers, errors, cancellation, events, navigation/close behavior, and outbound-frame assertions without a DOM.
+
+For `invokeChannel`, the signal remains effective after opening: aborting discards buffered items,
+rejects pending/future reads with `operation_canceled`, and sends one `channel_close`. The timeout
+bounds only the opening invocation, not the channel's duration. Lower-level callers can pass the
+same signal to `client.channel(id, signal)`. Iterator `return()` (including a `for await` break)
+discards unread items and closes observation; terminal frames, overflow, return, and connection loss
+remove abort listeners. A completed channel wins a later abort. Canceling observation does not
+implicitly abort an application's durable background job; expose an explicit authorized command for
+that separate action. Subscription signals still govern only the pending handshake; retain and call
+the returned unsubscribe function for an active subscription.
 
 ## Wire formats
 

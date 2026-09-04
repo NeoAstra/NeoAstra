@@ -47,10 +47,14 @@ remain ignored. Each implementation step includes this checklist update in its c
   per-invocation service disposal. Retain the service lease until channel termination (including
   failed admission/cancellation), preserving scoped teardown and generated/AOT-safe registration.
   Add focused lifecycle regressions, update RPC docs, verify generated fixtures, and commit.
-- [ ] **2c — Frontend channel cancellation.** Keep an `invokeChannel` abort signal effective after
+- [x] **2c — Frontend channel cancellation.** Keep an `invokeChannel` abort signal effective after
   opening the channel, remove listeners on every terminal path, and test cancellation/open races.
   Preserve the existing bounded overflow policy; document that transport ACKs are not durable
   end-consumer backpressure. Verify the frontend suite, then commit.
+  Implemented before independent step 2b. The regression first observed zero close frames on abort;
+  all 38 frontend tests/checks now pass (10,213 gzip bytes). Added the matching instance convenience
+  method, covered result/claim and connection-loss races, all terminal listener cleanup paths, and
+  iterator-return buffer disposal. No protocol changes or dependencies.
 - [ ] **3 — Reliable development readiness.** Regressions first: reject HTTP error pages as ready,
   retry individual request timeouts until the bounded overall deadline, propagate user cancellation,
   and cancel/observe readiness when the frontend exits early. Keep redirects denied and do not

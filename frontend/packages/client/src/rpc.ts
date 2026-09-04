@@ -2,7 +2,7 @@ import { NeoAstraClientError, type NeoAstraConnection, connect } from "./index.j
 import { isRecord } from "./shared.js";
 
 export interface NeoRpcCallOptions {
-  /** Cancels an invocation or a pending subscription handshake. */
+  /** Cancels an invocation, an opened channel observation, or a pending subscription handshake. */
   readonly signal?: AbortSignal;
   /** Bounds invocation completion or subscription acknowledgement to at most ten minutes. */
   readonly timeoutMilliseconds?: number;
@@ -62,6 +62,7 @@ interface ChannelState<T> {
   error?: Error;
   sequence: number;
   closed: boolean;
+  cleanups?: Array<() => void>;
 }
 
 export class NeoRpcClient {
@@ -156,10 +157,33 @@ export class NeoRpcClient {
     });
   }
 
-  channel<T>(id: string): AsyncIterable<T> {
+  /** Opens a channel and retains signal cancellation until its terminal state. The timeout bounds opening only. */
+  async invokeChannel<TRequest, TItem>(command: string, args: TRequest, options: NeoRpcCallOptions = {}): Promise<AsyncIterable<TItem>> {
+    const result = await this.invoke<TRequest, { readonly channel: string }>(command, args, options);
+    return this.channel<TItem>(result.channel, options.signal);
+  }
+
+  /** Claims a channel. Aborting stops observation, discards buffered items, and asks the host to close the channel. */
+  channel<T>(id: string, signal?: AbortSignal): AsyncIterable<T> {
+    if (this.closed) throw new NeoRpcError({ code: "connection_closed", message: "The RPC client is closed.", retryable: false });
     assertOpaqueId(id, "channel ID");
     const state = this.ensureChannel(id) as ChannelState<T>;
     const client = this;
+    if (signal !== undefined && !state.closed) {
+      const abort = (): void => {
+        if (state.closed) return;
+        state.closed = true;
+        state.error = abortError();
+        state.values.length = 0;
+        this.channels.delete(id);
+        this.cleanupChannel(state);
+        for (const waiter of state.waiters.splice(0)) waiter.reject(state.error);
+        try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: id })); } catch { }
+      };
+      (state.cleanups ??= []).push(() => signal.removeEventListener("abort", abort));
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    }
     return {
       [Symbol.asyncIterator](): AsyncIterator<T> {
         return {
@@ -170,10 +194,14 @@ export class NeoRpcClient {
             return new Promise((resolve, reject) => state!.waiters.push({ resolve, reject }));
           },
           async return(): Promise<IteratorResult<T>> {
-            if (!state!.closed) {
-              state!.closed = true;
-              client.channels.delete(id);
-              for (const waiter of state!.waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
+            const notifyHost = !state.closed;
+            state.closed = true;
+            state.values.length = 0;
+            delete state.error;
+            client.channels.delete(id);
+            client.cleanupChannel(state);
+            for (const waiter of state.waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
+            if (notifyHost) {
               try { client.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: id })); } catch { }
             }
             return { done: true, value: undefined };
@@ -194,7 +222,7 @@ export class NeoRpcClient {
     for (const id of this.pending.keys()) { try { this.connection.send(Object.freeze({ neoastra: 1, kind: "cancel", id })); } catch { } }
     for (const id of this.pendingSubscriptions.keys()) { try { this.connection.send(Object.freeze({ neoastra: 1, kind: "unsubscribe", id })); } catch { } }
     for (const id of this.subscriptions.keys()) { try { this.connection.send(Object.freeze({ neoastra: 1, kind: "unsubscribe", id })); } catch { } }
-    for (const id of this.channels.keys()) { try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: id })); } catch { } }
+    for (const [id, state] of this.channels) { if (!state.closed) { try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: id })); } catch { } } }
     this.detach();
     this.failAll(new NeoRpcError({ code: "connection_closed", message: "The RPC client closed.", retryable: false }));
   }
@@ -258,6 +286,7 @@ export class NeoRpcClient {
     else {
       state.error = new NeoRpcError({ code: "too_many_requests", message: "The frontend channel buffer limit was exhausted.", retryable: false });
       state.closed = true;
+      this.cleanupChannel(state);
       for (const pending of state.waiters.splice(0)) pending.reject(state.error);
       try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: frame.channel })); } catch { }
       return;
@@ -268,8 +297,9 @@ export class NeoRpcClient {
   private receiveChannelTerminal(frame: Readonly<Record<string, unknown>>): void {
     if (typeof frame.channel !== "string") return;
     const state = this.channels.get(frame.channel);
-    if (state === undefined) return;
+    if (state === undefined || state.closed) return;
     state.closed = true;
+    this.cleanupChannel(state);
     if (frame.kind === "channel_error") state.error = parseError(frame.error);
     const terminal: IteratorResult<unknown> = { done: true, value: undefined };
     for (const waiter of state.waiters.splice(0)) {
@@ -282,7 +312,7 @@ export class NeoRpcClient {
     this.detach();
     for (const pending of this.pending.values()) { pending.cleanup(); pending.reject(error); }
     for (const pending of this.pendingSubscriptions.values()) pending.reject(error);
-    for (const state of this.channels.values()) { state.error = error; state.closed = true; state.values.length = 0; for (const waiter of state.waiters.splice(0)) waiter.reject(error); }
+    for (const state of this.channels.values()) { state.error = error; state.closed = true; state.values.length = 0; this.cleanupChannel(state); for (const waiter of state.waiters.splice(0)) waiter.reject(error); }
     this.pending.clear(); this.pendingSubscriptions.clear(); this.subscriptions.clear(); this.channels.clear();
   }
 
@@ -291,6 +321,10 @@ export class NeoRpcClient {
     this.detached = true;
     this.connection.closed.removeEventListener("abort", this.connectionClosed);
     this.removeReceive();
+  }
+
+  private cleanupChannel<T>(state: ChannelState<T>): void {
+    for (const cleanup of state.cleanups?.splice(0) ?? []) cleanup();
   }
 
   private nextId(prefix: string): string {
@@ -327,9 +361,7 @@ export async function subscribe<T>(event: string, handler: NeoRpcEventHandler<T>
 }
 
 export async function invokeChannel<TRequest, TItem>(command: string, args: TRequest, options?: NeoRpcCallOptions): Promise<AsyncIterable<TItem>> {
-  const client = await rpcClient();
-  const result = await client.invoke<TRequest, { readonly channel: string }>(command, args, options);
-  return client.channel<TItem>(result.channel);
+  return (await rpcClient()).invokeChannel<TRequest, TItem>(command, args, options);
 }
 
 function parseError(value: unknown): NeoRpcError {

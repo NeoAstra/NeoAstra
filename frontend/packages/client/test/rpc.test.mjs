@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import test from "node:test";
 import { NeoRpcClient, NeoRpcError } from "../dist/index.js";
 import { createMockClient, createMockRpcHarness } from "../dist/testing.js";
@@ -128,6 +129,88 @@ test("frontend channel buffering is bounded and fails rather than dropping", asy
   await assert.rejects(iterator.next(), error => error.code === "too_many_requests");
   assert.equal(transport.outboundFrames.some(frame => frame.kind === "channel_close"), true);
   client.close();
+});
+
+test("an opened channel retains abort cancellation and discards buffered items", async () => {
+  const transport = createMockClient();
+  const client = new NeoRpcClient(await transport.connect());
+  const controller = new AbortController();
+  try {
+    const iterator = client.channel("abort-channel", controller.signal)[Symbol.asyncIterator]();
+    transport.injectInbound({ neoastra: 1, kind: "channel_item", channel: "abort-channel", sequence: 1, value: "buffered" });
+    controller.abort();
+    assert.equal(transport.outboundFrames.filter(frame => frame.kind === "channel_close").length, 1);
+    await assert.rejects(iterator.next(), error => error.code === "operation_canceled");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+    await iterator.return();
+    client.close();
+    assert.equal(transport.outboundFrames.filter(frame => frame.kind === "channel_close").length, 1);
+  } finally { client.close(); }
+});
+
+test("invokeChannel preserves cancellation across the result-to-iterator race", async () => {
+  const transport = createMockClient();
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => "opening-channel" });
+  const controller = new AbortController();
+  try {
+    const opening = client.invokeChannel("documents.stream", {}, { signal: controller.signal });
+    transport.injectInbound({ neoastra: 1, kind: "result", id: "opening-channel", ok: true, value: { channel: "opened" } });
+    controller.abort(); // The opening invocation has committed, but its continuation has not run.
+    const iterator = (await opening)[Symbol.asyncIterator]();
+    await assert.rejects(iterator.next(), error => error.code === "operation_canceled");
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+    assert.equal(transport.outboundFrames.filter(frame => frame.kind === "channel_close").length, 1);
+    assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel").length, 0);
+  } finally { client.close(); }
+});
+
+test("channel abort rejects pending readers and every terminal path removes listeners", async () => {
+  for (const terminal of ["abort", "complete", "error", "overflow", "return", "client", "connection"]) {
+    const transport = createMockClient();
+    const client = new NeoRpcClient(await transport.connect(), { maximumBufferedChannelItems: 1 });
+    const controller = new AbortController();
+    try {
+      const iterator = client.channel("terminal-channel", controller.signal)[Symbol.asyncIterator]();
+      assert.equal(getEventListeners(controller.signal, "abort").length, 1, terminal);
+      switch (terminal) {
+        case "abort": {
+          const waiting = iterator.next();
+          controller.abort();
+          await assert.rejects(waiting, error => error.code === "operation_canceled");
+          break;
+        }
+        case "complete": transport.injectInbound({ neoastra: 1, kind: "channel_complete", channel: "terminal-channel" }); break;
+        case "error": transport.injectInbound({ neoastra: 1, kind: "channel_error", channel: "terminal-channel", error: { code: "internal_error", message: "Failed.", retryable: false } }); break;
+        case "overflow":
+          for (let sequence = 1; sequence <= 2; sequence++) transport.injectInbound({ neoastra: 1, kind: "channel_item", channel: "terminal-channel", sequence, value: sequence });
+          break;
+        case "return":
+          transport.injectInbound({ neoastra: 1, kind: "channel_item", channel: "terminal-channel", sequence: 1, value: "discard" });
+          await iterator.return();
+          assert.deepEqual(await iterator.next(), { done: true, value: undefined });
+          break;
+        case "client": client.close(); break;
+        case "connection": transport.close(); break;
+      }
+      assert.equal(getEventListeners(controller.signal, "abort").length, 0, terminal);
+      const closes = transport.outboundFrames.filter(frame => frame.kind === "channel_close").length;
+      controller.abort();
+      client.close();
+      assert.equal(transport.outboundFrames.filter(frame => frame.kind === "channel_close").length, closes, terminal);
+    } finally { client.close(); }
+  }
+});
+
+test("connection loss between channel result and claim cannot create an orphan iterator", async () => {
+  const transport = createMockClient();
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => "lost-channel" });
+  const controller = new AbortController();
+  const opening = client.invokeChannel("documents.stream", {}, { signal: controller.signal });
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "lost-channel", ok: true, value: { channel: "lost" } });
+  transport.close();
+  await assert.rejects(opening, error => error.code === "connection_closed");
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  assert.throws(() => client.channel("after-close"), error => error.code === "connection_closed");
 });
 
 test("result and AbortSignal races have one deterministic client-side winner", async () => {
