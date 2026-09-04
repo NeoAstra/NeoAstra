@@ -24,7 +24,12 @@ For a freshly generated npm project, run `npm install` (or the equivalent manage
 dotnet neoastra dev
 ```
 
-The tool first runs the configured `contractCommand` (default `dotnet build --no-restore`) so generated bindings are current, then starts the configured frontend command in `frontend.root`, labels/redacts output, probes the exact `devUrl` without following redirects, and starts the configured backend command only after readiness. Generated defaults use `127.0.0.1`; `localhost` is rejected. `::1` is also accepted. Other IP literals require `allowRemoteDevServer: true` and produce a prominent warning. The exact configured origin alone is trusted. Ctrl+C, readiness timeout, or either unexpected child exit tears down both process trees within a bounded interval and returns nonzero for unexpected failures. Frontend HMR remains Vite's responsibility; C# restart remains `dotnet watch`'s responsibility.
+The tool first runs the configured `contractCommand` (default `dotnet build --no-restore`) so generated bindings are current, then starts the configured frontend command in `frontend.root`, labels/redacts output, probes the exact `devUrl` without following redirects, and starts the configured backend command only after an HTTP 2xx response. HTTP error pages are not readiness; connection failures and individual two-second request timeouts are retried within the overall 60-second deadline. User cancellation remains cancellation, while an exhausted deadline reports `readiness_timeout`. An early frontend exit cancels and observes the outstanding probe, and a known exit takes precedence over simultaneous readiness. Generated defaults use `127.0.0.1`; `localhost` is rejected. `::1` is also accepted. Other IP literals require `allowRemoteDevServer: true` and produce a prominent warning. The exact configured origin alone is trusted. Ctrl+C, readiness timeout, or either unexpected child exit tears down both process trees within a bounded interval and returns nonzero for unexpected failures. Frontend HMR remains Vite's responsibility; C# restart remains `dotnet watch`'s responsibility.
+
+A successful loopback response proves reachability, not process identity. Keep Vite's strict-port
+setting enabled, reserve the configured development port, and run only a trusted development server
+on an origin given bridge authority. Readiness does not authenticate a different process already
+listening on that port.
 
 ## Build, run, publish, and MSBuild properties
 

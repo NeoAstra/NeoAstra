@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -272,8 +273,58 @@ public sealed class ToolingTests
         using var otherOrigin = new HttpResponseMessage(HttpStatusCode.Redirect) { Headers = { Location = new Uri("http://127.0.0.1:5174/ready") } };
         Assert.AreEqual("readiness_redirect", Assert.ThrowsExactly<NeoToolException>(() => NeoReadinessProbe.ValidateResponse(configured, sameOrigin)).Code);
         Assert.AreEqual("readiness_redirect", Assert.ThrowsExactly<NeoToolException>(() => NeoReadinessProbe.ValidateResponse(configured, otherOrigin)).Code);
-        using var ready = new HttpResponseMessage(HttpStatusCode.NotFound); Assert.IsTrue(NeoReadinessProbe.ValidateResponse(configured, ready));
-        using var waiting = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable); Assert.IsFalse(NeoReadinessProbe.ValidateResponse(configured, waiting));
+        using var ready = new HttpResponseMessage(HttpStatusCode.OK); Assert.IsTrue(NeoReadinessProbe.ValidateResponse(configured, ready));
+        foreach (var status in new[] { HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.NotFound, HttpStatusCode.ServiceUnavailable })
+        {
+            using var waiting = new HttpResponseMessage(status);
+            Assert.IsFalse(NeoReadinessProbe.ValidateResponse(configured, waiting), status.ToString());
+        }
+    }
+
+    [TestMethod]
+    public async Task ReadinessProbe_RetriesIndividualRequestTimeoutsUntilTheOverallDeadline()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var url = new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/");
+        using var stop = new CancellationTokenSource();
+        var server = ServeAsync();
+        try
+        {
+            await new NeoReadinessProbe().WaitAsync(url, TimeSpan.FromSeconds(8), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+            await server.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            stop.Cancel();
+            try { await server; } catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        }
+
+        async Task ServeAsync()
+        {
+            using var stalled = await listener.AcceptTcpClientAsync(stop.Token);
+            // The first request exceeds HttpClient's two-second limit, not the overall deadline.
+            await Task.Delay(TimeSpan.FromMilliseconds(2300), stop.Token);
+            using var ready = await listener.AcceptTcpClientAsync(stop.Token);
+            var stream = ready.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+            while (await reader.ReadLineAsync(stop.Token) is { Length: > 0 }) { }
+            await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray(), stop.Token);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReadinessProbe_DistinguishesOverallTimeoutFromUserCancellation()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start(); // Connections are accepted by the OS, but no response is produced.
+        var url = new Uri($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/");
+        var probe = new NeoReadinessProbe();
+        Assert.AreEqual("readiness_timeout", (await Assert.ThrowsExactlyAsync<NeoToolException>(() =>
+            probe.WaitAsync(url, TimeSpan.FromMilliseconds(100), CancellationToken.None))).Code);
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => probe.WaitAsync(url, TimeSpan.FromSeconds(5), stop.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => probe.WaitAsync(url, TimeSpan.FromSeconds(5), new CancellationToken(true)));
     }
 
     [TestMethod]
@@ -595,6 +646,42 @@ public sealed class ToolingTests
         Assert.AreEqual(7, await new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(1)));
         CollectionAssert.AreEqual(new[] { "start:contract", "start:frontend", "readiness" }, order);
         Assert.AreEqual(2, factory.Starts.Count); Assert.IsTrue(frontend.Stopped);
+        try { Assert.IsTrue(readiness.Canceled, "An exited frontend must cancel and observe its readiness task."); }
+        finally { readiness.Release.TrySetResult(); }
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_DoesNotStartBackendWhenReadinessAndFrontendExitAreBothComplete()
+    {
+        using var fixture = new ProjectFixture();
+        var order = new List<string>();
+        var contract = new FakeProcess(); contract.Exit(0);
+        var frontend = new FakeProcess(); frontend.Exit(7);
+        var readiness = new FakeReadiness(order); readiness.Release.TrySetResult();
+        var factory = new FakeFactory(order, contract, frontend);
+        Assert.AreEqual(7, await new NeoDevelopmentOrchestrator(factory, readiness)
+            .RunAsync(NeoProjectConfiguration.Load(fixture.ConfigurationPath), CancellationToken.None));
+        Assert.AreEqual(2, factory.Starts.Count);
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_UserCancellationDuringReadinessStopsFrontend()
+    {
+        using var fixture = new ProjectFixture();
+        using var stop = new CancellationTokenSource();
+        var order = new List<string>();
+        var contract = new FakeProcess(); contract.Exit(0);
+        var frontend = new FakeProcess();
+        var readiness = new FakeReadiness(order);
+        var factory = new FakeFactory(order, contract, frontend);
+        var run = new NeoDevelopmentOrchestrator(factory, readiness)
+            .RunAsync(NeoProjectConfiguration.Load(fixture.ConfigurationPath), stop.Token);
+        await readiness.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        stop.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => run.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.IsTrue(readiness.Canceled);
+        Assert.IsTrue(frontend.Stopped);
+        Assert.AreEqual(2, factory.Starts.Count);
     }
 
     private sealed class IntegratedBuildFixture : IDisposable
@@ -874,6 +961,12 @@ public sealed class ToolingTests
     private sealed class FakeReadiness(List<string> order) : INeoReadinessProbe
     {
         internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously); internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public async Task WaitAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken) { order.Add("readiness"); Started.TrySetResult(); await Release.Task.WaitAsync(cancellationToken); }
+        internal bool Canceled { get; private set; }
+        public async Task WaitAsync(Uri url, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            order.Add("readiness"); Started.TrySetResult();
+            try { await Release.Task.WaitAsync(cancellationToken); }
+            finally { Canceled = cancellationToken.IsCancellationRequested; }
+        }
     }
 }

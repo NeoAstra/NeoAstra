@@ -305,36 +305,32 @@ internal sealed class NeoReadinessProbe : INeoReadinessProbe
         {
             Timeout = TimeSpan.FromSeconds(2)
         };
-        while (true)
+        try
         {
-            timeoutSource.Token.ThrowIfCancellationRequested();
-            try
+            while (true)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token).ConfigureAwait(false);
-                if (ValidateResponse(url, response))
-                    return;
-            }
-            catch (NeoToolException)
-            {
-                throw;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
-            {
-                throw new NeoToolException("readiness_timeout", "The development server did not become ready before the bounded timeout.");
-            }
-            catch (HttpRequestException)
-            {
-            }
+                timeoutSource.Token.ThrowIfCancellationRequested();
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token).ConfigureAwait(false);
+                    if (ValidateResponse(url, response))
+                        return;
+                }
+                catch (OperationCanceledException) when (!timeoutSource.IsCancellationRequested)
+                {
+                    // A single HTTP timeout is retryable within the overall readiness deadline.
+                }
+                catch (HttpRequestException)
+                {
+                }
 
-            try
-            {
                 await Task.Delay(100, timeoutSource.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new NeoToolException("readiness_timeout", "The development server did not become ready before the bounded timeout.");
-            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new NeoToolException("readiness_timeout", "The development server did not become ready before the bounded timeout.");
         }
     }
 
@@ -348,7 +344,7 @@ internal sealed class NeoReadinessProbe : INeoReadinessProbe
             throw new NeoToolException("readiness_redirect", "Readiness redirects are rejected; configure the exact final development URL.");
         }
 
-        return (int)response.StatusCode is >= 200 and < 500;
+        return response.IsSuccessStatusCode;
     }
 }
 
@@ -374,10 +370,17 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         await using var frontend = processFactory.Start(new("frontend", frontendCommand, project.FrontendRoot, project.Environment, project.SecretEnvironment, (line, error) => Log("frontend", line, error)));
         try
         {
-            var ready = readiness.WaitAsync(project.DevUrl, TimeSpan.FromSeconds(60), cancellationToken);
-            var first = await Task.WhenAny(ready, frontend.Completion).ConfigureAwait(false);
-            if (first == frontend.Completion)
-                return await frontend.Completion.ConfigureAwait(false) is 0 ? 1 : frontend.ExitCode!.Value;
+            using var readinessStop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var ready = readiness.WaitAsync(project.DevUrl, TimeSpan.FromSeconds(60), readinessStop.Token);
+            await Task.WhenAny(ready, frontend.Completion).ConfigureAwait(false);
+            if (frontend.Completion.IsCompleted)
+            {
+                readinessStop.Cancel();
+                // The frontend exit is authoritative; observe an abandoned probe's cancellation/failure.
+                try { await ready.ConfigureAwait(false); } catch (Exception) { }
+                var frontendExit = await frontend.Completion.ConfigureAwait(false);
+                return frontendExit == 0 ? 1 : frontendExit;
+            }
             await ready.ConfigureAwait(false);
             var backendEnvironment = new Dictionary<string, string>(project.Environment, StringComparer.OrdinalIgnoreCase)
             {

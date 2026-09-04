@@ -62,10 +62,13 @@ remain ignored. Each implementation step includes this checklist update in its c
   all 38 frontend tests/checks now pass (10,213 gzip bytes). Added the matching instance convenience
   method, covered result/claim and connection-loss races, all terminal listener cleanup paths, and
   iterator-return buffer disposal. No protocol changes or dependencies.
-- [ ] **3 — Reliable development readiness.** Regressions first: reject HTTP error pages as ready,
+- [x] **3 — Reliable development readiness.** Regressions first: reject HTTP error pages as ready,
   retry individual request timeouts until the bounded overall deadline, propagate user cancellation,
   and cancel/observe readiness when the frontend exits early. Keep redirects denied and do not
   introduce process spawning abstractions or dependencies. Update tooling docs, verify, and commit.
+  Reproduced all three faults before fixing them; also reproduced the simultaneous ready/exit race.
+  All 32 tooling tests pass, including a real loopback HTTP request-timeout/retry test and cancellation
+  tests. Documented that 2xx reachability is not server-process authentication. No new dependencies.
 - [ ] **4 — Honest, repeatable validation.** Fix the stale engineering ABI test with explicit parser
   fixtures; execute engineering tests in ordinary CI. Extend the opt-in conformance workflow to
   actually run the browser harness, bound execution, and retain logs including skips (not just the
