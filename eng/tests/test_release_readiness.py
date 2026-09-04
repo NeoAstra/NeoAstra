@@ -33,7 +33,29 @@ class ReleaseReadinessTests(unittest.TestCase):
             release_readiness.VERSION_HEADER.read_text(encoding="utf-8")
         )
 
-        self.assertEqual({"major": 1, "minor": 9}, version)
+        # The pre-release ABI was intentionally reset to 1.0; release pairing is a separate gate.
+        self.assertEqual({"major": 1, "minor": 0}, version)
+
+    def test_version_parser_reads_explicit_numeric_components(self) -> None:
+        for major, minor in ((1, 0), (1, 9), (12, 34)):
+            with self.subTest(major=major, minor=minor):
+                text = (
+                    "#pragma once\n"
+                    f"#define NEOASTRA_ABI_VERSION_MINOR\t{minor}\n"
+                    f"#define NEOASTRA_ABI_VERSION_MAJOR {major}   \n"
+                )
+                self.assertEqual({"major": major, "minor": minor}, release_readiness.parse_version(text))
+
+    def test_version_parser_rejects_missing_or_malformed_components(self) -> None:
+        for text in (
+            "",
+            "#define NEOASTRA_ABI_VERSION_MAJOR 1\n",
+            "#define NEOASTRA_ABI_VERSION_MINOR 0\n",
+            "#define NEOASTRA_ABI_VERSION_MAJOR -1\n#define NEOASTRA_ABI_VERSION_MINOR 0\n",
+            "#define NEOASTRA_ABI_VERSION_MAJOR 1\n#define NEOASTRA_ABI_VERSION_MINOR invalid\n",
+        ):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                release_readiness.parse_version(text)
 
     def test_checksum_manifest_is_sorted_and_does_not_hash_itself(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

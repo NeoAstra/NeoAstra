@@ -21,18 +21,19 @@ claim that every target has passed release-level runtime validation. In this doc
 | Ubuntu 24.04+ | ARM64 / `linux-arm64` | WebKitGTK 6.0 | Required | Implemented and source-reviewed. Native build/test/package coverage on ARM64 infrastructure is configured; no release-level browser-runtime result is asserted. |
 | Linux using musl | x64 or ARM64 | WebKitGTK | Not a v1 target | Unsupported. No musl RID assets, compatible dependency baseline, or musl runtime CI are present. |
 
-Thirty-two-bit architectures and RIDs other than those listed above are not supported. The NuGet
-project targets .NET 10 and is configured to pack one managed `NeoAstra.dll` plus the matching
-`neoastra_native` asset for the six listed RIDs. The packaging workflow assembles all six native
-assets; a workflow definition alone is not a release-validation record.
+Thirty-two-bit architectures and RIDs other than those listed above are not supported. The .NET 10
+`NeoAstra.Core` package carries the native assets; the ordinary `NeoAstra` application package depends
+on that core. The packaging workflow assembles all six native assets; a workflow definition alone is
+not a release-validation record.
 
 ## Runtime requirements
 
 All platforms require:
 
 - A .NET 10 runtime, unless the application is published self-contained or with NativeAOT.
-- A NeoAstra native asset matching the operating system and process architecture. Managed and
-  native assets are a paired release unit; the loader rejects an ABI major or minor mismatch.
+- A NeoAstra native asset matching the operating system and process architecture. The pre-release
+  ABI is `1.0`, and the current loader/bundler enforce major compatibility only. Strict managed/native
+  release pairing remains a release gate, not a control already enforced by the pre-release loader.
 - A graphical desktop session and use of the platform UI thread. Headless build success does not
   establish that a browser view can be created.
 
@@ -81,10 +82,16 @@ ARM64. NativeAOT, packaging, delivery, and desktop conformance remain separately
 rather than checks on every managed change. The native tests cover the ABI, ownership, dispatch,
 teardown, and stress behavior; they do not by themselves prove end-to-end browser behavior.
 
-The repository contains an opt-in browser conformance harness, but normal CI does not invoke it with
-`--run`. Consequently, this page does not infer macOS or Linux runtime support from source review,
-compilation, native tests, Xvfb use, or NativeAOT publication. A v1 support claim still requires the
-platform sample and browser integration acceptance criteria to be run and recorded on each target.
+Normal CI does not invoke the browser harness with `--run`. The separate, manually dispatched
+`conformance.yml` now configures both desktop-service smoke and browser `--run --stress` execution on
+Windows x64, macOS x64, and Linux x64, with per-step deadlines and retained logs including explicit
+skips. This is configured coverage, not a report that those jobs passed, and does not cover every RID.
+Ordinary managed CI also runs the dependency-free engineering tests, including ABI-header parsing.
+
+This page does not infer macOS or Linux runtime support from source review, compilation, native tests,
+Xvfb use, or NativeAOT publication. A v1 support claim still requires the platform sample and browser
+integration acceptance criteria to be run and recorded on each target. Record the OS/engine/RID,
+artifact identity, command, and pass/fail/skip results; review each skip against release requirements.
 
 For local verification, see the sample and conformance commands in the
 [project readme](../readme.md#building). Passing those commands on one machine validates that tested

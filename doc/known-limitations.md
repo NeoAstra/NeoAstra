@@ -9,7 +9,7 @@ implemented source, configured workflow coverage, and actual runtime validation.
 - Release-level browser validation is not established here for macOS or Linux. Windows ARM64 native
   execution and browser validation are also not established.
 - The minimum supported macOS version has not been frozen.
-- The repository workflows build and package artifacts but do not publish a release. Each configured
+- Configured build/package workflows do not by themselves establish release readiness. Each configured
   native RID now assembles a separate readiness artifact containing the staged native binary, public
   headers, separate native debug symbols, runtime documentation, third-party notices, an export-based
   ABI report, and a SHA-256 manifest; the package artifact also receives a SHA-256 manifest. The
@@ -74,6 +74,13 @@ and native window-state transitions remain available.
 - Application and browser operations begin on the platform UI thread. An attached host must continue
   pumping that thread through asynchronous disposal; NeoAstra will not tear down COM, Cocoa, or GTK
   objects on the wrong thread after the host loop has stopped.
+- Generic Host's dedicated UI-thread path has focused Windows test coverage, not macOS/AppKit
+  main-thread or Linux qualification. Use explicit native-main-loop ownership where that hosted path
+  has not been qualified. See [lifecycle and hosting](application-lifecycle-and-hosting.md).
+- RPC channel cancellation is cooperative. A noncooperative iterator retains its service and can
+  keep teardown pending after its warning; a blocked transport callback can also delay shutdown.
+  Frontend channel acknowledgements mean buffer admission, not application consumption. Bounded
+  overflow requires application resynchronization; it is not a durable event log.
 - Linux requires a working X11 or Wayland display. A headless build, native unit test, or NativeAOT
   publish does not prove that a WebKitGTK view can be created.
 - Linux tray items use the Freedesktop StatusNotifierItem protocol. KDE Plasma provides a watcher;

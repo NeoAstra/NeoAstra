@@ -69,11 +69,16 @@ remain ignored. Each implementation step includes this checklist update in its c
   Reproduced all three faults before fixing them; also reproduced the simultaneous ready/exit race.
   All 32 tooling tests pass, including a real loopback HTTP request-timeout/retry test and cancellation
   tests. Documented that 2xx reachability is not server-process authentication. No new dependencies.
-- [ ] **4 — Honest, repeatable validation.** Fix the stale engineering ABI test with explicit parser
+- [x] **4 — Honest, repeatable validation.** Fix the stale engineering ABI test with explicit parser
   fixtures; execute engineering tests in ordinary CI. Extend the opt-in conformance workflow to
   actually run the browser harness, bound execution, and retain logs including skips (not just the
   desktop-service smoke fixture). Do not present configured jobs as passing runs. Verify locally,
   update support/limitation docs, review, and commit.
+  Engineering tests now pass (7 pass, 1 explicit Windows symlink skip), with numeric/malformed parser
+  fixtures. Ordinary CI runs them; opt-in conformance now runs browser stress and retains logs,
+  OS/SDK metadata and native SHA-256 with bounded steps. Both workflow YAML files parse locally.
+  Windows browser stress rerun: 15 pass, 19 explicit skips; no workflow was dispatched. Corrected
+  stale strict ABI-minor pairing/package claims in support docs. Other RID evidence remains open.
 - [ ] **5a — Simple-host lifecycle extension.** Add one backend-only main-window configuration
   callback to `NeoAppBuilder`, before the window is shown/navigation starts, so close/quit/launch
   handlers do not require rebuilding the secure host. Keep existing lifecycle types and security

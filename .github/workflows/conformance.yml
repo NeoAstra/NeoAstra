@@ -27,6 +27,7 @@ jobs:
             rid: linux-x64
             library: libneoastra_native.so
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -48,7 +49,27 @@ jobs:
           sudo apt-get install -y libgtk-4-1 libwebkitgtk-6.0-4 xvfb
       - name: Run desktop session smoke fixture
         shell: bash
+        timeout-minutes: 10
         run: |
+          mkdir -p artifacts/conformance
           export NEOASTRA_NATIVE_LIBRARY="$PWD/artifacts/desktop-native/${{ matrix.library }}"
           command=(dotnet run --project src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -- --native-smoke)
-          if [[ "${{ runner.os }}" == "Linux" ]]; then xvfb-run -a "${command[@]}"; else "${command[@]}"; fi
+          if [[ "${{ runner.os }}" == "Linux" ]]; then xvfb-run -a "${command[@]}" 2>&1 | tee artifacts/conformance/desktop-smoke.log; else "${command[@]}" 2>&1 | tee artifacts/conformance/desktop-smoke.log; fi
+      - name: Run browser conformance including stress
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          mkdir -p artifacts/conformance
+          export NEOASTRA_NATIVE_LIBRARY="$PWD/artifacts/desktop-native/${{ matrix.library }}"
+          echo "RID=${{ matrix.rid }} COMMIT=${{ github.sha }}" > artifacts/conformance/host.txt
+          dotnet --info >> artifacts/conformance/host.txt
+          node -e "const fs = require('node:fs'); const crypto = require('node:crypto'); console.log('NATIVE_SHA256=' + crypto.createHash('sha256').update(fs.readFileSync(process.env.NEOASTRA_NATIVE_LIBRARY)).digest('hex'));" >> artifacts/conformance/host.txt
+          command=(dotnet run --project src/NeoAstra.Conformance/NeoAstra.Conformance.csproj -c Release -- --run --stress --timeout-seconds 30)
+          if [[ "${{ runner.os }}" == "Linux" ]]; then xvfb-run -a "${command[@]}" 2>&1 | tee artifacts/conformance/browser.log; else "${command[@]}" 2>&1 | tee artifacts/conformance/browser.log; fi
+      - name: Retain conformance results including skips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-${{ matrix.rid }}
+          path: artifacts/conformance/
+          if-no-files-found: warn
