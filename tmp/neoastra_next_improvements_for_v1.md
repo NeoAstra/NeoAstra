@@ -6,7 +6,7 @@
 
 **Goal:** a small, dependable .NET/system-WebView application platform for CodeAlta, not feature parity with Electron.
 
-**Status:** assessment and implementation in progress; **not a v1 release certification**.
+**Status:** scoped assessment, implementation and local verification complete; **not a v1 release certification**.
 
 This is the execution checklist requested by the user. The historical v2 analysis remains unchanged;
 the current assessment is `tmp/rich_desktop_webview_app_analysis_v3.md`. These two requested documents
@@ -98,9 +98,17 @@ remain ignored. Each implementation step includes this checklist update in its c
   records missing approval recovery and bootstrap rollback, and requires one runtime event consumer.
   Corrected permissionless RPC wording, template lockfile/bootstrap advice and unqualified version
   examples; linked the consumer path and lifecycle hook. No CodeAlta edits or dependency installations.
-- [ ] **6 — Final verification and review.** Re-run managed build/tests, frontend checks, engineering
+- [x] **6 — Final verification and review.** Re-run managed build/tests, frontend checks, engineering
   tests, advanced deterministic validation, and Windows browser conformance/stress as practical.
   Record actual results and outstanding gates here and in the assessment; leave worktree clean.
+  Release build has zero warnings/errors; 209 managed and 38 frontend tests pass. Engineering:
+  7 pass, 1 Windows symlink skip. Advanced deterministic validation passes. Real Windows browser
+  stress: 15 pass, 19 explicit skips; desktop smoke exits 0, and all four prebuilt native CTests pass.
+  Fresh Windows NativeAOT compilation and both fixture/default and desktop-smoke executions pass
+  after aligning the runtime with the already-restored compiler (details below). Local package
+  inspection verifies the exact new adoption guide is included with its companion guides.
+  Generated contracts remain unchanged; workflow YAML and relative documentation links validate.
+  Final diff reviewed; v2 and other checkouts remain unchanged. No release gate was checked off.
 
 ## Mandatory release gates (remain unchecked until retained evidence exists)
 
@@ -145,3 +153,51 @@ useful follow-up; do not confuse their absence with a need to redesign the typed
   An initial CTest attempt in the old `windows-x64-release` directory could not run its four tests:
   that stale generated configuration points to the former `NeoWebView` checkout. It was preserved;
   using the current `win-x64` directory resolved the verification-path error.
+
+### Final Windows evidence (2026-09-04)
+
+Host: Windows `10.0.26200`, x64, .NET SDK `10.0.303`. Browser harness reports WebView2 with
+`backendVersion=system browser=system`; it does not retain an exact engine version. No workflow was
+dispatched, dependency installed, artifact published, or clean-host consumer certified.
+
+Commands used existing restored dependencies; final logs are ignored `tmp/v1-final-*.log`:
+
+```powershell
+# src
+dotnet build -c Release --no-restore -p:NeoAstraRestoreFrontendDependencies=false
+dotnet test -c Release --no-build --no-restore
+# frontend
+npm run check
+# repository root
+python -m unittest discover -s eng/tests -v
+dotnet run --project samples/NeoAstra.Sample.Advanced -c Release --no-build --no-restore -- --validate-advanced
+$env:NEOASTRA_NATIVE_LIBRARY = (Resolve-Path src/NeoAstra.Core/runtimes/win-x64/native/neoastra_native.dll).Path
+dotnet run --project src/NeoAstra.Conformance -c Release --no-build --no-restore -- --run --stress --timeout-seconds 30
+dotnet run --project src/NeoAstra.NativeAotFixture -c Release --no-build --no-restore -- --native-smoke
+ctest --test-dir artifacts/native/win-x64 --output-on-failure
+dotnet publish src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -r win-x64 --self-contained --no-restore -p:NeoAstraRestoreFrontendDependencies=false -p:RuntimeFrameworkVersion=10.0.10 -p:NativeIntermediateOutputPath=C:/code/NeoAstra/artifacts/v1-final-nativeaot-obj/ -o artifacts/v1-final-nativeaot
+./artifacts/v1-final-nativeaot/NeoAstra.NativeAotFixture.exe
+./artifacts/v1-final-nativeaot/NeoAstra.NativeAotFixture.exe --native-smoke
+dotnet pack src/NeoAstra/NeoAstra.csproj -c Release --no-build --no-restore -p:NeoAstraRestoreFrontendDependencies=false -o artifacts/v1-final-pack
+```
+
+- Initial no-restore NativeAOT publish **failed**: the current SDK selected runtime `10.0.11`, but
+  existing restore assets referenced ILCompiler/NativeAOT `10.0.10` (`System.Private.CoreLib` mismatch).
+  The successful command pins only this verification invocation to the already-cached/restored
+  `10.0.10` runtime. A fresh native intermediate directory forced real recompilation, not reuse of
+  the failed publish's output. No repository dependency/SDK policy changed. Normal clean-restore and
+  clean-host release consumers still need qualification.
+- Initial raw-byte generated TypeScript comparison **failed solely on LF versus CRLF** (1014 versus
+  1028 bytes). Normalized text matches exactly; git reports neither fixture changed. This is not a
+  protocol/hash change, and no generated files were rewritten to hide it.
+- Frontend client remains 10,213 gzip bytes against the 20,480-byte budget; package/license/provenance,
+  static/framework fixtures and template checks pass. Local `.nupkg` ZIP inspection verifies the new
+  guide's exact bytes; this is package-content validation, not an outside-checkout installation test.
+- Native CTests use a **different prebuilt binary** from browser/desktop tests. Neither native asset
+  was rebuilt or promoted to a release artifact in this pass. SHA-256 identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Staged `src/NeoAstra.Core/runtimes/win-x64/native/neoastra_native.dll` (browser/desktop smoke) | `2170f688164e5cb8b7fd405ab5d46f9f81c30e7092c068309d83d3644665786c` |
+| `artifacts/native/win-x64/neoastra_native.dll` (CTest tree) | `4fb6a3528cf628f5df911114b7bb8e31d95aad88735ead64cd8a6f2f6e55384c` |
+| Fresh `artifacts/v1-final-nativeaot/NeoAstra.NativeAotFixture.exe` | `b60d26ec778f7ca822e25855b67f62417520ad0a507f169e76ceb211cdbf1872` |

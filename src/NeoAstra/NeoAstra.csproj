@@ -55,6 +55,7 @@
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-staging-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-update-manifest-v1.schema.json" Pack="true" PackagePath="schemas/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/frontend-tooling-and-assets.md" Pack="true" PackagePath="docs/" />
+    <None Include="$(MSBuildThisFileDirectory)../../doc/codealta-integration.md" Pack="true" PackagePath="docs/" />
     <None Include="$(MSBuildThisFileDirectory)../../doc/delivery-and-updates.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 

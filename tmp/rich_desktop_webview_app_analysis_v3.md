@@ -235,6 +235,51 @@ to a useful first CodeAlta GUI. Conversely, adding those APIs cannot substitute 
 
 ## Implementation outcome
 
-Pending execution. The companion checklist will record each commit-sized fix, passing checks,
-deviations and remaining prerequisites. This section will be updated after final verification;
-baseline findings above intentionally preserve the evidence that drove the changes.
+**The scoped implementation pass is complete. NeoAstra is a better foundation for the first CodeAlta
+slice, not yet a release-qualified excellent v1.** Baseline findings above intentionally preserve the
+evidence that drove the changes; the companion checklist records commands, regressions and deviations.
+
+- Hosted startup now separates dispatcher availability from readiness; startup can await dispatched
+  work without circular waiting. Failure/cancellation/early-stop tests cover native cleanup and
+  original exception propagation. Post-readiness loop-fault logging was source-reviewed, not injected.
+- Backend channels retain invocation-specific service leases through enumerator cleanup, reserve
+  capacity before publishing IDs, and release abandoned results. Reentrant close accepts cancellation
+  without awaiting its own pump. Frontend abort remains effective after opening and cleans terminal
+  listeners/buffers. This is not durable/lossless application-consumption backpressure.
+- Development readiness now requires 2xx, retries request timeouts within the total deadline, and
+  cancels/observes readiness after early frontend exit, including simultaneous ready/exit completion.
+- Engineering tests now validate the actual header plus explicit parser fixtures. Ordinary CI runs
+  them; opt-in conformance runs browser stress and retains logs/skips and host/artifact metadata.
+  These workflow changes were parsed locally, not dispatched remotely.
+- `ConfigureMainWindow` adds one backend-only simple-host lifecycle setup point without changing
+  browser trust/navigation policy. The public [CodeAlta guide](../doc/codealta-integration.md), included
+  in the application package, documents real composition APIs and application-owned policy still
+  needed. Consumer documentation now distinguishes included lockfiles, reviewed versions and
+  restricted registrations from permissionless trusted-local RPC.
+
+### Executed final checks
+
+| Check | Result on this Windows x64 host |
+| --- | --- |
+| Release solution build | Success, zero warnings/errors; no restore/install |
+| Managed suite | 209 passed, 0 failed/reported skipped; not blanket proof of every legacy native guard |
+| Frontend checks | 38 tests pass; TypeScript, package/license/provenance, fixtures/templates pass; 10,213 gzip bytes |
+| Engineering suite | 7 pass; 1 explicitly skipped Windows symlink case |
+| Advanced sample | Deterministic contract/asset/feature-tour validation passes, not browser acceptance of every feature |
+| Windows WebView2 stress | 15 pass, 19 explicitly skipped, including a passing 100,000-message case |
+| Desktop/native | Desktop smoke exits 0; 4 existing native CTest executables pass |
+| NativeAOT | Fresh win-x64 compile and default RPC/desktop fixture plus native desktop smoke executions pass |
+| Package/docs | Local package contains exact adoption guide; relative document targets and changed workflow YAML validate |
+
+NativeAOT initially failed because no-restore assets referenced compiler `10.0.10` while the current
+SDK selected runtime `10.0.11`. Aligning this invocation to the cached `10.0.10` runtime and using a new
+native intermediate directory produced a passing fresh compile/run; dependencies were not changed.
+A raw generated-TypeScript comparison also exposed local LF/CRLF differences only; normalized contracts
+match and tracked generated files are unchanged. These deviations are retained rather than concealed.
+
+The checklist retains host/artifact identities and full reproduction commands. Browser/desktop smoke
+used the staged native DLL; CTests used a different prebuilt DLL. Neither was freshly rebuilt or
+release-paired here. NativeAOT smoke still uses the staged library, not a clean-host installation.
+The real CodeAlta GUI, macOS/Linux hosting, full RID/browser/UX matrix, strict release package/ABI
+policy and installer/update qualification remain open. No comparison checkout or CodeAlta data was
+modified, and historical v2 remains untouched.
