@@ -79,10 +79,14 @@ remain ignored. Each implementation step includes this checklist update in its c
   OS/SDK metadata and native SHA-256 with bounded steps. Both workflow YAML files parse locally.
   Windows browser stress rerun: 15 pass, 19 explicit skips; no workflow was dispatched. Corrected
   stale strict ABI-minor pairing/package claims in support docs. Other RID evidence remains open.
-- [ ] **5a — Simple-host lifecycle extension.** Add one backend-only main-window configuration
+- [x] **5a — Simple-host lifecycle extension.** Add one backend-only main-window configuration
   callback to `NeoAppBuilder`, before the window is shown/navigation starts, so close/quit/launch
   handlers do not require rebuilding the secure host. Keep existing lifecycle types and security
   policy; validate registration and native callback ordering/failure cleanup. Document and commit.
+  Added `ConfigureMainWindow(Action<NeoApplication, NeoWindow>)` with one-registration validation
+  and XML docs. All 11 NeoApp tests pass; two native Windows cases verify UI-thread/hidden-window
+  ordering, original failure propagation, and window cleanup without creating a browser. Other OS
+  guards are inconclusive. The callback attaches existing typed async lifecycle handlers, not async void.
 - [ ] **5b — CodeAlta adoption guide and golden-path documentation.** Correct the stale mandatory-RPC
   permission claim, explain restricted-view registrations, remove template lockfile/version ambiguity,
   and provide a concrete headless-host integration recipe and

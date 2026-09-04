@@ -45,6 +45,7 @@ public sealed class NeoAppBuilder
     private readonly HashSet<string> _mainViewPermissions = new(StringComparer.Ordinal);
     private IReadOnlyList<NeoPermissionDeclaration>? _permissionDeclarations;
     private Action<NeoRpcBuilder>? _configureRpc;
+    private Action<NeoApplication, NeoWindow>? _configureMainWindow;
     private string? _contractHash;
     private NeoExternalUrlScope? _externalLinkScope;
     private Session? _session;
@@ -60,6 +61,20 @@ public sealed class NeoAppBuilder
 
     /// <summary>Gets or sets the production asset directory.</summary>
     public string AssetsDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "assets");
+
+    /// <summary>Registers backend configuration for the hidden main window and its application.</summary>
+    /// <param name="configure">The synchronous callback used to attach lifecycle handlers or configure window properties.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>The callback runs once during startup on the native UI thread, after assigning <see cref="NeoApplication.MainWindow"/> and before RPC/browser creation, showing, or navigation. It does not change bridge or navigation policy. Attach asynchronous close/quit/launch handlers here rather than using an async-void configuration callback. A thrown exception fails startup and propagates from <see cref="NeoApp.Run"/> after application teardown.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">Main-window configuration was already registered.</exception>
+    public NeoAppBuilder ConfigureMainWindow(Action<NeoApplication, NeoWindow> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_configureMainWindow is not null) throw new InvalidOperationException("Main-window configuration can be registered only once.");
+        _configureMainWindow = configure;
+        return this;
+    }
 
     /// <summary>Opts the main view into capability authorization and grants exact generated application permissions.</summary>
     /// <param name="permissions">Exact generated permission identifiers.</param>
@@ -140,6 +155,7 @@ public sealed class NeoAppBuilder
         NeoRpcViewBinding? binding = null;
         try
         {
+            _configureMainWindow?.Invoke(application, window);
             var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
             var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
             var release = developmentOrigin is null;

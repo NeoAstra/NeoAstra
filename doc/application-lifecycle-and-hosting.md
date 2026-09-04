@@ -2,6 +2,33 @@
 
 NeoAstra uses a versioned `NEOASTRA_DECISION_WINDOW_CLOSE` decision for window close. User and programmatic requests default to **cancel** after 30 seconds; repeated requests coalesce while one decision is pending. Windows `WM_QUERYENDSESSION` is reported separately as a non-cancelable best-effort lifecycle event and is never blocked for asynchronous work. macOS window close and GTK delete events are deferred without blocking their UI thread. An approved managed quit uses the internal `neoastra_window_force_close` path only after application and window policy has completed. That function is backend API, is absent from browser transport/RPC, and should not be used for ordinary close.
 
+## Lifecycle policy in the simple host
+
+`NeoAppBuilder.ConfigureMainWindow` provides one synchronous, backend-only configuration callback.
+It runs on the native UI thread after `application.MainWindow` is assigned, while the window is
+hidden, before RPC/browser creation or navigation. Register existing close/quit/launch handlers or
+set window properties here without rebuilding the secure host. For example, with an application-owned
+`editor` that implements saving and launch handling:
+
+```csharp
+app.ConfigureMainWindow((application, window) =>
+{
+    window.CloseRequested += async request =>
+    {
+        if (request.CanCancel && !await editor.ConfirmAndSaveAsync(request.DeadlineToken))
+            request.Cancel();
+    };
+    application.LaunchReceived += editor.HandleLaunchAsync;
+});
+```
+
+The configuration callback itself must not be `async void` or block the UI loop; asynchronous work
+belongs in the typed lifecycle handlers. Duplicate/null registration fails early. A callback exception
+fails startup, closes application-owned native windows through normal application teardown, and
+propagates from `NeoApp.Run`. Bridge, capability, and navigation policies remain unchanged.
+For custom application options, single-instance acquisition before window creation, multiple views,
+or independently owned backend services, use explicit `NeoApplication` composition instead.
+
 ## Managed ordering
 
 `NeoApplication.State` transitions through `Created`, `Starting`, `Ready`, `QuitRequested`, `ClosingWindows`, `Stopping`, and `Stopped`. `Run` enters `Ready` after its startup callback; attached hosts call `NotifyReady`. State changes and launch delivery are serialized by the application dispatcher.

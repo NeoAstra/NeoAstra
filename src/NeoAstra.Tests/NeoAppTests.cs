@@ -144,6 +144,87 @@ public sealed class NeoAppTests
         }
     }
 
+    [TestMethod]
+    public void MainWindowConfigurationRejectsNullAndDuplicateRegistration()
+    {
+        var builder = CreateBuilder(ApplicationPermission());
+        Assert.ThrowsExactly<ArgumentNullException>(() => builder.ConfigureMainWindow(null!));
+        Assert.AreSame(builder, builder.ConfigureMainWindow(static (_, _) => { }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => builder.ConfigureMainWindow(static (_, _) => { }));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MainWindowConfigurationRunsBeforeShowingAndFailureCleansUp(bool failInWindowCallback)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Native main-window callback ordering is qualified by this test on Windows only.");
+            return;
+        }
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var configured = 0;
+                var rpcConfigured = false;
+                NeoWindow? captured = null;
+                var expected = new InvalidOperationException("Deliberate startup stop before browser creation.");
+                Exception? failure = null;
+                try
+                {
+                    NeoApp.Run([], builder =>
+                    {
+                        builder.ConfigureMainWindow((application, window) =>
+                        {
+                            configured++;
+                            captured = window;
+                            Assert.AreSame(window, application.MainWindow);
+                            Assert.IsTrue(application.Dispatcher.CheckAccess());
+                            Assert.IsFalse(window.IsVisible);
+                            Assert.IsFalse(rpcConfigured);
+                            window.Title = "Configured before showing";
+                            if (failInWindowCallback) throw expected;
+                        });
+                        builder.ConfigureGeneratedRpc("contract", [], _ =>
+                        {
+                            rpcConfigured = true;
+                            Assert.AreEqual(1, configured);
+                            Assert.AreEqual("Configured before showing", captured!.Title);
+                            // Prove ordering without needing a browser runtime or an asset directory.
+                            throw expected;
+                        });
+                    });
+                }
+                catch (NeoAstraNativeLibraryException) { throw; }
+                catch (Exception exception) { failure = exception; }
+                Assert.AreSame(expected, failure);
+                Assert.AreEqual(1, configured);
+                Assert.AreEqual(!failInWindowCallback, rpcConfigured);
+                Assert.IsNotNull(captured);
+                Assert.IsTrue(captured.IsClosed, "Application teardown must close the window after startup failure.");
+            });
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            Assert.Inconclusive("The native runtime is not staged for main-window callback tests.");
+        }
+    }
+
+    private static Task RunStaAsync(Action action)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { action(); completion.TrySetResult(); }
+            catch (Exception exception) { completion.TrySetException(exception); }
+        }) { IsBackground = true };
+        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     private static NeoAppBuilder CreateBuilder(NeoPermissionDeclaration declaration) =>
         new NeoAppBuilder().ConfigureGeneratedRpc("contract", [declaration], static _ => { });
 
