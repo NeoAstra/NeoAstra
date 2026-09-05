@@ -7,7 +7,7 @@ project = "NeoAstra.slnx"
 user = "NeoAstra"
 repo = "NeoAstra"
 [changelog]
-publish = false # Disable for now until release (as the changelog takes a huge amount of time to generate)
+#publish = false # Disable for now until release (as the changelog takes a huge amount of time to generate)
 owners = ["xoofx"] # To avoid to be mentioned in the changelog
 [nuget]
 user = "xoofx"
