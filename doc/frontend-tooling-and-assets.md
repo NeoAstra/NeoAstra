@@ -79,6 +79,8 @@ Reference only the `NeoAstra` package. The package carries the compiled, framewo
 
 For configured package projects, the production command is framework-neutral: it is exactly the `frontend.buildCommand` argument array. It may invoke any locally available build tool and does not imply Vite, React, TypeScript, Node.js, or a package manager. Static convention projects perform no frontend command: the SDK fingerprints `frontend`, assembles project and SDK files under `obj`, validates the result, and synchronizes exact build/publish assets. `packageManager: "none"` never invokes Node. Automatic dependency restore is currently limited to npm projects whose resolved `frontend.lockfile` is `frontend.root/package-lock.json`; other package managers remain explicit.
 
+The SDK passes the materialized static frontend directory to asset validation as an absolute, project-based path. This preserves containment checks when the project is beneath a linked ancestor, such as macOS `/var` pointing to `/private/var`; links within the asset tree remain rejected.
+
 The targets fingerprint the effective configuration, configuration name, frontend tree, lockfile, generated RPC contract outputs, declared extra inputs, and NeoAstra tool version. The configured `dist` directory, `node_modules`, and VCS metadata are excluded from normal-build inputs. Content changes, additions, and deletions therefore rerun preparation, while an unchanged build skips the production command. Preparation and output copies synchronize exact directories so removed assets do not survive a rerun; `dotnet clean` removes tracked preparation/output files and causes the next build to prepare again.
 
 | Property | Meaning |

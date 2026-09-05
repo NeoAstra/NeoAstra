@@ -608,6 +608,10 @@ public sealed class ToolingTests
 
         var first = await fixture.BuildStaticAsync();
         StringAssert.Contains(first, "Validated");
+        // Preserve the project's lexical path when the child process resolves a linked
+        // working-directory ancestor (for example, /var -> /private/var on macOS).
+        var materialized = Path.Combine(Path.GetDirectoryName(fixture.StaticProjectPath)!, "obj", "Debug", "net10.0", "neoastra", "frontend", "materialized");
+        StringAssert.Contains(first, $"STATIC_FRONTEND_ARGUMENT=--static-root \"{materialized}\"");
         Assert.AreEqual("static source", File.ReadAllText(Path.Combine(fixture.StaticBuildOutput, "assets", "index.html")));
         Assert.AreEqual("export const sdkClient = true;", File.ReadAllText(Path.Combine(fixture.StaticBuildOutput, "assets", "neoastra-client", "index.js")));
         Assert.IsFalse(File.Exists(Path.Combine(fixture.StaticBuildOutput, "assets", "neoastra-client", "testing.js")));
@@ -783,6 +787,9 @@ public sealed class ToolingTests
                     <NeoAstraFrontendClientSourceDirectory>{{Xml(staticClient)}}</NeoAstraFrontendClientSourceDirectory>
                   </PropertyGroup>
                   <Import Project="{{Xml(_targetsPath)}}" />
+                  <Target Name="ReportStaticFrontendArgument" AfterTargets="NeoAstraPrepareFrontend">
+                    <Message Text="STATIC_FRONTEND_ARGUMENT=$(_NeoAstraStaticFrontendArgument)" Importance="high" />
+                  </Target>
                 </Project>
                 """);
         }

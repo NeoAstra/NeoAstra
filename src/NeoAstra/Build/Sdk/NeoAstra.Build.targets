@@ -113,7 +113,8 @@
       <_NeoAstraDevelopmentArgument Condition="'$(NeoAstraAllowDevelopmentSettingsInRelease)' == 'true'">--allow-development-settings</_NeoAstraDevelopmentArgument>
       <_NeoAstraDevUrlArgument Condition="'$(NeoAstraDevUrl)' != ''">--dev-url &quot;$(NeoAstraDevUrl)&quot;</_NeoAstraDevUrlArgument>
       <NeoAstraStaticFrontendOutput Condition="'$(NeoAstraStaticFrontendOutput)' == ''">$(NeoAstraFrontendIntermediateDirectory)/materialized</NeoAstraStaticFrontendOutput>
-      <_NeoAstraStaticFrontendArgument Condition="'$(NeoAstraStaticFrontend)' == 'true' and '$(NeoAstraPrebuiltAssets)' != 'true'">--static-root &quot;$(NeoAstraStaticFrontendOutput)&quot;</_NeoAstraStaticFrontendArgument>
+      <!-- Keep the project path spelling: a child process can resolve linked cwd ancestors (macOS /var -> /private/var). -->
+      <_NeoAstraStaticFrontendArgument Condition="'$(NeoAstraStaticFrontend)' == 'true' and '$(NeoAstraPrebuiltAssets)' != 'true'">--static-root &quot;$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(NeoAstraStaticFrontendOutput)'))&quot;</_NeoAstraStaticFrontendArgument>
     </PropertyGroup>
     <ItemGroup Condition="'$(NeoAstraStaticFrontend)' == 'true' and '$(NeoAstraPrebuiltAssets)' != 'true'">
       <_NeoAstraStaticFrontendSource Include="$(NeoAstraStaticFrontendSourceDirectory)/**/*" />
