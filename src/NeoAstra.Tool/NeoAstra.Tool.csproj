@@ -5,7 +5,8 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>neoastra</ToolCommandName>
     <PackageId>NeoAstra.Tool</PackageId>
-    <Description>Secure development, assets, inspectable delivery, and update metadata tooling for NeoAstra applications.</Description>
+    <Description>Development and delivery CLI for NeoAstra desktop apps. Run frontend development workflows, validate assets and capabilities, and prepare application bundles and update metadata.</Description>
+    <PackageTags>neoastra;desktop;cli;dotnet-tool;frontend;development;packaging</PackageTags>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

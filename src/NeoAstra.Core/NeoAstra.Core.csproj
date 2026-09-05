@@ -12,11 +12,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Description>Cross-platform WebView core for native NeoAstra desktop applications.</Description>
+    <Description>Low-level .NET APIs for native windows and embedded WebViews on Windows, macOS, and Linux, backed by WebView2, WKWebView, and WebKitGTK. The foundation of NeoAstra for custom application hosts.</Description>
     <Copyright>Alexandre Mutel</Copyright>
     <NeutralLanguage>en-US</NeutralLanguage>
     <Authors>Alexandre Mutel</Authors>
-    <PackageTags>webview;webapp;desktop;native</PackageTags>
+    <PackageTags>neoastra;desktop;webview;webview2;wkwebview;webkitgtk;native;interop;cross-platform;nativeaot</PackageTags>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageIcon>NeoAstra.png</PackageIcon>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

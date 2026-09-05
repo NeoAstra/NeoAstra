@@ -4,8 +4,10 @@ Build native desktop apps with web technologies.
 
 ## Start here
 
+- [Getting started](getting-started.md) — packages, a minimal application, and samples.
 - [Platforms and runtime dependencies](platform-support.md) — supported targets, browser backends, and validation status.
 - [Known limitations](known-limitations.md) — release-readiness gaps and current platform constraints.
+- [Building and verification](building.md) — source prerequisites, native and managed builds, frontend checks, and conformance tools.
 
 ## Application development
 

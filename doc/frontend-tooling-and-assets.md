@@ -30,7 +30,7 @@ static `frontend/index.html` consumer of the package does not need Node at all.
 
 For a first local run **from this checkout** without assuming published packages, use
 `dotnet run --project samples/NeoAstra.Sample -c Release` after provisioning the repository build
-prerequisites (including Node for compiling NeoAstra's own frontend SDK). See the [project readme](../readme.md#building).
+prerequisites (including Node for compiling NeoAstra's own frontend SDK). See the [building guide](building.md#prerequisites).
 For distribution, use `dotnet publish -c Release -r <RID> --self-contained`, then the reviewed
 [delivery workflow](delivery-and-updates.md). Publish success is not installer or target-host acceptance.
 The [CodeAlta guide](codealta-integration.md) adds backend ownership and security requirements; it is

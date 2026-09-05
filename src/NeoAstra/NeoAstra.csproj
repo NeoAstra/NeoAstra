@@ -6,7 +6,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Description>The complete NeoAstra desktop application platform with RPC, secure capabilities, desktop services, and hosting.</Description>
+    <Description>Desktop application framework for .NET and web technologies, using platform browsers on Windows, macOS, and Linux. Includes typed RPC, native desktop services, application hosting, and frontend build integration.</Description>
+    <PackageTags>neoastra;desktop;gui;webview;html;css;javascript;cross-platform;nativeaot;rpc</PackageTags>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageIcon>NeoAstra.png</PackageIcon>
     <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>

@@ -97,5 +97,5 @@ integration acceptance criteria to be run and recorded on each target. Record th
 artifact identity, command, and pass/fail/skip results; review each skip against release requirements.
 
 For local verification, see the sample and conformance commands in the
-[project readme](../readme.md#building). Passing those commands on one machine validates that tested
+[building and verification guide](building.md). Passing those commands on one machine validates that tested
 environment only; it does not expand the support matrix.
