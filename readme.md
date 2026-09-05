@@ -196,6 +196,14 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
+The [CI workflow](.github/workflows/ci.yml) builds and tests on macOS and Linux, then runs
+`dotnet-releaser` on Windows to build, test, and pack using [the release configuration](src/dotnet-releaser.toml).
+The shared action uses its default `run` mode: pull requests and branch pushes validate without publishing;
+release tag pushes automatically publish NuGet packages through trusted publishing. The NuGet account
+`xoofx` must have a trusted publishing policy for `NeoAstra/NeoAstra` and workflow `ci.yml`; no NuGet API-key
+secret is required. Packages use the checked-in native RID assets. The manually dispatched `package.yml`
+workflow rebuilds all six native RIDs and runs the extended package checks without publishing.
+
 The browser conformance and performance executables are built with the solution but are never run by a normal build or test. Both are noninteractive and opt-in; invoking either without arguments exits successfully without creating an application or browser. From the repository root, run local conformance with `dotnet run --project src/NeoAstra.Conformance -c Release -- --run`. Add `--stress` for the bounded high-volume scenarios or `--timeout-seconds N` to change the per-scenario limit. The harness uses only copied `conformance://` fixtures and prints an explicit `SKIP` when a backend capability, trusted user activation, destructive process failure, filesystem mutation, or subprocess isolation prevents safe automation.
 
 Run the dependency-free benchmark harness with `dotnet run --project src/NeoAstra.Benchmarks -c Release -- --run --quick`; omit `--quick` for the bounded default sample, or use `--iterations`, `--lifecycle-iterations`, `--timeout-seconds`, and `--idle-seconds` to tune it. Each `RESULT`/`SKIP` identifies the backend and platform. Results include browser-engine, native-backend, OS-scheduling, and machine effects; environment/view timing must not be interpreted as NeoAstra controlling engine startup, and memory/idle-CPU figures currently cover only the host process. Use same-machine, same-engine regression baselines rather than absolute comparisons across platforms.

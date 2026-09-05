@@ -2,6 +2,8 @@ name: ci
 
 on:
   push:
+    branches: ['**']
+    tags: ['**']
   pull_request:
 
 permissions:
@@ -46,5 +48,24 @@ jobs:
       contents: write
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test release-readiness tooling
+        run: python -m unittest discover -s eng/tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            samples/NeoAstra.Sample.Advanced/frontend/package-lock.json
+      # Default `run` mode builds/tests/packs on PRs and branches, and publishes on release tag pushes.
       - name: Build, Test, Pack and Publish
         uses: xoofx/.github/.github/actions/dotnet-releaser-action@main
+        with:
+          checkout-repo: 'false'

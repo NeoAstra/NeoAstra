@@ -76,11 +76,14 @@ All platforms require:
 ## What is and is not currently validated
 
 The main CI workflow builds and tests `NeoAstra.slnx` on Windows x64, macOS ARM64, and Linux x64.
+After the macOS/Linux checks pass, Windows runs the shared `dotnet-releaser` action in its default
+`run` mode to build, test, and pack the solution with the checked-in native RID assets. Release tag
+pushes also publish NuGet packages via trusted publishing; pull requests and branch pushes do not publish.
 A separate native workflow runs automatically only when native sources, build inputs, or staged native
 runtimes change; it compiles artifacts for all six RIDs and executes native tests on all except Windows
-ARM64. NativeAOT, packaging, delivery, and desktop conformance remain separately dispatchable workflows
-rather than checks on every managed change. The native tests cover the ABI, ownership, dispatch,
-teardown, and stress behavior; they do not by themselves prove end-to-end browser behavior.
+ARM64. NativeAOT, extended package validation, delivery, and desktop conformance remain separately
+dispatchable workflows rather than checks on every managed change. The native tests cover the ABI,
+ownership, dispatch, teardown, and stress behavior; they do not by themselves prove end-to-end browser behavior.
 
 Normal CI does not invoke the browser harness with `--run`. The separate, manually dispatched
 `conformance.yml` now configures both desktop-service smoke and browser `--run --stress` execution on
