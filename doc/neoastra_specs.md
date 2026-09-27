@@ -2658,13 +2658,14 @@ Configurable limits SHOULD include:
 * Maximum pending asynchronous decisions.
 * Maximum pending dispatch callbacks.
 
-Suggested default message limit:
+Default message byte ceiling (configurable downward):
 
 ```text
-16 MiB
+2 GiB minus one byte (int.MaxValue)
 ```
 
-Applications requiring larger payloads should use files, streams, or future shared-buffer APIs.
+Actual capacity depends on memory, serializer, and browser-engine limits. Applications may use files
+or streams to avoid retaining large JSON messages and should configure smaller budgets when needed.
 
 ## 34.4 Benchmarks
 

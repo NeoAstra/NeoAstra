@@ -8,6 +8,18 @@ public sealed class TransportTests
     private static readonly NeoRuntimeInfo RuntimeInfo = new("webview2", "1", "1", "windows", "x64", 0, false);
 
     [TestMethod]
+    public void DefaultTransportAcceptsFramesBeyondFormerHardLimitInBothDirections()
+    {
+        var coordinator = CreateCoordinator([]);
+        Connect(coordinator, "large-document");
+        var frame = "{\"neoastra\":1,\"kind\":\"invoke\",\"value\":\"" + new string('x', 17 * 1024 * 1024) + "\"}";
+        var envelope = Envelope(coordinator, "large-document", frame);
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(envelope).Kind);
+        Assert.AreEqual(envelope, coordinator.WrapOutbound(frame));
+        Assert.AreEqual((uint)int.MaxValue, new NeoAstraOptions().MaximumMessageSize);
+    }
+
+    [TestMethod]
     public void HandshakeNegotiatesFeaturesAndDuplicateHelloReturnsSameSession()
     {
         var sent = new List<string>();

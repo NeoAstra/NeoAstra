@@ -1,8 +1,9 @@
 export const PROTOCOL_MAJOR = 1;
 export const PROTOCOL_MINOR = 0;
 export const SUPPORTED_FEATURES = Object.freeze(["invoke", "cancel", "events"] as const);
-export const DEFAULT_MAXIMUM_FRAME_BYTES = 1024 * 1024;
-export const HARD_MAXIMUM_FRAME_BYTES = 16 * 1024 * 1024;
+// Match native and managed signed 32-bit byte lengths, not an application payload quota.
+export const HARD_MAXIMUM_FRAME_BYTES = 2 ** 31 - 1;
+export const DEFAULT_MAXIMUM_FRAME_BYTES = HARD_MAXIMUM_FRAME_BYTES;
 export const DEFAULT_MAXIMUM_JSON_DEPTH = 32;
 export const DEFAULT_DIAGNOSTIC_QUEUE_LIMIT = 100;
 export const DEFAULT_HANDSHAKE_TIMEOUT_MILLISECONDS = 10_000;

@@ -1096,7 +1096,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private readonly Queue<byte[]> _queue = [];
         private readonly SemaphoreSlim _ready;
         private readonly CancellationTokenSource _closed;
-        private int _bytes;
+        private long _bytes;
         private int _started;
         private long _sequence;
         private int _state;

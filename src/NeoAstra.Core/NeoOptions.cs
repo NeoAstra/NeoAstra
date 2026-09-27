@@ -330,8 +330,8 @@ public sealed class NeoAstraOptions
     /// <summary>Gets or sets whether the view automatically fills its parent.</summary>
     public bool FillParent { get; set; } = true;
 
-    /// <summary>Gets or sets the maximum accepted web-message size in bytes. The value must be positive.</summary>
-    public uint MaximumMessageSize { get; set; } = 1024 * 1024;
+    /// <summary>Gets or sets the maximum web-message size in UTF-8 bytes, including the transport envelope. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>
+    public uint MaximumMessageSize { get; set; } = int.MaxValue;
 
     /// <summary>Gets or sets the timeout for asynchronous browser decisions.</summary>
     public TimeSpan DecisionTimeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -422,7 +422,7 @@ public sealed class NeoAstraOptions
 /// <summary>Configures bounded protocol handling for the portable frontend transport.</summary>
 public sealed class NeoTransportOptions
 {
-    internal const uint HardMaximumFrameBytes = 16 * 1024 * 1024;
+    internal const uint HardMaximumFrameBytes = int.MaxValue;
 
     /// <summary>Gets or sets the maximum JSON nesting depth accepted by the host.</summary>
     public int MaximumJsonDepth { get; set; } = 32;

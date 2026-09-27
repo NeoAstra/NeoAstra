@@ -49,8 +49,19 @@ single receive-handler registration, negotiated feature lookup, bounded `send`, 
 `close()`.
 
 `NeoTransportOptions` configures JSON depth, handshake attempts, diagnostic retention, and handshake
-timeout. `NeoAstraOptions.MaximumMessageSize` remains the raw UTF-8 frame/envelope limit and cannot
-exceed the 16 MiB hard maximum. Application frames are never accepted before a handshake. Production
+timeout. `NeoAstraOptions.MaximumMessageSize` is the raw UTF-8 frame/envelope limit and defaults to
+`int.MaxValue` (2 GiB minus one byte), the managed byte-length ceiling, rather than a small payload
+quota. Native messaging and the JavaScript client use the same ceiling. Available memory, JSON
+serialization and browser-engine string/message limits can be reached sooner; this is not a guarantee
+that a 2 GiB message can be allocated or delivered.
+
+`NeoRpcOptions.MaximumFrameBytes` and `MaximumQueuedEventBytesPerSubscription` also default to
+`int.MaxValue`. Applications can set smaller positive limits on the view and RPC host to bound memory
+use; the strictest applicable limit wins, and view limits include envelope overhead. Event queue count
+and overflow policy, concurrency, request rates, timeouts, and JSON nesting-depth limits are unchanged.
+For deeply nested DTOs, configure `NeoTransportOptions.MaximumJsonDepth`,
+`NeoRpcOptions.MaximumJsonDepth`, and the application's `JsonSerializerContext` options together.
+Application frames are never accepted before a handshake. Production
 diagnostics contain stable codes and bounded metadata, never frame bodies, arguments, file paths, raw
 exceptions, or secrets.
 

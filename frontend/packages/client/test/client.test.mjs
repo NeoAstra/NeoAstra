@@ -50,6 +50,26 @@ function createBootstrap(respond = handler => queueMicrotask(() => handler(runti
 
 test.afterEach(() => delete globalThis[transportKey]);
 
+test("runtime-sized frame limits accept large payloads in both directions", async () => {
+  const maximumFrameBytes = 2 ** 31 - 1;
+  const bootstrap = createBootstrap((handler, frame) => {
+    if (frame.kind === "hello") queueMicrotask(() => handler(runtime(undefined, {
+      limits: { maximumFrameBytes, maximumJsonDepth: 32, maximumDiagnosticQueue: 100 },
+    })));
+  });
+  bootstrap.metadata.maximumFrameBytes = maximumFrameBytes;
+  const client = await loadClient(bootstrap);
+  const connection = await client.connect();
+  const frame = { neoastra: 1, kind: "invoke", value: "x".repeat(17 * 1024 * 1024) };
+  connection.send(frame);
+  assert.deepEqual(bootstrap.sent.at(-1), frame);
+  const received = [];
+  connection.setReceiveHandler(value => received.push(value));
+  bootstrap.receive(frame);
+  assert.deepEqual(received[0], frame);
+  connection.close();
+});
+
 test("ordinary browser import is side-effect free and unavailable", async () => {
   const client = await loadClient(undefined);
   assert.equal(client.isAvailable(), false);

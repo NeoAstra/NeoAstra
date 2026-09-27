@@ -830,6 +830,9 @@ void test_bridge_origin_trust() {
     assert(neo_bridge_access_allowed_for(custom_schemes, {}, NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW, "https://untrusted.example/"));
     assert(neo_bridge_access_allowed_for(custom_schemes, {}, NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW, ""));
     assert(neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, 4, false, "1234", "app://neoastra"));
+    const std::string large_message(17u * 1024u * 1024u, 'x');
+    assert(neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE, false, large_message, "app://neoastra"));
+    assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, 1024, false, large_message, "app://neoastra"));
     assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, 4, false, "12345", "app://neoastra"));
     assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, 4, true, "1", "app://neoastra"));
     assert(!neo_bridge_message_allowed_for(custom_schemes, bridge_origins, NEOASTRA_BRIDGE_TRUSTED_ORIGINS, 4, false, "1", "app://other-host"));

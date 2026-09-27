@@ -15,6 +15,49 @@ namespace NeoAstra.Tests;
 public sealed class RpcTests
 {
     [TestMethod]
+    public async Task ExplicitRpcByteBudgetsStillRejectOversizedData()
+    {
+        var invoked = false;
+        NeoRpcEvent<Response>? changed = null;
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request>("small.accept", (_, _, _) => { invoked = true; return ValueTask.CompletedTask; },
+                RpcTestJsonContext.Default.Request, CommandPolicy);
+            changed = builder.AddEvent("small.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event" });
+        }, new NeoRpcOptions { MaximumFrameBytes = 1024, MaximumQueuedEventBytesPerSubscription = 1024 });
+        await using (host) await using (session)
+        {
+            var payload = new string('x', 2048);
+            await session.ReceiveAsync(Invoke("large", "small.accept", "{\"id\":\"" + payload + "\"}"));
+            Assert.IsFalse(invoked);
+            Assert.IsEmpty(frames);
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"small-sub\",\"event\":\"small.changed\"}");
+            Assert.AreEqual(0, await changed!.PublishAsync(new Response(payload, "large")));
+        }
+    }
+
+    [TestMethod]
+    public async Task DefaultRpcAcceptsLargeRequestsResponsesAndEvents()
+    {
+        var payload = new string('x', 17 * 1024 * 1024);
+        NeoRpcEvent<Response>? changed = null;
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request, Response>("large.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "large")),
+                RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+            changed = builder.AddEvent("large.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event" });
+        });
+        await using (host) await using (session)
+        {
+            await session.ReceiveAsync(Invoke("large", "large.echo", "{\"id\":\"" + payload + "\"}"));
+            Assert.AreEqual(payload, Parse(frames.Single()).GetProperty("value").GetProperty("title").GetString());
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"large-sub\",\"event\":\"large.changed\"}");
+            Assert.AreEqual(1, await changed!.PublishAsync(new Response(payload, "large")));
+            await WaitUntilAsync(() => frames.Any(frame => Kind(frame) == "event"));
+        }
+    }
+
+    [TestMethod]
     public async Task InvokeSupportsValueVoidUnknownMalformedAndDuplicate()
     {
         var invoked = 0;

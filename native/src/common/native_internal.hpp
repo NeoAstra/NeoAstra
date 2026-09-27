@@ -431,7 +431,7 @@ struct neoastra_view final : neo_ui_ref_counted {
     bool destroying{};
     std::string source;
     std::string title;
-    uint32_t maximum_message_size{1024u * 1024u};
+    uint32_t maximum_message_size{NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE};
     neoastra_bridge_policy_t bridge_policy{NEOASTRA_BRIDGE_DISABLED};
     std::vector<std::string> bridge_origins;
     neo_callback_slot<neoastra_event_callback_t> events;

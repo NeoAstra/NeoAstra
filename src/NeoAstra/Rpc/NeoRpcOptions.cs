@@ -22,14 +22,14 @@ public sealed class NeoRpcOptions
     public int MaximumIdLength { get; set; } = 128;
     /// <summary>Gets or sets the maximum command or event wire-name length.</summary>
     public int MaximumWireNameLength { get; set; } = 192;
-    /// <summary>Gets or sets the maximum inbound JSON bytes accepted by the standalone session API.</summary>
-    public int MaximumFrameBytes { get; set; } = 1024 * 1024;
+    /// <summary>Gets or sets the maximum inbound JSON bytes accepted by the session API. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>
+    public int MaximumFrameBytes { get; set; } = int.MaxValue;
     /// <summary>Gets or sets the maximum JSON nesting depth.</summary>
     public int MaximumJsonDepth { get; set; } = 32;
     /// <summary>Gets or sets the maximum queued event count per subscription.</summary>
     public int MaximumQueuedEventsPerSubscription { get; set; } = 64;
-    /// <summary>Gets or sets the maximum serialized bytes queued by one subscription.</summary>
-    public int MaximumQueuedEventBytesPerSubscription { get; set; } = 256 * 1024;
+    /// <summary>Gets or sets the maximum serialized bytes queued by one subscription. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>
+    public int MaximumQueuedEventBytesPerSubscription { get; set; } = int.MaxValue;
     /// <summary>Gets or sets the maximum subscriptions in one session.</summary>
     public int MaximumSubscriptionsPerSession { get; set; } = 128;
     /// <summary>Gets or sets the maximum open channels in one session.</summary>
@@ -84,10 +84,10 @@ public sealed class NeoRpcOptions
         if (InvocationTimeout <= TimeSpan.Zero || InvocationTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(InvocationTimeout));
         if (MaximumIdLength is < 16 or > 256) throw new ArgumentOutOfRangeException(nameof(MaximumIdLength));
         if (MaximumWireNameLength is < 16 or > 512) throw new ArgumentOutOfRangeException(nameof(MaximumWireNameLength));
-        if (MaximumFrameBytes is < 1024 or > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumFrameBytes));
+        if (MaximumFrameBytes < 1) throw new ArgumentOutOfRangeException(nameof(MaximumFrameBytes));
         if (MaximumJsonDepth is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(MaximumJsonDepth));
         if (MaximumQueuedEventsPerSubscription is < 1 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumQueuedEventsPerSubscription));
-        if (MaximumQueuedEventBytesPerSubscription is < 1024 or > 16 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumQueuedEventBytesPerSubscription));
+        if (MaximumQueuedEventBytesPerSubscription < 1) throw new ArgumentOutOfRangeException(nameof(MaximumQueuedEventBytesPerSubscription));
         if (MaximumSubscriptionsPerSession is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumSubscriptionsPerSession));
         if (MaximumChannelsPerSession is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumChannelsPerSession));
         if (MaximumUnacknowledgedChannelItems is < 1 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumUnacknowledgedChannelItems));

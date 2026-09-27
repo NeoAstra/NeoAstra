@@ -21,6 +21,9 @@ It uses the platform browser — WebView2 on Windows, WKWebView on macOS, and We
 
 See the [documentation](doc/readme.md) for getting started, samples, platform support, security, and building from source.
 
+Large UI/.NET transfers use runtime-sized payload budgets by default, with configurable smaller
+[transport and RPC limits](doc/frontend-transport.md#lifecycle-and-limits).
+
 ## 🪪 License
 
 This software is released under the [BSD-2-Clause license](https://opensource.org/licenses/BSD-2-Clause).
