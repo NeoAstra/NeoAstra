@@ -10,6 +10,9 @@ permissions:
   contents: read
 
 jobs:
+  native:
+    uses: ./.github/workflows/native.yml
+
   managed:
     name: Build and test (${{ matrix.os }})
     strategy:
@@ -41,7 +44,7 @@ jobs:
 
   release:
     name: Build, test, pack, and publish (Windows)
-    needs: managed
+    needs: [managed, native]
     permissions:
       id-token: write
       actions: write
@@ -64,6 +67,32 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             samples/NeoAstra.Sample.Advanced/frontend/package-lock.json
+      # Pair managed code with this commit's native libraries, not checked-in binaries.
+      # Stage every packaged RID before the releaser evaluates MSBuild native item globs.
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-win-x64
+          path: src/NeoAstra.Core/runtimes/win-x64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-win-arm64
+          path: src/NeoAstra.Core/runtimes/win-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-linux-x64
+          path: src/NeoAstra.Core/runtimes/linux-x64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-linux-arm64
+          path: src/NeoAstra.Core/runtimes/linux-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-osx-x64
+          path: src/NeoAstra.Core/runtimes/osx-x64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-osx-arm64
+          path: src/NeoAstra.Core/runtimes/osx-arm64/native
       # Default `run` mode builds/tests/packs on PRs and branches, and publishes on release tag pushes.
       - name: Build, Test, Pack and Publish
         uses: xoofx/.github/.github/actions/dotnet-releaser-action@main
