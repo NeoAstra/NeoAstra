@@ -93,11 +93,7 @@ The [CI workflow](../.github/workflows/ci.yml) builds and tests on macOS and Lin
 The shared action uses its default `run` mode: pull requests and branch pushes validate without publishing;
 release tag pushes automatically publish NuGet packages through trusted publishing. The NuGet account
 `xoofx` must have a trusted publishing policy for `NeoAstra/NeoAstra` and workflow `ci.yml`; no NuGet API-key
-secret is required. CI calls the reusable native workflow and waits for its builds and checks before
-the Windows release job. That job downloads all six native RID artifacts from the same workflow run
-before MSBuild evaluates the projects, so Windows tests and packages use libraries built from the
-same commit as the managed code rather than potentially stale checked-in binaries. Missing or failed
-native builds block release instead of falling back to those binaries. The manually dispatched
+secret is required. Packages use the checked-in native RID assets. The manually dispatched
 [`package.yml` workflow](../.github/workflows/package.yml) rebuilds all six native RIDs and runs the extended package checks without publishing.
 
 Native CI is configured with explicit `linux-x64-asan-ubsan`, `linux-x64-analysis`, and `macos-x64-asan-ubsan` presets. The `linux-x64-tsan` preset remains available for manual investigation, but its CI job is temporarily disabled because uninstrumented GTK/Pango/GLib/GIO worker synchronization produces changing false-positive reports. The ThreadSanitizer test preset selects only the common ownership and contended teardown tests; it does not run browser conformance automation. Sanitizer test presets use fail-fast runtime options, instrument the test executables and shared library, and disable LTO. LeakSanitizer remains disabled until process-global allocations in GTK/WebKitGTK and Apple WebKit have reviewed suppressions. The enabled sanitizer jobs describe configured coverage, not evidence that they ran on a Windows development host; run the matching preset on its named host to establish an execution result. ThreadSanitizer remains separate from AddressSanitizer and UndefinedBehaviorSanitizer.
