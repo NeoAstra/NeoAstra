@@ -2,7 +2,9 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -53,6 +55,8 @@ public sealed class NeoRpcHost : IAsyncDisposable
         {
             ["frameBytes"] = _options.MaximumFrameBytes, ["jsonDepth"] = _options.MaximumJsonDepth,
             ["applicationInvocations"] = _options.MaximumConcurrentInvocations, ["sessionInvocations"] = _options.MaximumConcurrentInvocationsPerSession,
+            ["retainedRequestIdsPerSession"] = _options.MaximumRetainedRequestIds,
+            ["completedRequestIdsPerSession"] = Math.Min(_options.MaximumCompletedRequestIds, _options.MaximumRetainedRequestIds),
             ["requestRatePerSecond"] = _options.RequestRatePerSecond, ["requestBurst"] = _options.RequestRateBurst,
             ["subscriptionsPerSession"] = _options.MaximumSubscriptionsPerSession, ["channelsPerSession"] = _options.MaximumChannelsPerSession,
             ["resourcesPerSession"] = _options.MaximumResourcesPerSession, ["resourcesPerView"] = _options.MaximumResourcesPerView,
@@ -234,7 +238,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly CancellationTokenSource _closed;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly ConcurrentDictionary<string, InvocationState> _requests = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _usedRequestIds = new(StringComparer.Ordinal);
+    // Actual IDs and request-state objects are owned only while processing is active.
+    private readonly Dictionary<string, RequestIdState> _usedRequestIds = new(StringComparer.Ordinal);
+    private readonly HashSet<RequestIdFingerprint> _completedRequestIds = new();
+    private readonly Queue<RequestIdFingerprint> _completedRequestIdOrder = new();
     private readonly object _requestIdsLock = new();
     private readonly ConcurrentDictionary<string, SubscriptionState> _subscriptions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ChannelState> _channels = new(StringComparer.Ordinal);
@@ -273,6 +280,14 @@ public sealed class NeoRpcSession : IAsyncDisposable
     public CancellationToken Closed => _closed.Token;
     /// <summary>Gets the current active invocation count.</summary>
     public int ActiveInvocationCount => Volatile.Read(ref _activeInvocations);
+    /// <summary>Gets the current number of tracked invocation/subscription identities, including active IDs and bounded completed fingerprints.</summary>
+    /// <remarks>Completed ID strings and request-state objects are released; only fixed-size SHA-256 fingerprints remain for replay checks.</remarks>
+    public int RetainedRequestIdCount { get { lock (_requestIdsLock) return _usedRequestIds.Count + _completedRequestIds.Count; } }
+    /// <summary>Gets the number of request IDs pinned by processing invocations or pending/active subscriptions.</summary>
+    /// <remarks>Cancellation or timeout does not release an invocation ID until backend work and terminal delivery stop.</remarks>
+    public int ActiveRequestIdCount { get { lock (_requestIdsLock) return _usedRequestIds.Count; } }
+    /// <summary>Gets the capacity for new unique IDs, including slots recoverable by evicting completed history.</summary>
+    public int RemainingRequestIdCapacity { get { lock (_requestIdsLock) return _host.Options.MaximumRetainedRequestIds - _usedRequestIds.Count; } }
     /// <summary>Gets the current active subscription count.</summary>
     public int ActiveSubscriptionCount => _subscriptions.Count;
     /// <summary>Gets the current active channel count.</summary>
@@ -429,6 +444,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
         Volatile.Write(ref _subscriptionSlots, 0);
         _channels.Clear();
         _requests.Clear();
+        lock (_requestIdsLock)
+        {
+            _usedRequestIds.Clear();
+            _completedRequestIds.Clear();
+            _completedRequestIdOrder.Clear();
+        }
         _host.Remove(this);
         _sendLock.Dispose();
         _closed.Dispose();
@@ -522,11 +543,18 @@ public sealed class NeoRpcSession : IAsyncDisposable
             await HandleAbuseAsync().ConfigureAwait(false);
             return;
         }
-        if (!RememberRequestId(id))
+        var requestId = RememberRequestId(id, out var admissionError);
+        if (requestId is null)
         {
-            await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.DuplicateRequest, "The request ID was already used.", null)).ConfigureAwait(false);
+            await SendErrorResultAsync(id, admissionError).ConfigureAwait(false);
             return;
         }
+        try { await InvokeCoreAsync(root, id, command, args, sourceOrigin, isMainFrame, receiveCancellation).ConfigureAwait(false); }
+        finally { CompleteRequestId(requestId); }
+    }
+
+    private async ValueTask InvokeCoreAsync(JsonElement root, string id, string command, JsonElement args, Uri? sourceOrigin, bool isMainFrame, CancellationToken receiveCancellation)
+    {
         if (!ContractMatches(root))
         {
             await SendErrorResultAsync(id, ContractMismatchError(root)).ConfigureAwait(false);
@@ -718,13 +746,21 @@ public sealed class NeoRpcSession : IAsyncDisposable
             await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The subscription limit is exhausted.", null, true)).ConfigureAwait(false);
             return;
         }
-        if (!RememberRequestId(id))
+        var requestId = RememberRequestId(id, out var admissionError);
+        if (requestId is null)
         {
             Interlocked.Decrement(ref _subscriptionSlots);
-            await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.DuplicateRequest, "The subscription ID was already used.", null)).ConfigureAwait(false);
+            await SendSubscriptionErrorAsync(id, admissionError).ConfigureAwait(false);
             return;
         }
-        var subscription = new SubscriptionState(this, id, descriptor, sourceOrigin, isMainFrame);
+        SubscriptionState subscription;
+        try { subscription = new SubscriptionState(this, requestId, descriptor, sourceOrigin, isMainFrame); }
+        catch
+        {
+            Interlocked.Decrement(ref _subscriptionSlots);
+            CompleteRequestId(requestId);
+            throw;
+        }
         if (!_subscriptions.TryAdd(id, subscription))
         {
             Interlocked.Decrement(ref _subscriptionSlots);
@@ -750,7 +786,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
         catch
         {
-            _subscriptions.TryRemove(new KeyValuePair<string, SubscriptionState>(id, subscription));
+            RemoveSubscription(id, subscription);
             subscription.Close();
             throw;
         }
@@ -867,12 +903,46 @@ public sealed class NeoRpcSession : IAsyncDisposable
         return new(identity, correlationId, cancellationToken, _resources, view, window);
     }
 
-    private bool RememberRequestId(string id)
+    private RequestIdState? RememberRequestId(string id, out NeoRpcError error)
+    {
+        var fingerprint = RequestIdFingerprint.Create(id);
+        lock (_requestIdsLock)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            // Check duplicates before eviction, including when the history is full.
+            if (_usedRequestIds.ContainsKey(id) || _completedRequestIds.Contains(fingerprint))
+            {
+                error = FrameworkError(NeoRpcErrorCodes.DuplicateRequest, "The request ID is active or retained in completed history.", null);
+                return null;
+            }
+            if (_usedRequestIds.Count + _completedRequestIds.Count >= _host.Options.MaximumRetainedRequestIds && _completedRequestIdOrder.TryDequeue(out var completed))
+                _completedRequestIds.Remove(completed);
+            if (_usedRequestIds.Count + _completedRequestIds.Count < _host.Options.MaximumRetainedRequestIds)
+            {
+                var requestId = new RequestIdState(id, fingerprint);
+                _usedRequestIds.Add(id, requestId);
+                error = default;
+                return requestId;
+            }
+        }
+        // Application-owned diagnostic callbacks must not run under the admission lock.
+        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.RequestIdCapacityExhausted,
+            $"RPC request-ID capacity is exhausted: retained={_host.Options.MaximumRetainedRequestIds}, remaining=0. All retained IDs are active.");
+        error = FrameworkError(NeoRpcErrorCodes.RequestIdCapacityExhausted, "All retained request-ID slots are active. Wait for backend work or subscriptions to close.", null, retryable: true);
+        return null;
+    }
+
+    private void CompleteRequestId(RequestIdState requestId)
     {
         lock (_requestIdsLock)
         {
-            if (_usedRequestIds.Count >= _host.Options.MaximumRetainedRequestIds) return false;
-            return _usedRequestIds.Add(id);
+            // The ownership check prevents late cleanup from retiring a subsequently reused ID.
+            if (!_usedRequestIds.TryGetValue(requestId.Id, out var retained) || !ReferenceEquals(retained, requestId)) return;
+            _usedRequestIds.Remove(requestId.Id);
+            if (Volatile.Read(ref _disposed) != 0) return;
+            if (_completedRequestIds.Add(requestId.Fingerprint)) _completedRequestIdOrder.Enqueue(requestId.Fingerprint);
+            if (_completedRequestIds.Count > Math.Min(_host.Options.MaximumCompletedRequestIds, _host.Options.MaximumRetainedRequestIds))
+                _completedRequestIds.Remove(_completedRequestIdOrder.Dequeue());
         }
     }
 
@@ -1020,6 +1090,26 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     private static string NewCorrelationId() => Convert.ToHexString(Guid.NewGuid().ToByteArray()).ToLowerInvariant();
 
+    private sealed class RequestIdState(string id, RequestIdFingerprint fingerprint)
+    {
+        internal string Id { get; } = id;
+        internal RequestIdFingerprint Fingerprint { get; } = fingerprint;
+    }
+
+    private readonly record struct RequestIdFingerprint(ulong First, ulong Second, ulong Third, ulong Fourth)
+    {
+        internal static RequestIdFingerprint Create(string id)
+        {
+            // IDs have already been validated as printable ASCII of at most 256 characters.
+            Span<byte> encoded = stackalloc byte[id.Length];
+            Encoding.UTF8.GetBytes(id, encoded);
+            Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+            SHA256.HashData(encoded, digest);
+            return new(BinaryPrimitives.ReadUInt64LittleEndian(digest), BinaryPrimitives.ReadUInt64LittleEndian(digest[8..]),
+                BinaryPrimitives.ReadUInt64LittleEndian(digest[16..]), BinaryPrimitives.ReadUInt64LittleEndian(digest[24..]));
+        }
+    }
+
     private sealed class InvocationState : IDisposable
     {
         private const int Pending = 0;
@@ -1091,6 +1181,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private const int Active = 1;
         private const int Closed = 2;
         private readonly NeoRpcSession _session;
+        private readonly RequestIdState _requestId;
         private readonly string _id;
         private readonly object _lock = new();
         private readonly Queue<byte[]> _queue = [];
@@ -1101,9 +1192,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private long _sequence;
         private int _state;
 
-        internal SubscriptionState(NeoRpcSession session, string id, EventDescriptor descriptor, Uri? sourceOrigin, bool isMainFrame)
+        internal SubscriptionState(NeoRpcSession session, RequestIdState requestId, EventDescriptor descriptor, Uri? sourceOrigin, bool isMainFrame)
         {
-            _session = session; _id = id; Descriptor = descriptor;
+            _session = session; _requestId = requestId; _id = requestId.Id; Descriptor = descriptor;
             SourceOrigin = sourceOrigin; IsMainFrame = isMainFrame;
             _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closed.Token);
             _ready = new SemaphoreSlim(0, session._host.Options.MaximumQueuedEventsPerSubscription);
@@ -1157,7 +1248,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         internal void Close() { Interlocked.Exchange(ref _state, Closed); if (!_closed.IsCancellationRequested) _closed.Cancel(); }
         internal void DisposePending()
         {
-            if (Volatile.Read(ref _started) == 0) { _ready.Dispose(); _closed.Dispose(); }
+            if (Volatile.Read(ref _started) == 0) { _ready.Dispose(); _closed.Dispose(); _session.CompleteRequestId(_requestId); }
         }
         private async Task PumpAsync()
         {
@@ -1173,7 +1264,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
             catch (OperationCanceledException) when (_closed.IsCancellationRequested) { }
             catch (Exception) { Close(); }
-            finally { _session.RemoveSubscription(_id, this); _ready.Dispose(); _closed.Dispose(); }
+            finally { _session.RemoveSubscription(_id, this); _ready.Dispose(); _closed.Dispose(); _session.CompleteRequestId(_requestId); }
         }
     }
 

@@ -166,11 +166,22 @@ Exceptions MUST NOT be serialized directly. The runtime maps failures in this or
 
 Stable framework codes include:
 
-- `invalid_request`, `command_not_found`, `duplicate_request`;
+- `invalid_request`, `command_not_found`, `duplicate_request`, `request_id_capacity_exhausted`;
 - `permission_denied`, `scope_denied`;
 - `payload_too_large`, `too_many_requests`, `timeout`;
 - `operation_canceled`, `connection_closed`, `protocol_mismatch`;
 - `serialization_failed`, `internal_error`.
+
+Request-ID replay protection uses a bounded completion-order history rather than a lifetime
+call budget. The default admission bound is 16,777,216 tracked identities. Completed ID strings
+and request-state objects MUST be released immediately; only a bounded history of fixed-size
+SHA-256 fingerprints is kept for replay checks (4,096 by default). New unique IDs evict only
+completed history; active invocations and pending/active
+subscriptions remain pinned until work and cleanup stop, even after timeout/cancellation.
+Duplicates are checked before eviction. If all retained slots are pinned, a new unique request
+is rejected before admission with `request_id_capacity_exhausted`. Clients MUST use unique IDs
+and MUST NOT automatically replay mutations on failure or session renewal; bounded history is
+not a durable exactly-once guarantee. See [runtime lifecycle and diagnostics](../rpc-and-bindings.md#request-id-lifecycle-and-safe-recovery).
 
 Request deserialization (including rejection of a JSON `null` required DTO), application execution, and response serialization are distinct phases. `invalid_request` applies only to malformed requests, application exceptions use the mapping order above even when their CLR type is serialization-related, and a failure to serialize a successful application result uses `serialization_failed`.
 

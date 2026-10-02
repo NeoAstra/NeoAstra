@@ -41,6 +41,28 @@ test("already aborted calls send no invoke and active abort sends cancel", async
   mock.close();
 });
 
+test("retryable capacity and timeout errors never automatically replay mutations", async () => {
+  for (const code of ["request_id_capacity_exhausted", "timeout", "duplicate_request"]) {
+    const transport = createMockClient();
+    let next = 0;
+    const client = new NeoRpcClient(await transport.connect(), { idFactory: () => `mutation-${++next}` });
+    transport.outboundFrames.length = 0;
+    try {
+      const pending = client.invoke("documents.mutate", { id: "readme" });
+      transport.injectInbound({ neoastra: 1, kind: "result", id: "mutation-1", ok: false, error: { code, message: "Request failed.", retryable: true } });
+      await assert.rejects(pending, error => error instanceof NeoRpcError && error.code === code && error.retryable);
+      await tick();
+      assert.deepEqual(transport.outboundFrames.map(frame => frame.kind), ["invoke"]);
+
+      // Only a new application-initiated call may send again, using a new ID.
+      const later = client.invoke("documents.read", { id: "readme" });
+      transport.injectInbound({ neoastra: 1, kind: "result", id: "mutation-2", ok: true, value: "current" });
+      assert.equal(await later, "current");
+      assert.deepEqual(transport.outboundFrames.map(frame => frame.id), ["mutation-1", "mutation-2"]);
+    } finally { client.close(); }
+  }
+});
+
 test("subscriptions preserve sequence and unsubscribe", async () => {
   let next = 0;
   const mock = createMockRpcHarness({ idFactory: () => `id-${++next}` });

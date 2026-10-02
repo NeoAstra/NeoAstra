@@ -12,8 +12,10 @@ public static class NeoRpcErrorCodes
     public const string InvalidRequest = "invalid_request";
     /// <summary>The requested command is not registered.</summary>
     public const string CommandNotFound = "command_not_found";
-    /// <summary>The request ID is already active or was already used in this session.</summary>
+    /// <summary>The request ID is active or retained in the session's bounded completed history.</summary>
     public const string DuplicateRequest = "duplicate_request";
+    /// <summary>All retained request-ID slots are pinned by active work or subscriptions; the new request was not admitted.</summary>
+    public const string RequestIdCapacityExhausted = "request_id_capacity_exhausted";
     /// <summary>The caller lacks the command permission.</summary>
     public const string PermissionDenied = "permission_denied";
     /// <summary>The caller is outside the permitted scope.</summary>
@@ -61,6 +63,7 @@ public readonly record struct NeoRpcError
     /// <summary>Gets the optional diagnostic correlation identifier.</summary>
     public string? CorrelationId { get; }
     /// <summary>Gets whether a later retry can reasonably succeed.</summary>
+    /// <remarks>This is advisory, not proof that backend work was never admitted. Clients must not automatically replay mutations after a timeout or failed response.</remarks>
     public bool Retryable { get; init; }
 }
 

@@ -14,8 +14,12 @@ public sealed class NeoRpcOptions
     /// <summary>Gets or sets the maximum simultaneous invocations in one document session.</summary>
     /// <remarks>The value must be less than <see cref="MaximumConcurrentInvocations"/>.</remarks>
     public int MaximumConcurrentInvocationsPerSession { get; set; } = 32;
-    /// <summary>Gets or sets the maximum retained request IDs per session, including active and completed IDs.</summary>
-    public int MaximumRetainedRequestIds { get; set; } = 4096;
+    /// <summary>Gets or sets the maximum tracked request identities per session, including active IDs and completed fingerprints.</summary>
+    /// <remarks>Defaults to 16,777,216 as a last-resort admission bound. Storage is allocated on demand; completed history is separately bounded by <see cref="MaximumCompletedRequestIds"/>. New unique requests evict the oldest completed fingerprints when full. Active invocations (even after cancellation or timeout) and pending/active subscriptions are never evicted.</remarks>
+    public int MaximumRetainedRequestIds { get; set; } = 16_777_216;
+    /// <summary>Gets or sets the maximum completed invocation/subscription fingerprints retained for duplicate protection.</summary>
+    /// <remarks>Defaults to 4,096 and is also constrained by <see cref="MaximumRetainedRequestIds"/>. Completed ID strings and request-state objects are released immediately; only fixed-size SHA-256 fingerprints are retained, oldest first. IDs must not be reused; this bounded history is not a durable exactly-once guarantee.</remarks>
+    public int MaximumCompletedRequestIds { get; set; } = 4096;
     /// <summary>Gets or sets the default command timeout.</summary>
     public TimeSpan InvocationTimeout { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>Gets or sets the maximum opaque request, subscription, channel, and resource ID length.</summary>
@@ -80,7 +84,8 @@ public sealed class NeoRpcOptions
         if (MaximumConcurrentInvocations is < 2 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumConcurrentInvocations));
         if (MaximumConcurrentInvocationsPerSession is < 1 or > 4096 || MaximumConcurrentInvocationsPerSession >= MaximumConcurrentInvocations)
             throw new ArgumentOutOfRangeException(nameof(MaximumConcurrentInvocationsPerSession));
-        if (MaximumRetainedRequestIds is < 1 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumRetainedRequestIds));
+        if (MaximumRetainedRequestIds is < 1 or > 16_777_216) throw new ArgumentOutOfRangeException(nameof(MaximumRetainedRequestIds));
+        if (MaximumCompletedRequestIds is < 1 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumCompletedRequestIds));
         if (InvocationTimeout <= TimeSpan.Zero || InvocationTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(InvocationTimeout));
         if (MaximumIdLength is < 16 or > 256) throw new ArgumentOutOfRangeException(nameof(MaximumIdLength));
         if (MaximumWireNameLength is < 16 or > 512) throw new ArgumentOutOfRangeException(nameof(MaximumWireNameLength));
@@ -114,6 +119,7 @@ public sealed class NeoRpcOptions
             MaximumConcurrentInvocations = MaximumConcurrentInvocations,
             MaximumConcurrentInvocationsPerSession = MaximumConcurrentInvocationsPerSession,
             MaximumRetainedRequestIds = MaximumRetainedRequestIds,
+            MaximumCompletedRequestIds = MaximumCompletedRequestIds,
             InvocationTimeout = InvocationTimeout,
             MaximumIdLength = MaximumIdLength,
             MaximumWireNameLength = MaximumWireNameLength,

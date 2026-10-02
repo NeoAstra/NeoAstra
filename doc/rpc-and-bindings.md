@@ -57,6 +57,46 @@ The host snapshots trusted view/session identity, source origin, main-frame stat
 
 `NeoRpcOptions` bounds global/per-session concurrency, retained request IDs, frame depth/bytes, event queues/bytes, subscriptions, unacknowledged channel items, channels, resources, and deadlines. The global invocation limit must exceed the per-session limit; immediate admission reserves capacity for another view instead of letting one hot view occupy every global slot. IDs are printable non-empty ASCII. Request and pending-subscription IDs occupy bounded session slots; cancellation, unsubscribe, or session close that wins the atomic terminal transition cannot be reversed by a late handler or authorization result. Exactly one terminal state atomically wins cancellation/result races: a committed result defeats late cancellation, while cancellation, timeout, or session close that commits first defeats a handler result even when that handler ignores its token. Navigation installs the newly negotiated document session before starting teardown of the prior session, so prior application cleanup cannot block new-document frames; binding disposal still awaits all tracked teardown. Renderer failure, view disposal, binding disposal, and host disposal cancel all calls, subscriptions, channels, and resources. Host lifecycle state and session snapshots are taken under its lifecycle lock, but cancellation occurs after releasing that lock so application cancellation callbacks never run beneath it.
 
+### Request-ID lifecycle and safe recovery
+
+`MaximumRetainedRequestIds` defaults to **16,777,216** as a last-resort bound on tracked
+invocation/subscription identities, **not a lifetime call budget**. Storage is allocated on demand,
+not preallocated at that size. Completed ID strings and request-state objects are removed
+immediately on completion; replay protection keeps only fixed-size, 32-byte SHA-256 fingerprints,
+with no references to the original IDs or call state. `MaximumCompletedRequestIds` separately
+bounds this fingerprint history to **4,096** by default (or the total limit, if smaller), so
+normal polling does not accumulate completed IDs or grow memory toward the admission bound.
+The oldest completed fingerprints are evicted when completed history
+exceeds its bound or a new unique request needs room at the total bound. Duplicate checks
+happen before admission eviction. Active invocations and pending/active subscriptions stay
+pinned: an invocation is completed for retention purposes
+only after backend execution, terminal delivery, and invocation cleanup finish. A cancellation
+or timeout response alone does not release its ID. Unsubscribed IDs remain pinned until pending
+authorization or the event pump stops. Rejected and failed invocations also become completed
+history. The active-ID lookup and fingerprint history are separately bounded; responses
+are not cached, and teardown clears the history.
+
+When every slot is pinned, a new unique invoke or subscribe fails **before backend admission**
+with `request_id_capacity_exhausted`, not `duplicate_request`. Admission recovers when work
+finishes or subscriptions close; increasing the limit is not required for sequential polling.
+The diagnostic sink receives a warning with that code and retained/remaining counts.
+`NeoRpcSession.RetainedRequestIdCount` includes completed fingerprints, `ActiveRequestIdCount` counts
+pinned IDs, and `RemainingRequestIdCapacity` includes unused slots **and evictable history**.
+The host diagnostic snapshot reports the configured `retainedRequestIdsPerSession` limit.
+It also reports the effective `completedRequestIdsPerSession` history limit. Default active
+invocation/subscription limits are far below the 16-million-ID admission bound; ordinary
+applications do not need a special ID-capacity recovery mechanism.
+
+Always generate unique IDs for the entire document session, including custom frontend
+`idFactory` implementations. An old ID can be accepted again after eviction, so this protection
+is a bounded replay window, **not durable exactly-once execution**. Mutations needing that
+guarantee must use application-owned durable idempotency keys or reconcile backend state.
+The client never automatically renews the session or replays calls. An error's `retryable` flag
+is advisory: a timeout, cancellation, or failed/missing response does not prove backend work
+was never admitted. Do not retry mutations automatically with either the old or a fresh ID.
+
+### Dispatch, errors, and streams
+
 Request deserialization, application execution, and response serialization are separate phases. Malformed or JSON `null` request DTOs fail with `invalid_request` before application code; an application-thrown serialization exception follows normal application mapping/redaction; an unserializable result fails with `serialization_failed`. Errors use bounded lowercase colon-separated identifiers, bounded control-free client messages, and optional bounded printable-ASCII correlation IDs. `NeoRpcException` is an explicit safe application error; `INeoRpcErrorMapper` handles other known failures, but malformed mapper output is rejected. Release defaults redact exception types, stack traces, paths, and nested messages. `IncludeDevelopmentErrorDetails` is an explicit bounded development-only switch.
 
 Events are ordered per subscription and use declaration-owned `DropOldest`, `DropNewest`, `Coalesce`, or `Fail` overflow. Bounded JSON channels use monotonic sequence numbers and acknowledgements to bound unacknowledged transport items. The frontend acknowledges admission into its buffer, not consumption by the application iterator: a slow reader can still exhaust its bounded buffer and receive `too_many_requests`. Applications that observe durable work need a snapshot/resynchronization policy rather than treating the channel as a lossless event log. Resources are opaque session-owned handles closed by `resource_close` or teardown. These channel/resource frames reserve room for a future scalable binary extension.

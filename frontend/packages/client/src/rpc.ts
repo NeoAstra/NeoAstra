@@ -14,6 +14,7 @@ export interface NeoRpcErrorValue {
   readonly code: string;
   readonly message: string;
   readonly correlationId?: string;
+  /** Advisory only: does not prove backend work was never admitted. Calls are never automatically replayed. */
   readonly retryable: boolean;
 }
 

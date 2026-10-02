@@ -87,6 +87,329 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public void RequestIdDefaultsHaveLargeAdmissionCapacityAndBoundedHistory()
+    {
+        var options = new NeoRpcOptions();
+        Assert.AreEqual(16_777_216, options.MaximumRetainedRequestIds);
+        Assert.AreEqual(4096, options.MaximumCompletedRequestIds);
+        Assert.IsTrue(options.MaximumConcurrentInvocationsPerSession + options.MaximumSubscriptionsPerSession < options.MaximumRetainedRequestIds);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { MaximumCompletedRequestIds = 0 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { MaximumCompletedRequestIds = 1_000_001 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { MaximumRetainedRequestIds = 16_777_217 }));
+    }
+
+    [TestMethod]
+    [DataRow(4, 1)]
+    [DataRow(4, 4)]
+    [DataRow(16_777_216, 4)]
+    [DataRow(4096, 4096)]
+    [DataRow(16_777_216, 4096)]
+    public async Task RequestIdHistoryAllowsLongRunningSequentialCalls(int capacity, int history)
+    {
+        var invoked = 0;
+        var (host, session, frames) = Create(builder => builder.AddCommand<Request>("poll.read", (_, _, _) =>
+        {
+            invoked++;
+            return ValueTask.CompletedTask;
+        }, RpcTestJsonContext.Default.Request), new NeoRpcOptions
+        {
+            MaximumRetainedRequestIds = capacity,
+            MaximumCompletedRequestIds = history,
+            RequestRatePerSecond = 100_000,
+            RequestRateBurst = 100_000,
+        });
+        await using (host) await using (session)
+        {
+            var calls = history + 512;
+            for (var i = 0; i < calls; i++)
+            {
+                await session.ReceiveAsync(Invoke($"poll-{i}", "poll.read", "{\"id\":\"x\"}"));
+                Assert.AreEqual(Math.Min(i + 1, history), session.RetainedRequestIdCount);
+                Assert.AreEqual(0, session.ActiveRequestIdCount);
+                Assert.AreEqual(capacity, session.RemainingRequestIdCapacity, "Completed history is evictable capacity, not a lifetime budget.");
+            }
+            Assert.AreEqual((long)capacity, host.GetDiagnosticSnapshot().Limits["retainedRequestIdsPerSession"]);
+            Assert.AreEqual((long)history, host.GetDiagnosticSnapshot().Limits["completedRequestIdsPerSession"]);
+            Assert.AreEqual(calls, invoked, "Completed calls must not exhaust admission for unique IDs.");
+            Assert.IsTrue(frames.All(frame => Parse(frame).GetProperty("ok").GetBoolean()));
+
+            await session.ReceiveAsync(Invoke($"poll-{calls - 1}", "poll.read", "{\"id\":\"x\"}"));
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()));
+            Assert.AreEqual(calls, invoked);
+
+            // Only the bounded completion history protects old IDs, not the whole session lifetime.
+            await session.ReceiveAsync(Invoke("poll-0", "poll.read", "{\"id\":\"x\"}"));
+            Assert.IsTrue(Parse(frames.Last()).GetProperty("ok").GetBoolean());
+            Assert.AreEqual(calls + 1, invoked);
+        }
+        Assert.AreEqual(0, session.RetainedRequestIdCount);
+        Assert.AreEqual(0, session.ActiveRequestIdCount);
+    }
+
+    [TestMethod]
+    public async Task CompletedRequestHistoryKeepsOnlyValueTypeFingerprints()
+    {
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request>("memory.read", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request);
+            builder.AddEvent("memory.changed", RpcTestJsonContext.Default.Response);
+        });
+        await using (host) await using (session)
+        {
+            for (var i = 0; i < 64; i++) await session.ReceiveAsync(Invoke($"completed-{i}", "memory.read", "{\"id\":\"x\"}"));
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"completed-sub\",\"event\":\"memory.changed\"}");
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"completed-sub\"}");
+
+            Assert.AreEqual(65, session.RetainedRequestIdCount, "Replay fingerprints must still be retained; this test does not rely on history eviction.");
+            Assert.AreEqual(0, session.ActiveRequestIdCount);
+            foreach (var name in new[] { "_usedRequestIds", "_requests", "_subscriptions" })
+            {
+                var registry = GetCollection(name);
+                Assert.AreEqual(0, registry.Cast<object>().Count(), $"{name} must release completed IDs and state.");
+            }
+            foreach (var name in new[] { "_completedRequestIds", "_completedRequestIdOrder" })
+            {
+                var history = GetCollection(name);
+                Assert.AreEqual(65, history.Cast<object>().Count());
+                var elementType = history.GetType().GetGenericArguments().Single();
+                Assert.IsTrue(elementType.IsValueType, "Completed history must not retain request-state objects.");
+                var fields = elementType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                Assert.AreEqual(4, fields.Length);
+                Assert.IsTrue(fields.All(static field => field.FieldType == typeof(ulong)), "Fingerprints must contain only 32 bytes of value data, not ID strings or call references.");
+            }
+            await session.ReceiveAsync(Invoke("completed-sub", "memory.read", "{\"id\":\"completed-sub\"}"));
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()), "Releasing strings must preserve recent replay protection.");
+        }
+
+        System.Collections.IEnumerable GetCollection(string name)
+        {
+            var field = typeof(NeoRpcSession).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field);
+            var collection = field.GetValue(session) as System.Collections.IEnumerable;
+            Assert.IsNotNull(collection);
+            return collection;
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RequestIdCapacityStaysPinnedUntilCanceledOrTimedOutWorkStops(bool timeout)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invoked = 0;
+        var diagnostics = new RpcDiagnosticSink();
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request>("mutation.wait", async (_, _, _) =>
+            {
+                Interlocked.Increment(ref invoked);
+                entered.TrySetResult();
+                await release.Task; // Deliberately continue backend work after a terminal response.
+            }, RpcTestJsonContext.Default.Request, new() { Timeout = timeout ? TimeSpan.FromMilliseconds(30) : TimeSpan.FromMinutes(1) });
+            builder.AddCommand<Request>("poll.read", (_, _, _) => { Interlocked.Increment(ref invoked); return ValueTask.CompletedTask; }, RpcTestJsonContext.Default.Request);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 1, DiagnosticSink = diagnostics });
+        await using (host) await using (session)
+        {
+            var invocation = session.ReceiveAsync(Invoke("mutation", "mutation.wait", "{\"id\":\"x\"}")).AsTask();
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                if (!timeout) await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"cancel\",\"id\":\"mutation\"}");
+                await WaitUntilAsync(() => frames.Any(frame => ErrorCode(frame) == (timeout ? "timeout" : "operation_canceled")));
+                Assert.IsFalse(invocation.IsCompleted);
+
+                await session.ReceiveAsync(Invoke("mutation", "mutation.wait", "{\"id\":\"x\"}"));
+                Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()));
+                await session.ReceiveAsync(Invoke("new-request", "poll.read", "{\"id\":\"x\"}"));
+                Assert.AreEqual("request_id_capacity_exhausted", ErrorCode(frames.Last()));
+                Assert.AreEqual(1, session.RetainedRequestIdCount);
+                Assert.AreEqual(1, session.ActiveRequestIdCount);
+                Assert.AreEqual(0, session.RemainingRequestIdCapacity);
+                var exhausted = diagnostics.Values.Single(value => value.Code == NeoRpcErrorCodes.RequestIdCapacityExhausted);
+                StringAssert.Contains(exhausted.Message, "retained=1, remaining=0");
+                Assert.IsFalse(exhausted.Message.Contains("mutation", StringComparison.Ordinal));
+                Assert.AreEqual(1, invoked, "Neither duplicate nor exhausted requests may execute backend work.");
+            }
+            finally { release.TrySetResult(); }
+            await invocation;
+            Assert.AreEqual(0, session.ActiveRequestIdCount);
+            Assert.AreEqual(1, session.RemainingRequestIdCapacity);
+
+            await session.ReceiveAsync(Invoke("mutation", "mutation.wait", "{\"id\":\"x\"}"));
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()), "Finishing work must retain recent duplicate protection.");
+            await session.ReceiveAsync(Invoke("new-request", "poll.read", "{\"id\":\"x\"}"));
+            Assert.IsTrue(Parse(frames.Last()).GetProperty("ok").GetBoolean());
+            Assert.AreEqual(2, invoked, "Recovery must not automatically replay the mutation.");
+        }
+    }
+
+    [TestMethod]
+    public async Task RequestIdHistoryEvictsByCompletionOrderWithoutEvictingActiveWork()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var invoked = 0;
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request>("work.wait", async (_, _, _) =>
+            {
+                Interlocked.Increment(ref invoked);
+                entered.TrySetResult();
+                await release.Task;
+            }, RpcTestJsonContext.Default.Request);
+            builder.AddCommand<Request>("poll.read", (_, _, _) => { Interlocked.Increment(ref invoked); return ValueTask.CompletedTask; }, RpcTestJsonContext.Default.Request);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 2 });
+        await using (host) await using (session)
+        {
+            var invocation = session.ReceiveAsync(Invoke("slow", "work.wait", "{\"id\":\"x\"}")).AsTask();
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                for (var i = 0; i < 20; i++) await session.ReceiveAsync(Invoke($"poll-{i}", "poll.read", "{\"id\":\"x\"}"));
+                Assert.AreEqual(21, invoked);
+                Assert.AreEqual(2, session.RetainedRequestIdCount);
+                Assert.AreEqual(1, session.ActiveRequestIdCount);
+                Assert.AreEqual(1, session.RemainingRequestIdCapacity);
+                await session.ReceiveAsync(Invoke("slow", "work.wait", "{\"id\":\"x\"}"));
+                Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()));
+            }
+            finally { release.TrySetResult(); }
+            await invocation;
+
+            await session.ReceiveAsync(Invoke("new", "poll.read", "{\"id\":\"x\"}"));
+            await session.ReceiveAsync(Invoke("slow", "work.wait", "{\"id\":\"x\"}"));
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()), "Recently completed slow work must outlive earlier completed polling IDs.");
+            await session.ReceiveAsync(Invoke("poll-19", "poll.read", "{\"id\":\"x\"}"));
+            Assert.IsTrue(Parse(frames.Last()).GetProperty("ok").GetBoolean());
+            Assert.AreEqual(23, invoked);
+        }
+    }
+
+    [TestMethod]
+    public async Task RequestIdHistoryPinsSubscriptionsAndRecoversAfterUnsubscribe()
+    {
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddEvent("poll.changed", RpcTestJsonContext.Default.Response);
+            builder.AddCommand<Request>("poll.read", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 2 });
+        await using (host) await using (session)
+        {
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"live-sub\",\"event\":\"poll.changed\"}");
+            for (var i = 0; i < 20; i++) await session.ReceiveAsync(Invoke($"poll-{i}", "poll.read", "{\"id\":\"x\"}"));
+            Assert.IsTrue(frames.Where(frame => Kind(frame) == "result").All(frame => Parse(frame).GetProperty("ok").GetBoolean()));
+            await session.ReceiveAsync(Invoke("live-sub", "poll.read", "{\"id\":\"x\"}"));
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()));
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"other-sub\",\"event\":\"poll.changed\"}");
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"overflow-sub\",\"event\":\"poll.changed\"}");
+            Assert.AreEqual("subscribed", Kind(frames.Last()));
+            Assert.AreEqual("request_id_capacity_exhausted", ErrorCode(frames.Last()));
+            Assert.AreEqual(2, session.ActiveSubscriptionCount);
+            Assert.AreEqual(0, session.RemainingRequestIdCapacity);
+
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"live-sub\"}");
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"live-sub\",\"event\":\"poll.changed\"}");
+            Assert.AreEqual("duplicate_request", ErrorCode(frames.Last()));
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"overflow-sub\",\"event\":\"poll.changed\"}");
+            Assert.IsFalse(Parse(frames.Last()).TryGetProperty("error", out _));
+            Assert.AreEqual(2, session.ActiveSubscriptionCount);
+        }
+    }
+
+    [TestMethod]
+    public async Task RequestIdHistoryPinsPendingAuthorizationEvenAfterUnsubscribe()
+    {
+        var authorization = new BlockingAuthorization();
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddEvent("poll.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event" });
+            builder.AddCommand<Request>("poll.read", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 1, AuthorizationService = authorization });
+        await using (host) await using (session)
+        {
+            var subscribing = session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"pending-sub\",\"event\":\"poll.changed\"}").AsTask();
+            try
+            {
+                await authorization.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"pending-sub\"}");
+                Assert.AreEqual(0, session.ActiveSubscriptionCount);
+                Assert.AreEqual(1, session.ActiveRequestIdCount);
+                await session.ReceiveAsync(Invoke("new", "poll.read", "{\"id\":\"x\"}"));
+                Assert.AreEqual("request_id_capacity_exhausted", ErrorCode(frames.Last()));
+            }
+            finally { authorization.Release.TrySetResult(); }
+            await subscribing;
+
+            Assert.AreEqual(0, session.ActiveRequestIdCount);
+            await session.ReceiveAsync(Invoke("new", "poll.read", "{\"id\":\"x\"}"));
+            Assert.IsTrue(Parse(frames.Last()).GetProperty("ok").GetBoolean());
+            Assert.IsFalse(frames.Any(frame => Kind(frame) == "subscribed"));
+        }
+    }
+
+    [TestMethod]
+    public async Task RequestIdHistoryRetiresDeniedSubscriptions()
+    {
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddEvent("poll.denied", RpcTestJsonContext.Default.Response, new() { Permission = "secure:read" });
+            builder.AddEvent("poll.changed", RpcTestJsonContext.Default.Response);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 1, MaximumSubscriptionsPerSession = 1, AuthorizationService = new DenyAuthorization() });
+        await using (host) await using (session)
+        {
+            for (var i = 0; i < 20; i++)
+            {
+                await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"denied-{i}\",\"event\":\"poll.denied\"}}");
+                Assert.AreEqual("permission_denied", ErrorCode(frames.Last()));
+                Assert.AreEqual(0, session.ActiveSubscriptionCount);
+                Assert.AreEqual(0, session.ActiveRequestIdCount);
+                Assert.AreEqual(1, session.RetainedRequestIdCount);
+            }
+            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"allowed\",\"event\":\"poll.changed\"}");
+            Assert.IsFalse(Parse(frames.Last()).TryGetProperty("error", out _));
+            Assert.AreEqual(1, session.ActiveSubscriptionCount);
+        }
+    }
+
+    [TestMethod]
+    public async Task RequestIdHistoryRetiresRejectedAndFailedInvocations()
+    {
+        var invoked = 0;
+        var (host, session, frames) = Create(builder =>
+        {
+            builder.AddCommand<Request>("phase.normal", (_, _, _) => { invoked++; return ValueTask.CompletedTask; }, RpcTestJsonContext.Default.Request);
+            builder.AddCommand<Request>("phase.denied", (_, _, _) => { invoked++; return ValueTask.CompletedTask; }, RpcTestJsonContext.Default.Request, new() { Permission = "secure:read" });
+            builder.AddCommand<Request>("phase.fail", (_, _, _) => throw new InvalidOperationException("secret"), RpcTestJsonContext.Default.Request);
+            builder.AddCommand<Request, SerializationFailureResponse>("phase.serialize", (_, _, _) => ValueTask.FromResult(new SerializationFailureResponse { Value = "secret" }), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.SerializationFailureResponse);
+        }, new NeoRpcOptions { MaximumRetainedRequestIds = 1, AuthorizationService = new DenyAuthorization() });
+        await using (host) await using (session)
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                foreach (var (command, args, expected) in new[]
+                {
+                    ("missing", "{}", "command_not_found"),
+                    ("phase.normal", "null", "invalid_request"),
+                    ("phase.denied", "{\"id\":\"x\"}", "permission_denied"),
+                    ("phase.fail", "{\"id\":\"x\"}", "internal_error"),
+                    ("phase.serialize", "{\"id\":\"x\"}", "serialization_failed"),
+                })
+                {
+                    await session.ReceiveAsync(Invoke($"{command}-{i}", command, args));
+                    Assert.AreEqual(expected, ErrorCode(frames.Last()));
+                    Assert.AreEqual(1, session.RetainedRequestIdCount);
+                    Assert.AreEqual(0, session.ActiveRequestIdCount);
+                }
+            }
+            await session.ReceiveAsync(Invoke("valid", "phase.normal", "{\"id\":\"x\"}"));
+            Assert.IsTrue(Parse(frames.Last()).GetProperty("ok").GetBoolean());
+            Assert.AreEqual(1, invoked);
+        }
+    }
+
+    [TestMethod]
     public async Task CancelTimeoutConcurrencyAndTeardownAreBounded()
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
