@@ -1223,6 +1223,39 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task ViewBindingDiagnosesFramesDroppedForAClosedCurrentSession()
+    {
+        var service = new ChannelService();
+        service.ReleaseItems.TrySetResult();
+        var diagnostics = new RpcDiagnosticSink();
+        var builder = new NeoRpcBuilder(TestOptions(new NeoRpcOptions { DiagnosticSink = diagnostics }));
+        RegisterChannelService(builder, new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation));
+        await using var host = builder.Build();
+        var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        SetField(view, "_viewLabel", "binding-view");
+        NeoRpcSession? opened = null;
+        await using var binding = new NeoRpcViewBinding(host, view, snapshot => opened = host.OpenSession(
+            new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId),
+            (json, _) => Kind(json) == "channel_item" ? throw new InvalidOperationException("transport failed") : ValueTask.CompletedTask));
+        var queue = typeof(NeoRpcViewBinding).GetMethod("QueueTransition", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var receive = typeof(NeoRpcViewBinding).GetMethod("OnMessage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var snapshot = new NeoTransportSessionSnapshot("closed-document", 0, Array.Empty<string>(), true);
+        queue.Invoke(binding, [snapshot]);
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("stream", "service.stream", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        await WaitUntilAsync(() => opened!.Closed.IsCancellationRequested && opened.ActiveChannelCount == 0);
+        Assert.IsFalse(Dropped().Any(), "Nothing was dropped before the transport failed.");
+
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("dropped-1", "service.stream", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("dropped-2", "service.stream", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        await WaitUntilAsync(() => Dropped().Any());
+        await Task.Delay(20);
+        Assert.AreEqual(NeoRpcDiagnosticLevel.Warning, Dropped().Single().Level, "A closed session is diagnosed once, not per dropped frame.");
+
+        IEnumerable<NeoRpcDiagnostic> Dropped() => diagnostics.Values.Where(value => value.Code == NeoRpcErrorCodes.ConnectionClosed);
+        static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
     public async Task AbuseClosureAndConcurrentDisposalAwaitOneCompleteTeardown()
     {
         var resource = new BlockingAsyncDisposable();

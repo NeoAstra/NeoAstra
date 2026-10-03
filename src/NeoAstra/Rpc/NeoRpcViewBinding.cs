@@ -13,6 +13,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private readonly object _gate = new();
     private readonly List<Task> _teardowns = [];
     private NeoRpcSession? _session;
+    private bool _droppedFrameDiagnosed;
     private int _disposed;
 
     private NeoRpcViewBinding(NeoRpcHost host, global::NeoAstra.NeoAstra view)
@@ -97,6 +98,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             }
             previous = _session;
             _session = next;
+            _droppedFrameDiagnosed = false;
             if (previous is not null)
             {
                 _teardowns.RemoveAll(static task => task.IsCompleted);
@@ -167,14 +169,26 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private async Task ReceiveContainedAsync(NeoRpcSession session, NeoTransportApplicationMessage message)
     {
         try { await session.ReceiveAsync(message.Json, message.SourceOrigin, message.IsMainFrame, session.Closed).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (session.Closed.IsCancellationRequested) { }
-        catch (ObjectDisposedException) { }
+        catch (OperationCanceledException) when (session.Closed.IsCancellationRequested) { DiagnoseDroppedFrame(session); }
+        catch (ObjectDisposedException) { DiagnoseDroppedFrame(session); }
         catch (Exception exception)
         {
             _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, "The platform RPC binding failed and closed its document session.");
             try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
             _ = exception;
         }
+    }
+
+    private void DiagnoseDroppedFrame(NeoRpcSession session)
+    {
+        lock (_gate)
+        {
+            // Frames racing a replaced or detached session are expected. A closed session that is still
+            // current answers nothing until the document reloads, so report that state once.
+            if (!ReferenceEquals(_session, session) || _droppedFrameDiagnosed) return;
+            _droppedFrameDiagnosed = true;
+        }
+        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.ConnectionClosed, "The platform RPC binding is dropping frames for a closed document session until its document reloads.");
     }
 
     private static async Task DisposeContainedAsync(NeoRpcSession session)
