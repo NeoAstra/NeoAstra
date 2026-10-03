@@ -176,6 +176,19 @@ int main() {
     neoastra_window_t* window = nullptr;
     assert(neoastra_app_create_window(app, &window_options, &window, &error) == NEOASTRA_OK);
     assert(window != nullptr && error == nullptr);
+    // Bounds pair the window origin with its client size, so writing back what was read must leave the window unchanged.
+    neoastra_rect_t bounds{};
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
+    assert(bounds.width == 800 && bounds.height == 600);
+    const auto placed = bounds;
+    for (int restore = 0; restore < 3; restore++) {
+        assert(neoastra_window_set_bounds(window, bounds) == NEOASTRA_OK);
+        assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
+    }
+    assert(bounds.x == placed.x && bounds.y == placed.y && bounds.width == 800 && bounds.height == 600);
+    assert(neoastra_window_set_bounds(window, {placed.x, placed.y, 640, 480}) == NEOASTRA_OK);
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
+    assert(bounds.x == placed.x && bounds.y == placed.y && bounds.width == 640 && bounds.height == 480);
     assert(neoastra_window_set_maximum_size(window, {1200, 900}) == NEOASTRA_OK);
     assert(neoastra_window_set_minimum_size(window, {320, 200}) == NEOASTRA_OK);
     neoastra_size_t size{};

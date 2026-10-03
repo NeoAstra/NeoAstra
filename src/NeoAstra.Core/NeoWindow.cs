@@ -74,6 +74,7 @@ public sealed class NeoWindow : IAsyncDisposable
     }
 
     /// <summary>Gets or sets the position of the window, including its frame, in logical units.</summary>
+    /// <remarks>The position is the top-left corner of the window measured from the top-left corner of the primary display, with the vertical axis pointing down on every platform.</remarks>
     public NeoPoint Position
     {
         get => GetBounds().Position;
