@@ -1020,6 +1020,29 @@ bool title_bar_extended(const neoastra_window_t* window, HWND hwnd) noexcept {
            (static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)) & WS_CAPTION) == WS_CAPTION;
 }
 
+// Portable sizes describe the client area, while Win32 sizes and track limits describe the whole window.
+SIZE frame_size(const neoastra_window_t* window, HWND hwnd) noexcept {
+    RECT frame{};
+    AdjustWindowRectExForDpi(&frame, static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)), FALSE,
+                             static_cast<DWORD>(GetWindowLongW(hwnd, GWL_EXSTYLE)), window_dpi(hwnd));
+    // An extended title bar hands the caption to the client and keeps the left, right, and bottom frame.
+    if (title_bar_extended(window, hwnd)) frame.top = 0;
+    return {frame.right - frame.left, frame.bottom - frame.top};
+}
+
+SIZE outer_size(const neoastra_window_t* window, HWND hwnd, int32_t client_width, int32_t client_height) noexcept {
+    const auto frame = frame_size(window, hwnd);
+    return {std::max(client_width, 1) + frame.cx, std::max(client_height, 1) + frame.cy};
+}
+
+// Portable bounds pair the window's own origin with the size of its client area.
+void sync_bounds(neoastra_window_t* window, HWND hwnd) noexcept {
+    RECT frame{}, client{};
+    if (!GetWindowRect(hwnd, &frame) || !GetClientRect(hwnd, &client)) return;
+    std::lock_guard lock(window->state_mutex);
+    window->bounds = {frame.left, frame.top, client.right, client.bottom};
+}
+
 bool top_edge_resizable(HWND hwnd) noexcept {
     return (static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)) & WS_THICKFRAME) != 0 && !IsZoomed(hwnd);
 }
@@ -1349,7 +1372,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             neo_window_closed(window);
             return 0;
         case WM_MOVE:
-            { std::lock_guard lock(window->state_mutex); window->bounds.x = static_cast<int16_t>(LOWORD(lparam)); window->bounds.y = static_cast<int16_t>(HIWORD(lparam)); }
+            // The message carries the client origin, which is not where a position request places the window.
+            sync_bounds(window, hwnd);
             neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_MOVED, window->id);
             break;
         case WM_SIZE: {
@@ -1378,11 +1402,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         }
         case WM_GETMINMAXINFO: {
             auto* constraints = reinterpret_cast<MINMAXINFO*>(lparam);
+            const auto frame = frame_size(window, hwnd);
             std::lock_guard lock(window->state_mutex);
-            if (window->minimum_size.width > 0) constraints->ptMinTrackSize.x = window->minimum_size.width;
-            if (window->minimum_size.height > 0) constraints->ptMinTrackSize.y = window->minimum_size.height;
-            if (window->maximum_size.width > 0) constraints->ptMaxTrackSize.x = window->maximum_size.width;
-            if (window->maximum_size.height > 0) constraints->ptMaxTrackSize.y = window->maximum_size.height;
+            if (window->minimum_size.width > 0) constraints->ptMinTrackSize.x = window->minimum_size.width + frame.cx;
+            if (window->minimum_size.height > 0) constraints->ptMinTrackSize.y = window->minimum_size.height + frame.cy;
+            if (window->maximum_size.width > 0) constraints->ptMaxTrackSize.x = window->maximum_size.width + frame.cx;
+            if (window->maximum_size.height > 0) constraints->ptMaxTrackSize.y = window->maximum_size.height + frame.cy;
             return 0;
         }
         case WM_ACTIVATE:
@@ -1577,12 +1602,17 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         if ((options->flags & 2u) == 0) style = WS_POPUP;
         const auto title=widen(window->title);
         DWORD extended=(options->flags&8u)?WS_EX_TOPMOST:0;if((options->flags&16u)==0)extended|=WS_EX_TOOLWINDOW;
-        const auto x=(options->flags&32u)?CW_USEDEFAULT:window->bounds.x;
-        const auto y=(options->flags&32u)?CW_USEDEFAULT:window->bounds.y;
-        state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(window->bounds.width,1),std::max(window->bounds.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
+        const auto requested=window->bounds;
+        const auto x=(options->flags&32u)?CW_USEDEFAULT:requested.x;
+        const auto y=(options->flags&32u)?CW_USEDEFAULT:requested.y;
+        state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(requested.width,1),std::max(requested.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
         if(!state->hwnd){const auto code=GetLastError();delete state;window->platform=nullptr;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window creation failed",code,"win32");return false;}
         layout_title_bar(window);
-        if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}const auto width=std::max(window->bounds.width,1),height=std::max(window->bounds.height,1);SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-width)/2,area.top+((area.bottom-area.top)-height)/2,width,height,SWP_NOZORDER|SWP_NOACTIVATE);}
+        // The frame depends on the DPI of the monitor the window landed on, so the client size is applied once the window exists.
+        const auto outer=outer_size(window,state->hwnd,requested.width,requested.height);
+        if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-outer.cx)/2,area.top+((area.bottom-area.top)-outer.cy)/2,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE);}
+        else SetWindowPos(state->hwnd,nullptr,0,0,outer.cx,outer.cy,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        sync_bounds(window,state->hwnd);
         state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);state->modal_active=true;}}
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
         return true;
@@ -1593,7 +1623,14 @@ neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) no
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
-neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,w->bounds.width,w->bounds.height,SWP_NOZORDER|SWP_NOACTIVATE)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
+neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {
+    auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    const auto outer=outer_size(w,s->hwnd,w->bounds.width,w->bounds.height);
+    if(!SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE))return NEOASTRA_ERROR_DISPOSED;
+    // A request the system adjusted to a placement the window already had sends no move or size message.
+    if(!IsIconic(s->hwnd))sync_bounds(w,s->hwnd);
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetWindowPos(s->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
     auto* state = static_cast<windows_window*>(w->platform);

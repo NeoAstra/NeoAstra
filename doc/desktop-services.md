@@ -53,7 +53,7 @@ Headless Linux commonly reports clipboard, notification, tray-host, shortcut, an
 
 ## Persistence and secrets
 
-`NeoJsonWindowStateStore` accepts application-chosen bounded keys and writes one source-generated JSON record atomically. Restore validates finite scale values, rejects malformed display snapshots, chooses the saved or best-intersecting display, rescales logical dimensions, clamps to the work area, and normalizes minimized state unless explicitly requested.
+`NeoJsonWindowStateStore` accepts application-chosen bounded keys and writes one source-generated JSON record atomically. Restore validates finite scale values, rejects malformed display snapshots, chooses the saved or best-intersecting display, rescales logical dimensions, clamps to the work area, and normalizes minimized state unless explicitly requested. A placement pairs the window position with its client size, the values `NeoWindow.Position` and `NeoWindow.ClientSize` both report and accept, so restoring it reproduces the window whatever its frame or title-bar style.
 
 `NeoSafeStorage.CreateSystem` accepts a stable application namespace and an absolute private data directory. Windows persists only DPAPI-protected bytes and zeroes temporary protected/native buffers. macOS uses binary-safe Security.framework calls and zeroes Keychain-owned retrieved bytes before freeing them. Linux passes base64 secret bytes over redirected standard input to Secret Service and zeroes encoded/captured buffers. Retrieval returns an owned byte array; applications should zero it with `CryptographicOperations.ZeroMemory` as soon as possible.
 
