@@ -105,6 +105,10 @@ Channel capacity is reserved before the result ID is sent; enumeration starts on
 delivery. A `channel_close` control frame accepts cancellation without waiting for the pump inside
 the receive callback, so transports may deliver close reentrantly during an outbound send. The
 session continues tracking the channel until cleanup finishes, and session/host disposal awaits it.
+Closing a channel or removing a subscription (`channel_close`, `unsubscribe`, or `Fail` overflow)
+while one of its frames is being sent cancels only that frame: the channel or subscription ends and
+the session keeps serving other calls. A `NeoRpcSendFrame` that observes its token being canceled
+must therefore leave the connection usable; any other send failure closes the session.
 Cancellation is cooperative: after a five-second drain warning, a noncooperative enumerator keeps
 teardown pending and its service alive rather than being force-disposed while in use. Application
 iterators, disposers, and transport callbacks must cooperate with cancellation and avoid blocking;

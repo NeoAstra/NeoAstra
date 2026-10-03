@@ -12,8 +12,12 @@ namespace NeoAstra.Rpc;
 
 /// <summary>Sends one complete JSON protocol frame to a frontend connection.</summary>
 /// <param name="json">The complete JSON object.</param>
-/// <param name="cancellationToken">Cancels connection teardown, not a committed send.</param>
+/// <param name="cancellationToken">Canceled when the session closes or when the channel or subscription that owns the frame closes; never for a committed result.</param>
 /// <returns>A task representing delivery acceptance.</returns>
+/// <remarks>
+/// Throwing <see cref="OperationCanceledException"/> after <paramref name="cancellationToken"/> is canceled withdraws only that frame,
+/// so the connection must still be able to carry later frames. Any other failure is a transport failure and closes the session.
+/// </remarks>
 public delegate ValueTask NeoRpcSendFrame(string json, CancellationToken cancellationToken);
 
 /// <summary>Owns an immutable command registry and all active document RPC sessions.</summary>
@@ -1022,6 +1026,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closed.Token);
         await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try { await _send(json, cancellationToken).ConfigureAwait(false); }
+        // The caller withdrew its own frame (a closed channel or subscription): the transport did not fail.
+        // Session teardown cancels every caller token too, and then there is nothing left to close.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch
         {
             _closed.Cancel();

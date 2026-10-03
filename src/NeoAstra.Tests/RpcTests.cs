@@ -780,6 +780,65 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task ChannelCloseDuringAnItemSendKeepsTheSessionOpen()
+    {
+        var service = new ChannelService();
+        service.ReleaseItems.TrySetResult();
+        var itemSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = new NeoRpcBuilder(TestOptions());
+        RegisterChannelService(builder, new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation));
+        builder.AddCommand<Request, Response>("documents.open", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.ViewLabel)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "close-during-item-send"), async (json, cancellationToken) =>
+        {
+            frames.Enqueue(json);
+            if (Kind(json) != "channel_item") return;
+            itemSendStarted.TrySetResult();
+            // A cancelable transport post, like a frame still queued on the UI dispatcher.
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await session.ReceiveAsync(Invoke("stream", "service.stream", "{\"id\":\"x\"}"));
+        await itemSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var channel = Parse(frames.First()).GetProperty("value").GetProperty("channel").GetString();
+        await session.ReceiveAsync(ChannelClose(channel!)).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => session.ActiveChannelCount == 0);
+        Assert.IsFalse(session.Closed.IsCancellationRequested, "Closing one channel must not close its session.");
+        Assert.AreEqual(1, service.EnumeratorDisposeCount);
+        Assert.AreEqual(1, service.DisposeCount);
+        Assert.AreEqual(1, frames.Count(frame => Kind(frame) == "channel_complete"));
+        await session.ReceiveAsync(Invoke("after-close", "documents.open", "{\"id\":\"x\"}"), null, true, session.Closed).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        AssertSingleTerminal(frames, "after-close", null);
+    }
+
+    [TestMethod]
+    public async Task UnsubscribeDuringAnEventSendKeepsTheSessionOpen()
+    {
+        var eventSendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = new NeoRpcBuilder(TestOptions());
+        var changed = builder.AddEvent("documents.changed", RpcTestJsonContext.Default.Response, new() { Permission = "test:event" });
+        builder.AddCommand<Request, Response>("documents.open", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.ViewLabel)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "unsubscribe-during-event-send"), async (json, cancellationToken) =>
+        {
+            frames.Enqueue(json);
+            if (Kind(json) != "event") return;
+            eventSendStarted.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        });
+        await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"sub\",\"event\":\"documents.changed\"}");
+        Assert.AreEqual(1, await changed.PublishAsync(new Response("first", "fixture")));
+        await eventSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"sub\"}").AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(0, session.ActiveSubscriptionCount);
+        Assert.IsFalse(session.Closed.IsCancellationRequested, "Removing one subscription must not close its session.");
+        Assert.AreEqual(0, await changed.PublishAsync(new Response("second", "fixture")));
+        await session.ReceiveAsync(Invoke("after-unsubscribe", "documents.open", "{\"id\":\"x\"}"), null, true, session.Closed).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        AssertSingleTerminal(frames, "after-unsubscribe", null);
+    }
+
+    [TestMethod]
     public async Task ChannelOwnershipIsCapturedBeforeResultConversion()
     {
         var service = new ChannelService();
@@ -1406,7 +1465,11 @@ public sealed class RpcTests
             Assert.AreEqual(1, await changed.PublishAsync(new Response("second", "fixture")));
             var finalAccepted = await changed.PublishAsync(new Response("third", "fixture"));
             Assert.AreEqual(policy is NeoRpcOverflowBehavior.DropOldest or NeoRpcOverflowBehavior.Coalesce ? 1 : 0, finalAccepted, policy.ToString());
-            if (policy == NeoRpcOverflowBehavior.Fail) await WaitUntilAsync(() => session.ActiveSubscriptionCount == 0);
+            if (policy == NeoRpcOverflowBehavior.Fail)
+            {
+                await WaitUntilAsync(() => session.ActiveSubscriptionCount == 0);
+                Assert.IsFalse(session.Closed.IsCancellationRequested, "A failed subscription must not close its session.");
+            }
             else
             {
                 releaseEventSend.TrySetResult();
