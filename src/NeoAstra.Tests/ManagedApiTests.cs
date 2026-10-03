@@ -818,6 +818,110 @@ public sealed class ManagedApiTests
         }
     }
 
+    [TestMethod]
+    public async Task WindowBounds_RoundTripClientSizeAndPositionWhenDevelopmentLibraryIsAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            var run = RunStaAsync(() =>
+            {
+                // Windows created by this thread get frames scaled for their monitor, as in a DPI-aware application.
+                SetThreadDpiAwarenessContext(-4);
+                return NeoApplication.Run(
+                    new NeoApplicationOptions
+                    {
+                        ApplicationName = "NeoAstra window bounds test",
+                        ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                    },
+                    async application =>
+                    {
+                        // Each frame shape reserves a different non-client area around the same client size.
+                        (string Name, NeoWindowOptions Options)[] cases =
+                        [
+                            ("standard", new NeoWindowOptions()),
+                            ("overlay", new NeoWindowOptions { TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) }),
+                            ("hidden", new NeoWindowOptions { TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Hidden) }),
+                            ("fixed", new NeoWindowOptions { IsResizable = false }),
+                            ("tool", new NeoWindowOptions { ShowInTaskbar = false }),
+                            ("borderless", new NeoWindowOptions { HasDecorations = false }),
+                        ];
+                        foreach (var (name, options) in cases)
+                        {
+                            options.IsVisible = false;
+                            options.StartupLocation = NeoWindowStartupLocation.Manual;
+                            options.X = 120;
+                            options.Y = 90;
+                            options.Width = 640;
+                            options.Height = 420;
+                            await using var window = application.CreateWindow(options);
+                            AssertWindowBounds(window, new NeoRect(120, 90, 640, 420), name + " created");
+
+                            window.ClientSize = new NeoSize(700, 500);
+                            AssertWindowBounds(window, new NeoRect(120, 90, 700, 500), name + " resized");
+
+                            window.Position = new NeoPoint(160, 130);
+                            AssertWindowBounds(window, new NeoRect(160, 130, 700, 500), name + " moved");
+
+                            // Window-state restoration writes back exactly what it read on the previous launch.
+                            for (var launch = 0; launch < 3; launch++)
+                            {
+                                window.Position = window.Position;
+                                window.ClientSize = window.ClientSize;
+                            }
+                            AssertWindowBounds(window, new NeoRect(160, 130, 700, 500), name + " restored");
+
+                            // The size limits describe the client area as well, so both limits stay reachable.
+                            window.MaximumClientSize = new NeoSize(800, 600);
+                            window.MinimumClientSize = new NeoSize(300, 200);
+                            window.ClientSize = new NeoSize(800, 600);
+                            AssertWindowBounds(window, new NeoRect(160, 130, 800, 600), name + " maximum");
+                            window.ClientSize = new NeoSize(300, 200);
+                            AssertWindowBounds(window, new NeoRect(160, 130, 300, 200), name + " minimum");
+                        }
+
+                        await using (var centered = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Center, Width = 500, Height = 300 }))
+                        {
+                            AssertWindowBounds(centered, new NeoRect(centered.Position.X, centered.Position.Y, 500, 300), "centered");
+                        }
+
+                        await using (var placed = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 500, Height = 300 }))
+                        {
+                            AssertWindowBounds(placed, new NeoRect(placed.Position.X, placed.Position.Y, 500, 300), "default placement");
+                        }
+
+                        application.Shutdown(0);
+                    });
+            });
+
+            Assert.AreEqual(0, await run.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
+        }
+    }
+
+    private static void AssertWindowBounds(NeoWindow window, NeoRect expected, string message)
+    {
+        Assert.AreEqual(expected.Size, window.ClientSize, message);
+        Assert.AreEqual(expected.Position, window.Position, message);
+
+        // The portable values must describe the real window: its outer origin and the size of its client area.
+        var hwnd = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).GetWin32Hwnd();
+        Assert.IsTrue(GetClientRect(hwnd, out var client), message);
+        Assert.IsTrue(GetWindowRect(hwnd, out var frame), message);        Assert.AreEqual(expected.Size, new NeoSize(client.Right - client.Left, client.Bottom - client.Top), message);
+        Assert.AreEqual(expected.Position, new NeoPoint(frame.Left, frame.Top), message);
+    }
+
     private static Task<T> RunStaAsync<T>(Func<T> callback)
     {
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -887,6 +991,26 @@ public sealed class ManagedApiTests
 
     [DllImport("user32.dll")]
     private static extern nint DispatchMessageW(in NativeMessage message);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern nint SetThreadDpiAwarenessContext(nint context);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetClientRect(nint window, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint window, out NativeRect rect);
 
     private sealed class NullResourceProvider : INeoResourceProvider
     {

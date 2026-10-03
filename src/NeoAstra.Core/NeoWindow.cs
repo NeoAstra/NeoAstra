@@ -73,7 +73,8 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the window position in logical units.</summary>
+    /// <summary>Gets or sets the position of the window, including its frame, in logical units.</summary>
+    /// <remarks>The position is the top-left corner of the window measured from the top-left corner of the primary display, with the vertical axis pointing down on every platform.</remarks>
     public NeoPoint Position
     {
         get => GetBounds().Position;
@@ -85,6 +86,7 @@ public sealed class NeoWindow : IAsyncDisposable
     }
 
     /// <summary>Gets or sets the client size in logical units.</summary>
+    /// <remarks>The client area excludes the window frame and a standard title bar, so a value read here can be assigned back without resizing the window.</remarks>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
     public NeoSize ClientSize
     {
