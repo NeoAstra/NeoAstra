@@ -129,4 +129,45 @@ use to provide their own move and resize handles. macOS has no native interactiv
 point, so `startResize` reports `Unsupported` there and titled windows rely on their standard
 resize borders.
 
+## Built-in browser shortcuts and menus
+
+A browser engine brings shortcuts and user interface of its own: a find bar, a print dialog, reload
+and zoom keys, a context menu, and a status bubble for hovered links. An application that defines its
+own shortcuts and menus can turn them off per view with `NeoBrowserFeatures`:
+
+```csharp
+var view = await environment.CreateWebViewAsync(
+    NeoAstraHost.FillWindow(window),
+    new NeoAstraOptions
+    {
+        ViewLabel = "main",
+        BrowserFeatures = NeoBrowserFeatures.ApplicationShell(),
+    });
+```
+
+`ApplicationShell()` disables the accelerator keys, context menu, status bar, and zoom controls and
+leaves DevTools at the engine default. Each property can also be set on its own; `null` keeps the
+engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection to the main view of a
+`NeoApp` application.
+
+| Property | Turns off | Windows / WebView2 | macOS / WKWebView | Linux / WebKitGTK 6.0 |
+| --- | --- | --- | --- | --- |
+| `AcceleratorKeys` | Find, print, reload, zoom, caret-browsing, and similar browser shortcuts | Switchable | Engine has none | Engine has none |
+| `ContextMenus` | The default context menu | Switchable | Switchable | Switchable |
+| `DevTools` | User access to DevTools | Switchable; on by default | Switchable; off by default | Switchable; off by default |
+| `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
+| `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification; off by default | Engine has none |
+
+Turning the accelerator keys off does not swallow the keys: the page still receives every `keydown`
+event and can give `Ctrl+F` or `Ctrl+P` its own meaning. Text editing and caret movement are never
+affected, so copy, cut, paste, select all, undo, and the navigation keys keep working. The page also
+still receives `contextmenu` events when the default menu is off, so it can show a menu of its own.
+
+The DevTools shortcut follows `DevTools` rather than `AcceleratorKeys`. With DevTools enabled, `F12`
+opens them on Windows (together with `Ctrl+Shift+I`) and on Linux even when every other browser
+shortcut is off. `NeoAstra.OpenDevTools()` opens them from application code on Windows and Linux.
+WKWebView has no public way to open the Web Inspector, so on macOS it is reached through the context
+menu's Inspect Element item or Safari's Develop menu, and `OpenDevTools()` reports
+`NotSupportedException`.
+
 See [known limitations](known-limitations.md) for the validation status of each backend.

@@ -803,4 +803,7 @@ neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view, const s
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const std::string& message, bool json, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view, double* factor) noexcept;
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view, double factor) noexcept;
+// Enabling a feature the engine does not have reports NEOASTRA_ERROR_NOT_SUPPORTED; disabling one succeeds.
+neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept;
+neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept;

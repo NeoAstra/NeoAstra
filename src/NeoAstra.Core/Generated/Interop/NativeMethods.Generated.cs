@@ -163,6 +163,22 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_TITLE_BAR_HIDDEN = unchecked((uint)2),
         }
 
+        /// <summary>
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut.
+        /// </summary>
+        public enum neoastra_view_setting : uint
+        {
+            NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = unchecked((uint)0),
+
+            NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = unchecked((uint)1),
+
+            NEOASTRA_VIEW_SETTING_DEVTOOLS = unchecked((uint)2),
+
+            NEOASTRA_VIEW_SETTING_STATUS_BAR = unchecked((uint)3),
+
+            NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = unchecked((uint)4),
+        }
+
         public enum neoastra_option_state : uint
         {
             NEOASTRA_OPTION_DEFAULT = unchecked((uint)0),
@@ -1278,6 +1294,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_window_resize_edge_t (NativeMethods.neoastra_window_resize_edge from) => new (from);
         }
 
+        /// <summary>
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut.
+        /// </summary>
+        public readonly partial record struct neoastra_view_setting_t(NativeMethods.neoastra_view_setting Value)
+        {
+            public static implicit operator NativeMethods.neoastra_view_setting (neoastra_view_setting_t from) => from.Value;
+
+            public static implicit operator neoastra_view_setting_t (NativeMethods.neoastra_view_setting from) => new (from);
+        }
+
         public readonly partial record struct neoastra_option_state_t(NativeMethods.neoastra_option_state Value)
         {
             public static implicit operator NativeMethods.neoastra_option_state (neoastra_option_state_t from) => from.Value;
@@ -2020,6 +2046,14 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_set_zoom_factor")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_set_zoom_factor(NativeMethods.neoastra_view_t arg0, double arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_set_setting")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_set_setting(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_view_setting_t arg1, uint arg2);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_open_devtools")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_open_devtools(NativeMethods.neoastra_view_t arg0);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_get_native_handle")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

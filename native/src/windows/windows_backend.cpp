@@ -72,6 +72,7 @@ struct windows_view {
     EventRegistrationToken basic_auth{};
     EventRegistrationToken client_certificate{};
     EventRegistrationToken server_certificate_error{};
+    EventRegistrationToken accelerator_key{};
     bool events_registered{};
     std::vector<windows_drop_registration> drop_registrations;
 };
@@ -1942,6 +1943,32 @@ void register_view_drop_targets(neoastra_view_t* view, windows_view* state) {
 
 } // namespace
 
+namespace {
+// F12 and Ctrl+Shift+I are browser accelerators, so turning those off would also take the DevTools shortcut away.
+// It stays available for as long as DevTools themselves are enabled.
+HRESULT register_devtools_shortcut(neoastra_view_t* view, windows_view* state) {
+    return state->controller->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
+        [view](ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT {
+            auto* state = static_cast<windows_view*>(view->platform);
+            COREWEBVIEW2_KEY_EVENT_KIND kind{};
+            COREWEBVIEW2_PHYSICAL_KEY_STATUS status{};
+            UINT key{};
+            if (!state || !state->core || FAILED(args->get_KeyEventKind(&kind)) || kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN ||
+                FAILED(args->get_VirtualKey(&key)) || FAILED(args->get_PhysicalKeyStatus(&status)) || status.WasKeyDown) return S_OK;
+            const auto control = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
+            if (!(key == VK_F12 && !control && !shift && !alt) && !(key == 'I' && control && shift && !alt)) return S_OK;
+            ComPtr<ICoreWebView2Settings> settings;
+            ComPtr<ICoreWebView2Settings3> settings3;
+            BOOL accelerators = TRUE, devtools = FALSE;
+            // While browser accelerators are on, the engine opens DevTools itself.
+            if (FAILED(state->core->get_Settings(&settings)) || FAILED(settings.As(&settings3)) ||
+                FAILED(settings3->get_AreBrowserAcceleratorKeysEnabled(&accelerators)) || accelerators) return S_OK;
+            if (SUCCEEDED(settings->get_AreDevToolsEnabled(&devtools)) && devtools && SUCCEEDED(state->core->OpenDevToolsWindow())) (void)args->put_Handled(TRUE);
+            return S_OK;
+        }).Get(), &state->accelerator_key);
+}
+} // namespace
+
 bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_options_t*,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {
     auto* environment = static_cast<windows_environment*>(view->environment->platform);
     const auto parent = view_parent(view);
@@ -1972,6 +1999,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 layout_title_bar(view->window);
             }
             if (SUCCEEDED(result)) result = register_view_events(view, state);
+            if (SUCCEEDED(result)) result = register_devtools_shortcut(view, state);
             if (SUCCEEDED(result) && view->profile) {
                 auto* profile = static_cast<windows_profile*>(view->profile->platform);
                 ComPtr<ICoreWebView2_13> core13;
@@ -2014,4 +2042,21 @@ neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const st
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view,double* factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->get_ZoomFactor(factor))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view,double factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_ZoomFactor(factor))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
+neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_view_setting_t setting,bool enabled) noexcept {
+    auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    ComPtr<ICoreWebView2Settings> settings;if(FAILED(state->core->get_Settings(&settings)))return NEOASTRA_ERROR_NATIVE_FAILURE;
+    const BOOL value=enabled?TRUE:FALSE;HRESULT result=E_NOINTERFACE;
+    switch(setting){
+        case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:{ComPtr<ICoreWebView2Settings3> settings3;if(SUCCEEDED(settings.As(&settings3)))result=settings3->put_AreBrowserAcceleratorKeysEnabled(value);break;}
+        case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:result=settings->put_AreDefaultContextMenusEnabled(value);break;
+        case NEOASTRA_VIEW_SETTING_DEVTOOLS:result=settings->put_AreDevToolsEnabled(value);break;
+        case NEOASTRA_VIEW_SETTING_STATUS_BAR:result=settings->put_IsStatusBarEnabled(value);break;
+        case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:{
+            // Pinch zoom is a separate setting on newer runtimes; older ones only have the wheel and keyboard control.
+            result=settings->put_IsZoomControlEnabled(value);ComPtr<ICoreWebView2Settings5> settings5;if(SUCCEEDED(result)&&SUCCEEDED(settings.As(&settings5)))result=settings5->put_IsPinchZoomEnabled(value);break;}
+        default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    return SUCCEEDED(result)?NEOASTRA_OK:result==E_NOINTERFACE?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->core->OpenDevToolsWindow())?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state)return NEOASTRA_ERROR_NOT_INITIALIZED;if(kind==NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER&&state->controller){handle->kind=kind;handle->value=state->controller.Get();return NEOASTRA_OK;}if(kind==NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE&&state->core){handle->kind=kind;handle->value=state->core.Get();return NEOASTRA_OK;}return NEOASTRA_ERROR_NOT_SUPPORTED;}

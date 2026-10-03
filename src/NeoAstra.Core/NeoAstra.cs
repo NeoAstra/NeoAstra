@@ -333,6 +333,22 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Resets page zoom to 100 percent.</summary>
     public void ResetZoom() => ZoomFactor = 1d;
 
+    /// <summary>Opens the engine's DevTools for this view.</summary>
+    /// <exception cref="InvalidOperationException">DevTools are disabled for this view.</exception>
+    /// <exception cref="NotSupportedException">The active engine offers no way to open DevTools programmatically.</exception>
+    public void OpenDevTools()
+    {
+        ThrowIfDisposed();
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_open_devtools(NativeHandle), default, "open DevTools");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library cannot open DevTools.", exception);
+        }
+    }
+
     /// <summary>Gets a typed borrowed native browser handle.</summary>
     /// <param name="kind">The requested backend handle kind.</param>
     /// <returns>A borrowed native handle valid while this view remains alive.</returns>
@@ -405,6 +421,28 @@ public sealed class NeoAstra : IAsyncDisposable
     internal event Action? NativeNavigationStarted;
 
     internal event Action? Disposing;
+
+    internal void ApplyBrowserFeatures(NeoBrowserFeatures features)
+    {
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS, features.AcceleratorKeys);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS, features.ContextMenus);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEVTOOLS, features.DevTools);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_STATUS_BAR, features.StatusBar);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS, features.ZoomControls);
+
+        void Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)
+        {
+            if (enabled is not { } value) return;
+            try
+            {
+                NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_setting(NativeHandle, setting, value ? 1u : 0u), default, "set browser feature");
+            }
+            catch (Exception exception) when (exception is NotSupportedException or EntryPointNotFoundException)
+            {
+                // The engine has no such feature to switch, or the native library predates the setting.
+            }
+        }
+    }
 
     internal async ValueTask InitializeTransportAsync(CancellationToken cancellationToken)
     {

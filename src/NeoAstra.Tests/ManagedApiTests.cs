@@ -97,6 +97,12 @@ public sealed class ManagedApiTests
             new NeoAstraOptions { Transport = new NeoTransportOptions { MaximumDiagnosticQueue = 0 } }.Validate(null!));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
             new NeoAstraOptions { Transport = new NeoTransportOptions { HandshakeTimeout = TimeSpan.Zero } }.Validate(null!));
+        Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAstraOptions { BrowserFeatures = null! }.Validate(null!));
+        var defaultFeatures = new NeoAstraOptions().BrowserFeatures;
+        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null });
+        var shellFeatures = NeoBrowserFeatures.ApplicationShell();
+        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false });
+        Assert.AreNotSame(shellFeatures, NeoBrowserFeatures.ApplicationShell());
 
         var provider = new NullResourceProvider();
         var scheme = NeoCustomScheme.Application("app", provider);
@@ -750,6 +756,7 @@ public sealed class ManagedApiTests
                             Profile = profile,
                             BridgePolicy = NeoBridgePolicy.TrustedOrigins,
                             BridgeOrigins = ["app://neoastra"],
+                            BrowserFeatures = new NeoBrowserFeatures { AcceleratorKeys = false, ContextMenus = false, DevTools = false, StatusBar = false, ZoomControls = false },
                         });
                     webView.ZoomFactor = 1.25;
                     Assert.AreEqual(1.25, webView.ZoomFactor, 0.001);

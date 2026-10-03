@@ -62,6 +62,9 @@ public sealed class NeoAppBuilder
     /// <summary>Gets or sets the production asset directory.</summary>
     public string AssetsDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "assets");
 
+    /// <summary>Gets or sets which engine-provided browser features the main view keeps.</summary>
+    public NeoBrowserFeatures BrowserFeatures { get; set; } = new();
+
     /// <summary>Registers backend configuration for the hidden main window and its application.</summary>
     /// <param name="configure">The synchronous callback used to attach lifecycle handlers or configure window properties.</param>
     /// <returns>This builder.</returns>
@@ -198,6 +201,7 @@ public sealed class NeoAppBuilder
 
             window.Show();
             window.Activate();
+            viewOptions.BrowserFeatures = BrowserFeatures;
             view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
             var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
             view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));

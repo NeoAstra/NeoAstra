@@ -178,6 +178,9 @@ internal sealed class AdvancedApplication(
         NeoAstraOptions ViewOptions(string label) => new()
         {
             ViewLabel = label,
+            // The page owns its shortcuts and menus: no browser find, print, reload, or context menu.
+            // Editing keys keep working, and F12 still opens DevTools.
+            BrowserFeatures = CreateBrowserFeatures(),
             BridgePolicy = trustEntireView
                 ? NeoBridgePolicy.TrustEntireView
                 : NeoBridgePolicy.TrustedOrigins,
@@ -247,6 +250,13 @@ internal sealed class AdvancedApplication(
             mainBinding,
             previewBinding,
             windowState);
+    }
+
+    private static NeoBrowserFeatures CreateBrowserFeatures()
+    {
+        var features = NeoBrowserFeatures.ApplicationShell();
+        features.DevTools = true;
+        return features;
     }
 
     private void ConfigureLaunchRouting(

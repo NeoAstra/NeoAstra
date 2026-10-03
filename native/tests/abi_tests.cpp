@@ -57,6 +57,7 @@ static_assert(std::is_same_v<std::underlying_type_t<neoastra_native_parent_kind_
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_native_handle_kind_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_state_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_title_bar_style_t>, uint32_t>);
+static_assert(std::is_same_v<std::underlying_type_t<neoastra_view_setting_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_option_state_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_script_injection_time_t>, uint32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_decision_action_t>, uint32_t>);
@@ -212,6 +213,8 @@ int main() {
     assert(title_bar.style == NEOASTRA_TITLE_BAR_OVERLAY && title_bar.height >= 0 && title_bar.left_inset >= 0 && title_bar.right_inset >= 0);
     title_bar.style = NEOASTRA_TITLE_BAR_DEFAULT;
     assert(neoastra_window_set_title_bar(window, &title_bar) == NEOASTRA_OK);
+    assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_open_devtools(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(state == NEOASTRA_WINDOW_NORMAL);
     close_capture closes{};
     assert(neoastra_app_set_event_callback(app, capture_close, &closes) == NEOASTRA_OK);

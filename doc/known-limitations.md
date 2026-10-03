@@ -41,6 +41,9 @@ assuming that every browser engine supports every portable event.
 | Content extended into the title bar | Available | Available | Available where GTK draws client-side decorations |
 | Native window controls over extended content | Available; Windows 11 snap layouts included | Available; system-defined height and position | Not exposed; the application draws its controls |
 | CSS drag regions | Native `app-region` | Emulated from the pointer press | Emulated from the pointer press |
+| Built-in browser shortcuts (find, print, reload, zoom) | Can be turned off | Not present in the engine | Not present in the engine |
+| Default context menu | Can be turned off | Can be turned off | Can be turned off |
+| DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
@@ -50,7 +53,7 @@ unbounded asynchronous deferral.
 Chromeless drag and resize entry points must be called while a native pointer press is still held.
 They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
 when no suitable press is active and `NotSupportedException` when the operation has no safe native
-implementation. Title-bar styles and drag regions are described in
+implementation. Title-bar styles, drag regions, and the built-in browser feature switches are described in
 [chromeless windows](chromeless-windows.md); they have been exercised on Windows 11, while the macOS
 and Linux implementations have not yet been run on their target hosts. On Windows, blended caption
 buttons and top-edge resizing over the browser view require an application manifest that declares

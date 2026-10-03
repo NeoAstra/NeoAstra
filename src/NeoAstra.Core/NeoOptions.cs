@@ -318,6 +318,46 @@ public sealed class NeoWindowOptions
     }
 }
 
+/// <summary>Selects which engine-provided browser features a view keeps.</summary>
+/// <remarks>
+/// A <see langword="null"/> value keeps the engine default, and a feature the active engine does not provide is ignored.
+/// Text editing and caret movement, such as copy, paste, select all, and undo, are never affected.
+/// </remarks>
+public sealed class NeoBrowserFeatures
+{
+    /// <summary>Gets or sets whether built-in browser shortcuts such as find, print, reload, and zoom stay active.</summary>
+    /// <remarks>
+    /// The key events still reach the page, so an application can give those keys its own meaning. The DevTools
+    /// shortcut follows <see cref="DevTools"/> instead of this value.
+    /// </remarks>
+    public bool? AcceleratorKeys { get; set; }
+
+    /// <summary>Gets or sets whether the engine shows its default context menu.</summary>
+    public bool? ContextMenus { get; set; }
+
+    /// <summary>Gets or sets whether the user can open DevTools, including through F12 where the engine has a shortcut.</summary>
+    public bool? DevTools { get; set; }
+
+    /// <summary>Gets or sets whether the engine shows its status bar, such as the address of a hovered link.</summary>
+    public bool? StatusBar { get; set; }
+
+    /// <summary>Gets or sets whether the user can zoom the page with the mouse wheel, keyboard, or a pinch gesture.</summary>
+    public bool? ZoomControls { get; set; }
+
+    /// <summary>
+    /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls.
+    /// DevTools keep the engine default.
+    /// </summary>
+    /// <returns>A new feature selection.</returns>
+    public static NeoBrowserFeatures ApplicationShell() => new()
+    {
+        AcceleratorKeys = false,
+        ContextMenus = false,
+        StatusBar = false,
+        ZoomControls = false,
+    };
+}
+
 /// <summary>Configures a browser view.</summary>
 public sealed class NeoAstraOptions
 {
@@ -356,6 +396,9 @@ public sealed class NeoAstraOptions
     /// <summary>Gets or sets the portable frontend transport limits and handshake policy.</summary>
     public NeoTransportOptions Transport { get; set; } = new();
 
+    /// <summary>Gets or sets which engine-provided browser features the view keeps.</summary>
+    public NeoBrowserFeatures BrowserFeatures { get; set; } = new();
+
     internal void Validate(NeoEnvironment environment)
     {
         if (Profile is not null && !ReferenceEquals(Profile.Environment, environment))
@@ -385,6 +428,7 @@ public sealed class NeoAstraOptions
 
         ArgumentNullException.ThrowIfNull(BridgeOrigins);
         ArgumentNullException.ThrowIfNull(Transport);
+        ArgumentNullException.ThrowIfNull(BrowserFeatures);
         Transport.Validate();
         if (ViewLabel is not null && (string.IsNullOrWhiteSpace(ViewLabel) || ViewLabel.Length > 128 || ViewLabel.Any(char.IsControl)))
         {

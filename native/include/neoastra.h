@@ -78,6 +78,8 @@ typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 
 typedef enum neoastra_window_resize_edge : uint32_t { NEOASTRA_WINDOW_RESIZE_LEFT = 0, NEOASTRA_WINDOW_RESIZE_TOP = 1, NEOASTRA_WINDOW_RESIZE_RIGHT = 2, NEOASTRA_WINDOW_RESIZE_BOTTOM = 3, NEOASTRA_WINDOW_RESIZE_TOP_LEFT = 4, NEOASTRA_WINDOW_RESIZE_TOP_RIGHT = 5, NEOASTRA_WINDOW_RESIZE_BOTTOM_LEFT = 6, NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = 7 } neoastra_window_resize_edge_t;
 /** Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls. */
 typedef enum neoastra_title_bar_style : uint32_t { NEOASTRA_TITLE_BAR_DEFAULT = 0, NEOASTRA_TITLE_BAR_OVERLAY = 1, NEOASTRA_TITLE_BAR_HIDDEN = 2 } neoastra_title_bar_style_t;
+/** Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. */
+typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4 } neoastra_view_setting_t;
 typedef enum neoastra_option_state : uint32_t { NEOASTRA_OPTION_DEFAULT = 0, NEOASTRA_OPTION_ENABLED = 1, NEOASTRA_OPTION_DISABLED = 2 } neoastra_option_state_t;
 typedef enum neoastra_script_injection_time : uint32_t { NEOASTRA_SCRIPT_DOCUMENT_START = 0, NEOASTRA_SCRIPT_DOCUMENT_END = 1 } neoastra_script_injection_time_t;
 typedef enum neoastra_decision_action : uint32_t { NEOASTRA_DECISION_DEFAULT = 0, NEOASTRA_DECISION_ALLOW = 1, NEOASTRA_DECISION_DENY = 2, NEOASTRA_DECISION_CANCEL = 3, NEOASTRA_DECISION_OPEN_EXTERNAL = 4, NEOASTRA_DECISION_DOWNLOAD = 5, NEOASTRA_DECISION_HANDLED_EXTERNAL = 6 } neoastra_decision_action_t;
@@ -256,6 +258,8 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastr
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t*, neoastra_string_view_t, uint32_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t*, double*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t*, double);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t*, neoastra_view_setting_t, uint32_t);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_native_handle(neoastra_view_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_query_extension(const void*, neoastra_string_view_t, uint32_t, const void**);
 

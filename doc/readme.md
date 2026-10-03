@@ -17,7 +17,7 @@ Build native desktop apps with web technologies.
 - [Frontend tooling, production assets, and templates](frontend-tooling-and-assets.md) — configure development, builds, and secure asset hosting.
 - [Application lifecycle, launch routing, and hosting](application-lifecycle-and-hosting.md) — manage startup, shutdown, windows, and host integration.
 - [Plugins and desktop services](desktop-services.md) — use native desktop features without granting implicit renderer authority.
-- [Chromeless windows and web title bars](chromeless-windows.md) — extend web content into the title bar while keeping native window behavior.
+- [Chromeless windows and web title bars](chromeless-windows.md) — extend web content into the title bar while keeping native window behavior, and turn off built-in browser shortcuts and menus.
 - [Delivery and authenticated updates](delivery-and-updates.md) — create deterministic bundles and configure signed updates.
 
 ## Security guidance

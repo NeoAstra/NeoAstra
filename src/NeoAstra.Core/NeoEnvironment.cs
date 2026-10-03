@@ -325,6 +325,8 @@ internal static class NeoTransportViewInitializer
         try
         {
             view = await environment.CreateWebViewCoreAsync(host, options, popupRequest, cancellationToken);
+            // Applied before the first navigation so no document ever sees the engine defaults.
+            view.ApplyBrowserFeatures(options.BrowserFeatures);
             await view.InitializeTransportAsync(cancellationToken);
             return view;
         }

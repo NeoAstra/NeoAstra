@@ -41,9 +41,12 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 
 @interface NeoAstraWebView : WKWebView
 @property(nonatomic,assign) neoastra_view_t* nativeView;
+@property(nonatomic,assign) BOOL contextMenusDisabled;
 @end
 
 @implementation NeoAstraWebView
+// AppKit shows nothing for an empty menu; page-level contextmenu handlers have already run by now.
+- (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event { if(self.contextMenusDisabled)[menu removeAllItems];else [super willOpenMenu:menu withEvent:event]; }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
     BOOL handled=[super performDragOperation:sender];
     auto* view=self.nativeView;
@@ -479,4 +482,20 @@ neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const st
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;std::string script="window.dispatchEvent(new CustomEvent('neoastramessage',{detail:"+(json?message:"null")+"}));";[state->webview evaluateJavaScript:ns_string(script) completionHandler:nil];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view,double* factor) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;*factor=state->webview.magnification;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view,double factor) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;state->webview.magnification=factor;return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_view_setting_t setting,bool enabled) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    switch(setting){
+        // WKWebView has no browser shortcuts or status bar of its own, so there is nothing to turn off or on.
+        case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:case NEOASTRA_VIEW_SETTING_STATUS_BAR:return enabled?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:if(![state->webview isKindOfClass:[NeoAstraWebView class]])return NEOASTRA_ERROR_NOT_SUPPORTED;((NeoAstraWebView*)state->webview).contextMenusDisabled=!enabled;return NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_DEVTOOLS:
+            // Both switches are set through key-value coding: `inspectable` only exists on macOS 13.3 and later.
+            @try{[state->webview.configuration.preferences setValue:@(enabled) forKey:@"developerExtrasEnabled"];if([state->webview respondsToSelector:NSSelectorFromString(@"setInspectable:")])[state->webview setValue:@(enabled) forKey:@"inspectable"];}@catch(NSException*){return NEOASTRA_ERROR_NOT_SUPPORTED;}
+            return NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:state->webview.allowsMagnification=enabled;return NEOASTRA_OK;
+        default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    }
+}}
+// WebKit offers no public call to open the Web Inspector; it is reached from the context menu or Safari's Develop menu.
+neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);return !state||!state->webview?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WKWEBVIEW&&kind!=NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;handle->kind=kind;handle->value=(__bridge void*)state->webview;return NEOASTRA_OK;}
