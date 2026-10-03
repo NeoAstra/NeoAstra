@@ -709,6 +709,28 @@ public sealed class ManagedApiTests
                     Assert.IsTrue(window.IsResizable);
                     Assert.IsFalse(window.IsAlwaysOnTop);
                     Assert.IsTrue(window.ShowInTaskbar);
+                    Assert.AreEqual(default, window.GetTitleBarLayout());
+                    window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) { Height = 40 };
+                    Assert.AreEqual(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Overlay, 40, 0, 138), window.GetTitleBarLayout());
+                    window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Hidden);
+                    Assert.AreEqual(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Hidden, 32, 0, 0), window.GetTitleBarLayout());
+                    // Borderless windows have no caption for native controls to replace.
+                    window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay);
+                    window.HasDecorations = false;
+                    Assert.IsFalse(window.GetTitleBarLayout().HasNativeControls);
+                    window.HasDecorations = true;
+                    Assert.IsTrue(window.GetTitleBarLayout().HasNativeControls);
+                    window.TitleBar = default;
+                    Assert.AreEqual(default, window.GetTitleBarLayout());
+                    await using (var chromeless = application.CreateWindow(new NeoWindowOptions
+                    {
+                        IsVisible = false,
+                        TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) { Height = 48, BackgroundColor = new NeoColor(8, 18, 31) },
+                    }))
+                    {
+                        Assert.AreEqual(NeoWindowTitleBarStyle.Overlay, chromeless.TitleBar.Style);
+                        Assert.AreEqual(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Overlay, 48, 0, 138), chromeless.GetTitleBarLayout());
+                    }
                     window.MaximumClientSize = new NeoSize(1200, 900);
                     window.MinimumClientSize = new NeoSize(320, 200);
                     Assert.AreEqual(new NeoSize(1200, 900), window.MaximumClientSize);

@@ -88,6 +88,19 @@ public sealed class DesktopServicesTests
         Assert.Throws<ArgumentException>(() => service.SetBadgeAsync(null!, new string('x', 17)));
         Assert.Throws<ArgumentOutOfRangeException>(() => service.SetTitleBarThemeAsync(null!, (NeoWindowTitleBarTheme)99));
 
+        Assert.AreEqual(default, DesktopRendererRegistration.ParseColor(null));
+        Assert.AreEqual(new NeoColor(0x10, 0x20, 0x30), DesktopRendererRegistration.ParseColor("#102030"));
+        Assert.AreEqual(new NeoColor(0xAB, 0xCD, 0xEF, 0x80), DesktopRendererRegistration.ParseColor("#abcdef80"));
+        foreach (var malformed in new[] { "102030", "#12345", "#12345g", "#1234567", "red" })
+            Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.ParseColor(malformed));
+        var snapshotJson = JsonSerializer.Serialize(
+            new DesktopWindowStateResult(new("Title", default, new(800, 600), default, default, true, true, false, 1, NeoWindowState.Maximized, true, true, false, true, false,
+                new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138))),
+            DesktopRendererJsonContext.Default.DesktopWindowStateResult);
+        StringAssert.Contains(snapshotJson, "\"titleBar\":{\"style\":\"Overlay\",\"height\":32,\"leftInset\":0,\"rightInset\":138}");
+        var titleBarRequest = JsonSerializer.Deserialize("{\"style\":\"Hidden\",\"height\":40,\"symbolColor\":\"#ffffff\"}", DesktopRendererJsonContext.Default.DesktopWindowTitleBarRequest);
+        Assert.AreEqual(new DesktopWindowTitleBarRequest(NeoWindowTitleBarStyle.Hidden, 40, "#ffffff", null), titleBarRequest);
+
         var rendererSupport = DesktopWindowExtraSupportResult.From(service);
         var supportJson = JsonSerializer.Serialize(rendererSupport, DesktopRendererJsonContext.Default.DesktopWindowExtraSupportResult);
         using var supportDocument = JsonDocument.Parse(supportJson);

@@ -8,7 +8,7 @@ import {
   createMockRpcHarness,
 } from "@neoastra/client/testing";
 import { neoRpcContractHash } from "#neoastra";
-import { isNativeMenuVisibleByDefault, isWindowExtraAvailable } from "./DesktopTour";
+import { describeTitleBar, isNativeMenuVisibleByDefault, isWindowExtraAvailable } from "./DesktopTour";
 import { tourNotification, withAdvancedContract } from "./tour-api";
 
 if (tourNotification.actions.length !== 0) {
@@ -21,6 +21,15 @@ if (isWindowExtraAvailable(undefined) || isWindowExtraAvailable({ supportLevel: 
 if (isNativeMenuVisibleByDefault("windows") || isNativeMenuVisibleByDefault("linux") ||
     !isNativeMenuVisibleByDefault("macos")) {
   throw new Error("The native menu must be opt-in on Windows/Linux and default-on on macOS.");
+}
+
+const overlaySnapshot = {
+  state: "Maximized",
+  titleBar: { style: "Overlay", height: 40, leftInset: 0, rightInset: 138 },
+} as Parameters<typeof describeTitleBar>[0];
+if (!describeTitleBar(overlaySnapshot).includes("138px right") ||
+    !describeTitleBar({ ...overlaySnapshot!, titleBar: { style: "Hidden", height: 40, leftInset: 0, rightInset: 0 } }).includes("drawn by the page")) {
+  throw new Error("The title-bar summary must report native control insets and page-drawn controls.");
 }
 
 const observedContractHashes: Array<string | undefined> = [];

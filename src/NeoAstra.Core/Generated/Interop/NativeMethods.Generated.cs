@@ -151,6 +151,18 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = unchecked((uint)7),
         }
 
+        /// <summary>
+        /// Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls.
+        /// </summary>
+        public enum neoastra_title_bar_style : uint
+        {
+            NEOASTRA_TITLE_BAR_DEFAULT = unchecked((uint)0),
+
+            NEOASTRA_TITLE_BAR_OVERLAY = unchecked((uint)1),
+
+            NEOASTRA_TITLE_BAR_HIDDEN = unchecked((uint)2),
+        }
+
         public enum neoastra_option_state : uint
         {
             NEOASTRA_OPTION_DEFAULT = unchecked((uint)0),
@@ -1035,6 +1047,38 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_color_t (NativeMethods.neoastra_color from) => new (from);
         }
 
+        /// <summary>
+        /// Title-bar configuration and layout in logical units. A zero height selects the platform default, a zero-alpha symbol color follows the system theme, and a zero-alpha background is transparent. The insets are outputs describing space reserved for native window controls.
+        /// </summary>
+        public partial struct neoastra_title_bar
+        {
+            public uint size;
+
+            public uint version;
+
+            public NativeMethods.neoastra_title_bar_style_t style;
+
+            public int height;
+
+            public NativeMethods.neoastra_color_t symbol_color;
+
+            public NativeMethods.neoastra_color_t background_color;
+
+            public int left_inset;
+
+            public int right_inset;
+        }
+
+        /// <summary>
+        /// Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls.
+        /// </summary>
+        public readonly partial record struct neoastra_title_bar_style_t(NativeMethods.neoastra_title_bar_style Value)
+        {
+            public static implicit operator NativeMethods.neoastra_title_bar_style (neoastra_title_bar_style_t from) => from.Value;
+
+            public static implicit operator neoastra_title_bar_style_t (NativeMethods.neoastra_title_bar_style from) => new (from);
+        }
+
         public partial struct neoastra_view_options
         {
             public uint size;
@@ -1386,6 +1430,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator NativeMethods.neoastra_window_options (neoastra_window_options_t from) => from.Value;
 
             public static implicit operator neoastra_window_options_t (NativeMethods.neoastra_window_options from) => new (from);
+        }
+
+        /// <summary>
+        /// Title-bar configuration and layout in logical units. A zero height selects the platform default, a zero-alpha symbol color follows the system theme, and a zero-alpha background is transparent. The insets are outputs describing space reserved for native window controls.
+        /// </summary>
+        public readonly partial record struct neoastra_title_bar_t(NativeMethods.neoastra_title_bar Value)
+        {
+            public static implicit operator NativeMethods.neoastra_title_bar (neoastra_title_bar_t from) => from.Value;
+
+            public static implicit operator neoastra_title_bar_t (NativeMethods.neoastra_title_bar from) => new (from);
         }
 
         public readonly partial record struct neoastra_view_options_t(NativeMethods.neoastra_view_options Value)
@@ -1851,6 +1905,14 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_begin_resize")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_begin_resize(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_window_resize_edge_t arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_title_bar")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_title_bar(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_title_bar_t* arg1);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_set_title_bar")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_set_title_bar(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_title_bar_t* arg1);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_close")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

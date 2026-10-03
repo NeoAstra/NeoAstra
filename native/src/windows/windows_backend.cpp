@@ -38,6 +38,14 @@ struct windows_window {
     uint32_t modal_children{};
     bool modal_active{};
     bool modal{};
+    HWND caption{}; // Caption-button overlay for NEOASTRA_TITLE_BAR_OVERLAY.
+    HWND top_grip{}; // Input-only strip restoring top-edge resizing above the browser.
+    bool caption_layered{};
+    bool caption_tracking{};
+    bool grip_unavailable{};
+    bool active{true};
+    int caption_hot{-1};
+    int caption_pressed{-1};
     windows_window() { restored_placement.length = sizeof(restored_placement); }
 };
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; };
@@ -985,6 +993,317 @@ LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
+constexpr wchar_t caption_class[] = L"NeoAstra.CaptionControls";
+constexpr wchar_t grip_class[] = L"NeoAstra.ResizeGrip";
+// Logical units matching the Windows 11 caption buttons.
+constexpr int caption_button_width = 46;
+constexpr int caption_default_height = 32;
+constexpr int top_grip_height = 4;
+constexpr int top_grip_corner = 16;
+enum caption_button : int { caption_none = -1, caption_minimize = 0, caption_maximize = 1, caption_close = 2 };
+
+ATOM register_class(const wchar_t* name, WNDPROC procedure);
+
+UINT window_dpi(HWND hwnd) noexcept { const auto dpi = GetDpiForWindow(hwnd); return dpi ? dpi : USER_DEFAULT_SCREEN_DPI; }
+int scale_for_dpi(int value, UINT dpi) noexcept { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
+int title_bar_height(const neoastra_window_t* window) noexcept { return window->title_bar.height > 0 ? window->title_bar.height : caption_default_height; }
+POINT client_point(HWND hwnd, LPARAM screen) noexcept {
+    POINT point{static_cast<short>(LOWORD(screen)), static_cast<short>(HIWORD(screen))};
+    ScreenToClient(hwnd, &point);
+    return point;
+}
+
+// The caption is replaced only while the window owns a standard frame; borderless and fullscreen windows have none.
+bool title_bar_extended(const neoastra_window_t* window, HWND hwnd) noexcept {
+    const auto* state = static_cast<const windows_window*>(window->platform);
+    return state && !state->fullscreen && window->title_bar.style != NEOASTRA_TITLE_BAR_DEFAULT &&
+           (static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)) & WS_CAPTION) == WS_CAPTION;
+}
+
+bool top_edge_resizable(HWND hwnd) noexcept {
+    return (static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)) & WS_THICKFRAME) != 0 && !IsZoomed(hwnd);
+}
+
+// Keeps the system frame (shadow, resize borders, snapping) while handing the caption area to the client.
+LRESULT extend_client_into_title_bar(HWND hwnd, WPARAM wparam, LPARAM lparam) noexcept {
+    // Both forms of the message begin with the proposed window rectangle.
+    auto* client = reinterpret_cast<RECT*>(lparam);
+    const auto top = client->top;
+    const auto result = DefWindowProcW(hwnd, WM_NCCALCSIZE, wparam, lparam);
+    client->top = top;
+    if (!IsZoomed(hwnd)) return result;
+    // A maximized window overhangs its monitor by the frame thickness on every side.
+    const auto dpi = window_dpi(hwnd);
+    const auto resizable = (static_cast<DWORD>(GetWindowLongW(hwnd, GWL_STYLE)) & WS_THICKFRAME) != 0;
+    client->top += GetSystemMetricsForDpi(resizable ? SM_CYSIZEFRAME : SM_CYFIXEDFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    // Leave a sliver for an auto-hide taskbar; a client area covering the whole monitor would keep it from appearing.
+    APPBARDATA bar{};
+    bar.cbSize = sizeof(bar);
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if ((SHAppBarMessage(ABM_GETSTATE, &bar) & ABS_AUTOHIDE) != 0 && GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        const auto hidden_bar = [&monitor](UINT edge) noexcept {
+            APPBARDATA query{};
+            query.cbSize = sizeof(query);
+            query.uEdge = edge;
+            query.rc = monitor.rcMonitor;
+            return SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &query) != 0;
+        };
+        if (hidden_bar(ABE_TOP)) client->top += 2;
+        if (hidden_bar(ABE_BOTTOM)) client->bottom -= 2;
+        if (hidden_bar(ABE_LEFT)) client->left += 2;
+        if (hidden_bar(ABE_RIGHT)) client->right -= 2;
+    }
+    return result;
+}
+
+struct caption_color { float red{}, green{}, blue{}, alpha{}; }; // Premultiplied channels in [0, 1].
+caption_color premultiply(neoastra_color_t color, float opacity = 1.f) noexcept {
+    const auto alpha = static_cast<float>(color.alpha) / 255.f * opacity;
+    return {static_cast<float>(color.red) / 255.f * alpha, static_cast<float>(color.green) / 255.f * alpha, static_cast<float>(color.blue) / 255.f * alpha, alpha};
+}
+caption_color scaled(caption_color color, float factor) noexcept { return {color.red * factor, color.green * factor, color.blue * factor, color.alpha * factor}; }
+caption_color over(caption_color top, caption_color bottom) noexcept {
+    const auto keep = 1.f - top.alpha;
+    return {top.red + bottom.red * keep, top.green + bottom.green * keep, top.blue + bottom.blue * keep, top.alpha + bottom.alpha * keep};
+}
+bool is_light(neoastra_color_t color) noexcept { return color.red * 299 + color.green * 587 + color.blue * 114 > 127500; }
+
+bool system_uses_dark_theme() noexcept {
+    DWORD light = 1, size = sizeof(light);
+    return SHRegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
+                          SRRF_RT_REG_DWORD, nullptr, &light, &size) == ERROR_SUCCESS && light == 0;
+}
+
+int CALLBACK font_found(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM found) { *reinterpret_cast<bool*>(found) = true; return 0; }
+const wchar_t* caption_font(HDC dc) noexcept {
+    // Windows 11 ships the Fluent glyphs; Windows 10 only has their MDL2 predecessors at the same code points.
+    LOGFONTW query{};
+    query.lfCharSet = DEFAULT_CHARSET;
+    wcscpy_s(query.lfFaceName, L"Segoe Fluent Icons");
+    bool found{};
+    EnumFontFamiliesExW(dc, &query, font_found, reinterpret_cast<LPARAM>(&found), 0);
+    return found ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
+}
+
+bool caption_button_enabled(HWND parent, int button) noexcept {
+    const auto style = static_cast<DWORD>(GetWindowLongW(parent, GWL_STYLE));
+    return button == caption_minimize ? (style & WS_MINIMIZEBOX) != 0 : button == caption_maximize ? (style & WS_MAXIMIZEBOX) != 0 : button == caption_close;
+}
+int caption_button_from_hit(WPARAM hit) noexcept { return hit == HTMINBUTTON ? caption_minimize : hit == HTMAXBUTTON ? caption_maximize : hit == HTCLOSE ? caption_close : caption_none; }
+
+void render_caption(neoastra_window_t* window, windows_window* state) noexcept {
+    if (!state->caption) return;
+    RECT rect{};
+    GetClientRect(state->caption, &rect);
+    const int width = rect.right, height = rect.bottom;
+    if (width <= 0 || height <= 0) return;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    const auto screen = GetDC(nullptr);
+    const auto dc = CreateCompatibleDC(screen);
+    void* bits{};
+    const auto bitmap = dc ? CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (bitmap && bits) {
+        const auto previous_bitmap = SelectObject(dc, bitmap);
+        std::memset(bits, 0, static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+        // GDI text carries no alpha, so the glyphs are drawn white on black and read back as coverage.
+        const auto font = CreateFontW(-scale_for_dpi(10, window_dpi(state->hwnd)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, caption_font(dc));
+        const auto previous_font = SelectObject(dc, font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(255, 255, 255));
+        const wchar_t glyphs[3] = {L'', IsZoomed(state->hwnd) ? L'' : L'', L''};
+        for (int button = 0; button < 3; ++button) {
+            RECT cell{width * button / 3, 0, width * (button + 1) / 3, height};
+            DrawTextW(dc, &glyphs[button], 1, &cell, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+        }
+        GdiFlush();
+        SelectObject(dc, previous_font);
+        DeleteObject(font);
+
+        const auto& configured = window->title_bar;
+        const auto light_symbols = configured.symbol_color.alpha ? is_light(configured.symbol_color)
+                                 : configured.background_color.alpha ? !is_light(configured.background_color) : system_uses_dark_theme();
+        const neoastra_color_t tint = light_symbols ? neoastra_color_t{255, 255, 255, 255} : neoastra_color_t{0, 0, 0, 255};
+        const auto symbol = configured.symbol_color.alpha ? configured.symbol_color : tint;
+        const auto base = premultiply(configured.background_color);
+        const auto opaque_base = premultiply(light_symbols ? neoastra_color_t{32, 32, 32, 255} : neoastra_color_t{243, 243, 243, 255});
+        caption_color backgrounds[3]{}, symbols[3]{};
+        for (int button = 0; button < 3; ++button) {
+            const auto enabled = caption_button_enabled(state->hwnd, button);
+            const auto hot = enabled && state->caption_hot == button;
+            const auto pressed = hot && state->caption_pressed == button;
+            backgrounds[button] = base;
+            symbols[button] = premultiply(symbol, !enabled || (!state->active && !hot) ? .36f : 1.f);
+            if (hot && button == caption_close) {
+                backgrounds[button] = over(premultiply({196, 43, 28, 255}, pressed ? .9f : 1.f), base);
+                symbols[button] = premultiply({255, 255, 255, 255}, pressed ? .7f : 1.f);
+            } else if (hot) {
+                backgrounds[button] = over(premultiply(tint, light_symbols ? (pressed ? .04f : .06f) : (pressed ? .024f : .037f)), base);
+            }
+        }
+        auto* pixel = static_cast<uint8_t*>(bits);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x, pixel += 4) {
+                const auto button = std::min(x * 3 / width, 2);
+                auto color = over(scaled(symbols[button], static_cast<float>(pixel[0]) / 255.f), backgrounds[button]);
+                if (!state->caption_layered) color = over(color, opaque_base);
+                // Fully transparent layered pixels are not hit-testable, so keep an imperceptible alpha floor.
+                const auto alpha = std::clamp(static_cast<int>(color.alpha * 255.f + .5f), 1, 255);
+                pixel[0] = static_cast<uint8_t>(std::min(static_cast<int>(color.blue * 255.f + .5f), alpha));
+                pixel[1] = static_cast<uint8_t>(std::min(static_cast<int>(color.green * 255.f + .5f), alpha));
+                pixel[2] = static_cast<uint8_t>(std::min(static_cast<int>(color.red * 255.f + .5f), alpha));
+                pixel[3] = static_cast<uint8_t>(alpha);
+            }
+        }
+        if (state->caption_layered) {
+            POINT origin{};
+            SIZE size{width, height};
+            BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            UpdateLayeredWindow(state->caption, screen, nullptr, &size, dc, &origin, 0, &blend, ULW_ALPHA);
+        } else if (const auto target = GetDC(state->caption)) {
+            BitBlt(target, 0, 0, width, height, dc, 0, 0, SRCCOPY);
+            ReleaseDC(state->caption, target);
+        }
+        SelectObject(dc, previous_bitmap);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (dc) DeleteDC(dc);
+    ReleaseDC(nullptr, screen);
+}
+
+void set_caption_state(neoastra_window_t* window, windows_window* state, int hot, int pressed) noexcept {
+    if (state->caption_hot == hot && state->caption_pressed == pressed) return;
+    state->caption_hot = hot;
+    state->caption_pressed = pressed;
+    render_caption(window, state);
+}
+
+// Native caption buttons drawn over the browser. Reporting the standard hit codes keeps Windows 11 snap layouts available.
+LRESULT CALLBACK caption_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_NCCREATE) SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
+    auto* window = reinterpret_cast<neoastra_window_t*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    auto* state = window ? static_cast<windows_window*>(window->platform) : nullptr;
+    if (!state || !state->hwnd) return DefWindowProcW(hwnd, message, wparam, lparam);
+    switch (message) {
+        case WM_NCHITTEST: {
+            RECT rect{};
+            GetClientRect(hwnd, &rect);
+            const auto point = client_point(hwnd, lparam);
+            const auto dpi = window_dpi(hwnd);
+            if (top_edge_resizable(state->hwnd) && point.y < scale_for_dpi(top_grip_height, dpi))
+                return point.x >= rect.right - scale_for_dpi(top_grip_corner, dpi) ? HTTOPRIGHT : HTTOP;
+            const auto button = std::clamp(static_cast<int>(point.x * 3 / std::max(rect.right, 1L)), 0, 2);
+            if (!caption_button_enabled(state->hwnd, button)) return HTBORDER;
+            return button == caption_minimize ? HTMINBUTTON : button == caption_maximize ? HTMAXBUTTON : HTCLOSE;
+        }
+        case WM_NCMOUSEMOVE:
+            if (!state->caption_tracking) {
+                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE | TME_NONCLIENT, hwnd, 0};
+                state->caption_tracking = TrackMouseEvent(&track) != FALSE;
+            }
+            set_caption_state(window, state, caption_button_from_hit(wparam), state->caption_pressed);
+            return 0;
+        case WM_NCMOUSELEAVE:
+            state->caption_tracking = false;
+            set_caption_state(window, state, caption_none, caption_none);
+            return 0;
+        case WM_NCLBUTTONDOWN: case WM_NCLBUTTONDBLCLK: {
+            if (wparam == HTTOP || wparam == HTTOPRIGHT) return SendMessageW(state->hwnd, message, wparam, lparam);
+            // DefWindowProc must not see these: it would draw and track legacy caption buttons.
+            const auto button = caption_button_from_hit(wparam);
+            set_caption_state(window, state, button, button);
+            return 0;
+        }
+        case WM_NCLBUTTONUP: {
+            const auto button = caption_button_from_hit(wparam);
+            const auto pressed = state->caption_pressed;
+            set_caption_state(window, state, button, caption_none);
+            if (button != caption_none && button == pressed)
+                PostMessageW(state->hwnd, WM_SYSCOMMAND, button == caption_minimize ? SC_MINIMIZE : button == caption_close ? SC_CLOSE : IsZoomed(state->hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
+            return 0;
+        }
+        case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP: case WM_NCRBUTTONDBLCLK: case WM_NCMBUTTONDOWN: case WM_NCMBUTTONUP: case WM_NCMBUTTONDBLCLK:
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            BeginPaint(hwnd, &paint);
+            EndPaint(hwnd, &paint);
+            render_caption(window, state);
+            return 0;
+        }
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+// Invisible strip that restores top-edge resizing where the browser covers the former caption.
+LRESULT CALLBACK grip_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+    const auto parent = GetAncestor(hwnd, GA_PARENT);
+    if (message == WM_NCHITTEST && parent) {
+        RECT rect{}, parent_rect{};
+        GetClientRect(hwnd, &rect);
+        GetClientRect(parent, &parent_rect);
+        const auto point = client_point(hwnd, lparam);
+        const auto corner = scale_for_dpi(top_grip_corner, window_dpi(hwnd));
+        if (point.x < corner) return HTTOPLEFT;
+        return rect.right >= parent_rect.right && point.x >= rect.right - corner ? HTTOPRIGHT : HTTOP;
+    }
+    if ((message == WM_NCLBUTTONDOWN || message == WM_NCLBUTTONDBLCLK) && parent) return SendMessageW(parent, message, wparam, lparam);
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+void destroy_title_bar_windows(windows_window* state) noexcept {
+    for (auto* child : {&state->caption, &state->top_grip}) {
+        if (!*child) continue;
+        SetWindowLongPtrW(*child, GWLP_USERDATA, 0);
+        DestroyWindow(*child);
+        *child = nullptr;
+    }
+}
+
+// Positions the caption buttons and resize grip above the browser views; call after anything that changes the frame or child order.
+void layout_title_bar(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<windows_window*>(window->platform);
+    if (!state || !state->hwnd) return;
+    const auto extended = title_bar_extended(window, state->hwnd);
+    const auto controls = extended && window->title_bar.style == NEOASTRA_TITLE_BAR_OVERLAY;
+    const auto grip = extended && top_edge_resizable(state->hwnd);
+    const auto instance = GetModuleHandleW(nullptr);
+    if (controls && !state->caption && register_class(caption_class, caption_proc)) {
+        // Layered child windows require a Windows 8+ application manifest; without one the buttons fall back to an opaque strip.
+        state->caption = CreateWindowExW(WS_EX_LAYERED, caption_class, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, state->hwnd, nullptr, instance, window);
+        state->caption_layered = state->caption != nullptr;
+        if (!state->caption) state->caption = CreateWindowExW(0, caption_class, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, state->hwnd, nullptr, instance, window);
+    }
+    if (grip && !state->top_grip && !state->grip_unavailable && register_class(grip_class, grip_proc)) {
+        // Opaque to hit testing yet never drawn: no redirection bitmap backs the layered window.
+        state->top_grip = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP, grip_class, L"", WS_CHILD, 0, 0, 0, 0, state->hwnd, nullptr, instance, nullptr);
+        if (state->top_grip) SetLayeredWindowAttributes(state->top_grip, 0, 255, LWA_ALPHA);
+        else state->grip_unavailable = true;
+    }
+    RECT client{};
+    GetClientRect(state->hwnd, &client);
+    const auto dpi = window_dpi(state->hwnd);
+    int controls_width{};
+    if (controls && state->caption) {
+        controls_width = scale_for_dpi(caption_button_width, dpi) * 3;
+        SetWindowPos(state->caption, HWND_TOP, client.right - controls_width, 0, controls_width, scale_for_dpi(title_bar_height(window), dpi), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        render_caption(window, state);
+    } else if (state->caption) {
+        ShowWindow(state->caption, SW_HIDE);
+    }
+    if (grip && state->top_grip) SetWindowPos(state->top_grip, HWND_TOP, 0, 0, std::max(client.right - controls_width, 0L), scale_for_dpi(top_grip_height, dpi), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    else if (state->top_grip) ShowWindow(state->top_grip, SW_HIDE);
+}
+
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
@@ -1011,8 +1330,22 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 DestroyWindow(hwnd);
             }
             return 0;
+        case WM_NCCALCSIZE:
+            if (title_bar_extended(window, hwnd)) return extend_client_into_title_bar(hwnd, wparam, lparam);
+            break;
+        case WM_NCACTIVATE:
+            if (auto* native = static_cast<windows_window*>(window->platform)) {
+                native->active = wparam != FALSE;
+                render_caption(window, native);
+                // The caption belongs to the client area now, so suppress the legacy non-client repaint.
+                if (title_bar_extended(window, hwnd)) return DefWindowProcW(hwnd, message, wparam, -1);
+            }
+            break;
+        case WM_SETTINGCHANGE:
+            if (auto* native = static_cast<windows_window*>(window->platform)) render_caption(window, native);
+            break;
         case WM_DESTROY:
-            {auto* state=static_cast<windows_window*>(window->platform);if(state&&state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}state->modal_active=false;}if(state)state->hwnd=nullptr;}
+            {auto* state=static_cast<windows_window*>(window->platform);if(state)destroy_title_bar_windows(state);if(state&&state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}state->modal_active=false;}if(state)state->hwnd=nullptr;}
             neo_window_closed(window);
             return 0;
         case WM_MOVE:
@@ -1028,6 +1361,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             if (native) native->reported_state = state;
             { std::lock_guard lock(window->state_mutex); window->bounds.width = LOWORD(lparam); window->bounds.height = HIWORD(lparam);window->state=state; }
             for (auto* view : window->views) if (view && view->fill_parent) neo_platform_view_set_bounds(view);
+            layout_title_bar(window);
             neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_RESIZED, window->id);
             if (state_changed) neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_STATE_CHANGED, window->id, nullptr, nullptr, state);
             break;
@@ -1036,6 +1370,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                          suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+            layout_title_bar(window);
             const auto dpi = HIWORD(wparam);
             neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED, window->id, nullptr, nullptr,
                          static_cast<uint64_t>(dpi) * 1000u / 96u);
@@ -1050,8 +1385,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             if (window->maximum_size.height > 0) constraints->ptMaxTrackSize.y = window->maximum_size.height;
             return 0;
         }
-        case WM_SETFOCUS: case WM_KILLFOCUS:
-            neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED, window->id, nullptr, nullptr, message == WM_SETFOCUS ? 1 : 0);
+        case WM_ACTIVATE:
+            // Keyboard focus normally sits in the browser's own child window, so activation is what reports the window as in use.
+            neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED, window->id, nullptr, nullptr, LOWORD(wparam) != WA_INACTIVE ? 1 : 0);
             break;
     }
     return DefWindowProcW(hwnd, message, wparam, lparam);
@@ -1245,6 +1581,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         const auto y=(options->flags&32u)?CW_USEDEFAULT:window->bounds.y;
         state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(window->bounds.width,1),std::max(window->bounds.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
         if(!state->hwnd){const auto code=GetLastError();delete state;window->platform=nullptr;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window creation failed",code,"win32");return false;}
+        layout_title_bar(window);
         if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}const auto width=std::max(window->bounds.width,1),height=std::max(window->bounds.height,1);SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-width)/2,area.top+((area.bottom-area.top)-height)/2,width,height,SWP_NOZORDER|SWP_NOACTIVATE);}
         state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);state->modal_active=true;}}
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
@@ -1252,7 +1589,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
     } catch(const std::exception& ex){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
 void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}}if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
-neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){sync_window_view_visibility(w,false);ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);sync_window_view_visibility(w,true);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){sync_window_view_visibility(w,false);ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);sync_window_view_visibility(w,true);layout_title_bar(w);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
@@ -1285,6 +1622,9 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
         SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
         state->fullscreen = false;
+        // The frame above was computed while still fullscreen; recompute it so the caption is handed back to the client.
+        if (title_bar_extended(w, state->hwnd)) SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        layout_title_bar(w);
     }
     if (!visible) return NEOASTRA_OK;
     const auto command = w->state == NEOASTRA_WINDOW_MINIMIZED ? SW_MINIMIZE
@@ -1302,7 +1642,22 @@ neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* w,neoastr
     const auto current=static_cast<DWORD>(GetWindowLongW(state->hwnd,GWL_STYLE));style|=current&static_cast<DWORD>(WS_VISIBLE|WS_DISABLED|WS_CLIPCHILDREN|WS_CLIPSIBLINGS);
     if(state->fullscreen){state->restored_style=style;return NEOASTRA_OK;}
     SetWindowLongW(state->hwnd,GWL_STYLE,static_cast<LONG>(style));
-    return SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+    const auto changed=SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+    layout_title_bar(w);
+    return changed?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* w) noexcept {
+    auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    const auto changed=SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+    layout_title_bar(w);
+    return changed?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* w,neoastra_title_bar_t* value) noexcept {
+    auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    value->height=w->title_bar.style==NEOASTRA_TITLE_BAR_DEFAULT?0:title_bar_height(w);
+    // Fullscreen and borderless windows have no caption, so no caption buttons cover the content.
+    value->right_inset=w->title_bar.style==NEOASTRA_TITLE_BAR_OVERLAY&&state->caption&&title_bar_extended(w,state->hwnd)?caption_button_width*3:0;
+    return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* w) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,HTCAPTION,0);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t* w,neoastra_window_resize_edge_t edge) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;static constexpr WPARAM hit_tests[]={HTLEFT,HTTOP,HTRIGHT,HTBOTTOM,HTTOPLEFT,HTTOPRIGHT,HTBOTTOMLEFT,HTBOTTOMRIGHT};ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,hit_tests[edge],0);return NEOASTRA_OK;}
@@ -1608,6 +1963,14 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             if (SUCCEEDED(result)) result=state->controller.As(&controller4);
             if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);
             if (SUCCEEDED(result)) register_view_drop_targets(view, state);
+            if (SUCCEEDED(result) && view->window) {
+                // Lets `app-region: drag` content move, maximize, and open the system menu of its host window like a native caption.
+                ComPtr<ICoreWebView2Settings> settings;
+                ComPtr<ICoreWebView2Settings9> settings9;
+                if (SUCCEEDED(state->core->get_Settings(&settings)) && SUCCEEDED(settings.As(&settings9))) (void)settings9->put_IsNonClientRegionSupportEnabled(TRUE);
+                // The new controller window is created above the caption overlays.
+                layout_title_bar(view->window);
+            }
             if (SUCCEEDED(result)) result = register_view_events(view, state);
             if (SUCCEEDED(result) && view->profile) {
                 auto* profile = static_cast<windows_profile*>(view->profile->platform);

@@ -108,6 +108,21 @@ public sealed class LifecycleTests
     }
 
     [TestMethod]
+    public void WindowTitleBarIsValidatedBeforeNativeDispatch()
+    {
+        var window = (NeoWindow)RuntimeHelpers.GetUninitializedObject(typeof(NeoWindow));
+        Assert.Throws<ArgumentOutOfRangeException>(() => window.TitleBar = new NeoWindowTitleBar((NeoWindowTitleBarStyle)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) { Height = -1 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => window.TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) { Height = NeoWindowTitleBar.MaximumHeight + 1 });
+
+        Assert.AreEqual(NeoWindowTitleBarStyle.Default, new NeoWindowOptions().TitleBar.Style);
+        Assert.AreEqual(NeoColor.Transparent, new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay).SymbolColor);
+        Assert.IsTrue(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Overlay, 32, 0, 138).HasNativeControls);
+        Assert.IsTrue(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Overlay, 28, 68, 0).HasNativeControls);
+        Assert.IsFalse(new NeoWindowTitleBarLayout(NeoWindowTitleBarStyle.Hidden, 32, 0, 0).HasNativeControls);
+    }
+
+    [TestMethod]
     public void LaunchEventsAreImmutableAndStrictlyValidated()
     {
         var arguments = new[] { "--document", "note.txt" };

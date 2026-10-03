@@ -254,6 +254,9 @@ public sealed class NeoWindowOptions
     /// <summary>Gets or sets whether the window has normal platform decorations.</summary>
     public bool HasDecorations { get; set; } = true;
 
+    /// <summary>Gets or sets how the window presents its title bar.</summary>
+    public NeoWindowTitleBar TitleBar { get; set; }
+
     /// <summary>Gets or sets whether the user can resize the window.</summary>
     public bool IsResizable { get; set; } = true;
 
@@ -303,6 +306,7 @@ public sealed class NeoWindowOptions
             throw new ArgumentException("A window owner must belong to the same application.", nameof(Owner));
         }
         if (IsModal && Owner is null) throw new ArgumentException("A modal window requires an explicit owner.", nameof(IsModal));
+        TitleBar.Validate(nameof(TitleBar));
     }
 
     private static void ValidateSize(NeoSize value, string parameterName)

@@ -50,6 +50,11 @@ build, prepare that directory separately, pass `NeoAstraPrebuiltAssets=true`, an
 - **Capabilities:** ordinary application RPC needs no permission declarations. Open, close, and reopen the
   restricted preview window to see one advanced boundary: its theme query is explicitly allowed while another
   desktop call is denied before dispatch. User-close hides the reusable preview until application exit.
+- **Chromeless window:** the main window uses the `Overlay` title-bar style, so the React title bar
+  covers the whole window while the platform keeps its frame, resize borders, snapping, and window
+  controls. Drag the bar, double-click it, or resize from any edge, then use the Desktop Tour to switch
+  to page-drawn controls or back to the standard title bar. The application manifest declares Windows 10
+  support so the native caption buttons blend with the page.
 - **Lifecycle:** enable the recovery tray, close the main window to hide its still-live browser session,
   and left-click the tray item to restore and focus it. Use the tray's **Quit NeoAstra…** role or the
   renderer-facing negotiated-quit button to test asynchronous confirmation and cancellation. Mark work as

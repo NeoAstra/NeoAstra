@@ -38,16 +38,23 @@ assuming that every browser engine supports every portable event.
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
 | Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
 | Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |
+| Content extended into the title bar | Available | Available | Available where GTK draws client-side decorations |
+| Native window controls over extended content | Available; Windows 11 snap layouts included | Available; system-defined height and position | Not exposed; the application draws its controls |
+| CSS drag regions | Native `app-region` | Emulated from the pointer press | Emulated from the pointer press |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
 Linux, a handler that does not complete inline receives the documented safe default instead of an
 unbounded asynchronous deferral.
 
-Chromeless drag and resize entry points must be called synchronously while a native pointer press is
-active. They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
-when no suitable event is active and `NotSupportedException` when the operation has no safe native
-implementation. Linux window positioning is compositor-controlled on Wayland, so `Position`,
+Chromeless drag and resize entry points must be called while a native pointer press is still held.
+They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
+when no suitable press is active and `NotSupportedException` when the operation has no safe native
+implementation. Title-bar styles and drag regions are described in
+[chromeless windows](chromeless-windows.md); they have been exercised on Windows 11, while the macOS
+and Linux implementations have not yet been run on their target hosts. On Windows, blended caption
+buttons and top-edge resizing over the browser view require an application manifest that declares
+Windows 8 or later support. Linux window positioning is compositor-controlled on Wayland, so `Position`,
 `PositionChanged`, startup coordinates, and position restoration are best-effort there; size, focus,
 and native window-state transitions remain available.
 

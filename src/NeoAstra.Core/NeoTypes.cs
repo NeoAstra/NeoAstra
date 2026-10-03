@@ -169,6 +169,61 @@ public enum NeoWindowState
     Fullscreen,
 }
 
+/// <summary>Identifies how a window presents its title bar.</summary>
+public enum NeoWindowTitleBarStyle
+{
+    /// <summary>The standard platform title bar.</summary>
+    Default,
+    /// <summary>Content extends into the title-bar area while the platform frame and native window controls remain.</summary>
+    Overlay,
+    /// <summary>Content extends into the title-bar area and the application provides its own window controls.</summary>
+    Hidden,
+}
+
+/// <summary>Describes how a window presents its title bar.</summary>
+/// <remarks>
+/// The <see cref="NeoWindowTitleBarStyle.Overlay"/> and <see cref="NeoWindowTitleBarStyle.Hidden"/> styles keep the platform
+/// frame, including its shadow, resize borders, and snapping, and apply only to windows with decorations.
+/// </remarks>
+public readonly record struct NeoWindowTitleBar
+{
+    /// <summary>The largest supported <see cref="Height"/>.</summary>
+    public const int MaximumHeight = 512;
+
+    /// <summary>Initializes a title bar with the specified style and platform defaults.</summary>
+    /// <param name="style">The title-bar style.</param>
+    public NeoWindowTitleBar(NeoWindowTitleBarStyle style) => Style = style;
+
+    /// <summary>Gets the title-bar style.</summary>
+    public NeoWindowTitleBarStyle Style { get; init; }
+
+    /// <summary>Gets the title-bar height in logical units, or zero for the platform default. macOS always uses the system height.</summary>
+    public int Height { get; init; }
+
+    /// <summary>Gets the color of natively drawn window-control symbols. A transparent color follows the system theme.</summary>
+    public NeoColor SymbolColor { get; init; }
+
+    /// <summary>Gets the color behind natively drawn window controls. A transparent color shows the content beneath them.</summary>
+    public NeoColor BackgroundColor { get; init; }
+
+    internal void Validate(string parameterName)
+    {
+        if (!Enum.IsDefined(Style)) throw new ArgumentOutOfRangeException(parameterName, "The title-bar style is not defined.");
+        if (Height is < 0 or > MaximumHeight) throw new ArgumentOutOfRangeException(parameterName, $"The title-bar height must be between 0 and {MaximumHeight}.");
+    }
+}
+
+/// <summary>Describes the title-bar space that window content should account for, in logical units.</summary>
+/// <param name="Style">The effective title-bar style.</param>
+/// <param name="Height">The title-bar height, or zero when the platform draws a standard title bar.</param>
+/// <param name="LeftInset">The width covered by native window controls at the left edge.</param>
+/// <param name="RightInset">The width covered by native window controls at the right edge.</param>
+public readonly record struct NeoWindowTitleBarLayout(NeoWindowTitleBarStyle Style, int Height, int LeftInset, int RightInset)
+{
+    /// <summary>Gets whether native window controls currently cover part of the content.</summary>
+    public bool HasNativeControls => LeftInset > 0 || RightInset > 0;
+}
+
 /// <summary>Identifies an edge or corner used for an interactive window resize.</summary>
 public enum NeoWindowResizeEdge
 {

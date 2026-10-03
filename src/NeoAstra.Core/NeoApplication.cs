@@ -303,7 +303,9 @@ public sealed class NeoApplication : IAsyncDisposable
                     (options.ShowInTaskbar ? 16u : 0u) |
                     (options.StartupLocation == NeoWindowStartupLocation.Default ? 32u : 0u) |
                     (options.StartupLocation == NeoWindowStartupLocation.Center ? 64u : 0u) |
-                    (options.IsModal ? 128u : 0u);
+                    (options.IsModal ? 128u : 0u) |
+                    (options.TitleBar.Style != NeoWindowTitleBarStyle.Default ? 256u : 0u) |
+                    (options.TitleBar.Style == NeoWindowTitleBarStyle.Hidden ? 512u : 0u);
         var raw = new NativeMethods.neoastra_window_options
         {
             size = (uint)sizeof(NativeMethods.neoastra_window_options),

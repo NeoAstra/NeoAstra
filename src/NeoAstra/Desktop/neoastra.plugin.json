@@ -318,6 +318,24 @@
       "audited": true
     },
     {
+      "name": "desktop.window.set-title-bar",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.start-drag",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.start-resize",
+      "permission": "window:management",
+      "risk": "high",
+      "audited": true
+    },
+    {
       "name": "desktop.window.close",
       "permission": "window:close",
       "risk": "high",
@@ -438,6 +456,12 @@
     {
       "name": "desktop.window.close-requested",
       "permission": "window:close",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.state-changed",
+      "permission": "window:management",
       "risk": "high",
       "audited": true
     }
@@ -744,7 +768,11 @@
         "desktop.window.set-decorations",
         "desktop.window.set-resizable",
         "desktop.window.set-always-on-top",
-        "desktop.window.set-taskbar-visible"
+        "desktop.window.set-taskbar-visible",
+        "desktop.window.set-title-bar",
+        "desktop.window.start-drag",
+        "desktop.window.start-resize",
+        "desktop.window.state-changed"
       ],
       "risk": "high",
       "scopeFamily": "none",

@@ -13,6 +13,7 @@ It uses the platform browser — WebView2 on Windows, WKWebView on macOS, and We
 - **Your choice of frontend**: plain HTML/JavaScript, React, Vue, or another web framework.
 - **Typed .NET ↔ JavaScript RPC** with generated bindings, events, and streaming.
 - **Native desktop integration**: windows, menus, dialogs, clipboard, and notifications.
+- **Chromeless windows**: web-rendered title bars that keep the native frame, snapping, and window controls.
 - **Controlled local assets** without a localhost server, with explicit security boundaries.
 - **Development tooling**: project templates, frontend builds, and live development workflows.
 - **.NET 10 and NativeAOT-friendly** design with source-generated interop and serialization.

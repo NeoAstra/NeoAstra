@@ -13,6 +13,7 @@ internal sealed class AdvancedApplication(
     internal const string ApplicationId = "org.neoastra.sample.advanced";
     internal const string DisplayName = "NeoAstra Advanced Sample";
     internal const string Version = "1.0.0";
+    private const int TitleBarHeight = 40;
 
     private AdvancedSession? _session;
     private readonly CancellationTokenSource _pulseCancellation = new();
@@ -32,6 +33,8 @@ internal sealed class AdvancedApplication(
             Width = 1180,
             Height = 820,
             IsVisible = false,
+            // The React title bar covers the whole window; the platform keeps its frame and window controls.
+            TitleBar = new NeoWindowTitleBar(NeoWindowTitleBarStyle.Overlay) { Height = TitleBarHeight },
         });
         application.MainWindow = mainWindow;
 

@@ -429,9 +429,17 @@ export type {
   DesktopStatus,
   DesktopSupportInfo,
   DesktopSupportLevel,
+  DesktopTitleBarAttachOptions,
+  DesktopTitleBarBinding,
   DesktopTrayRequest,
   DesktopValueResult,
   DesktopWindowExtraSupport,
+  DesktopWindowResizeEdge,
+  DesktopWindowSnapshot,
+  DesktopWindowState,
+  DesktopWindowTitleBarLayout,
+  DesktopWindowTitleBarOptions,
+  DesktopWindowTitleBarStyle,
   NeoDesktopClient,
 } from "./desktop.js";
 

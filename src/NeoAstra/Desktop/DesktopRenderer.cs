@@ -130,6 +130,7 @@ internal static class NeoDesktopRendererContract
         "desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size",
         "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen",
         "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible", "desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close",
+        "desktop.window.set-title-bar", "desktop.window.start-drag", "desktop.window.start-resize",
         "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
         "desktop.application.request-quit",
         "desktop.safe-storage.store", "desktop.safe-storage.retrieve", "desktop.safe-storage.delete", "desktop.safe-storage.contains",
@@ -137,7 +138,7 @@ internal static class NeoDesktopRendererContract
     internal static readonly string[] Events =
     [
         "desktop.tray.activated", "desktop.notifications.activated", "desktop.shortcuts.activated",
-        "desktop.system.theme-changed", "desktop.system.displays-changed", "desktop.drag-drop.inbound", "desktop.window.close-requested",
+        "desktop.system.theme-changed", "desktop.system.displays-changed", "desktop.drag-drop.inbound", "desktop.window.close-requested", "desktop.window.state-changed",
     ];
 }
 
@@ -152,6 +153,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private readonly HashSet<string> _trackedDropSessions = new(StringComparer.Ordinal);
     private readonly Dictionary<NeoWindow, CloseInterception> _closeInterceptions = [];
     private readonly Dictionary<ulong, PendingClose> _pendingCloses = [];
+    private readonly Dictionary<NeoWindow, WindowWatch> _windowWatches = [];
     private long _nextGeneration;
     private NeoRpcEvent<DesktopIdEvent>? _trayActivated;
     private NeoRpcEvent<DesktopNotificationActivatedEvent>? _notificationActivated;
@@ -160,6 +162,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private NeoRpcEvent<DesktopDisplaysChangedEvent>? _displaysChanged;
     private NeoRpcEvent<DesktopDropEvent>? _dropInbound;
     private NeoRpcEvent<DesktopWindowCloseRequestedEvent>? _windowCloseRequested;
+    private NeoRpcEvent<DesktopWindowStateResult>? _windowStateChanged;
     private ulong _nextCloseRequest;
     private bool _dragDropRegistered;
     private bool _disposed;
@@ -213,6 +216,9 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.window.set-resizable", "window:management", SetWindowResizableAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-always-on-top", "window:management", SetWindowAlwaysOnTopAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-taskbar-visible", "window:management", SetWindowTaskbarVisibleAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-title-bar", "window:management", SetWindowTitleBarAsync, json.DesktopWindowTitleBarRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.start-drag", "window:management", StartWindowDragAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.start-resize", "window:management", StartWindowResizeAsync, json.DesktopWindowResizeRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.close", "window:close", CloseWindowAsync, json.DesktopEmptyRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.intercept-close", "window:close", InterceptWindowCloseAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.complete-close", "window:close", CompleteWindowCloseAsync, json.DesktopWindowCloseResponse, json.DesktopStatusResult);
@@ -238,6 +244,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         _displaysChanged = builder.AddEvent("desktop.system.displays-changed", json.DesktopDisplaysChangedEvent, new() { Permission = "system-info:displays" });
         _dropInbound = builder.AddEvent("desktop.drag-drop.inbound", json.DesktopDropEvent, new() { Permission = "drag-drop:receive-files" });
         _windowCloseRequested = builder.AddEvent("desktop.window.close-requested", json.DesktopWindowCloseRequestedEvent, new() { Permission = "window:close" });
+        _windowStateChanged = builder.AddEvent("desktop.window.state-changed", json.DesktopWindowStateResult, new() { Permission = "window:management" });
         services.Tray.Activated += OnTrayActivated;
         services.Notifications.Activated += OnNotificationActivated;
         services.GlobalShortcuts.Activated += OnShortcutActivated;
@@ -474,12 +481,19 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private ValueTask<DesktopWindowStateResult> GetWindowStateAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
         => InvokeWindowAsync(context, window =>
         {
-            bool? taskbarVisible;
-            try { taskbarVisible = window.ShowInTaskbar; } catch (NotSupportedException) { taskbarVisible = null; }
-            return new DesktopWindowStateResult(new(window.Title, window.Position, window.ClientSize, window.MinimumClientSize, window.MaximumClientSize,
-                window.IsVisible, window.IsFocused, window.IsClosed, window.ScaleFactor, window.State, window.HasDecorations, window.IsResizable,
-                window.IsAlwaysOnTop, taskbarVisible, window.IsModal));
+            // A state query starts change notifications for the window, so renderers observe later native transitions.
+            WatchWindow(window);
+            return new DesktopWindowStateResult(Snapshot(window));
         }, token);
+    private static DesktopWindowSnapshot Snapshot(NeoWindow window)
+    {
+        bool? taskbarVisible;
+        try { taskbarVisible = window.ShowInTaskbar; } catch (NotSupportedException) { taskbarVisible = null; }
+        var titleBar = window.GetTitleBarLayout();
+        return new(window.Title, window.Position, window.ClientSize, window.MinimumClientSize, window.MaximumClientSize,
+            window.IsVisible, window.IsFocused, window.IsClosed, window.ScaleFactor, window.State, window.HasDecorations, window.IsResizable,
+            window.IsAlwaysOnTop, taskbarVisible, window.IsModal, new(titleBar.Style, titleBar.Height, titleBar.LeftInset, titleBar.RightInset));
+    }
     private ValueTask<DesktopStatusResult> SetWindowTitleAsync(DesktopTextRequest request, NeoRpcContext context, CancellationToken token)
     {
         if (request.Value.Length > 4096 || request.Value.Any(static value => value == '\0')) throw new ArgumentException("The window title is malformed.", nameof(request));
@@ -515,6 +529,57 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         => MutateWindowAsync(context, window => window.IsAlwaysOnTop = request.Value, token);
     private ValueTask<DesktopStatusResult> SetWindowTaskbarVisibleAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
         => MutateWindowAsync(context, window => window.ShowInTaskbar = request.Value, token);
+    private ValueTask<DesktopStatusResult> SetWindowTitleBarAsync(DesktopWindowTitleBarRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        var titleBar = new NeoWindowTitleBar(request.Style) { Height = request.Height, SymbolColor = ParseColor(request.SymbolColor), BackgroundColor = ParseColor(request.BackgroundColor) };
+        return InvokeWindowAsync(context, window =>
+        {
+            try { window.TitleBar = titleBar; }
+            catch (NotSupportedException) { return Status(NeoDesktopStatus.Unsupported); }
+            WatchWindow(window);
+            PublishWindowState(window);
+            return Status(NeoDesktopStatus.Success);
+        }, token);
+    }
+    private static ValueTask<DesktopStatusResult> StartWindowDragAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => InvokeWindowAsync(context, static window => StartInteraction(window.BeginDrag), token);
+    private static ValueTask<DesktopStatusResult> StartWindowResizeAsync(DesktopWindowResizeRequest request, NeoRpcContext context, CancellationToken token)
+        => InvokeWindowAsync(context, window => StartInteraction(() => window.BeginResize(request.Edge)), token);
+    private static DesktopStatusResult StartInteraction(Action begin)
+    {
+        try { begin(); return Status(NeoDesktopStatus.Success); }
+        // The pointer was released before the request reached the window.
+        catch (InvalidOperationException) { return Status(NeoDesktopStatus.Canceled, "pointer_released"); }
+        catch (NotSupportedException) { return Status(NeoDesktopStatus.Unsupported); }
+    }
+    internal static NeoColor ParseColor(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return default;
+        if (value.Length is not (7 or 9) || value[0] != '#' || !uint.TryParse(value.AsSpan(1), System.Globalization.NumberStyles.AllowHexSpecifier, System.Globalization.CultureInfo.InvariantCulture, out var rgba))
+            throw new ArgumentException("A color must use the #RRGGBB or #RRGGBBAA form.", nameof(value));
+        if (value.Length == 7) rgba = rgba << 8 | 0xFF;
+        return new((byte)(rgba >> 24), (byte)(rgba >> 16), (byte)(rgba >> 8), (byte)rgba);
+    }
+    private void WatchWindow(NeoWindow window)
+    {
+        var watch = new WindowWatch((_, _) => PublishWindowState(window), (_, _) => PublishWindowState(window), (_, _) => UnwatchWindow(window));
+        lock (_sync) if (_disposed || window.IsClosed || !_windowWatches.TryAdd(window, watch)) return;
+        watch.Attach(window);
+    }
+    private void UnwatchWindow(NeoWindow window)
+    {
+        WindowWatch? watch;
+        lock (_sync) if (!_windowWatches.Remove(window, out watch)) return;
+        watch.Detach(window);
+    }
+    // Raised by native window events on the UI dispatcher, where the snapshot can be read directly.
+    private void PublishWindowState(NeoWindow window)
+    {
+        if (IsDisposed() || window.IsClosed) return;
+        DesktopWindowStateResult value;
+        try { value = new(Snapshot(window)); } catch { return; }
+        _ = PublishContainedAsync(_windowStateChanged, value, context => ReferenceEquals(Window(context), window));
+    }
     private ValueTask<DesktopStatusResult> CloseWindowAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
         => MutateWindowAsync(context, static window => window.Close(), token);
     private async ValueTask<DesktopStatusResult> InterceptWindowCloseAsync(DesktopBoolRequest request, NeoRpcContext context, CancellationToken token)
@@ -726,6 +791,9 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
             foreach (var session in sessions) services.DragDrop.ReleaseOwner(NeoPluginOwner.DocumentSession(session));
             foreach (var session in trackedSessions) services.DragDrop.UnregisterRendererSession(session);
             foreach (var interception in closeInterceptions) { interception.Window.CloseRequested -= interception.Handler; interception.Window.Closed -= interception.ClosedHandler; }
+            KeyValuePair<NeoWindow, WindowWatch>[] watches;
+            lock (_sync) { watches = _windowWatches.ToArray(); _windowWatches.Clear(); }
+            foreach (var watch in watches) watch.Value.Detach(watch.Key);
             foreach (var pending in pendingCloses) pending.Completion.TrySetResult(true);
             lock (_sync) { _ownedMenus.Clear(); _ownedTray.Clear(); _ownedShortcuts.Clear(); _ownedNotifications.Clear(); _trackedDropSessions.Clear(); }
         }
@@ -772,6 +840,11 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         internal EventHandler ClosedHandler { get; set; } = null!;
     }
     private sealed record PendingClose(string SessionId, long Generation, TaskCompletionSource<bool> Completion);
+    private sealed record WindowWatch(EventHandler<NeoWindowStateChangedEventArgs> StateHandler, EventHandler FocusHandler, EventHandler ClosedHandler)
+    {
+        internal void Attach(NeoWindow window) { window.StateChanged += StateHandler; window.FocusChanged += FocusHandler; window.Closed += ClosedHandler; }
+        internal void Detach(NeoWindow window) { window.StateChanged -= StateHandler; window.FocusChanged -= FocusHandler; window.Closed -= ClosedHandler; }
+    }
 }
 
 internal sealed record DesktopEmptyRequest;
@@ -805,7 +878,10 @@ internal sealed record DesktopBoolRequest(bool Value);
 internal sealed record DesktopTextRequest(string Value);
 internal sealed record DesktopPointRequest(int X, int Y);
 internal sealed record DesktopSizeRequest(int Width, int Height);
-internal sealed record DesktopWindowSnapshot(string Title, NeoPoint Position, NeoSize Size, NeoSize MinimumSize, NeoSize MaximumSize, bool Visible, bool Focused, bool Closed, double ScaleFactor, NeoWindowState State, bool Decorations, bool Resizable, bool AlwaysOnTop, bool? TaskbarVisible, bool Modal);
+internal sealed record DesktopWindowTitleBarLayout(NeoWindowTitleBarStyle Style, int Height, int LeftInset, int RightInset);
+internal sealed record DesktopWindowSnapshot(string Title, NeoPoint Position, NeoSize Size, NeoSize MinimumSize, NeoSize MaximumSize, bool Visible, bool Focused, bool Closed, double ScaleFactor, NeoWindowState State, bool Decorations, bool Resizable, bool AlwaysOnTop, bool? TaskbarVisible, bool Modal, DesktopWindowTitleBarLayout TitleBar);
+internal sealed record DesktopWindowTitleBarRequest(NeoWindowTitleBarStyle Style, int Height, string? SymbolColor, string? BackgroundColor);
+internal sealed record DesktopWindowResizeRequest(NeoWindowResizeEdge Edge);
 internal sealed record DesktopWindowStateResult(DesktopWindowSnapshot Value);
 internal sealed record DesktopWindowCloseResponse(ulong RequestId, bool PreventDefault);
 internal sealed record DesktopWindowCloseRequestedEvent(ulong RequestId, NeoWindowCloseReason Reason, bool CanCancel);
@@ -859,6 +935,8 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopSizeRequest))]
 [JsonSerializable(typeof(DesktopWindowStateResult))]
 [JsonSerializable(typeof(DesktopWindowCloseResponse))]
+[JsonSerializable(typeof(DesktopWindowTitleBarRequest))]
+[JsonSerializable(typeof(DesktopWindowResizeRequest))]
 [JsonSerializable(typeof(DesktopWindowCloseRequestedEvent))]
 [JsonSerializable(typeof(DesktopOptionalTextRequest))]
 [JsonSerializable(typeof(DesktopDialogRequest))]

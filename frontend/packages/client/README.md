@@ -50,6 +50,23 @@ await desktop.window.focus();
 await desktop.application.requestQuit();
 ```
 
+## Web title bars
+
+A window whose host selected the `Overlay` or `Hidden` title-bar style lets the page cover the
+title-bar area. `attachTitleBar` publishes the native layout on the document element as
+`--neoastra-titlebar-height`, `--neoastra-titlebar-inset-left`, and `--neoastra-titlebar-inset-right`,
+together with `data-neoastra-titlebar`, `data-neoastra-window-state`, and
+`data-neoastra-window-focused`. Elements marked `data-neoastra-drag-region` move the window; controls
+inside them stay interactive.
+
+```ts
+const titleBar = await desktop.window.attachTitleBar();
+if (titleBar.snapshot.titleBar.rightInset === 0 && titleBar.snapshot.titleBar.leftInset === 0) {
+  // No native window controls are shown: render minimize, maximize, and close buttons in the page.
+}
+await desktop.window.setTitleBar({ style: "Overlay", height: 40 });
+```
+
 Close handlers may be asynchronous, but they remain bounded by the host's native close deadline. A
 disconnect, timeout, or handler failure preserves a cancelable window. Use the tray activation event to
 restore a hidden window; its payload distinguishes primary and secondary activation. Synchronous

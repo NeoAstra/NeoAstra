@@ -35,6 +35,25 @@ export interface DesktopWindowSnapshot {
   readonly minimumSize: { readonly width: number; readonly height: number }; readonly maximumSize: { readonly width: number; readonly height: number };
   readonly visible: boolean; readonly focused: boolean; readonly closed: boolean; readonly scaleFactor: number; readonly state: DesktopWindowState;
   readonly decorations: boolean; readonly resizable: boolean; readonly alwaysOnTop: boolean; readonly taskbarVisible?: boolean; readonly modal: boolean;
+  readonly titleBar: DesktopWindowTitleBarLayout;
+}
+export type DesktopWindowTitleBarStyle = "Default" | "Overlay" | "Hidden";
+export type DesktopWindowResizeEdge = "Left" | "Top" | "Right" | "Bottom" | "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight";
+/** Title-bar space in CSS pixels. The insets are the widths covered by native window controls and are zero while none are shown. */
+export interface DesktopWindowTitleBarLayout { readonly style: DesktopWindowTitleBarStyle; readonly height: number; readonly leftInset: number; readonly rightInset: number; }
+/** Colors use the `#RRGGBB` or `#RRGGBBAA` form. An omitted symbol color follows the system theme; an omitted background is transparent. */
+export interface DesktopWindowTitleBarOptions { readonly style: DesktopWindowTitleBarStyle; readonly height?: number; readonly symbolColor?: string; readonly backgroundColor?: string; }
+export interface DesktopTitleBarAttachOptions {
+  /** Element receiving the layout attributes and custom properties. Defaults to the document element. */
+  readonly root?: HTMLElement;
+  /** Called with the initial snapshot and after every native state, focus, or title-bar change. */
+  readonly onChange?: (snapshot: DesktopWindowSnapshot) => void;
+  readonly rpc?: NeoRpcCallOptions;
+}
+export interface DesktopTitleBarBinding {
+  /** The most recent window snapshot. */
+  readonly snapshot: DesktopWindowSnapshot;
+  dispose(): Promise<void>;
 }
 export interface DesktopWindowCloseRequestedEvent {
   readonly reason: DesktopWindowCloseReason; readonly canCancel: boolean;
@@ -63,10 +82,47 @@ export const desktopCommands = Object.freeze({
     show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
     setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
     interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
+    setTitleBar: "desktop.window.set-title-bar", startDrag: "desktop.window.start-drag", startResize: "desktop.window.start-resize", stateChanged: "desktop.window.state-changed",
     setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", getExtraSupport: "desktop.window.get-extra-support", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
   }),
   application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 } as const);
+
+const dragRegion = "[data-neoastra-drag-region]";
+// Controls inside a drag region keep their own pointer behavior.
+const dragExclusions = "a,button,input,select,textarea,summary,label,[role=button],[contenteditable],[data-neoastra-no-drag]";
+const dragRegionRules = `${dragRegion}{app-region:drag;user-select:none}${dragRegion} :is(${dragExclusions}){app-region:no-drag}`;
+
+interface DragRegionActions { drag(): Promise<unknown>; toggleMaximize(maximized: boolean): Promise<unknown>; }
+
+/** Makes `data-neoastra-drag-region` elements move the window like a native title bar. */
+function installDragRegions(target: Document, snapshot: () => DesktopWindowSnapshot | undefined, actions: DragRegionActions): () => void {
+  const view = target.defaultView;
+  // Chromium-based backends resolve `app-region` natively, including double-click maximize and the system menu.
+  if (view?.CSS?.supports?.("app-region", "drag") === true && typeof view.CSSStyleSheet === "function" && Array.isArray(target.adoptedStyleSheets)) {
+    const sheet = new view.CSSStyleSheet();
+    sheet.replaceSync(dragRegionRules);
+    target.adoptedStyleSheets = [...target.adoptedStyleSheets, sheet];
+    return () => { target.adoptedStyleSheets = target.adoptedStyleSheets.filter(item => item !== sheet); };
+  }
+  // Other engines have no drag-region styling, so a primary press asks the host to start the native move.
+  const onMouseDown = (event: MouseEvent) => {
+    const element = view !== null && event.target instanceof view.Element ? event.target : null;
+    const region = element?.closest(dragRegion);
+    if (event.button !== 0 || element === null || !region) return;
+    const excluded = element.closest(dragExclusions);
+    if (excluded !== null && region.contains(excluded)) return;
+    event.preventDefault();
+    const current = snapshot();
+    if (event.detail === 2) {
+      if (current?.resizable === true && current.state !== "Fullscreen") void actions.toggleMaximize(current.state === "Maximized").catch(() => { });
+    } else if (event.detail <= 1) {
+      void actions.drag().catch(() => { });
+    }
+  };
+  target.addEventListener("mousedown", onMouseDown);
+  return () => target.removeEventListener("mousedown", onMouseDown);
+}
 
 export function createDesktopClient(rpc: DesktopRpc) {
   if (rpc === null || typeof rpc !== "object" || typeof rpc.invoke !== "function" || typeof rpc.subscribe !== "function") throw new TypeError("A desktop RPC client is required.");
@@ -133,6 +189,52 @@ export function createDesktopClient(rpc: DesktopRpc) {
       finally { await unsubscribe(); closeOptions = undefined; }
     };
   }
+  const windowState = (options?: NeoRpcCallOptions) => invoke<{ readonly value: DesktopWindowSnapshot }>(desktopCommands.window.getState, {}, options);
+  const onWindowStateChanged = (handler: (value: DesktopWindowSnapshot) => void, options?: NeoRpcCallOptions) =>
+    subscribe<{ readonly value: DesktopWindowSnapshot }>(desktopCommands.window.stateChanged, event => handler(event.value), options);
+  async function attachTitleBar(options: DesktopTitleBarAttachOptions = {}): Promise<DesktopTitleBarBinding> {
+    const root = options.root ?? document.documentElement;
+    let snapshot: DesktopWindowSnapshot | undefined;
+    let disposed = false;
+    const apply = (value: DesktopWindowSnapshot) => {
+      if (disposed) return;
+      snapshot = value;
+      root.dataset.neoastraTitlebar = value.titleBar.style.toLowerCase();
+      root.dataset.neoastraWindowState = value.state.toLowerCase();
+      root.dataset.neoastraWindowFocused = String(value.focused);
+      root.style.setProperty("--neoastra-titlebar-height", `${value.titleBar.height}px`);
+      root.style.setProperty("--neoastra-titlebar-inset-left", `${value.titleBar.leftInset}px`);
+      root.style.setProperty("--neoastra-titlebar-inset-right", `${value.titleBar.rightInset}px`);
+      try { options.onChange?.(value); } catch { /* A listener failure must not stop layout updates. */ }
+    };
+    // Subscribe before the first query so no transition is lost between the two.
+    const unsubscribe = await onWindowStateChanged(apply, options.rpc);
+    let removeRegions: () => void;
+    try {
+      apply((await windowState(options.rpc)).value);
+      removeRegions = installDragRegions(root.ownerDocument, () => snapshot, {
+        drag: () => invoke<DesktopResult>(desktopCommands.window.startDrag, {}, options.rpc),
+        toggleMaximize: maximized => invoke<DesktopResult>(maximized ? desktopCommands.window.restore : desktopCommands.window.maximize, {}, options.rpc),
+      });
+    } catch (error) {
+      disposed = true;
+      await unsubscribe();
+      throw error;
+    }
+    return Object.freeze({
+      get snapshot() { return snapshot!; },
+      dispose: async () => {
+        if (disposed) return;
+        disposed = true;
+        removeRegions();
+        delete root.dataset.neoastraTitlebar;
+        delete root.dataset.neoastraWindowState;
+        delete root.dataset.neoastraWindowFocused;
+        for (const name of ["height", "inset-left", "inset-right"]) root.style.removeProperty(`--neoastra-titlebar-${name}`);
+        await unsubscribe();
+      },
+    });
+  }
   return Object.freeze({
     dialogs: Object.freeze({
       openFile: (value: DesktopFileDialogRequest, options?: NeoRpcCallOptions) => invoke<DesktopPathsResult>(desktopCommands.dialogs.openFile, dialog("openFile", value), options),
@@ -191,7 +293,8 @@ export function createDesktopClient(rpc: DesktopRpc) {
       delete: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.safeStorage.delete, { id }, options),
     }),
     window: Object.freeze({
-      state: (options?: NeoRpcCallOptions) => invoke<{ readonly value: DesktopWindowSnapshot }>(desktopCommands.window.getState, {}, options),
+      state: windowState,
+      onStateChanged: onWindowStateChanged,
       setTitle: (value: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTitle, { value }, options),
       setPosition: (x: number, y: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setPosition, { x, y }, options),
       setSize: (width: number, height: number, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setSize, { width, height }, options),
@@ -208,6 +311,10 @@ export function createDesktopClient(rpc: DesktopRpc) {
       setResizable: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setResizable, { value }, options),
       setAlwaysOnTop: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setAlwaysOnTop, { value }, options),
       setTaskbarVisible: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTaskbarVisible, { value }, options),
+      setTitleBar: (value: DesktopWindowTitleBarOptions, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTitleBar, { style: value.style, height: value.height ?? 0, symbolColor: value.symbolColor, backgroundColor: value.backgroundColor }, options),
+      startDrag: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.startDrag, {}, options),
+      startResize: (edge: DesktopWindowResizeEdge, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.startResize, { edge }, options),
+      attachTitleBar,
       close: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.close, {}, options),
       onCloseRequested,
       setIcon: (path: DesktopScopedPath, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setIcon, { ...path, operation: "read" }, options),

@@ -2,6 +2,7 @@ import React from "react";
 import {
   connect,
   onDiagnostic,
+  type DesktopWindowSnapshot,
   type NeoAstraRuntimeInfo,
 } from "@neoastra/client";
 import markUrl from "./advanced-mark.svg";
@@ -10,6 +11,7 @@ import { FeatureCard, ResultPanel } from "./FeatureCard";
 import { tour, type TourActivity } from "#neoastra";
 import { LifecycleTour } from "./LifecycleTour";
 import { RpcTour } from "./RpcTour";
+import { TitleBar, useTitleBar } from "./TitleBar";
 import { describe, describeError, desktop } from "./tour-api";
 
 interface ActivityEntry {
@@ -74,28 +76,73 @@ export function App() {
 
   if (connectionError !== undefined) {
     return (
-      <main className="connection-failure" tabIndex={-1}>
-        <img className="mark" src={markUrl} alt="" />
-        <h1>NeoAstra connection failed</h1>
-        <p>{connectionError}</p>
-      </main>
+      <div className="app-content">
+        <main className="connection-failure" tabIndex={-1}>
+          <img className="mark" src={markUrl} alt="" />
+          <h1>NeoAstra connection failed</h1>
+          <p>{connectionError}</p>
+        </main>
+      </div>
     );
   }
 
   if (runtime === undefined) {
     return (
-      <main className="connection-failure" tabIndex={-1}>
-        <img className="mark pulse" src={markUrl} alt="" />
-        <h1>Connecting to NeoAstra</h1>
-        <p>The authenticated renderer transport is negotiating a document session.</p>
-      </main>
+      <div className="app-content">
+        <main className="connection-failure" tabIndex={-1}>
+          <img className="mark pulse" src={markUrl} alt="" />
+          <h1>Connecting to NeoAstra</h1>
+          <p>The authenticated renderer transport is negotiating a document session.</p>
+        </main>
+      </div>
     );
   }
 
   if (runtime.viewLabel === "preview") {
-    return <RestrictedPreview runtime={runtime} report={report} activities={activities} />;
+    return (
+      <div className="app-content">
+        <RestrictedPreview runtime={runtime} report={report} activities={activities} />
+      </div>
+    );
   }
 
+  return (
+    <MainView
+      runtime={runtime}
+      details={details}
+      workerMessage={workerMessage}
+      report={report}
+      activities={activities}
+    />
+  );
+}
+
+interface MainViewProps {
+  readonly runtime: NeoAstraRuntimeInfo;
+  readonly details: string;
+  readonly workerMessage: string;
+  readonly report: (source: string, message: string) => void;
+  readonly activities: readonly ActivityEntry[];
+}
+
+function MainView(props: MainViewProps) {
+  const windowSnapshot = useTitleBar();
+
+  return (
+    <>
+      <TitleBar snapshot={windowSnapshot} title="NeoAstra Advanced Sample" />
+      <div className="app-content">
+        <FeatureTour {...props} windowSnapshot={windowSnapshot} />
+      </div>
+    </>
+  );
+}
+
+interface FeatureTourProps extends MainViewProps {
+  readonly windowSnapshot: DesktopWindowSnapshot | undefined;
+}
+
+function FeatureTour({ runtime, details, workerMessage, report, activities, windowSnapshot }: FeatureTourProps) {
   return (
     <main tabIndex={-1}>
       <header className="hero">
@@ -155,7 +202,7 @@ export function App() {
       <section className="tour-grid" aria-label="NeoAstra feature demonstrations">
         <RpcTour report={report} />
         <LifecycleTour report={report} />
-        <DesktopTour platform={runtime.platform} report={report} />
+        <DesktopTour platform={runtime.platform} windowSnapshot={windowSnapshot} report={report} />
       </section>
 
       <ActivityLog activities={activities} />

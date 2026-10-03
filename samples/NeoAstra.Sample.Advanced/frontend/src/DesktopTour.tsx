@@ -2,6 +2,8 @@ import React from "react";
 import type {
   DesktopSupportInfo,
   DesktopWindowExtraSupport,
+  DesktopWindowSnapshot,
+  DesktopWindowTitleBarStyle,
   NeoAstraRuntimeInfo,
 } from "@neoastra/client";
 import { tour } from "#neoastra";
@@ -21,10 +23,22 @@ import {
 
 interface DesktopTourProps {
   readonly platform: NeoAstraRuntimeInfo["platform"];
+  readonly windowSnapshot: DesktopWindowSnapshot | undefined;
   readonly report: (source: string, message: string) => void;
 }
 
 type ResultGroup = "dialogs" | "shell" | "system" | "storage" | "window";
+
+const titleBarHeight = 40;
+
+export function describeTitleBar(snapshot: DesktopWindowSnapshot | undefined) {
+  if (snapshot === undefined) return "Waiting for the native title-bar layout.";
+  const { style, height, leftInset, rightInset } = snapshot.titleBar;
+  const controls = leftInset > 0 || rightInset > 0
+    ? `native controls reserve ${leftInset}px left and ${rightInset}px right`
+    : style === "Default" ? "the platform draws the whole title bar" : "window controls are drawn by the page";
+  return `${style} title bar, ${height}px high; ${controls}. Window is ${snapshot.state.toLowerCase()}.`;
+}
 
 export function isWindowExtraAvailable(support: DesktopSupportInfo | undefined) {
   return support !== undefined && support.supportLevel !== "None";
@@ -34,7 +48,7 @@ export function isNativeMenuVisibleByDefault(platform: NeoAstraRuntimeInfo["plat
   return platform === "macos";
 }
 
-export function DesktopTour({ platform, report }: DesktopTourProps) {
+export function DesktopTour({ platform, windowSnapshot, report }: DesktopTourProps) {
   const [results, setResults] = React.useState<Record<ResultGroup, string>>({
     dialogs: "Choose an action to invoke a native dialog.",
     shell: "Registered native surfaces report platform support explicitly.",
@@ -128,6 +142,11 @@ export function DesktopTour({ platform, report }: DesktopTourProps) {
       report(source, message);
       return undefined;
     }
+  }
+
+  function setTitleBar(style: DesktopWindowTitleBarStyle) {
+    return run("window", `title-bar-${style.toLowerCase()}`, () =>
+      desktop.window.setTitleBar({ style, height: titleBarHeight }));
   }
 
   async function readClipboard() {
@@ -367,6 +386,31 @@ export function DesktopTour({ platform, report }: DesktopTourProps) {
           <span>or drop a file/text/URL here to observe its brokered event below.</span>
         </div>
         <ResultPanel label="Resource result">{results.storage}</ResultPanel>
+      </FeatureCard>
+
+      <FeatureCard
+        eyebrow="Chromeless window"
+        title="Web title bar with native window behavior"
+        description={
+          "The page extends into the title-bar area while the platform keeps its frame, resize borders, " +
+          "snapping, and window controls. Elements marked data-neoastra-drag-region move the window."
+        }
+      >
+        <div className="button-row">
+          <button type="button" onClick={() => void setTitleBar("Overlay")}>Native controls</button>
+          <button type="button" onClick={() => void setTitleBar("Hidden")}>Web controls</button>
+          <button type="button" className="secondary" onClick={() => void setTitleBar("Default")}>
+            Standard title bar
+          </button>
+        </div>
+        <div className="instruction">
+          <strong>Try it</strong>
+          <span>
+            Drag the title bar, double-click it to maximize, or resize from any edge. Buttons inside the
+            bar stay clickable.
+          </span>
+        </div>
+        <ResultPanel label="Title-bar layout">{describeTitleBar(windowSnapshot)}</ResultPanel>
       </FeatureCard>
 
       <FeatureCard

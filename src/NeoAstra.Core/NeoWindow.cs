@@ -20,6 +20,7 @@ public sealed class NeoWindow : IAsyncDisposable
     private bool _isFocused;
     private double _scaleFactor = 1d;
     private NeoWindowState _state;
+    private NeoWindowTitleBar _titleBar;
     private int _closed;
     private int _disposed;
 
@@ -37,6 +38,13 @@ public sealed class NeoWindow : IAsyncDisposable
         _isVisible = options.IsVisible;
         _state = options.State;
         Id = NativeMethods.neoastra_window_get_id(NativeHandle);
+        _titleBar = options.TitleBar;
+        // The creation flags carry only the style; the remaining title-bar settings need the full native call.
+        if (_titleBar != new NeoWindowTitleBar(_titleBar.Style))
+        {
+            try { ApplyTitleBar(_titleBar); }
+            catch (NotSupportedException) { }
+        }
     }
 
     /// <summary>Gets the stable application-local window identifier.</summary>
@@ -209,6 +217,26 @@ public sealed class NeoWindow : IAsyncDisposable
         set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_SHOW_IN_TASKBAR, value);
     }
 
+    /// <summary>Gets or sets how the window presents its title bar.</summary>
+    /// <remarks>
+    /// <see cref="NeoWindowTitleBarStyle.Overlay"/> and <see cref="NeoWindowTitleBarStyle.Hidden"/> extend the content into
+    /// the title-bar area while keeping the platform frame. Use <see cref="GetTitleBarLayout"/> to keep content clear of
+    /// native window controls.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The style is not defined or the height is out of range.</exception>
+    /// <exception cref="NotSupportedException">The loaded native library does not provide title-bar styles.</exception>
+    public NeoWindowTitleBar TitleBar
+    {
+        get => _titleBar;
+        set
+        {
+            value.Validate(nameof(value));
+            ThrowIfDisposed();
+            ApplyTitleBar(value);
+            _titleBar = value;
+        }
+    }
+
     /// <summary>Gets the owner window, if any.</summary>
     public NeoWindow? Owner => _owner;
 
@@ -338,6 +366,33 @@ public sealed class NeoWindow : IAsyncDisposable
         if (!Enum.IsDefined(edge)) throw new ArgumentOutOfRangeException(nameof(edge));
         ThrowIfDisposed();
         NativeError.ThrowIfFailed(NativeMethods.neoastra_window_begin_resize(NativeHandle, (NativeMethods.neoastra_window_resize_edge)edge), default, "begin interactive window resize");
+    }
+
+    /// <summary>Gets the title-bar space that content must currently account for.</summary>
+    /// <returns>
+    /// The effective style, the title-bar height, and the insets covered by native window controls. The insets are zero
+    /// while no native controls cover the content, such as in fullscreen.
+    /// </returns>
+    public unsafe NeoWindowTitleBarLayout GetTitleBarLayout()
+    {
+        ThrowIfDisposed();
+        var native = new NativeMethods.neoastra_title_bar_t(new NativeMethods.neoastra_title_bar
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_title_bar),
+            version = 1,
+        });
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_window_get_title_bar(NativeHandle, &native), default, "get window title bar");
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // An older native library always draws the standard title bar.
+            return default;
+        }
+
+        var value = native.Value;
+        return new NeoWindowTitleBarLayout((NeoWindowTitleBarStyle)value.style.Value, value.height, value.left_inset, value.right_inset);
     }
 
     /// <summary>Requests that the native window close.</summary>
@@ -579,6 +634,29 @@ public sealed class NeoWindow : IAsyncDisposable
     {
         ThrowIfDisposed();
         NativeError.ThrowIfFailed(NativeMethods.neoastra_window_set_attribute(NativeHandle, attribute, value ? 1u : 0u), default, "set window attribute");
+    }
+
+    private unsafe void ApplyTitleBar(NeoWindowTitleBar value)
+    {
+        var native = new NativeMethods.neoastra_title_bar_t(new NativeMethods.neoastra_title_bar
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_title_bar),
+            version = 1,
+            style = (NativeMethods.neoastra_title_bar_style)value.Style,
+            height = value.Height,
+            symbol_color = ToNative(value.SymbolColor),
+            background_color = ToNative(value.BackgroundColor),
+        });
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_window_set_title_bar(NativeHandle, &native), default, "set window title bar");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library does not provide title-bar styles.", exception);
+        }
+
+        static NativeMethods.neoastra_color ToNative(NeoColor color) => new() { red = color.Red, green = color.Green, blue = color.Blue, alpha = color.Alpha };
     }
 
     private unsafe NeoRect GetBounds()
