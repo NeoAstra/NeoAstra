@@ -15,6 +15,7 @@ import {
   SUPPORTED_FEATURES,
   assertApplicationFrame,
   isRecord,
+  parseCloseReason,
   type NeoAstraConnectionState,
 } from "./shared.js";
 
@@ -42,7 +43,8 @@ export interface MockNeoAstraClient {
   readonly outboundFrames: readonly Readonly<Record<string, unknown>>[];
   injectInbound(frame: unknown): void;
   injectMalformed(): void;
-  close(): void;
+  /** Closes the connection as the host would, reporting `reason` (for example `"rpc_session_closed"`) as its `closeReason`. */
+  close(reason?: string): void;
   navigate(overrides?: MockTransportOptions): MockNeoAstraClient;
 }
 
@@ -139,13 +141,13 @@ class MockClient implements MockNeoAstraClient {
     this.emitDiagnostic({ level: "warning", code: "invalid_frame", message: "The mock host injected a malformed frame." });
   }
 
-  close(): void {
+  close(reason?: string): void {
     this.active = false;
-    this.connection?.hostClose();
+    this.connection?.hostClose(parseCloseReason(reason));
   }
 
   navigate(overrides: MockTransportOptions = {}): MockNeoAstraClient {
-    this.close();
+    this.close("navigation");
     return new MockClient({ ...this.options, ...overrides });
   }
 
@@ -161,6 +163,7 @@ class MockConnection implements NeoAstraConnection {
   readonly closed: AbortSignal;
   private readonly controller = new AbortController();
   private currentState: NeoAstraConnectionState = "connected";
+  private reason: string | undefined;
   private receiveHandler: ((frame: Readonly<Record<string, unknown>>) => void) | undefined;
 
   constructor(
@@ -174,6 +177,8 @@ class MockConnection implements NeoAstraConnection {
   }
 
   get state(): NeoAstraConnectionState { return this.currentState; }
+
+  get closeReason(): string | undefined { return this.reason; }
 
   hasFeature(feature: string): boolean { return this.runtimeInfo.negotiatedFeatures.includes(feature); }
 
@@ -193,13 +198,13 @@ class MockConnection implements NeoAstraConnection {
     if (this.currentState !== "connected") return;
     this.currentState = "closing";
     this.record(Object.freeze({ neoastra: 1, kind: "close" }));
-    this.finishClose();
+    this.finishClose("client_close");
   }
 
   accept(frame: Readonly<Record<string, unknown>>): void {
     if (this.currentState !== "connected") return;
     if (frame.kind === "close") {
-      this.finishClose();
+      this.hostClose(parseCloseReason(frame.reason));
       return;
     }
     if (frame.kind === "diagnostic") {
@@ -221,14 +226,16 @@ class MockConnection implements NeoAstraConnection {
     }
   }
 
-  hostClose(): void {
-    this.diagnose({ level: "information", code: "connection_closed", message: "The mock host closed the connection." });
-    this.finishClose();
+  hostClose(reason: string): void {
+    if (this.currentState === "closed") return;
+    this.diagnose({ level: "information", code: "connection_closed", message: `The mock host closed the connection (${reason}).` });
+    this.finishClose(reason);
   }
 
-  private finishClose(): void {
+  private finishClose(reason: string): void {
     if (this.currentState === "closed") return;
     this.currentState = "closed";
+    this.reason = reason;
     this.receiveHandler = undefined;
     this.controller.abort(new NeoAstraClientError("connection_closed", "The mock connection is closed."));
   }

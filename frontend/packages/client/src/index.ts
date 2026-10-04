@@ -7,6 +7,7 @@ import {
   SUPPORTED_FEATURES,
   assertApplicationFrame,
   isRecord,
+  parseCloseReason,
   type NeoAstraConnectionState,
 } from "./shared.js";
 
@@ -40,6 +41,12 @@ export interface NeoAstraConnection {
   readonly runtimeInfo: NeoAstraRuntimeInfo;
   readonly state: NeoAstraConnectionState;
   readonly closed: AbortSignal;
+  /**
+   * Why the connection closed, set before `closed` aborts: `"client_close"` after `close()`, otherwise the
+   * host's reason, such as `"navigation"` or `"rpc_session_closed"`. A document cannot connect twice, so a
+   * host close of a document that keeps running is recovered from by reloading it.
+   */
+  readonly closeReason?: string;
   hasFeature(feature: string): boolean;
   send(frame: unknown): void;
   setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void): () => void;
@@ -247,6 +254,7 @@ class Connection implements NeoAstraConnection {
   private readonly abortController = new AbortController();
   private receiveHandler: ((frame: Readonly<Record<string, unknown>>) => void) | undefined;
   private currentState: NeoAstraConnectionState = "connected";
+  private reason: string | undefined;
 
   constructor(
     private readonly bootstrap: BootstrapTransport,
@@ -259,6 +267,8 @@ class Connection implements NeoAstraConnection {
   }
 
   get state(): NeoAstraConnectionState { return this.currentState; }
+
+  get closeReason(): string | undefined { return this.reason; }
 
   hasFeature(feature: string): boolean {
     return this.runtimeInfo.negotiatedFeatures.includes(feature);
@@ -285,7 +295,7 @@ class Connection implements NeoAstraConnection {
     if (this.currentState === "closed" || this.currentState === "closing") return;
     this.currentState = "closing";
     try { this.bootstrap.send(Object.freeze({ neoastra: 1, kind: "close" })); } catch { }
-    this.finishClose();
+    this.finishClose("client_close", "The transport connection is closed.");
   }
 
   accept(value: unknown): void {
@@ -294,7 +304,12 @@ class Connection implements NeoAstraConnection {
       return;
     }
     if (value.kind === "close") {
-      this.finishClose();
+      // The host revoked this document's session. A document cannot handshake twice, so the reason tells
+      // an application that keeps running whether reloading is the way to reconnect.
+      const reason = parseCloseReason(value.reason);
+      const message = `The host closed the transport connection (${reason}).`;
+      emitDiagnostic({ level: "information", code: "connection_closed", message });
+      this.finishClose(reason, message);
       return;
     }
     if (value.kind === "diagnostic") {
@@ -310,13 +325,14 @@ class Connection implements NeoAstraConnection {
     }
   }
 
-  private finishClose(): void {
+  private finishClose(reason: string, message: string): void {
     if (this.currentState === "closed") return;
     this.currentState = "closed";
+    this.reason = reason;
     state = "closed";
     this.removeReceive();
     this.receiveHandler = undefined;
-    this.abortController.abort(new NeoAstraClientError("connection_closed", "The transport connection is closed."));
+    this.abortController.abort(new NeoAstraClientError("connection_closed", message));
   }
 }
 

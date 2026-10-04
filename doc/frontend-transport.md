@@ -48,6 +48,23 @@ frames are ignored rather than retargeted. A connection exposes an `AbortSignal`
 single receive-handler registration, negotiated feature lookup, bounded `send`, and deterministic
 `close()`.
 
+A connection closed by the host reports why through `closeReason`, set before `closed` aborts, and
+through one `connection_closed` information diagnostic. `client_close` follows the document's own
+`close()`. `navigation`, `view_disposed`, `application_shutdown`, and `renderer_lost` end a document
+that is going away. `rpc_session_closed` is different: the host closed the RPC session of a document
+that keeps running (see [RPC and bindings](rpc-and-bindings.md)). A close without a valid reason
+token reports `unspecified`. A document handshakes once, so `connect()` then rejects with
+`connection_closed` and every RPC call fails immediately; a reload is the only way to reconnect, and
+whether to reload, and what state to keep, is the application's decision:
+
+```ts
+const connection = await connect();
+connection.closed.addEventListener("abort", () => {
+  // Do not reload on "navigation": that would cancel the navigation already under way.
+  if (connection.closeReason === "rpc_session_closed") location.reload();
+}, { once: true });
+```
+
 `NeoTransportOptions` configures JSON depth, handshake attempts, diagnostic retention, and handshake
 timeout. `NeoAstraOptions.MaximumMessageSize` is the raw UTF-8 frame/envelope limit and defaults to
 `int.MaxValue` (2 GiB minus one byte), the managed byte-length ceiling, rather than a small payload

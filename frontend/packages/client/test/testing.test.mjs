@@ -45,7 +45,16 @@ test("mock supports delay, protocol mismatch, malformed input, close, and naviga
   const oldConnection = await delayed.connect();
   const replacement = delayed.navigate({ idFactory: () => "replacement-id" });
   assert.equal(oldConnection.closed.aborted, true);
+  assert.equal(oldConnection.closeReason, "navigation");
   const replacementPending = replacement.connect();
   callbacks.shift()();
-  assert.equal((await replacementPending).runtimeInfo.documentSessionId, "replacement-id");
+  const replacementConnection = await replacementPending;
+  assert.equal(replacementConnection.runtimeInfo.documentSessionId, "replacement-id");
+
+  // A host that revokes the session of a running document reports why, so the application can reload.
+  assert.equal(replacementConnection.closeReason, undefined);
+  replacement.close("rpc_session_closed");
+  assert.equal(replacementConnection.closed.aborted, true);
+  assert.equal(replacementConnection.closeReason, "rpc_session_closed");
+  await assert.rejects(replacement.connect(), error => error.code === "transport_unavailable");
 });

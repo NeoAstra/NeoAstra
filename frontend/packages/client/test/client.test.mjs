@@ -153,6 +153,50 @@ test("unknown features are ignored and diagnosed", async () => {
   assert.equal(diagnostics.at(-1).code, "unknown_feature");
 });
 
+test("a host close frame fails the live connection fast and reports its reason", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const diagnostics = [];
+  client.onDiagnostic(value => diagnostics.push(value));
+  const connection = await client.connect();
+  const rpc = new client.NeoRpcClient(connection);
+  const pending = rpc.invoke("slow", {});
+
+  bootstrap.receive({ neoastra: 1, kind: "close", reason: "rpc_session_closed" });
+
+  await assert.rejects(pending, error => error.code === "connection_closed" && error.retryable === true);
+  assert.equal(connection.state, "closed");
+  assert.equal(connection.closeReason, "rpc_session_closed");
+  assert.equal(connection.closed.aborted, true);
+  assert.equal(connection.closed.reason.code, "connection_closed");
+  assert.match(connection.closed.reason.message, /rpc_session_closed/);
+  assert.deepEqual(
+    diagnostics.filter(value => value.code === "connection_closed").map(value => [value.level, value.message]),
+    [["information", "The host closed the transport connection (rpc_session_closed)."]]);
+  // The document cannot handshake again: later calls fail immediately instead of waiting on the host.
+  assert.throws(() => rpc.invoke("later", {}), error => error.code === "connection_closed");
+  assert.throws(() => connection.send({ neoastra: 1, kind: "invoke" }), error => error.code === "connection_closed");
+  await assert.rejects(client.connect(), error => error.code === "connection_closed");
+  assert.equal(bootstrap.sent.filter(frame => frame.kind === "hello").length, 1);
+});
+
+test("a host close frame with a malformed reason is reported without echoing it", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const diagnostics = [];
+  client.onDiagnostic(value => diagnostics.push(value));
+  const connection = await client.connect();
+
+  assert.equal(connection.closeReason, undefined);
+  let reasonWhenAborted;
+  connection.closed.addEventListener("abort", () => { reasonWhenAborted = connection.closeReason; });
+  bootstrap.receive({ neoastra: 1, kind: "close", reason: "Not A Token <script>" });
+
+  assert.equal(connection.closed.aborted, true);
+  assert.equal(reasonWhenAborted, "unspecified");
+  assert.equal(diagnostics.at(-1).message, "The host closed the transport connection (unspecified).");
+});
+
 test("connection validates framing, byte size, depth, receive ownership, and close", async () => {
   const bootstrap = createBootstrap();
   const client = await loadClient(bootstrap);
@@ -169,5 +213,6 @@ test("connection validates framing, byte size, depth, receive ownership, and clo
   assert.equal(received.length, 0);
   connection.close();
   assert.equal(connection.closed.aborted, true);
+  assert.equal(connection.closeReason, "client_close");
   assert.throws(() => connection.send({ neoastra: 1, kind: "invoke" }), error => error.code === "connection_closed");
 });

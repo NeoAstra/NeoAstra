@@ -14,6 +14,11 @@ if (isAvailable()) {
 }
 ```
 
+A document handshakes once. When the host closes the connection, `connection.closed` aborts,
+`connection.closeReason` names the cause, and RPC calls fail with `connection_closed` instead of
+waiting. `rpc_session_closed` means the host closed the RPC session of a document that is still
+running; reload the document to reconnect.
+
 ## RPC
 
 Generated bindings use the public `invoke` and `subscribe` functions. For direct infrastructure use,

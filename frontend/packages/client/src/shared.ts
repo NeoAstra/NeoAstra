@@ -66,6 +66,11 @@ export function assertApplicationFrame(value: unknown, maximumFrameBytes: number
   }
 }
 
+/** Reads the bounded reason token of a host close frame; anything else is reported as "unspecified". */
+export function parseCloseReason(value: unknown): string {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value) ? value : "unspecified";
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
