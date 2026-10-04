@@ -162,6 +162,51 @@ public sealed class TransportTests
     }
 
     [TestMethod]
+    public void HostRevokedSessionNotifiesItsDocumentAndOnlyANavigationReconnects()
+    {
+        var sent = new List<string>();
+        var diagnostics = new List<NeoTransportDiagnosticEventArgs>();
+        var sessions = new List<NeoTransportSessionSnapshot?>();
+        var nextId = 0;
+        var coordinator = new NeoTransportCoordinator(Options(), RuntimeInfo, sent.Add, diagnostics.Add, idFactory: () => $"session-{++nextId}", sessionChanged: sessions.Add);
+        Connect(coordinator, "document-a");
+        Assert.HasCount(1, sent);
+
+        Assert.IsFalse(coordinator.CloseSession("another-session", "rpc_session_closed"), "Only the active session can be revoked.");
+        Assert.IsTrue(coordinator.IsConnected);
+        Assert.IsTrue(coordinator.CloseSession("session-1", "rpc_session_closed"));
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.IsNull(sessions[^1]);
+        Assert.HasCount(2, sent);
+        using (var close = JsonDocument.Parse(sent[^1]))
+        {
+            Assert.AreEqual("document-a", close.RootElement.GetProperty("rendererDocumentId").GetString());
+            Assert.AreEqual("close", close.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+            Assert.AreEqual("rpc_session_closed", close.RootElement.GetProperty("frame").GetProperty("reason").GetString());
+        }
+        Assert.IsFalse(coordinator.CloseSession("session-1", "rpc_session_closed"), "A revoked session cannot be revoked twice.");
+
+        // Neither the revoked document nor another renderer identity in the same navigation may handshake again.
+        coordinator.Receive(Envelope(coordinator, "document-a", Hello()));
+        Assert.AreEqual(NeoTransportReceiveKind.Consumed, coordinator.Receive(Envelope(coordinator, "document-a", "{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"late\"}")).Kind);
+        Assert.HasCount(2, sent);
+        coordinator.Receive(Envelope(coordinator, "document-b", Hello()));
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.HasCount(3, sent);
+        using (var rejection = JsonDocument.Parse(sent[^1]))
+        {
+            Assert.AreEqual("close", rejection.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+            Assert.AreEqual("connection_closed", rejection.RootElement.GetProperty("frame").GetProperty("code").GetString());
+        }
+        Assert.IsTrue(diagnostics.Any(value => value.Code == "connection_closed"));
+
+        // A reload is a new navigation and goes through the normal handshake.
+        Connect(coordinator, "document-c");
+        Assert.IsTrue(coordinator.IsConnected);
+        Assert.AreEqual("session-2", sessions[^1]!.Value.DocumentSessionId);
+    }
+
+    [TestMethod]
     public void ExcessDuplicateHellosCloseTheAbusiveDocumentSession()
     {
         var options = Options();

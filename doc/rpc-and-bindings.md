@@ -111,9 +111,19 @@ the session keeps serving other calls. A `NeoRpcSendFrame` that observes its tok
 must therefore leave the connection usable; any other send failure closes the session. A view
 binding that contains such a failure (or a failure to open a session) writes a `connection_closed`
 error whose message names the exception type, never the exception message, which may carry user
-data. A view binding that then receives frames for a closed session that is still current drops them
-and writes one `connection_closed` warning to the diagnostic sink; only a new document session
-recovers.
+data.
+
+A session can therefore close on the host while its document keeps running: a failed send, abuse
+closure, or disposal of the RPC host. The view binding then revokes that document's transport
+connection (close reason `rpc_session_closed`) and writes a `connection_closed` warning. In the
+frontend the connection's `closed` signal aborts, pending calls, subscription handshakes, and
+channels reject with a retryable `connection_closed`, and later calls fail immediately instead of
+waiting on a host that no longer answers. Calls are never replayed. A document cannot handshake
+twice, and the host rejects every further hello in that navigation, so the page recovers by
+reloading or navigating: the new document gets a new session through the normal handshake, with
+fresh rate and abuse budgets. See [Portable frontend transport](frontend-transport.md) for the
+frontend side. Frames that race the revocation are dropped; if the transport connection could not
+be revoked, the binding writes one `connection_closed` warning for the frames it drops.
 Cancellation is cooperative: after a five-second drain warning, a noncooperative enumerator keeps
 teardown pending and its service alive rather than being force-disposed while in use. Application
 iterators, disposers, and transport callbacks must cooperate with cancellation and avoid blocking;

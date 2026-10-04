@@ -1256,6 +1256,94 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task ViewBindingRevokesTheTransportSessionOfAClosedCurrentSession()
+    {
+        var service = new ChannelService();
+        service.ReleaseItems.TrySetResult();
+        var diagnostics = new RpcDiagnosticSink();
+        var builder = new NeoRpcBuilder(TestOptions(new NeoRpcOptions { DiagnosticSink = diagnostics }));
+        RegisterChannelService(builder, new NeoRpcServiceActivator<ChannelService>(_ => service, NeoRpcServiceLifetime.PerInvocation));
+        await using var host = builder.Build();
+        var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        SetField(view, "_viewLabel", "binding-view");
+        var queue = typeof(NeoRpcViewBinding).GetMethod("QueueTransition", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var receive = typeof(NeoRpcViewBinding).GetMethod("OnMessage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var revoked = new ConcurrentQueue<string>();
+        NeoRpcViewBinding? binding = null;
+        binding = new NeoRpcViewBinding(host, view,
+            snapshot => host.OpenSession(
+                new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId),
+                (json, _) => Kind(json) == "channel_item" ? throw new InvalidOperationException("transport failed") : ValueTask.CompletedTask),
+            documentSessionId =>
+            {
+                // The transport answers a revocation the way it answers a navigation: the session is gone.
+                revoked.Enqueue(documentSessionId);
+                queue.Invoke(binding, [null]);
+                return true;
+            });
+        await using var owned = binding;
+        var snapshot = new NeoTransportSessionSnapshot("failing-document", 0, Array.Empty<string>(), true);
+        queue.Invoke(binding, [snapshot]);
+
+        // The channel pump, not a received frame, observes the failed send that closes the session.
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("stream", "service.stream", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        await WaitUntilAsync(() => !revoked.IsEmpty && host.ActiveSessionCount == 0 && Closed().Any());
+        CollectionAssert.AreEqual(new[] { "failing-document" }, revoked.ToArray());
+
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("late", "service.stream", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        await Task.Delay(20);
+        var closed = Closed().Single();
+        Assert.AreEqual(NeoRpcDiagnosticLevel.Warning, closed.Level);
+        StringAssert.Contains(closed.Message, "closed the transport connection");
+        Assert.HasCount(1, revoked);
+
+        IEnumerable<NeoRpcDiagnostic> Closed() => diagnostics.Values.Where(value => value.Code == NeoRpcErrorCodes.ConnectionClosed);
+        static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
+    public async Task ViewBindingLeavesTheTransportAloneWhenItReplacesOrDetachesASession()
+    {
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("binding.echo", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.ViewLabel)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        await using var host = builder.Build();
+        var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        SetField(view, "_viewLabel", "binding-view");
+        var revoked = new ConcurrentQueue<string>();
+        var sessions = new ConcurrentQueue<NeoRpcSession>();
+        var binding = new NeoRpcViewBinding(host, view,
+            snapshot =>
+            {
+                var session = host.OpenSession(new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId), (_, _) => ValueTask.CompletedTask);
+                sessions.Enqueue(session);
+                return session;
+            },
+            documentSessionId => { revoked.Enqueue(documentSessionId); return true; });
+        var queue = typeof(NeoRpcViewBinding).GetMethod("QueueTransition", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        // A navigation replaces the session, and disposal detaches it: the transport already closed both.
+        queue.Invoke(binding, [new NeoTransportSessionSnapshot("first-document", 0, Array.Empty<string>(), true)]);
+        queue.Invoke(binding, [new NeoTransportSessionSnapshot("second-document", 0, Array.Empty<string>(), true)]);
+        await WaitUntilAsync(() => host.ActiveSessionCount == 1);
+        await binding.DisposeAsync();
+        Assert.AreEqual(0, host.ActiveSessionCount);
+        await Task.Delay(20);
+        Assert.IsTrue(revoked.IsEmpty);
+
+        // A session closed behind the binding's back while still current is the case that must be revoked.
+        var failing = new NeoRpcViewBinding(host, view,
+            snapshot => host.OpenSession(new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId), (_, _) => ValueTask.CompletedTask),
+            documentSessionId => { revoked.Enqueue(documentSessionId); return true; });
+        await using var owned = failing;
+        queue.Invoke(failing, [new NeoTransportSessionSnapshot("third-document", 0, Array.Empty<string>(), true)]);
+        await host.DisposeAsync();
+        await WaitUntilAsync(() => !revoked.IsEmpty);
+        CollectionAssert.AreEqual(new[] { "third-document" }, revoked.ToArray());
+
+        static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
     public async Task ViewBindingDiagnosesTheFailureTypeThatClosedItsSessionWithoutItsMessage()
     {
         var diagnostics = new RpcDiagnosticSink();

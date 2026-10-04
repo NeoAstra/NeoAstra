@@ -9,6 +9,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private readonly NeoRpcHost _host;
     private readonly global::NeoAstra.NeoAstra _view;
     private readonly Func<NeoTransportSessionSnapshot, NeoRpcSession> _openSession;
+    private readonly Func<string, bool> _closeTransportSession;
     private readonly NeoApplication? _application;
     private readonly object _gate = new();
     private readonly List<Task> _teardowns = [];
@@ -22,10 +23,16 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     }
 
     internal NeoRpcViewBinding(NeoRpcHost host, global::NeoAstra.NeoAstra view, Func<NeoTransportSessionSnapshot, NeoRpcSession> openSession)
+        : this(host, view, openSession, documentSessionId => view.CloseTransportSession(documentSessionId, "rpc_session_closed"))
+    {
+    }
+
+    internal NeoRpcViewBinding(NeoRpcHost host, global::NeoAstra.NeoAstra view, Func<NeoTransportSessionSnapshot, NeoRpcSession> openSession, Func<string, bool> closeTransportSession)
     {
         _host = host;
         _view = view;
         _openSession = openSession;
+        _closeTransportSession = closeTransportSession;
         _application = view.Environment?.Application;
         view.TransportApplicationMessageReceived += OnMessage;
         view.TransportSessionChanged += OnSessionChanged;
@@ -85,12 +92,12 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private void QueueTransition(NeoTransportSessionSnapshot? snapshot)
     {
         NeoRpcSession? previous;
+        NeoRpcSession? next = null;
         TaskCompletionSource? teardownCompletion = null;
         Exception? openFailure = null;
         lock (_gate)
         {
             if (Volatile.Read(ref _disposed) != 0) return;
-            NeoRpcSession? next = null;
             if (snapshot is not null)
             {
                 try { next = _openSession(snapshot.Value); }
@@ -107,6 +114,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             }
         }
         if (previous is not null) _ = CompleteTeardownAsync(previous, teardownCompletion!);
+        if (next is not null) WatchSession(next);
         if (openFailure is not null)
             _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, $"The platform RPC binding could not open its document session ({FailureName(openFailure)}).");
     }
@@ -184,6 +192,45 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         var name = exception.GetType().FullName ?? exception.GetType().Name;
         return name.Length <= 128 ? name : name[..128];
+    }
+
+    private void WatchSession(NeoRpcSession session)
+    {
+        // A failed send, abuse closure, or host disposal closes a session that is still this view's current
+        // one. Its document cannot observe that, so the transport session it is bound to is revoked too.
+        try { session.Closed.Register(() => OnSessionClosed(session)); }
+        catch (ObjectDisposedException) { OnSessionClosed(session); }
+    }
+
+    private void OnSessionClosed(NeoRpcSession session)
+    {
+        // A session replaced by a navigation or detached by disposal was closed by the transport itself.
+        lock (_gate) if (!ReferenceEquals(_session, session)) return;
+        if (_application is null)
+        {
+            _ = Task.Run(() => RevokeTransportSession(session));
+            return;
+        }
+        try
+        {
+            // The transport is owned by the UI thread, and this runs on whichever thread closed the session.
+            _application.Dispatcher.Post(() => RevokeTransportSession(session));
+        }
+        catch
+        {
+            // Application shutdown closes the transport itself. Nothing may escape either way: this is a
+            // cancellation callback, and a failure here would replace the error that closed the session.
+        }
+    }
+
+    private void RevokeTransportSession(NeoRpcSession session)
+    {
+        bool revoked;
+        try { revoked = _closeTransportSession(session.DocumentSessionId); }
+        catch { revoked = false; }
+        // The transport no longer has that session when a navigation or view disposal already replaced it.
+        if (revoked)
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.ConnectionClosed, "The platform RPC binding closed the transport connection of a closed document session; its document must reload to reconnect.");
     }
 
     private void DiagnoseDroppedFrame(NeoRpcSession session)

@@ -38,6 +38,7 @@ internal sealed class NeoTransportCoordinator
     private PendingHello? _pendingHello;
     private ActiveSession? _active;
     private bool _navigationPending;
+    private bool _revokedUntilNavigation;
     private bool _closed;
     private int _handshakeAttempts;
     private long _navigationGeneration;
@@ -104,6 +105,7 @@ internal sealed class NeoTransportCoordinator
         CloseActive("navigation", sendClose: true);
         if (_pendingHello is { } pending) RememberClosedRendererDocumentId(pending.RendererDocumentId);
         _navigationPending = true;
+        _revokedUntilNavigation = false;
         _pendingHello = null;
         _handshakeAttempts = 0;
         _navigationGeneration++;
@@ -224,6 +226,19 @@ internal sealed class NeoTransportCoordinator
         return envelope;
     }
 
+    // Revokes the active session on the host's initiative, for example when the RPC session bound to it
+    // closed. The document is told through a close frame so its client fails fast instead of waiting on a
+    // host that no longer answers. Nothing in the current navigation may handshake again: only a new
+    // navigation, which goes through the normal handshake, establishes a replacement session.
+    internal bool CloseSession(string documentSessionId, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(documentSessionId);
+        if (_closed || _active is not { } active || !string.Equals(active.DocumentSessionId, documentSessionId, StringComparison.Ordinal)) return false;
+        CloseActive(reason, sendClose: true);
+        _revokedUntilNavigation = true;
+        return true;
+    }
+
     internal void Close(string reason)
     {
         if (_closed) return;
@@ -269,6 +284,13 @@ internal sealed class NeoTransportCoordinator
             if (_active?.RendererDocumentId == rendererDocumentId) CloseActive("handshake_attempt_limit", sendClose: false);
             else RememberClosedRendererDocumentId(rendererDocumentId);
             if (_pendingHello?.RendererDocumentId == rendererDocumentId) _pendingHello = null;
+            return;
+        }
+        if (_revokedUntilNavigation)
+        {
+            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "connection_closed", "A hello was rejected because the host closed this navigation's document session.");
+            SendRejected(rendererDocumentId, "connection_closed");
+            RememberClosedRendererDocumentId(rendererDocumentId);
             return;
         }
         if (_active is { } active)

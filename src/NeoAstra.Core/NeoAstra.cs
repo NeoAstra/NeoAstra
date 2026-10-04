@@ -457,6 +457,9 @@ public sealed class NeoAstra : IAsyncDisposable
 
     internal void NotifyApplicationShutdown() => _transport?.Close("application_shutdown");
 
+    // Must run on the UI thread, like every other transport entry point.
+    internal bool CloseTransportSession(string documentSessionId, string reason) => _transport?.CloseSession(documentSessionId, reason) ?? false;
+
     internal NativeMethods.neoastra_view_t NativeHandle
     {
         get
