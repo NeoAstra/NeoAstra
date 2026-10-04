@@ -1256,6 +1256,41 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task ViewBindingDiagnosesTheFailureTypeThatClosedItsSessionWithoutItsMessage()
+    {
+        var diagnostics = new RpcDiagnosticSink();
+        var builder = new NeoRpcBuilder(TestOptions(new NeoRpcOptions { DiagnosticSink = diagnostics }));
+        builder.AddCommand<Request, Response>("binding.echo", (request, context, _) => ValueTask.FromResult(new Response(request.Id, context.ViewLabel)), RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        await using var host = builder.Build();
+        var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        SetField(view, "_viewLabel", "binding-view");
+        await using var binding = new NeoRpcViewBinding(host, view, snapshot => snapshot.DocumentSessionId == "broken-open"
+            ? throw new InvalidOperationException("private open detail")
+            : host.OpenSession(
+                new NeoRpcSessionIdentity("binding-view", snapshot.DocumentSessionId),
+                (_, _) => throw new ArgumentException("private send detail")));
+        var queue = typeof(NeoRpcViewBinding).GetMethod("QueueTransition", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var receive = typeof(NeoRpcViewBinding).GetMethod("OnMessage", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var snapshot = new NeoTransportSessionSnapshot("failing-document", 0, Array.Empty<string>(), true);
+        queue.Invoke(binding, [snapshot]);
+        receive.Invoke(binding, [new NeoTransportApplicationMessage(Invoke("call", "binding.echo", "{\"id\":\"x\"}"), snapshot, null, true)]);
+        await WaitUntilAsync(() => Failures().Any());
+        var sendFailure = Failures().Single();
+        StringAssert.Contains(sendFailure.Message, "closed its document session");
+        StringAssert.Contains(sendFailure.Message, typeof(ArgumentException).FullName);
+        Assert.IsFalse(sendFailure.Message.Contains("private send detail", StringComparison.Ordinal), "Exception messages may carry user data and stay out of diagnostics.");
+
+        queue.Invoke(binding, [new NeoTransportSessionSnapshot("broken-open", 0, Array.Empty<string>(), true)]);
+        var openFailure = Failures().Last();
+        StringAssert.Contains(openFailure.Message, "could not open its document session");
+        StringAssert.Contains(openFailure.Message, typeof(InvalidOperationException).FullName);
+        Assert.IsFalse(openFailure.Message.Contains("private open detail", StringComparison.Ordinal), "Exception messages may carry user data and stay out of diagnostics.");
+
+        IEnumerable<NeoRpcDiagnostic> Failures() => diagnostics.Values.Where(value => value.Code == NeoRpcErrorCodes.ConnectionClosed && value.Level == NeoRpcDiagnosticLevel.Error);
+        static void SetField(object target, string name, object? value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    }
+
+    [TestMethod]
     public async Task AbuseClosureAndConcurrentDisposalAwaitOneCompleteTeardown()
     {
         var resource = new BlockingAsyncDisposable();

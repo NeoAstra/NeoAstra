@@ -109,8 +109,11 @@ Closing a channel or removing a subscription (`channel_close`, `unsubscribe`, or
 while one of its frames is being sent cancels only that frame: the channel or subscription ends and
 the session keeps serving other calls. A `NeoRpcSendFrame` that observes its token being canceled
 must therefore leave the connection usable; any other send failure closes the session. A view
-binding that then receives frames for a closed session that is still current drops them and writes
-one `connection_closed` warning to the diagnostic sink; only a new document session recovers.
+binding that contains such a failure (or a failure to open a session) writes a `connection_closed`
+error whose message names the exception type, never the exception message, which may carry user
+data. A view binding that then receives frames for a closed session that is still current drops them
+and writes one `connection_closed` warning to the diagnostic sink; only a new document session
+recovers.
 Cancellation is cooperative: after a five-second drain warning, a noncooperative enumerator keeps
 teardown pending and its service alive rather than being force-disposed while in use. Application
 iterators, disposers, and transport callbacks must cooperate with cancellation and avoid blocking;

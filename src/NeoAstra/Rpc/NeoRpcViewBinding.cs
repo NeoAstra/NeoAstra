@@ -108,7 +108,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         }
         if (previous is not null) _ = CompleteTeardownAsync(previous, teardownCompletion!);
         if (openFailure is not null)
-            _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, "The platform RPC binding could not open its document session.");
+            _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, $"The platform RPC binding could not open its document session ({FailureName(openFailure)}).");
     }
 
     private static NeoRpcSession Open(NeoRpcHost host, global::NeoAstra.NeoAstra view, NeoTransportSessionSnapshot snapshot)
@@ -173,10 +173,17 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         catch (ObjectDisposedException) { DiagnoseDroppedFrame(session); }
         catch (Exception exception)
         {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, "The platform RPC binding failed and closed its document session.");
+            _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, $"The platform RPC binding failed and closed its document session ({FailureName(exception)}).");
             try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
-            _ = exception;
         }
+    }
+
+    // Diagnostics stay bounded and free of user data: the exception type identifies a contained failure,
+    // while its message may quote arguments, paths, or payload contents.
+    private static string FailureName(Exception exception)
+    {
+        var name = exception.GetType().FullName ?? exception.GetType().Name;
+        return name.Length <= 128 ? name : name[..128];
     }
 
     private void DiagnoseDroppedFrame(NeoRpcSession session)
