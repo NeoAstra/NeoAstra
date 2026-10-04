@@ -620,6 +620,95 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task AttachedApplication_ConcurrentDispatchNeverCollidesWithACallbackBeingCompleted()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoAstra dispatcher stress test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                });
+                try
+                {
+                    // Workers queue while the UI thread completes callbacks, so a registration handle released by a
+                    // callback is immediately available to a concurrent Post/InvokeAsync.
+                    const int workerCount = 8;
+                    const int dispatchesPerWorker = 6000;
+                    const int expected = workerCount * dispatchesPerWorker;
+                    var dispatcher = application.Dispatcher;
+                    var executions = 0;
+                    var failures = new ConcurrentQueue<Exception>();
+                    var invocations = new ConcurrentQueue<Task>();
+                    using var start = new ManualResetEventSlim();
+                    var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(() =>
+                    {
+                        start.Wait();
+                        for (var index = 0; index < dispatchesPerWorker; index++)
+                        {
+                            try
+                            {
+                                switch (index % 3)
+                                {
+                                    case 0:
+                                        dispatcher.Post(() => Interlocked.Increment(ref executions));
+                                        break;
+                                    case 1:
+                                        invocations.Enqueue(dispatcher.InvokeAsync(() => { Interlocked.Increment(ref executions); }).AsTask());
+                                        break;
+                                    default:
+                                        invocations.Enqueue(dispatcher.InvokeAsync(() => Interlocked.Increment(ref executions)).AsTask());
+                                        break;
+                                }
+                            }
+                            catch (Exception exception)
+                            {
+                                failures.Enqueue(exception);
+                            }
+                        }
+                    })).ToArray();
+                    var queued = Task.WhenAll(workers);
+                    start.Set();
+                    var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+                    while ((!queued.IsCompleted || Volatile.Read(ref executions) < expected - failures.Count) && DateTime.UtcNow < deadline)
+                    {
+                        PumpWindowsMessages();
+                        Thread.Yield();
+                    }
+
+                    Assert.IsTrue(queued.IsCompleted, "Concurrent dispatch did not finish while the UI loop was pumped.");
+                    Assert.IsTrue(failures.IsEmpty, $"{failures.Count} of {expected} dispatches failed; first failure: {failures.FirstOrDefault()}");
+                    Assert.AreEqual(expected, Volatile.Read(ref executions));
+                    Assert.IsTrue(Task.WhenAll(invocations).Wait(TimeSpan.FromSeconds(10)), "Invoked work did not complete its task.");
+                    Assert.AreEqual(0, OutstandingDispatchCount(dispatcher), "Completed callbacks left registrations behind.");
+                    return true;
+                }
+                finally
+                {
+                    application.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
+            });
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+
+        static int OutstandingDispatchCount(NeoDispatcher dispatcher)
+        {
+            var field = typeof(NeoDispatcher).GetField("_outstanding", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            return ((System.Collections.ICollection)field.GetValue(dispatcher)!).Count;
+        }
+    }
+
+    [TestMethod]
     public async Task AttachedApplication_ForwardsNativeLogsAndContainsLoggerExceptions()
     {
         if (!OperatingSystem.IsWindows())

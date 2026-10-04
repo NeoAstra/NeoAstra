@@ -107,29 +107,32 @@ public sealed unsafe class NeoDispatcher
             var registration = new DispatchRegistration(this, work);
             var root = GCHandle.Alloc(registration);
             var context = GCHandle.ToIntPtr(root);
-            NativeMethods.neoastra_result_t result;
+            var accepted = false;
             try
             {
-                result = NativeMethods.neoastra_app_dispatch(
+                // Register before handing the context to native code: once the dispatch is accepted nothing
+                // may fail, or its callback would run work the caller was told had not been queued. A callback
+                // racing this method waits for _sync in CompleteDispatch, so it always observes its entry.
+                _outstanding.Add(context, registration);
+                var result = NativeMethods.neoastra_app_dispatch(
                     handle,
                     (delegate* unmanaged[Cdecl]<void*, void>)&Dispatch,
                     (void*)context);
+                accepted = NativeError.Code(result) == NeoErrorCode.Success;
+                if (!accepted)
+                {
+                    NativeError.ThrowIfFailed(result, default, "dispatch managed work");
+                }
             }
-            catch
+            finally
             {
-                root.Free();
-                throw;
+                if (!accepted)
+                {
+                    // Native code did not keep the context, so no callback will ever release it.
+                    _outstanding.Remove(context);
+                    root.Free();
+                }
             }
-
-            if (NativeError.Code(result) != NeoErrorCode.Success)
-            {
-                root.Free();
-                NativeError.ThrowIfFailed(result, default, "dispatch managed work");
-            }
-
-            // Native dispatch promises not to invoke the callback before returning. Holding
-            // _sync here lets a callback race safely with registration and shutdown.
-            _outstanding.Add(context, registration);
         }
     }
 
@@ -151,11 +154,15 @@ public sealed unsafe class NeoDispatcher
         }
     }
 
-    private void CompleteDispatch(nint context, DispatchRegistration registration)
+    private void CompleteDispatch(nint context, GCHandle root, DispatchRegistration registration)
     {
         lock (_sync)
         {
+            // The runtime reuses a freed handle value immediately, and _outstanding is keyed by that value.
+            // Releasing the handle only after its entry is gone, under the lock Queue allocates in, keeps a
+            // concurrent Queue from being given a value that is still registered.
             _outstanding.Remove(context);
+            root.Free();
         }
 
         registration.Work.Execute();
@@ -168,9 +175,14 @@ public sealed unsafe class NeoDispatcher
         {
             var contextValue = (nint)context;
             var root = GCHandle.FromIntPtr(contextValue);
-            var registration = root.Target as DispatchRegistration;
-            root.Free();
-            registration?.Dispatcher.CompleteDispatch(contextValue, registration);
+            if (root.Target is DispatchRegistration registration)
+            {
+                registration.Dispatcher.CompleteDispatch(contextValue, root, registration);
+            }
+            else
+            {
+                root.Free();
+            }
         }
         catch
         {
