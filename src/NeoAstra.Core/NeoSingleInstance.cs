@@ -75,7 +75,7 @@ public sealed partial class NeoSingleInstance : IAsyncDisposable
     /// <summary>Gets the opaque local endpoint name. It contains no application arguments or secrets.</summary>
     public string EndpointName { get; }
 
-    /// <summary>Acquires the user/session-scoped lock or routes one launch to the existing primary.</summary>
+    /// <summary>Acquires the lock of the user (and of the session on Windows) or routes one launch to the existing primary.</summary>
     /// <param name="application">The application that queues primary launch delivery.</param>
     /// <param name="options">Single-instance security and timeout options.</param>
     /// <param name="secondaryLaunch">The launch envelope sent only when another primary owns the lock.</param>
@@ -145,7 +145,7 @@ public sealed partial class NeoSingleInstance : IAsyncDisposable
         {
             try
             {
-                await using var pipe = new NamedPipeClientStream(".", EndpointName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                await using var pipe = new NamedPipeClientStream(".", GetPipeName(EndpointName), PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.ConnectAsync(deadline.Token).ConfigureAwait(false);
                 var header = new byte[4];
                 BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
@@ -194,7 +194,7 @@ public sealed partial class NeoSingleInstance : IAsyncDisposable
         {
             try
             {
-                await using var pipe = new NamedPipeServerStream(EndpointName, PipeDirection.InOut, 1,
+                await using var pipe = new NamedPipeServerStream(GetPipeName(EndpointName), PipeDirection.InOut, 1,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
                     _options.MaximumEnvelopeBytes + 4, _options.MaximumEnvelopeBytes + 4);
                 await pipe.WaitForConnectionAsync(_stopping.Token).ConfigureAwait(false);
@@ -246,6 +246,17 @@ public sealed partial class NeoSingleInstance : IAsyncDisposable
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(applicationId + "\n" + userScope + "\n" + session));
         return "neoastra-" + Convert.ToHexStringLower(bytes.AsSpan(0, 20));
     }
+
+    // .NET places a relative pipe name under the temporary directory on Unix. The socket path would then depend
+    // on TMPDIR, and under the per-user temporary directory of macOS it exceeds the 104 bytes of a socket path.
+    // The endpoint already identifies the application and the user, and CurrentUserOnly refuses other users.
+    internal static string GetPipeName(string endpoint) => OperatingSystem.IsWindows() ? endpoint : "/tmp/" + endpoint;
+
+    // .NET scopes a named mutex to the terminal session on Unix unless it is told otherwise: a start from
+    // another terminal or from the desktop would not see the primary. Windows keeps its session scope.
+    internal static Mutex CreatePrimaryMutex(string name) => OperatingSystem.IsWindows()
+        ? new Mutex(false, name)
+        : new Mutex(false, name, new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false });
 
     internal static byte[] WriteEnvelope(Guid requestId, NeoLaunchEvent value)
     {
@@ -351,7 +362,7 @@ public sealed partial class NeoSingleInstance : IAsyncDisposable
         {
             try
             {
-                using var mutex = new Mutex(false, name);
+                using var mutex = CreatePrimaryMutex(name);
                 try { _owns = mutex.WaitOne(0); }
                 catch (AbandonedMutexException) { _owns = true; }
                 finally { _acquired.Set(); }

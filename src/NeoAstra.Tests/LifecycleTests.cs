@@ -315,6 +315,31 @@ public sealed class LifecycleTests
     }
 
     [TestMethod]
+    public async Task UnixPrimaryAnswersOnItsEndpoint()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        await WithUnixPrimaryAsync(async (_, applicationId, _) =>
+        {
+            // An envelope without the required fields is refused, by a primary that is listening.
+            var endpoint = NeoSingleInstance.CreateEndpoint(applicationId);
+            Assert.AreEqual(0, await SendRawEnvelopeAsync(endpoint, Encoding.UTF8.GetBytes("{}")));
+        });
+    }
+
+    [TestMethod]
+    public async Task UnixProcessInAnotherSessionDoesNotBecomeASecondPrimary()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        await WithUnixPrimaryAsync(async (helper, applicationId, directory) =>
+        {
+            var gate = Path.Combine(directory, "gate");
+            using var second = StartRaceHelper(helper, applicationId, gate, Path.Combine(directory, "second-ready"), 10, newSession: true);
+            await second.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.AreEqual(11, second.ExitCode);
+        });
+    }
+
+    [TestMethod]
     [SupportedOSPlatform("windows")]
     public async Task ExplicitRejectionIsNotRetriedBySecondaryProcess()
     {
@@ -631,10 +656,9 @@ public sealed class LifecycleTests
         }
     }
 
-    [SupportedOSPlatform("windows")]
     private static async Task<byte> SendRawEnvelopeAsync(string endpoint, byte[] payload)
     {
-        await using var pipe = new NamedPipeClientStream(".", endpoint, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = new NamedPipeClientStream(".", NeoSingleInstance.GetPipeName(endpoint), PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
@@ -649,7 +673,7 @@ public sealed class LifecycleTests
     [SupportedOSPlatform("windows")]
     private static async Task<byte> SendRawHeaderAsync(string endpoint, int length)
     {
-        await using var pipe = new NamedPipeClientStream(".", endpoint, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = new NamedPipeClientStream(".", NeoSingleInstance.GetPipeName(endpoint), PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, length);
@@ -662,7 +686,7 @@ public sealed class LifecycleTests
     [SupportedOSPlatform("windows")]
     private static async Task SendWithoutReadingAcknowledgementAsync(string endpoint, byte[] payload)
     {
-        await using var pipe = new NamedPipeClientStream(".", endpoint, PipeDirection.Out, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = new NamedPipeClientStream(".", NeoSingleInstance.GetPipeName(endpoint), PipeDirection.Out, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
@@ -674,7 +698,7 @@ public sealed class LifecycleTests
     [SupportedOSPlatform("windows")]
     private static async Task SendTruncatedEnvelopeAsync(string endpoint)
     {
-        await using var pipe = new NamedPipeClientStream(".", endpoint, PipeDirection.Out, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using var pipe = new NamedPipeClientStream(".", NeoSingleInstance.GetPipeName(endpoint), PipeDirection.Out, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var header = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(header, 10);
@@ -695,11 +719,46 @@ public sealed class LifecycleTests
         return Path.Combine(source, "NeoAstra.SingleInstanceHelper", "bin", configuration, "net10.0", "NeoAstra.SingleInstanceHelper.dll");
     }
 
+    // Starts a primary in its own Unix session, as a start from another terminal or from the desktop is.
+    private static async Task WithUnixPrimaryAsync(Func<string, string, string, Task> test)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "neoastra-single-instance-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var helper = GetSingleInstanceHelperPath();
+            var applicationId = "neoastra.tests.session." + Guid.NewGuid().ToString("N");
+            var gate = Path.Combine(directory, "gate");
+            var ready = Path.Combine(directory, "primary-ready");
+            await File.WriteAllTextAsync(gate, "go");
+            using var primary = StartRaceHelper(helper, applicationId, gate, ready, 30_000, newSession: true);
+            try
+            {
+                await WaitUntilAsync(() => File.Exists(ready));
+                await test(helper, applicationId, directory);
+            }
+            finally
+            {
+                primary.Kill(entireProcessTree: true);
+                await primary.WaitForExitAsync();
+                // A killed primary leaves its socket behind.
+                File.Delete(NeoSingleInstance.GetPipeName(NeoSingleInstance.CreateEndpoint(applicationId)));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartRaceHelper(string helper, string applicationId, string gate, string ready, int holdMilliseconds)
+        => StartRaceHelper(helper, applicationId, gate, ready, holdMilliseconds, newSession: false);
+
+    private static Process StartRaceHelper(string helper, string applicationId, string gate, string ready, int holdMilliseconds, bool newSession)
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true };
         start.ArgumentList.Add(helper);
-        start.ArgumentList.Add("--race");
+        start.ArgumentList.Add(newSession ? "--race-session" : "--race");
         start.ArgumentList.Add(applicationId);
         start.ArgumentList.Add(gate);
         start.ArgumentList.Add(ready);
