@@ -189,6 +189,17 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void MacStatusItem_SourceRetainsTheItemUntilItIsRemoved()
+    {
+        // The status bar does not keep the item it returns. Unretained, the item leaves the menu bar when the
+        // autorelease pool drains, and removing it at quit touches freed memory.
+        var tray = File.ReadAllText(FindRepositoryFile("src", "NeoAstra", "Desktop", "MacTray.cs"));
+        StringAssert.Contains(tray, "Native.SendVoid(item, Native.GetSelector(\"retain\"))");
+        StringAssert.Contains(tray, "Native.GetSelector(\"removeStatusItem:\"), item); Native.SendVoid(item, Native.GetSelector(\"release\"))");
+        Assert.AreEqual(1, tray.Split("removeStatusItem:").Length - 1, "Every removal goes through the one that releases the item.");
+    }
+
+    [TestMethod]
     public void PlatformBackends_SourcePairSchemeHandlingAndBridgeLimitations()
     {
         var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));

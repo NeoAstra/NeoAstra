@@ -30,7 +30,10 @@ internal sealed unsafe partial class MacTrayPresenter(NeoCommandService commands
     public void Set(NeoTrayItemOptions options)
     {
         EnsureAccess(); ObjectDisposedException.ThrowIf(_disposed, this); EnsureTarget();
-        var item = Native.SendDouble(_statusBar, Native.GetSelector("statusItemWithLength:"), -1); if (item == 0) throw new InvalidOperationException("Unable to allocate a macOS status item."); var button = Native.Send(item, Native.GetSelector("button")); if (button == 0) { Native.SendVoidArg(_statusBar, Native.GetSelector("removeStatusItem:"), item); throw new InvalidOperationException("The macOS status item has no button."); }
+        var item = Native.SendDouble(_statusBar, Native.GetSelector("statusItemWithLength:"), -1); if (item == 0) throw new InvalidOperationException("Unable to allocate a macOS status item.");
+        // The status bar does not keep the item it returns: unretained, it leaves the menu bar when the autorelease pool drains.
+        Native.SendVoid(item, Native.GetSelector("retain"));
+        var button = Native.Send(item, Native.GetSelector("button")); if (button == 0) { RemoveStatusItem(item); throw new InvalidOperationException("The macOS status item has no button."); }
         var menuItems = new List<nint>(); nint menu = 0, image = 0;
         try
         {
@@ -46,7 +49,7 @@ internal sealed unsafe partial class MacTrayPresenter(NeoCommandService commands
             _entries.TryGetValue(options.Id, out var previous); _entries[options.Id] = replacement; if (previous is not null) Destroy(previous);
             item = 0; image = 0; menu = 0;
         }
-        catch { if (menu != 0) Native.SendVoid(menu, Native.GetSelector("release")); if (image != 0) Native.SendVoid(image, Native.GetSelector("release")); Native.SendVoidArg(_statusBar, Native.GetSelector("removeStatusItem:"), item); foreach (var native in menuItems) _menuActions.Remove(native); throw; }
+        catch { if (menu != 0) Native.SendVoid(menu, Native.GetSelector("release")); if (image != 0) Native.SendVoid(image, Native.GetSelector("release")); if (item != 0) RemoveStatusItem(item); foreach (var native in menuItems) _menuActions.Remove(native); throw; }
     }
 
     public bool Remove(string id) { EnsureAccess(); if (!_entries.Remove(id, out var entry)) return false; Destroy(entry); return true; }
@@ -82,7 +85,8 @@ internal sealed unsafe partial class MacTrayPresenter(NeoCommandService commands
     }
     private void MenuActivated(nint sender) { if (!_menuActions.TryGetValue(sender, out var action) || action.CommandId is null) return; try { _ = commands.ActivateAsync(action.CommandId); } catch { } }
 
-    private void Destroy(Entry entry) { _buttons.Remove(entry.Button); foreach (var item in entry.ActionItems) _menuActions.Remove(item); Native.SendVoidArg(_statusBar, Native.GetSelector("removeStatusItem:"), entry.Item); if (entry.Menu != 0) Native.SendVoid(entry.Menu, Native.GetSelector("release")); if (entry.Image != 0) Native.SendVoid(entry.Image, Native.GetSelector("release")); }
+    private void Destroy(Entry entry) { _buttons.Remove(entry.Button); foreach (var item in entry.ActionItems) _menuActions.Remove(item); RemoveStatusItem(entry.Item); if (entry.Menu != 0) Native.SendVoid(entry.Menu, Native.GetSelector("release")); if (entry.Image != 0) Native.SendVoid(entry.Image, Native.GetSelector("release")); }
+    private void RemoveStatusItem(nint item) { Native.SendVoidArg(_statusBar, Native.GetSelector("removeStatusItem:"), item); Native.SendVoid(item, Native.GetSelector("release")); }
     private void EnsureTarget()
     {
         if (_target != 0) return; EnsureClass(); _target = Native.Send(Native.Send(s_targetClass, Native.GetSelector("alloc")), Native.GetSelector("init")); _statusBar = Native.Send(Native.GetClass("NSStatusBar"), Native.GetSelector("systemStatusBar")); if (_target == 0 || _statusBar == 0 || !Owners.TryAdd(_target, this)) throw new InvalidOperationException("Unable to initialize the macOS status callback target.");
