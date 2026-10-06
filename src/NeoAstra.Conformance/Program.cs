@@ -434,6 +434,13 @@ internal static partial class Program
                 // A window can host several views, the newest over the others. A view under another one is not
                 // drawn, but it is still alive, and it outlives a newer view that goes away.
                 var window = CreateHiddenWindow("NeoAstra shared window conformance");
+                // The path is read as a value: a backend may write the slash of a JSON string in its escaped form.
+                static async ValueTask<string?> PathAsync(NeoAstra.NeoAstra view)
+                {
+                    using var path = await EvaluateJsonAsync(view, "location.pathname");
+                    return path.RootElement.GetString();
+                }
+
                 try
                 {
                     await using var firstView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window));
@@ -441,12 +448,15 @@ internal static partial class Program
                     await using (var secondView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window)))
                     {
                         await NavigateAndWaitAsync(secondView, SecondUri, options.Timeout);
-                        Require(await firstView.EvaluateScriptAsync("location.pathname") == "\"/index.html\"", "The first view of a window did not survive a second one.");
-                        Require(await secondView.EvaluateScriptAsync("location.pathname") == "\"/second.html\"", "The second view of a window does not show its own document.");
+                        var under = await PathAsync(firstView);
+                        Require(under == "/index.html", $"The first view of a window did not survive a second one: it is at '{under}'.");
+                        var over = await PathAsync(secondView);
+                        Require(over == "/second.html", $"The second view of a window does not show its own document: it is at '{over}'.");
                     }
 
                     await NavigateAndWaitAsync(firstView, SecondUri, options.Timeout);
-                    Require(await firstView.EvaluateScriptAsync("location.pathname") == "\"/second.html\"", "The first view of a window did not survive the end of a second one.");
+                    var left = await PathAsync(firstView);
+                    Require(left == "/second.html", $"The first view of a window did not survive the end of a second one: it is at '{left}'.");
                 }
                 finally
                 {
