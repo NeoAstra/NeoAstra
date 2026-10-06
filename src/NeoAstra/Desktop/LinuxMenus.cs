@@ -34,6 +34,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         var generation = checked(++_generation);
         var callbacks = new List<GCHandle>();
         nint model = 0, actions = 0, widget = 0;
+        nuint parentDestroyed = 0;
         try
         {
             actions = Native.g_simple_action_group_new();
@@ -42,18 +43,31 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
             model = Build(items, target, generation, actions, callbacks, ref nextAction);
             widget = target.Kind == TargetKind.Context ? Native.gtk_popover_menu_new_from_model(model) : Native.gtk_popover_menu_bar_new_from_model(model);
             if (widget == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu widget.");
+            // The presenter keeps a reference of its own to the widget. A window that is destroyed takes its widgets
+            // out of the tree before the menu is removed here, and the widget has to be an object still by then.
+            Native.g_object_ref_sink(widget);
             Native.gtk_widget_insert_action_group(widget, "neoastra", actions);
-            if (target.Kind == TargetKind.Context) Native.gtk_widget_set_parent(widget, target.Widget);
+            if (target.Kind == TargetKind.Context)
+            {
+                Native.gtk_widget_set_parent(widget, target.Widget);
+                // A view does not know of the popover, and a widget must not be finalized with a child left: the
+                // popover leaves the view when the view is destroyed.
+                parentDestroyed = Native.g_signal_connect_data(target.Widget, "destroy", (nint)(delegate* unmanaged[Cdecl]<nint, nint, void>)&ParentDestroyed, widget, 0, 0);
+            }
             else Attach(target, widget);
-            var replacement = new Entry(target, model, actions, widget, callbacks, generation);
+            var replacement = new Entry(target, model, actions, widget, callbacks, generation, parentDestroyed);
             model = actions = widget = 0;
-            if (_entries.Remove(targetId, out var old)) Destroy(old, detach: true);
+            if (_entries.Remove(targetId, out var old)) Destroy(old);
             _entries[targetId] = replacement;
             if (target.Kind != TargetKind.Context) ApplyPreferred(target.Window);
         }
         catch
         {
-            if (widget != 0 && Native.gtk_widget_get_parent(widget) != 0) Native.gtk_widget_unparent(widget);
+            if (widget != 0 && Native.gtk_widget_get_parent(widget) is var parent && parent != 0)
+            {
+                if (parentDestroyed != 0) Native.g_signal_handler_disconnect(parent, parentDestroyed);
+                Native.gtk_widget_unparent(widget);
+            }
             if (widget != 0) Native.g_object_unref(widget);
             if (model != 0) Native.g_object_unref(model);
             if (actions != 0) Native.g_object_unref(actions);
@@ -67,7 +81,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         EnsureAccess();
         if (_entries.Remove(targetId, out var entry))
         {
-            Destroy(entry, detach: true);
+            Destroy(entry);
             if (entry.Target.Kind != TargetKind.Context) ApplyPreferred(entry.Target.Window);
         }
     }
@@ -153,6 +167,8 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         {
             var box = Native.gtk_box_new(1, 0);
             if (box == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu host.");
+            // The presenter keeps a reference of its own to the box, as it does to the menu widgets.
+            Native.g_object_ref_sink(box);
             Native.g_object_set_data(box, MenuHostKey, box);
             var content = Native.gtk_window_get_child(target.Window);
             if (content != 0) Native.g_object_ref(content);
@@ -173,16 +189,24 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         _hosts[target.Window] = host with { References = host.References + 1 };
     }
 
-    private void Destroy(Entry entry, bool detach)
+    private void Destroy(Entry entry)
     {
+        // A menu widget that still has a parent is in a window that is alive, and leaves it here. One without a parent
+        // was taken out of the tree already, by its window as it was destroyed or by its view as it went away.
+        var parent = Native.gtk_widget_get_parent(entry.Widget);
         if (entry.Target.Kind != TargetKind.Context && _hosts.TryGetValue(entry.Target.Window, out var host))
         {
-            if (detach && Native.gtk_widget_get_parent(entry.Widget) == host.Box) Native.gtk_box_remove(host.Box, entry.Widget);
+            if (parent != 0 && parent == host.Box) Native.gtk_box_remove(host.Box, entry.Widget);
             var references = host.References - 1;
             if (references <= 0) RestoreHost(entry.Target.Window, host);
             else _hosts[entry.Target.Window] = host with { References = references };
         }
-        else if (detach && Native.gtk_widget_get_parent(entry.Widget) != 0) Native.gtk_widget_unparent(entry.Widget);
+        else if (parent != 0)
+        {
+            if (entry.ParentDestroyed != 0) Native.g_signal_handler_disconnect(parent, entry.ParentDestroyed);
+            Native.gtk_widget_unparent(entry.Widget);
+        }
+        Native.g_object_unref(entry.Widget);
         Native.g_object_unref(entry.Model);
         Native.g_object_unref(entry.Actions);
         foreach (var callback in entry.Callbacks) if (callback.IsAllocated) callback.Free();
@@ -192,7 +216,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
 
     private void ApplyPreferred(nint window)
     {
-        if (!_hosts.TryGetValue(window, out var host)) return;
+        if (!_hosts.TryGetValue(window, out var host) || host.ManagedWindow.IsClosed) return;
         var preferred = Preferred(window);
         foreach (var entry in _entries.Values.Where(value => value.Target.Window == window && value.Target.Kind != TargetKind.Context)) Native.gtk_widget_set_visible(entry.Widget, ReferenceEquals(entry, preferred));
         _hosts[window] = host with { ActiveId = preferred?.Target.Id };
@@ -202,23 +226,24 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     {
         _hosts.Remove(window);
         host.ManagedWindow.Closed -= WindowClosed;
-        if (host.ManagedWindow.IsClosed) return;
-        // The menu bars are gone by now, so what is left in the box is the content of the window, which becomes its
-        // child again. It is read from the box rather than remembered: the native backend may have put the container
-        // of the views there after the box was made.
-        var content = Native.gtk_widget_get_first_child(host.Box);
-        if (content == 0)
+        if (!host.ManagedWindow.IsClosed)
         {
-            Native.gtk_window_set_child(window, 0);
-            return;
+            // The menu bars are gone by now, so what is left in the box is the content of the window, which becomes
+            // its child again. It is read from the box rather than remembered: the native backend may have put the
+            // container of the views there after the box was made.
+            var content = Native.gtk_widget_get_first_child(host.Box);
+            if (content == 0) Native.gtk_window_set_child(window, 0);
+            // A window has one child. A box that holds more than that stays where it is.
+            else if (Native.gtk_widget_get_next_sibling(content) == 0)
+            {
+                Native.g_object_ref(content);
+                Native.gtk_box_remove(host.Box, content);
+                Native.gtk_window_set_child(window, content);
+                Native.g_object_unref(content);
+            }
         }
 
-        // A window has one child. A box that holds more than that stays where it is.
-        if (Native.gtk_widget_get_next_sibling(content) != 0) return;
-        Native.g_object_ref(content);
-        Native.gtk_box_remove(host.Box, content);
-        Native.gtk_window_set_child(window, content);
-        Native.g_object_unref(content);
+        Native.g_object_unref(host.Box);
     }
 
     private void WindowClosed(object? sender, EventArgs args)
@@ -227,8 +252,10 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         var host = _hosts.FirstOrDefault(pair => ReferenceEquals(pair.Value.ManagedWindow, managed));
         if (host.Value is null) return;
         _hosts.Remove(host.Key);
+        managed.Closed -= WindowClosed;
         foreach (var id in _entries.Where(pair => pair.Value.Target.Window == host.Key).Select(static pair => pair.Key).ToArray())
-            if (_entries.Remove(id, out var entry)) Destroy(entry, detach: false);
+            if (_entries.Remove(id, out var entry)) Destroy(entry);
+        Native.g_object_unref(host.Value.Box);
     }
 
     private void Activate(ActivationContext context)
@@ -322,8 +349,14 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var entry in _entries.Values.ToArray()) Destroy(entry, detach: true);
+        foreach (var entry in _entries.Values.ToArray()) Destroy(entry);
         _entries.Clear();
+        foreach (var host in _hosts.Values)
+        {
+            host.ManagedWindow.Closed -= WindowClosed;
+            Native.g_object_unref(host.Box);
+        }
+
         _hosts.Clear();
     }
 
@@ -336,9 +369,13 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Activated(nint action, nint parameter, nint data) { try { var handle = GCHandle.FromIntPtr(data); if (handle.Target is ActivationContext context) context.Presenter.Activate(context); } catch { } }
 
+    // Runs as the view of a context menu is destroyed. The data is the popover, which the presenter still holds.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void ParentDestroyed(nint parent, nint data) { try { if (Native.gtk_widget_get_parent(data) == parent) Native.gtk_widget_unparent(data); } catch { } }
+
     private enum TargetKind { Application, Window, Context }
     private sealed record Target(string Id, TargetKind Kind, NeoWindow ManagedWindow, NeoAstra? View, nint Window, nint Widget);
-    private sealed record Entry(Target Target, nint Model, nint Actions, nint Widget, IReadOnlyList<GCHandle> Callbacks, long Generation);
+    private sealed record Entry(Target Target, nint Model, nint Actions, nint Widget, IReadOnlyList<GCHandle> Callbacks, long Generation, nuint ParentDestroyed);
     private sealed record ActivationContext(LinuxMenuPresenter Presenter, string TargetId, long Generation, string? CommandId, NeoMenuRole? Role);
     private sealed record RoleCandidate(NeoAstra View, NeoWindow? Owner, string? Label, nint Widget);
     private sealed record Host(nint Box, int References, string? ActiveId, NeoWindow ManagedWindow);
@@ -380,7 +417,9 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         [LibraryImport(Gtk)] internal static partial void gtk_window_minimize(nint window);
         [LibraryImport(Gtk)] internal static partial void gtk_window_close(nint window);
         [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nuint g_signal_connect_data(nint instance, string signal, nint callback, nint data, nint destroyData, uint flags);
+        [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_signal_handler_disconnect(nint instance, nuint handler);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial nint g_object_ref(nint value);
+        [LibraryImport("libgobject-2.0.so.0")] internal static partial nint g_object_ref_sink(nint value);
         [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_object_set_data(nint value, string key, nint data);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_object_unref(nint value);
         [LibraryImport("libwebkitgtk-6.0.so.4", StringMarshalling = StringMarshalling.Utf8)] internal static partial void webkit_web_view_execute_editing_command(nint view, string command);
