@@ -59,6 +59,17 @@ page, such as the frontend transport handshake, or until `document.readyState` i
 observed on macOS 26 for custom-scheme and HTTP documents. WebKitGTK uses the same engine but has not
 been checked.
 
+Do not expect `EvaluateScriptAsync` to wait for a Promise. It returns the script's completion value as
+the browser engine reports it, so a script that ends in a Promise, which every call to an `async`
+function does, gives no usable result. WKWebView fails such an evaluation at once with a
+`NeoAstraException` whose `Domain` is `wkwebview` and whose `NativeCode` is 5, the error it reports for
+any value it cannot return, a function or a DOM node included. A script that throws arrives as the same
+exception type with `NativeCode` 4. WebView2 completes the evaluation with the serialized Promise object
+instead. To read the outcome of asynchronous work, have the page store it or post it as a message, then
+read it from a later evaluation or the message handler. The WKWebView behavior was observed on macOS 26.
+The WebView2 behavior is the one the conformance harness was written against and was not re-checked
+for this note, and WebKitGTK has not been checked.
+
 Chromeless drag and resize entry points must be called while a native pointer press is still held.
 They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
 when no suitable press is active and `NotSupportedException` when the operation has no safe native
