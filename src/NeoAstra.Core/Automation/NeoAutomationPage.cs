@@ -386,11 +386,47 @@ public sealed class NeoAutomationPage
             ThrowIfClosed();
             var window = View.OwnedWindow ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
             if (window.State != NeoWindowState.Normal) window.State = NeoWindowState.Normal;
-            window.ClientSize = new NeoSize(width, height);
+
+            // The size is the one of the page, and a window can be larger than its page: a GTK window draws its title
+            // bar inside its own size, and an application may lay other things out around the view. What the window
+            // has beyond the page now is what it keeps beyond the page it is asked for.
+            var extraWidth = 0;
+            var extraHeight = 0;
+            if (View.ZoomFactor == 1d && await ReadViewportAsync(cancellationToken) is { Width: > 0, Height: > 0 } before)
+            {
+                var client = window.ClientSize;
+                extraWidth = Math.Max(client.Width - before.Width, 0);
+                extraHeight = Math.Max(client.Height - before.Height, 0);
+            }
+
+            window.ClientSize = new NeoSize(width + extraWidth, height + extraHeight);
             // The page learns its new size from a resize that the engine delivers a moment later.
-            await Task.Delay(50, cancellationToken);
+            var clock = Stopwatch.StartNew();
+            do
+            {
+                await Task.Delay(25, cancellationToken);
+            }
+            while (clock.ElapsedMilliseconds < 500 && await ReadViewportAsync(cancellationToken) is { } now && (now.Width != width || now.Height != height));
             return true;
         }, cancellationToken), cancellationToken).AsTask());
+    }
+
+    /// <summary>Reads the size of the viewport of the page, or <see langword="null"/> when the page does not say.</summary>
+    private async Task<NeoSize?> ReadViewportAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var info = await CallAgentAsync("info", null, cancellationToken);
+            if (info.IsOk && info.Value.TryGetProperty("viewport", out var viewport) &&
+                viewport.TryGetProperty("width", out var width) && viewport.TryGetProperty("height", out var height))
+            {
+                return new NeoSize((int)Math.Round(width.GetDouble()), (int)Math.Round(height.GetDouble()));
+            }
+        }
+        catch (DialogInterruptedException) { }
+        catch (NeoAutomationException) { /* the page is between two documents */ }
+
+        return null;
     }
 
     // -------------------------------------------------------------------------------------------------------------
