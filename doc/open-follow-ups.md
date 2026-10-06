@@ -27,10 +27,10 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   restricts those through AppArmor. On the Linux runner of the workflow, Ubuntu 24.04 under Xvfb, the
   desktop smoke fixture passes and the browser conformance harness then aborts at its first page with
   `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. The harness completes on Ubuntu 24.04
-  x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as it is. To do: let the
-  workflow lift the restriction on its runner, with
-  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the harness, and run it
-  there. An Ubuntu 24.04 arm64 virtual machine, reached over SSH and under Xvfb, aborted with
+  x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as it is. The workflow now
+  lifts the restriction on its runner, with
+  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the harness. To do: run the
+  workflow and see that the harness completes there. An Ubuntu 24.04 arm64 virtual machine, reached over SSH and under Xvfb, aborted with
   `Failed to fully launch dbus-proxy` when it loaded a page, with or without `dbus-run-session`, and
   the checks there ran with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`; whether that had the same
   cause is not known.
