@@ -764,9 +764,10 @@ internal static partial class Program
 
     // WKWebView fails an evaluation whose completion value it cannot return, a Promise included, with
     // WKErrorJavaScriptResultTypeIsUnsupported (5). A script that throws fails with WKErrorJavaScriptExceptionOccurred (4),
-    // so the two are told apart by the native code: both arrive as a NeoAstraException.
+    // so the two are told apart by the native code: both arrive as a NeoAstraException. WebKitGTK does the same with
+    // WEBKIT_JAVASCRIPT_ERROR_INVALID_RESULT (601) and WEBKIT_JAVASCRIPT_ERROR_SCRIPT_FAILED (699).
     private static bool IsUnsupportedResultType(NeoAstraException exception)
-        => exception is { Domain: "wkwebview", NativeCode: 5 };
+        => exception is { Domain: "wkwebview", NativeCode: 5 } or { Domain: "webkitgtk", NativeCode: 601 };
 
     // A backend can report a navigation as finished before a deferred module script has run (WKWebView does),
     // so state set by the fixture module is read only after the document itself has loaded.

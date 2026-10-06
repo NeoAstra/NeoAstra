@@ -87,17 +87,6 @@ when it is done.
   from the repository root on each platform. On Linux the run is expected to stop at "Promise results"
   if WebKitGTK rejects a Promise result (see the next entry), and otherwise at "navigation, history,
   and redirects" until `CanGoBack` is reported there.
-- **Conformance: a rejected Promise result is recognized on macOS only.** `IsUnsupportedResultType` in
-  `src/NeoAstra.Conformance/Program.cs` turns one error into a skip of the "Promise results" and
-  "IndexedDB" scenarios: a `NeoAstraException` with the domain `wkwebview` and the native code 5,
-  which is how WKWebView refuses to return a script result. WebKitGTK has an error of its own for
-  that, `WEBKIT_JAVASCRIPT_ERROR_INVALID_RESULT` (601), which its own tests expect for a DOM node, and
-  the GTK backend passes the code of an evaluation error on under the domain `webkitgtk`
-  (`script_finished` in `native/src/linux/gtk_backend.cpp`). If WebKitGTK reports a Promise that way,
-  "Promise results" ends the run on Linux with that exception, as it did on macOS. This follows from
-  the WebKitGTK source and has not been run. To do: run the harness on Linux and, if the scenario
-  fails with the native code 601, add that domain and code to `IsUnsupportedResultType`. A script that
-  throws is `WEBKIT_JAVASCRIPT_ERROR_SCRIPT_FAILED` (699) there and must keep failing its scenario.
 - **Conformance: "IndexedDB" is skipped on every backend.** The scenario evaluates an `async` function
   and reads the value that `EvaluateScriptAsync` returns, so it can pass only where a Promise result
   is awaited, and no backend is known to do that; see the next entry. IndexedDB itself is therefore
@@ -194,10 +183,12 @@ function does, gives no usable result. WKWebView fails such an evaluation at onc
 any value it cannot return, a function or a DOM node included. A value that it does return but that
 has no JSON form, such as a date or a number that is not finite, is reported as `null`. A script that
 throws arrives as the same exception type with `NativeCode` 4. WebView2 completes the evaluation with
-the serialized Promise object instead. To read the outcome of asynchronous work, have the page store it
-or post it as a message, then read it from a later evaluation or the message handler. The WKWebView
-behavior was observed on macOS 26. The WebView2 behavior is the one the conformance harness was written
-against and was not re-checked for this note, and WebKitGTK has not been checked.
+the serialized Promise object instead. WebKitGTK fails the evaluation as WKWebView does, with the
+`Domain` `webkitgtk` and the `NativeCode` 601 (`WEBKIT_JAVASCRIPT_ERROR_INVALID_RESULT`), and reports
+a script that throws with the code 699. To read the outcome of asynchronous work, have the page store
+it or post it as a message, then read it from a later evaluation or the message handler. The WKWebView
+behavior was observed on macOS 26 and the WebKitGTK one with WebKitGTK 2.52. The WebView2 behavior is
+the one the conformance harness was written against and was not re-checked for this note.
 
 `NeoAstra.CaptureAsync` returns a PNG or JPEG image of what a view shows. The image is in device
 pixels: its size is the captured size in CSS pixels multiplied by the zoom and the device scale. A
