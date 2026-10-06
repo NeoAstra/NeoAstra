@@ -942,7 +942,12 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
         case NEOASTRA_CAPABILITY_TRACKED_POPUPS:
         case NEOASTRA_CAPABILITY_SCRIPT_DIALOGS:
         case NEOASTRA_CAPABILITY_HTTP_AUTHENTICATION:
+        case NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT:
             info->support=NEOASTRA_SUPPORT_NATIVE;break;
+#if !defined(__APPLE__)
+        case NEOASTRA_CAPABILITY_CAPTURE_FULL_PAGE:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+#endif
 #if defined(_WIN32)
         case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:
         case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
@@ -1021,6 +1026,14 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t* v,ne
 neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t* v,double* factor){if(!v||!factor)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_get_zoom_factor(v,factor);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neoastra_view_setting_t setting,uint32_t enabled){if(!v||setting>NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_set_setting(v,setting,enabled!=0);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_open_devtools(v);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t* v,const neoastra_capture_options_t* options,neoastra_buffer_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){
+    if(outop)*outop=nullptr;
+    if(!v||!cb||!valid_struct(options,options?options->size:0,sizeof(*options))||options->format>NEOASTRA_CAPTURE_FORMAT_JPEG||options->quality>100||options->full_page>1||options->region.width<0||options->region.height<0)return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid capture arguments");
+    if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"capture must begin on the UI thread");
+    neoastra_operation_t* op{};
+    try{op=make_operation(outop);const auto result=neo_platform_view_capture(v,*options,cb,ctx,op,e);if(result!=NEOASTRA_OK){op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}}return result;}
+    catch(...){if(op)op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}return neo_fail(e,NEOASTRA_ERROR_NATIVE_FAILURE,"capture could not be started");}
+}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t* v,double factor){if(!v||!std::isfinite(factor)||factor<0.25||factor>5.0)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_set_zoom_factor(v,factor);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_get_native_handle(neoastra_view_t* v,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h){if(!v||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEOASTRA_ERROR_INVALID_ARGUMENT;return neo_platform_view_get_handle(v,kind,h);}
 neoastra_result_t NEOASTRA_CALL neoastra_query_extension(const void*,neoastra_string_view_t name,uint32_t,const void** table){if(table)*table=nullptr;if(!table||!neo_valid_utf8(name))return NEOASTRA_ERROR_INVALID_ARGUMENT;return NEOASTRA_ERROR_NOT_SUPPORTED;}

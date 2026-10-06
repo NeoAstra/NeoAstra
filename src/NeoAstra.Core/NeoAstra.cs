@@ -366,6 +366,76 @@ public sealed class NeoAstra : IAsyncDisposable
         }
     }
 
+    /// <summary>Captures an image of what this view currently shows.</summary>
+    /// <param name="options">The capture options, or <see langword="null"/> for a PNG image of the visible viewport.</param>
+    /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
+    /// <returns>The encoded image.</returns>
+    /// <remarks>
+    /// The view has to be drawn to be captured: on Windows a view whose window is hidden fails with
+    /// <see cref="InvalidOperationException"/>, and other backends may not complete for such a view, so pass a
+    /// cancellation token that bounds the wait.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The options are inconsistent, or the region is outside the visible viewport.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The format or the quality of the options is out of range.</exception>
+    /// <exception cref="InvalidOperationException">The view cannot be captured in its current state.</exception>
+    /// <exception cref="NotSupportedException">The active backend or the loaded native library has no such capture.</exception>
+    /// <exception cref="NeoAstraException">The browser engine failed to capture or encode the view.</exception>
+    public unsafe ValueTask<NeoCapturedImage> CaptureAsync(NeoCaptureOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        options ??= new NeoCaptureOptions();
+        options.Validate();
+        cancellationToken.ThrowIfCancellationRequested();
+        var region = options.Region ?? default;
+        var raw = new NativeMethods.neoastra_capture_options
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_capture_options),
+            version = 1,
+            format = (NativeMethods.neoastra_capture_format)options.Format,
+            quality = options.Format == NeoCaptureFormat.Jpeg ? (uint)(options.Quality ?? 0) : 0u,
+            full_page = options.FullPage ? 1u : 0u,
+            region = new NativeMethods.neoastra_rect { x = region.X, y = region.Y, width = region.Width, height = region.Height },
+        };
+        var nativeOptions = new NativeMethods.neoastra_capture_options_t(raw);
+        var operation = new NativeOperation<NeoCapturedImage>(cancellationToken, options.Format);
+        NativeMethods.neoastra_operation_t nativeOperation = default;
+        NativeMethods.neoastra_error_t error = default;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_view_capture_async(
+                NativeHandle,
+                &nativeOptions,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_buffer_t, NativeMethods.neoastra_error_t, void>)&CaptureCompleted,
+                (void*)operation.Context,
+                &nativeOperation,
+                &error);
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            operation.FailStart(new NotSupportedException("The loaded native library cannot capture a view.", exception));
+            return operation.ValueTask;
+        }
+        catch (Exception ex)
+        {
+            operation.FailStart(ex);
+            return operation.ValueTask;
+        }
+
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            var info = NativeError.Read(NativeError.Code(result), error.Handle);
+            if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
+            operation.FailStart(NativeError.CreateException(info, "capture view", cancellationToken));
+        }
+        else
+        {
+            operation.AttachOperation(nativeOperation.Handle);
+        }
+
+        return operation.ValueTask;
+    }
+
     /// <summary>Gets a typed borrowed native browser handle.</summary>
     /// <param name="kind">The requested backend handle kind.</param>
     /// <returns>A borrowed native handle valid while this view remains alive.</returns>
@@ -1064,6 +1134,36 @@ public sealed class NeoAstra : IAsyncDisposable
         catch (Exception ex)
         {
             NativeOperation.Get<NeoUserScript>(context)?.Fail(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void CaptureCompleted(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_buffer_t buffer, NativeMethods.neoastra_error_t error)
+    {
+        SafeBufferHandle? bufferHandle = buffer.Handle == 0 ? null : new SafeBufferHandle(buffer.Handle);
+        try
+        {
+            var operation = NativeOperation.Get<NeoCapturedImage>(context);
+            if (operation is null) return;
+            if (NativeError.Code(result) != NeoErrorCode.Success)
+            {
+                operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "capture view"));
+                return;
+            }
+
+            var length = buffer.Handle == 0 ? 0 : NativeMethods.neoastra_buffer_get_length(buffer);
+            var data = buffer.Handle == 0 ? null : NativeMethods.neoastra_buffer_get_data(buffer);
+            if (length == 0 || data is null) throw new InvalidDataException("The native backend returned an empty capture.");
+            if (length > (ulong)Array.MaxLength) throw new InvalidDataException("The native capture is too large.");
+            operation.Complete(new NeoCapturedImage((NeoCaptureFormat)operation.Owner!, new ReadOnlySpan<byte>(data, (int)length).ToArray()));
+        }
+        catch (Exception ex)
+        {
+            NativeOperation.Get<NeoCapturedImage>(context)?.Fail(ex);
+        }
+        finally
+        {
+            bufferHandle?.Dispose();
         }
     }
 

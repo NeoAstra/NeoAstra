@@ -328,6 +328,79 @@ void web_process_terminated(WebKitWebView*,WebKitWebProcessTerminationReason rea
 
 struct script_context { neoastra_view_t* view{};neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{}; };
 void script_finished(GObject* object,GAsyncResult* result,void* data){std::unique_ptr<script_context> context(static_cast<script_context*>(data));GError* error{};auto* value=webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(object),result,&error);std::string output;neoastra_error_t* native_error{};auto requested=NEOASTRA_OK;if(error){requested=NEOASTRA_ERROR_NATIVE_FAILURE;native_error=make_error(requested,error->message,error->code);g_error_free(error);}else if(value){char* json=jsc_value_to_json(value,0);output=json?json:"null";g_free(json);g_object_unref(value);}neoastra_result_t actual{};if(context->operation->try_complete(requested,actual))context->callback(context->context,actual,actual==NEOASTRA_OK?neo_string_view(output):neoastra_string_view_t{},native_error);if(native_error)native_error->release();context->operation->release();}
+struct capture_context { neoastra_capture_options_t options{};neoastra_buffer_callback_t callback{};void* context{};neoastra_operation_t* operation{};double zoom{1};int view_width{};int view_height{}; };
+// Crops a snapshot, which is in device pixels, to the requested region and encodes it. Returns null and a reason on failure.
+neoastra_buffer_t* encode_capture(GdkTexture* texture,const capture_context& capture,neoastra_result_t& failure,const char*& reason){
+    const int width=gdk_texture_get_width(texture),height=gdk_texture_get_height(texture);
+    if(width<=0||height<=0){reason="WebKitGTK returned an empty capture";return nullptr;}
+    int left=0,top=0,right=width,bottom=height;
+    if(!capture.options.full_page&&capture.options.region.width>0&&capture.options.region.height>0){
+        // CSS pixels become view units through the zoom level, and view units become texture pixels through the device scale.
+        const double scale_x=capture.zoom*(capture.view_width>0?static_cast<double>(width)/capture.view_width:1.0);
+        const double scale_y=capture.zoom*(capture.view_height>0?static_cast<double>(height)/capture.view_height:1.0);
+        const auto& region=capture.options.region;
+        left=std::clamp(static_cast<int>(region.x*scale_x),0,width);top=std::clamp(static_cast<int>(region.y*scale_y),0,height);
+        right=std::clamp(static_cast<int>((static_cast<double>(region.x)+region.width)*scale_x+0.5),0,width);
+        bottom=std::clamp(static_cast<int>((static_cast<double>(region.y)+region.height)*scale_y+0.5),0,height);
+        if(right<=left||bottom<=top){failure=NEOASTRA_ERROR_INVALID_ARGUMENT;reason="The capture region is outside the visible viewport";return nullptr;}
+    }
+    const int crop_width=right-left,crop_height=bottom-top;
+    const bool cropped=crop_width!=width||crop_height!=height;
+    if(capture.options.format==NEOASTRA_CAPTURE_FORMAT_PNG&&!cropped){
+        g_bytes_ptr png(gdk_texture_save_to_png_bytes(texture));gsize size{};const auto* data=png?static_cast<const uint8_t*>(g_bytes_get_data(png.get(),&size)):nullptr;
+        if(!data||!size){reason="The WebKitGTK capture could not be encoded";return nullptr;}
+        return new neoastra_buffer(std::vector<uint8_t>(data,data+size));
+    }
+    // The download is in the default memory format: premultiplied 32-bit pixels in native byte order, as Cairo has them.
+    const size_t stride=static_cast<size_t>(width)*4;
+    std::vector<guchar> pixels(stride*static_cast<size_t>(height));
+    gdk_texture_download(texture,pixels.data(),stride);
+    if(capture.options.format==NEOASTRA_CAPTURE_FORMAT_PNG){
+        const size_t crop_stride=static_cast<size_t>(crop_width)*4;
+        std::vector<guchar> rows(crop_stride*static_cast<size_t>(crop_height));
+        for(int row=0;row<crop_height;++row)std::copy_n(pixels.data()+static_cast<size_t>(top+row)*stride+static_cast<size_t>(left)*4,crop_stride,rows.data()+static_cast<size_t>(row)*crop_stride);
+        g_bytes_ptr bytes(g_bytes_new(rows.data(),rows.size()));
+        g_object_ptr<GdkTexture> part(gdk_memory_texture_new(crop_width,crop_height,GDK_MEMORY_DEFAULT,bytes.get(),crop_stride));
+        g_bytes_ptr png(part?gdk_texture_save_to_png_bytes(part.get()):nullptr);gsize size{};const auto* data=png?static_cast<const uint8_t*>(g_bytes_get_data(png.get(),&size)):nullptr;
+        if(!data||!size){reason="The WebKitGTK capture could not be encoded";return nullptr;}
+        return new neoastra_buffer(std::vector<uint8_t>(data,data+size));
+    }
+    // JPEG has no alpha: the pixels are laid over white, which undoes the premultiplication for opaque content.
+    const size_t rgb_stride=static_cast<size_t>(crop_width)*3;
+    std::vector<guchar> rgb(rgb_stride*static_cast<size_t>(crop_height));
+    for(int row=0;row<crop_height;++row){
+        const auto* input=pixels.data()+static_cast<size_t>(top+row)*stride+static_cast<size_t>(left)*4;auto* output=rgb.data()+static_cast<size_t>(row)*rgb_stride;
+        for(int column=0;column<crop_width;++column,input+=4,output+=3){
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+            const unsigned blue=input[0],green=input[1],red=input[2],alpha=input[3];
+#else
+            const unsigned alpha=input[0],red=input[1],green=input[2],blue=input[3];
+#endif
+            const unsigned white=255u-alpha;
+            output[0]=static_cast<guchar>(std::min(red+white,255u));output[1]=static_cast<guchar>(std::min(green+white,255u));output[2]=static_cast<guchar>(std::min(blue+white,255u));
+        }
+    }
+    g_object_ptr<GdkPixbuf> pixbuf(gdk_pixbuf_new_from_data(rgb.data(),GDK_COLORSPACE_RGB,FALSE,8,crop_width,crop_height,static_cast<int>(rgb_stride),nullptr,nullptr));
+    const auto quality=std::to_string(capture.options.quality?capture.options.quality:80u);
+    gchar* encoded{};gsize size{};
+    if(!pixbuf||!gdk_pixbuf_save_to_buffer(pixbuf.get(),&encoded,&size,"jpeg",nullptr,"quality",quality.c_str(),nullptr)||!encoded||!size){g_free(encoded);reason="The WebKitGTK capture could not be encoded";return nullptr;}
+    std::unique_ptr<gchar,decltype(&g_free)> owned(encoded,g_free);
+    return new neoastra_buffer(std::vector<uint8_t>(reinterpret_cast<const uint8_t*>(encoded),reinterpret_cast<const uint8_t*>(encoded)+size));
+}
+void capture_finished(GObject* object,GAsyncResult* result,void* data){
+    std::unique_ptr<capture_context> completion(static_cast<capture_context*>(data));GError* error{};
+    g_object_ptr<GdkTexture> texture(webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(object),result,&error));
+    neoastra_result_t requested=NEOASTRA_OK,actual{};neoastra_error_t* native_error{};neoastra_buffer_t* buffer{};
+    if(!texture){requested=NEOASTRA_ERROR_NATIVE_FAILURE;native_error=make_error(requested,error?error->message:"WebKitGTK returned no capture",error?error->code:0);}
+    else{
+        const char* reason="The WebKitGTK capture could not be encoded";auto failure=NEOASTRA_ERROR_NATIVE_FAILURE;
+        try{buffer=encode_capture(texture.get(),*completion,failure,reason);}catch(...){buffer=nullptr;}
+        if(!buffer){requested=failure;native_error=make_error(requested,reason);}
+    }
+    if(error)g_error_free(error);
+    if(completion->operation->try_complete(requested,actual)){completion->callback(completion->context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();
+    if(native_error)native_error->release();completion->operation->release();
+}
 struct add_script_context { neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{};std::string identifier; };
 gboolean script_added(void* data){std::unique_ptr<add_script_context> completion(static_cast<add_script_context*>(data));neoastra_result_t actual{};if(completion->operation->try_complete(NEOASTRA_OK,actual))completion->callback(completion->context,actual,actual==NEOASTRA_OK?neo_string_view(completion->identifier):neoastra_string_view_t{},nullptr);completion->operation->release();return G_SOURCE_REMOVE;}
 
@@ -479,5 +552,13 @@ neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcep
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);
     if(!webkit_settings_get_enable_developer_extras(webkit_web_view_get_settings(web_view)))return NEOASTRA_ERROR_INVALID_STATE;
     webkit_web_inspector_show(webkit_web_view_get_inspector(web_view));return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra_capture_options_t& options,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {
+    auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebKitGTK view is not initialized",0,"webkitgtk");
+    auto* web_view=WEBKIT_WEB_VIEW(state->widget);
+    auto* completion=new(std::nothrow) capture_context{options,callback,context,operation,webkit_web_view_get_zoom_level(web_view),gtk_widget_get_width(state->widget),gtk_widget_get_height(state->widget)};
+    if(!completion)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK capture could not be started",0,"webkitgtk");
+    webkit_web_view_get_snapshot(web_view,options.full_page?WEBKIT_SNAPSHOT_REGION_FULL_DOCUMENT:WEBKIT_SNAPSHOT_REGION_VISIBLE,WEBKIT_SNAPSHOT_OPTIONS_NONE,nullptr,capture_finished,completion);
+    return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW&&kind!=NEOASTRA_NATIVE_HANDLE_GTK_WIDGET)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;handle->kind=kind;handle->value=state->widget;return NEOASTRA_OK;}

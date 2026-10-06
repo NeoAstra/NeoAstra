@@ -33,6 +33,9 @@ public sealed class AbiLayoutTests
             (nameof(NativeMethods.neoastra_view_options.bridge_policy), 92),
             (nameof(NativeMethods.neoastra_view_options.bridge_origins), 96));
         AssertLayout<NativeMethods.neoastra_script_options>(40, (nameof(NativeMethods.neoastra_script_options.world_name), 24));
+        AssertLayout<NativeMethods.neoastra_capture_options>(40,
+            (nameof(NativeMethods.neoastra_capture_options.full_page), 16),
+            (nameof(NativeMethods.neoastra_capture_options.region), 24));
         AssertLayout<NativeMethods.neoastra_decision_response>(80, (nameof(NativeMethods.neoastra_decision_response.target_view), 64));
         AssertLayout<NativeMethods.neoastra_download_info>(88, (nameof(NativeMethods.neoastra_download_info.failure_reason), 72));
         AssertLayout<NativeMethods.neoastra_runtime_info>(104, (nameof(NativeMethods.neoastra_runtime_info.build_features), 88));
@@ -69,6 +72,7 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_resource_body_kind>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_bridge_policy>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_view_setting>(0, 5);
+        AssertEnum<uint, NativeMethods.neoastra_capture_format>(0, 1);
     }
 
     [TestMethod]
@@ -90,6 +94,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoCapability, NativeMethods.neoastra_capability>();
         AssertEquivalent<NeoLogLevel, NativeMethods.neoastra_log_level>();
         AssertEquivalent<NeoResourceKind, NativeMethods.neoastra_resource_kind>();
+        AssertEquivalent<NeoCaptureFormat, NativeMethods.neoastra_capture_format>();
 
         var nativeHandles = Values<NativeMethods.neoastra_native_handle_kind>().Skip(1).ToArray();
         CollectionAssert.AreEqual(Values<NeoNativeHandleKind>(), nativeHandles);

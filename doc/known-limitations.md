@@ -163,6 +163,8 @@ assuming that every browser engine supports every portable event.
 | Built-in browser shortcuts (find, print, reload, zoom) | Can be turned off | Not present in the engine | Not present in the engine |
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
+| Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
+| Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
@@ -198,6 +200,17 @@ instead. To read the outcome of asynchronous work, have the page store it or pos
 read it from a later evaluation or the message handler. The WKWebView behavior was observed on macOS 26.
 The WebView2 behavior is the one the conformance harness was written against and was not re-checked
 for this note, and WebKitGTK has not been checked.
+
+`NeoAstra.CaptureAsync` returns a PNG or JPEG image of what a view shows. The image is in device
+pixels: its size is the captured size in CSS pixels multiplied by the zoom and the device scale. A
+region is given in CSS pixels from the top-left corner of the visible viewport, as
+`getBoundingClientRect()` reports them, and the part of it outside the viewport is left out. WebView2
+captures through its DevTools protocol, which draws a frame only for a visible view, so a view in a
+hidden window fails with `InvalidOperationException` there; pass a cancellation token that bounds the
+wait on the other backends. WKWebView has no call for the part of a document outside the viewport, so
+`FullPage` reports `NotSupportedException` on macOS; query `NeoCapability.CaptureFullPage`. On macOS a
+region is scaled by the magnification only, which is exact while the view is not panned. The WebView2
+implementation was run on Windows 11; the WKWebView and WebKitGTK ones have not been run.
 
 Chromeless drag and resize entry points must be called while a native pointer press is still held.
 They deliberately do not synthesize global input. A backend reports `InvalidOperationException`

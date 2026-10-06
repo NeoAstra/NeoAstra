@@ -806,4 +806,6 @@ neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view, doubl
 // Enabling a feature the engine does not have reports NEOASTRA_ERROR_NOT_SUPPORTED; disabling one succeeds.
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept;
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept;
+// The options are already validated. A region without area means the whole viewport, and it is ignored for a full-page capture.
+neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastra_capture_options_t& options, neoastra_buffer_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept;

@@ -535,6 +535,16 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW = unchecked((uint)2),
         }
 
+        /// <summary>
+        /// Encoding of a captured view image.
+        /// </summary>
+        public enum neoastra_capture_format : uint
+        {
+            NEOASTRA_CAPTURE_FORMAT_PNG = unchecked((uint)0),
+
+            NEOASTRA_CAPTURE_FORMAT_JPEG = unchecked((uint)1),
+        }
+
         public readonly partial record struct neoastra_app_t(nint Handle)
         {
             public override string ToString() => "0x" + (nint.Size == 8 ? Handle.ToString("X16") : Handle.ToString("X8"));
@@ -1162,6 +1172,36 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_script_injection_time_t (NativeMethods.neoastra_script_injection_time from) => new (from);
         }
 
+        /// <summary>
+        /// View capture request. The region is in CSS pixels of the top-level document, measured from the top-left corner of the visible viewport, and is clipped to that viewport; a region without area selects the whole viewport. A nonzero full_page captures the whole document instead and ignores the region. The quality, from 1 through 100, applies to JPEG only; zero selects the backend default.
+        /// </summary>
+        public partial struct neoastra_capture_options
+        {
+            public uint size;
+
+            public uint version;
+
+            public NativeMethods.neoastra_capture_format_t format;
+
+            public uint quality;
+
+            public uint full_page;
+
+            public uint reserved;
+
+            public NativeMethods.neoastra_rect_t region;
+        }
+
+        /// <summary>
+        /// Encoding of a captured view image.
+        /// </summary>
+        public readonly partial record struct neoastra_capture_format_t(NativeMethods.neoastra_capture_format Value)
+        {
+            public static implicit operator NativeMethods.neoastra_capture_format (neoastra_capture_format_t from) => from.Value;
+
+            public static implicit operator neoastra_capture_format_t (NativeMethods.neoastra_capture_format from) => new (from);
+        }
+
         public partial struct neoastra_decision_response
         {
             public uint size;
@@ -1482,6 +1522,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator NativeMethods.neoastra_script_options (neoastra_script_options_t from) => from.Value;
 
             public static implicit operator neoastra_script_options_t (NativeMethods.neoastra_script_options from) => new (from);
+        }
+
+        /// <summary>
+        /// View capture request. The region is in CSS pixels of the top-level document, measured from the top-left corner of the visible viewport, and is clipped to that viewport; a region without area selects the whole viewport. A nonzero full_page captures the whole document instead and ignores the region. The quality, from 1 through 100, applies to JPEG only; zero selects the backend default.
+        /// </summary>
+        public readonly partial record struct neoastra_capture_options_t(NativeMethods.neoastra_capture_options Value)
+        {
+            public static implicit operator NativeMethods.neoastra_capture_options (neoastra_capture_options_t from) => from.Value;
+
+            public static implicit operator neoastra_capture_options_t (NativeMethods.neoastra_capture_options from) => new (from);
         }
 
         public readonly partial record struct neoastra_decision_response_t(NativeMethods.neoastra_decision_response Value)
@@ -2056,6 +2106,14 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_open_devtools")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_open_devtools(NativeMethods.neoastra_view_t arg0);
+
+        /// <summary>
+        /// Completes with the encoded image of what the view currently shows. Its pixel size is the captured size in CSS pixels times the zoom and device scale of the view.
+        /// A view that is not being drawn, such as one in a hidden window, can fail or never complete: cancel the operation to stop waiting.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_capture_async")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_capture_async(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_capture_options_t* arg1, NativeMethods.neoastra_buffer_callback_t arg2, void* arg3, NativeMethods.neoastra_operation_t* arg4, NativeMethods.neoastra_error_t* arg5);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_get_native_handle")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

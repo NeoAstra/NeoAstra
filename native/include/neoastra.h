@@ -104,6 +104,8 @@ typedef enum neoastra_log_level : uint32_t { NEOASTRA_LOG_TRACE = 0, NEOASTRA_LO
 typedef enum neoastra_resource_kind : uint32_t { NEOASTRA_RESOURCE_OTHER = 0, NEOASTRA_RESOURCE_DOCUMENT, NEOASTRA_RESOURCE_STYLESHEET, NEOASTRA_RESOURCE_IMAGE, NEOASTRA_RESOURCE_MEDIA, NEOASTRA_RESOURCE_FONT, NEOASTRA_RESOURCE_SCRIPT, NEOASTRA_RESOURCE_XML_HTTP_REQUEST, NEOASTRA_RESOURCE_FETCH, NEOASTRA_RESOURCE_TEXT_TRACK, NEOASTRA_RESOURCE_EVENT_SOURCE, NEOASTRA_RESOURCE_WEBSOCKET, NEOASTRA_RESOURCE_MANIFEST } neoastra_resource_kind_t;
 typedef enum neoastra_resource_body_kind : uint32_t { NEOASTRA_RESOURCE_BODY_EMPTY = 0, NEOASTRA_RESOURCE_BODY_BYTES = 1, NEOASTRA_RESOURCE_BODY_FILE = 2 } neoastra_resource_body_kind_t;
 typedef enum neoastra_bridge_policy : uint32_t { NEOASTRA_BRIDGE_DISABLED = 0, NEOASTRA_BRIDGE_TRUSTED_ORIGINS = 1, NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW = 2 } neoastra_bridge_policy_t;
+/** Encoding of a captured view image. */
+typedef enum neoastra_capture_format : uint32_t { NEOASTRA_CAPTURE_FORMAT_PNG = 0, NEOASTRA_CAPTURE_FORMAT_JPEG = 1 } neoastra_capture_format_t;
 
 typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_DATA_COOKIES (1ull << 0)
@@ -142,6 +144,8 @@ typedef struct neoastra_window_options { uint32_t size; uint32_t version; neoast
 typedef struct neoastra_title_bar { uint32_t size; uint32_t version; neoastra_title_bar_style_t style; int32_t height; neoastra_color_t symbol_color; neoastra_color_t background_color; int32_t left_inset; int32_t right_inset; } neoastra_title_bar_t;
 typedef struct neoastra_view_options { uint32_t size; uint32_t version; neoastra_profile_t* profile; neoastra_native_parent_t parent; neoastra_window_t* window; neoastra_rect_t bounds; uint32_t fill_parent; uint32_t maximum_message_size; uint64_t decision_timeout_ms; neoastra_decision_t* popup_request; uint32_t bridge_origin_count; neoastra_bridge_policy_t bridge_policy; const neoastra_string_view_t* bridge_origins; } neoastra_view_options_t;
 typedef struct neoastra_script_options { uint32_t size; uint32_t version; neoastra_script_injection_time_t injection_time; uint32_t main_frame_only; uint32_t isolated_world; neoastra_string_view_t world_name; } neoastra_script_options_t;
+/** View capture request. The region is in CSS pixels of the top-level document, measured from the top-left corner of the visible viewport, and is clipped to that viewport; a region without area selects the whole viewport. A nonzero full_page captures the whole document instead and ignores the region. The quality, from 1 through 100, applies to JPEG only; zero selects the backend default. */
+typedef struct neoastra_capture_options { uint32_t size; uint32_t version; neoastra_capture_format_t format; uint32_t quality; uint32_t full_page; uint32_t reserved; neoastra_rect_t region; } neoastra_capture_options_t;
 typedef struct neoastra_decision_response { uint32_t size; uint32_t version; neoastra_decision_action_t action; neoastra_string_view_t text; const neoastra_string_view_t* paths; uint32_t path_count; uint32_t persist; neoastra_string_view_t secondary_text; neoastra_view_t* target_view; uint32_t selected_index; uint32_t reserved; } neoastra_decision_response_t;
 typedef struct neoastra_download_info { uint32_t size; uint32_t version; uint64_t id; neoastra_download_state_t state; uint32_t can_pause; neoastra_string_view_t source_uri; neoastra_string_view_t destination_path; uint64_t bytes_received; uint64_t total_bytes; neoastra_string_view_t failure_reason; } neoastra_download_info_t;
 typedef struct neoastra_runtime_info { uint32_t size; uint32_t version; neoastra_string_view_t backend_name; neoastra_string_view_t backend_version; neoastra_string_view_t browser_version; neoastra_string_view_t operating_system; neoastra_string_view_t architecture; uint64_t build_features; uint32_t debug_build; uint32_t reserved; } neoastra_runtime_info_t;
@@ -260,6 +264,9 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t*, double);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t*, neoastra_view_setting_t, uint32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t*);
+/* Completes with the encoded image of what the view currently shows. Its pixel size is the captured size in CSS pixels times the zoom and device scale of the view.
+   A view that is not being drawn, such as one in a hidden window, can fail or never complete: cancel the operation to stop waiting. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t*, const neoastra_capture_options_t*, neoastra_buffer_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_native_handle(neoastra_view_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_query_extension(const void*, neoastra_string_view_t, uint32_t, const void**);
 

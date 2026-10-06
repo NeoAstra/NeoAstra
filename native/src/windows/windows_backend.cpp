@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -2106,4 +2107,173 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
     return SUCCEEDED(result)?NEOASTRA_OK:result==E_NOINTERFACE?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_ERROR_NATIVE_FAILURE;
 }
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->core->OpenDevToolsWindow())?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
+
+namespace {
+// CapturePreview has neither a region nor a full-page form, so captures go through the DevTools protocol,
+// which needs no debugging port and no open DevTools window.
+constexpr double maximum_capture_dimension = 16384.0;
+
+struct capture_state {
+    ComPtr<ICoreWebView2> core;
+    neoastra_capture_options_t options{};
+    neoastra_buffer_callback_t callback{};
+    void* context{};
+    neoastra_operation_t* operation{};
+    void complete(neoastra_result_t requested, neoastra_buffer_t* buffer, const char* message, HRESULT native_code) noexcept {
+        auto* pending = operation;
+        operation = nullptr;
+        if (!pending) { if (buffer) buffer->release(); return; }
+        auto* error = requested == NEOASTRA_OK ? nullptr : make_error(requested, message, native_code);
+        neoastra_result_t actual{};
+        if (pending->try_complete(requested, actual)) {
+            callback(context, actual, actual == NEOASTRA_OK ? buffer : nullptr, actual == requested ? error : nullptr);
+            if (actual != NEOASTRA_OK && buffer) buffer->release();
+        } else if (buffer) buffer->release();
+        if (error) error->release();
+        pending->release();
+    }
+    // WebView2 drops a pending protocol handler without calling it when its view closes first.
+    ~capture_state() { complete(NEOASTRA_ERROR_CANCELED, nullptr, "The view closed before its capture completed", E_ABORT); }
+};
+
+// Reads a number member of a flat object member of a DevTools protocol result, such as cssVisualViewport.pageX.
+// The layout metrics are plain decimals; they are read without the C locale, which may use another decimal separator.
+bool protocol_number(const wchar_t* json, const wchar_t* object, const wchar_t* member, double& value) {
+    if (!json) return false;
+    const auto object_key = std::wstring(L"\"") + object + L"\":{";
+    const auto* start = wcsstr(json, object_key.c_str());
+    if (!start) return false;
+    start += object_key.size();
+    const auto* end = wcschr(start, L'}');
+    const auto member_key = std::wstring(L"\"") + member + L"\":";
+    const auto* found = wcsstr(start, member_key.c_str());
+    if (!found || (end && found > end)) return false;
+    found += member_key.size();
+    const bool negative = *found == L'-';
+    if (negative) ++found;
+    if (*found < L'0' || *found > L'9') return false;
+    double parsed{};
+    for (; *found >= L'0' && *found <= L'9'; ++found) parsed = parsed * 10.0 + (*found - L'0');
+    if (*found == L'.') {
+        double place = 0.1;
+        for (++found; *found >= L'0' && *found <= L'9'; ++found, place /= 10.0) parsed += (*found - L'0') * place;
+    }
+    value = negative ? -parsed : parsed;
+    return true;
+}
+
+// Appends a number with three decimals, again independently of the C locale.
+void append_protocol_number(std::wstring& output, double value) {
+    const auto scaled = std::llround(value * 1000.0);
+    const auto magnitude = scaled < 0 ? -scaled : scaled;
+    if (scaled < 0) output.push_back(L'-');
+    output += std::to_wstring(magnitude / 1000);
+    const auto fraction = magnitude % 1000;
+    output.push_back(L'.');
+    if (fraction < 100) output.push_back(L'0');
+    if (fraction < 10) output.push_back(L'0');
+    output += std::to_wstring(fraction);
+}
+
+// Decodes the base64 "data" member of a Page.captureScreenshot result.
+bool protocol_image(const wchar_t* json, std::vector<uint8_t>& bytes) {
+    constexpr wchar_t key[] = L"\"data\":\"";
+    const auto* current = json ? wcsstr(json, key) : nullptr;
+    if (!current) return false;
+    current += std::size(key) - 1;
+    const auto* end = wcschr(current, L'"');
+    if (!end) return false;
+    bytes.reserve(static_cast<size_t>(end - current) / 4 * 3 + 3);
+    uint32_t accumulator{};
+    int bits{};
+    for (; current < end; ++current) {
+        const auto character = *current;
+        uint32_t value{};
+        if (character >= L'A' && character <= L'Z') value = static_cast<uint32_t>(character - L'A');
+        else if (character >= L'a' && character <= L'z') value = static_cast<uint32_t>(character - L'a') + 26u;
+        else if (character >= L'0' && character <= L'9') value = static_cast<uint32_t>(character - L'0') + 52u;
+        else if (character == L'+') value = 62u;
+        else if (character == L'/') value = 63u;
+        else if (character == L'=') break;
+        else if (character == L'\\') continue; // JSON may escape the solidus.
+        else return false;
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; bytes.push_back(static_cast<uint8_t>((accumulator >> bits) & 0xffu)); }
+    }
+    return !bytes.empty();
+}
+
+HRESULT start_capture(const std::shared_ptr<capture_state>& state, const std::wstring& clip) {
+    std::wstring parameters = state->options.format == NEOASTRA_CAPTURE_FORMAT_JPEG ? L"{\"format\":\"jpeg\"" : L"{\"format\":\"png\"";
+    if (state->options.format == NEOASTRA_CAPTURE_FORMAT_JPEG && state->options.quality) parameters += L",\"quality\":" + std::to_wstring(state->options.quality);
+    parameters += clip;
+    parameters += state->options.full_page ? L",\"captureBeyondViewport\":true}" : L",\"captureBeyondViewport\":false}";
+    return state->core->CallDevToolsProtocolMethod(L"Page.captureScreenshot", parameters.c_str(),
+        Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([state](HRESULT result, LPCWSTR json) -> HRESULT {
+            if (FAILED(result)) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 could not capture the view", result); return S_OK; }
+            try {
+                std::vector<uint8_t> bytes;
+                if (!protocol_image(json, bytes)) state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 returned no capture data", E_UNEXPECTED);
+                else state->complete(NEOASTRA_OK, new neoastra_buffer(std::move(bytes)), nullptr, S_OK);
+            } catch (...) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "The WebView2 capture could not be decoded", E_OUTOFMEMORY); }
+            return S_OK;
+        }).Get());
+}
+} // namespace
+
+neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastra_capture_options_t& options, neoastra_buffer_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
+    try {
+        auto* native = static_cast<windows_view*>(view->platform);
+        if (!native || !native->core || !native->controller) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "WebView2 view is not initialized");
+        // A hidden controller renders no frame, and a capture request for it would stay pending.
+        BOOL visible{};
+        if (FAILED(native->controller->get_IsVisible(&visible)) || !visible) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "A WebView2 view must be visible to be captured", 0, "webview2");
+        auto state = std::make_shared<capture_state>();
+        state->core = native->core;
+        state->options = options;
+        state->callback = callback;
+        state->context = context;
+        state->operation = operation;
+        const bool region = !options.full_page && options.region.width > 0 && options.region.height > 0;
+        HRESULT result{};
+        if (!options.full_page && !region) result = start_capture(state, {});
+        else result = state->core->CallDevToolsProtocolMethod(L"Page.getLayoutMetrics", L"{}",
+            Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([state](HRESULT result, LPCWSTR json) -> HRESULT {
+                if (FAILED(result)) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 could not measure the view for capture", result); return S_OK; }
+                try {
+                    double x{}, y{}, width{}, height{};
+                    if (state->options.full_page) {
+                        if (!protocol_number(json, L"cssContentSize", L"width", width) || !protocol_number(json, L"cssContentSize", L"height", height)) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 returned no document size", E_UNEXPECTED); return S_OK; }
+                        width = std::min(width, maximum_capture_dimension);
+                        height = std::min(height, maximum_capture_dimension);
+                    } else {
+                        double page_x{}, page_y{}, client_width{}, client_height{};
+                        if (!protocol_number(json, L"cssVisualViewport", L"pageX", page_x) || !protocol_number(json, L"cssVisualViewport", L"pageY", page_y) ||
+                            !protocol_number(json, L"cssVisualViewport", L"clientWidth", client_width) || !protocol_number(json, L"cssVisualViewport", L"clientHeight", client_height)) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 returned no viewport size", E_UNEXPECTED); return S_OK; }
+                        const auto& requested = state->options.region;
+                        const auto left = std::max(static_cast<double>(requested.x), 0.0), top = std::max(static_cast<double>(requested.y), 0.0);
+                        const auto right = std::min(static_cast<double>(requested.x) + requested.width, client_width), bottom = std::min(static_cast<double>(requested.y) + requested.height, client_height);
+                        x = page_x + left; y = page_y + top; width = right - left; height = bottom - top;
+                    }
+                    if (!(width >= 1.0) || !(height >= 1.0)) { state->complete(NEOASTRA_ERROR_INVALID_ARGUMENT, nullptr, "The capture region is outside the visible viewport", E_INVALIDARG); return S_OK; }
+                    std::wstring clip = L",\"clip\":{\"x\":";
+                    append_protocol_number(clip, x);
+                    clip += L",\"y\":";
+                    append_protocol_number(clip, y);
+                    clip += L",\"width\":";
+                    append_protocol_number(clip, width);
+                    clip += L",\"height\":";
+                    append_protocol_number(clip, height);
+                    clip += L",\"scale\":1}";
+                    const auto started = start_capture(state, clip);
+                    if (FAILED(started)) state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 capture could not be started", started);
+                } catch (...) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "The WebView2 capture could not be prepared", E_OUTOFMEMORY); }
+                return S_OK;
+            }).Get());
+        // A capture that did not start leaves the operation to the caller.
+        if (FAILED(result)) { state->operation = nullptr; return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 capture could not be started", result, "webview2"); }
+        return NEOASTRA_OK;
+    } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, ex.what()); }
+}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state)return NEOASTRA_ERROR_NOT_INITIALIZED;if(kind==NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER&&state->controller){handle->kind=kind;handle->value=state->controller.Get();return NEOASTRA_OK;}if(kind==NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE&&state->core){handle->kind=kind;handle->value=state->core.Get();return NEOASTRA_OK;}return NEOASTRA_ERROR_NOT_SUPPORTED;}

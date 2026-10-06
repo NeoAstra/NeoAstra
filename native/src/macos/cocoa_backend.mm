@@ -550,4 +550,36 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
 }}
 // WebKit offers no public call to open the Web Inspector; it is reached from the context menu or Safari's Develop menu.
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);return !state||!state->webview?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
+// WKWebView snapshots what the view shows; it has no call for the part of a document outside the viewport.
+neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra_capture_options_t& options,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WKWebView view is not initialized",0,"wkwebview");
+    if(options.full_page)return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WKWebView cannot capture a whole document",0,"wkwebview");
+    WKSnapshotConfiguration* configuration=[[WKSnapshotConfiguration alloc] init];
+    if(options.region.width>0&&options.region.height>0){
+        // CSS pixels become view units through the magnification. The rectangle is in view coordinates, whose origin depends on whether the view is flipped.
+        const NSRect bounds=state->webview.bounds;const CGFloat zoom=state->webview.magnification>0?state->webview.magnification:1;
+        NSRect requested=NSMakeRect(options.region.x*zoom,options.region.y*zoom,options.region.width*zoom,options.region.height*zoom);
+        if(!state->webview.isFlipped)requested.origin.y=NSHeight(bounds)-NSMaxY(requested);
+        requested=NSIntersectionRect(requested,bounds);
+        if(NSIsEmptyRect(requested))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The capture region is outside the visible viewport",0,"wkwebview");
+        configuration.rect=requested;
+    }
+    const auto format=options.format;const auto quality=options.quality?options.quality:80u;
+    [state->webview takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage* image,NSError* failure){@autoreleasepool{
+        NSData* data=nil;
+        if(image){
+            CGImageRef pixels=[image CGImageForProposedRect:nullptr context:nil hints:nil];
+            if(pixels){
+                NSBitmapImageRep* bitmap=[[NSBitmapImageRep alloc] initWithCGImage:pixels];
+                data=format==NEOASTRA_CAPTURE_FORMAT_JPEG?[bitmap representationUsingType:NSBitmapImageFileTypeJPEG properties:@{NSImageCompressionFactor:@(quality/100.0)}]:[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            }
+        }
+        neoastra_result_t requested=data.length?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE,actual{};neoastra_error_t* native_error=nullptr;neoastra_buffer_t* buffer=nullptr;
+        if(requested==NEOASTRA_OK){try{const auto* bytes=static_cast<const uint8_t*>(data.bytes);buffer=new neoastra_buffer(std::vector<uint8_t>(bytes,bytes+data.length));}catch(...){requested=NEOASTRA_ERROR_NATIVE_FAILURE;}}
+        if(requested!=NEOASTRA_OK)native_error=make_error(requested,failure?utf8(failure.localizedDescription).c_str():"WKWebView returned no capture",failure?failure.code:0);
+        if(operation->try_complete(requested,actual)){callback(context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();
+        if(native_error)native_error->release();operation->release();
+    }}];
+    return NEOASTRA_OK;
+}}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WKWEBVIEW&&kind!=NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;handle->kind=kind;handle->value=(__bridge void*)state->webview;return NEOASTRA_OK;}
