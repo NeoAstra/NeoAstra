@@ -494,6 +494,11 @@ internal static partial class Program
                 }
                 else
                 {
+                    // TEMPORARY: see Program.Diagnostics.cs.
+                    if (OperatingSystem.IsMacOS() || Environment.GetEnvironmentVariable("NEOASTRA_DIAG") == "1")
+                    {
+                        await RunMessageFloodDiagnosticsAsync(environment, bridgeMode);
+                    }
                     await RunCaseAsync("100,000 small messages", async () =>
                     {
                         var window = CreateHiddenWindow("NeoAstra message stress conformance");
