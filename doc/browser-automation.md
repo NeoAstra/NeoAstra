@@ -165,6 +165,7 @@ caller's own scripts but not its control over the page.
 
 ## Platform status
 
-The unit tests and the `automation:` scenarios of the
-[conformance harness](building.md#browser-conformance-and-benchmarks) run every tool. They were run on
-Windows 11 with WebView2. The same scenarios have not been run on macOS and Linux yet.
+The `automation:` scenarios of the
+[conformance harness](building.md#browser-conformance-and-benchmarks) call every tool. They pass on
+Windows 11 with WebView2, on macOS 15 with WKWebView, and on Ubuntu 24.04 with WebKitGTK 2.52. The unit
+tests, which go further into each tool, drive a live browser on Windows only.

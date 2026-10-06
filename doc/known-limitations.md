@@ -43,50 +43,50 @@ when it is done.
   [browser data and user-data roots](#browser-data-and-user-data-roots). To decide: whether a host
   gets default directories of its own, for example from `NeoApplicationOptions.ApplicationName`, and
   what happens to the data already in the shared ones.
-- **Linux: the user-data root and view teardown fixes were run on arm64 only.** They were built and
-  tested in an Ubuntu 24.04 arm64 virtual machine with WebKitGTK 2.52: the native tests, the sanitizer
-  and static-analyzer presets, and the release build. Not run: linux-x64, and any check that loads a
-  page with WebKit's sandbox enabled. In that virtual machine, reached over SSH and under Xvfb, loading
-  a page aborted with `Failed to fully launch dbus-proxy`, with or without `dbus-run-session`, so the
-  end-to-end check of local storage and cookies across processes ran with
-  `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`. The cause was not established, nor whether an
-  application started from a desktop session is affected. To do: on a Linux x64 desktop host, run
-  `xvfb-run -a python eng/build_native.py --rid linux-x64 --clean` and a check that loads a page, such
-  as the browser conformance harness.
+- **Linux: loading a page under Xvfb is unexplained on one host.** The user-data root and view
+  teardown fixes were built and tested in an Ubuntu 24.04 arm64 virtual machine with WebKitGTK 2.52.
+  In that virtual machine, reached over SSH and under Xvfb, loading a page aborted with
+  `Failed to fully launch dbus-proxy`, with or without `dbus-run-session`, so the end-to-end check of
+  local storage and cookies across processes ran with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`.
+  The cause was not established. Since then the native tests have passed on linux-x64 and linux-arm64
+  in the native workflow, under Xvfb, and the browser conformance harness, which loads pages, has
+  completed on Ubuntu 24.04 x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as
+  it is. To do: run the harness under Xvfb on the Linux runner of the conformance workflow, which the
+  entry on views that share a window keeps from happening.
+- **Linux: a second view that fills a window replaces the first.** A GTK window has one child, and the
+  GTK backend gives that place to the view created last (`gtk_window_set_child` in
+  `neo_platform_view_create_async`, `native/src/linux/gtk_backend.cpp`), which destroys the widget of
+  the view that had it. Windows and macOS stack the views of a window instead. The desktop smoke
+  fixture (`NeoAstra.NativeAotFixture --native-smoke`) creates two views in one window, so on Linux it
+  fails with "The native GTK context-menu target view is unavailable" for the first of them and ends in
+  a segmentation fault. That was seen on the Linux runner of the conformance workflow and under WSL 2,
+  with the runtime built from `15ab7e2`. The job of that workflow ends there, so its browser harness
+  has not run on the Linux runner. To do: hold the views of a window in a container that stacks them,
+  such as a `GtkOverlay`, and take a view out of it in `neo_platform_view_destroy`.
 - **Linux: the history flags have no native test.** The GTK backend raises the history-changed event
   (`NEOASTRA_EVENT_HISTORY_CHANGED`) from the `changed` signal of the back/forward list of a view, and
   again as a document commits and before its load is reported as finished, with bit 0 from
   `webkit_web_view_can_go_back` and bit 1 from `webkit_web_view_can_go_forward`. `CanGoBack` and
   `CanGoForward` stayed `false` on Linux before that, and the browser conformance scenario "navigation,
-  history, and redirects" timed out there, as it was seen to do with WebKitGTK 2.52. That scenario is
-  the only check of the flags on Linux. To do: cover them in `native/tests/linux_backend_tests.cpp`
-  the way `native/tests/macos_history_tests.mm` does on macOS, which needs a host where pages load
-  (see the entry above).
-- **macOS: the history test has not run on the CI runners.** `native/tests/macos_history_tests.mm` is
-  the first native test that loads pages, so WebKit's web content process must be able to start where
-  `ctest` runs. It passed on macOS 26.5 for arm64, for x86_64 under Rosetta, and with the sanitizer
-  preset built for arm64. It has not run on macOS 15, on the `macos-15-intel` and `macos-latest`
-  runners of the native workflow, or in the x64 sanitizer job. To do: check
-  `neoastra_macos_history_tests` in the next native workflow run. Where pages cannot load, it fails at
-  its first page and prints the page and the history flags it saw last.
+  history, and redirects" timed out there, as it was seen to do with WebKitGTK 2.52. With the runtime
+  built from `15ab7e2` the scenario passes. It is the only check of the flags on Linux. To do: cover
+  them in `native/tests/linux_backend_tests.cpp` the way `native/tests/macos_history_tests.mm` does on
+  macOS, which needs a host where pages load.
 - **macOS: `NavigationCompleted` can arrive before the module scripts of a page have run.** The Cocoa
   backend relays WKWebView's own notification; see the paragraph on `NavigationCompleted` under
   [backend capability differences](#backend-capability-differences). To decide: whether the backend
   should hold the event until the document has loaded, so that it means the same on every backend, or
   keep relaying the engine. WebKitGTK uses the same engine and has not been checked.
-- **Conformance: not rerun on Windows or Linux.** Two changes to
-  `src/NeoAstra.Conformance/Program.cs` have run on macOS only. The first scenario and the
-  100,000-message stress scenario wait until `document.readyState` is `complete` before they use what
-  the fixture module sets, because of the `NavigationCompleted` timing above. The optional "Promise
-  results" and "IndexedDB" scenarios are reported as skips, instead of ending the run, when the
-  backend rejects a script result that is a Promise, as WKWebView does; see the paragraph on
-  `EvaluateScriptAsync` under [backend capability differences](#backend-capability-differences). On
-  macOS 26.5 for arm64, with the current `osx-arm64` runtime, the whole run completes with exit code
-  0, in normal mode and with `--stress`. Neither Windows nor Linux was run after these changes. To do:
-  run `dotnet run --project src/NeoAstra.Conformance -c Release -- --run --stress --timeout-seconds 30`
-  from the repository root on each platform. On Linux the run is expected to stop at "Promise results"
-  if WebKitGTK rejects a Promise result (see the next entry), and otherwise at "navigation, history,
-  and redirects" until `CanGoBack` is reported there.
+- **Conformance: the 100,000-message scenario fails on macOS 15.** The harness was run with
+  `--run --stress --timeout-seconds 30` on the three platforms, with the runtimes built from `d2c38f6`
+  and `15ab7e2`. It completes on Windows 11 x64 with WebView2, on the runner of the conformance
+  workflow and on a development machine (28 passed, 19 skipped), and on Ubuntu 24.04 x64 with
+  WebKitGTK 2.52 in a WSL 2 desktop session (29 passed, 18 skipped). On the `macos-15-intel` runner of
+  the workflow every scenario passes up to "100,000 small messages", and there the evaluation that
+  posts the messages fails with the WKWebView error 5, "JavaScript execution returned a result of an
+  unsupported type", although its script ends in `true`. The same scenario passed on macOS 26.5 for
+  arm64. The cause is not established. To do: find what WKWebView on macOS 15 refuses there, for
+  example by posting the messages in smaller batches.
 - **Conformance: "IndexedDB" is skipped on every backend.** The scenario evaluates an `async` function
   and reads the value that `EvaluateScriptAsync` returns, so it can pass only where a Promise result
   is awaited, and no backend is known to do that; see the next entry. IndexedDB itself is therefore
@@ -116,13 +116,11 @@ when it is done.
   native ABI and the managed API, or leaves asynchronous results to messaging. It needs a native
   rebuild of every runtime, and on macOS it depends on the minimum supported version, which is not
   frozen. Until then the conformance scenario "Promise results" cannot pass.
-- **Most checked-in native runtimes predate the latest fixes.** Only `osx-arm64` was rebuilt, for the
-  macOS user-data root and history fixes. The other five runtimes under `src/NeoAstra.Core/runtimes`
-  predate the fixes for their platform (the user-data root fixes for macOS and Linux, the macOS
-  history fix, the private-environment fix for Windows, and the Linux view teardown fix) until they
-  are replaced with the artifacts of a native workflow run. A macOS build takes its minimum system
-  version from the machine that builds it, so replacing `osx-x64`, which the workflow builds for
-  macOS 15, with a build from a newer macOS would raise it.
+- **macOS: a runtime takes its minimum system version from the machine that builds it.** The six
+  runtimes under `src/NeoAstra.Core/runtimes` are the artifacts of one native workflow run. The
+  workflow builds `osx-x64` on macOS 15 and `osx-arm64` on macOS 26, and the libraries record those as
+  the oldest systems they load on: 15.0 for `osx-x64` and 26.0 for `osx-arm64`. To decide: the minimum
+  supported macOS version, which the build then has to be given as its deployment target.
 
 ## Backend capability differences
 
@@ -164,8 +162,9 @@ The engine's own JavaScript dialogs and the `ScriptDialogRequested` handler excl
 [built-in browser shortcuts and menus](chromeless-windows.md#built-in-browser-shortcuts-and-menus).
 WebView2 raises the request only while its own dialogs are off, and reads that switch when it loads a
 document: a handler assigned after a document has loaded gets the dialogs of the next one. This was
-observed on Windows 11 with the WebView2 Runtime 154. The WebKitGTK path, which keeps a dialog open
-until its decision arrives, was written from the WebKitGTK documentation and has not been run.
+observed on Windows 11 with the WebView2 Runtime 154. A dialog that stays open until its decision
+arrives was also run on macOS 15 and with WebKitGTK 2.52, in windows that are not shown, by the dialog
+scenario of the conformance harness.
 
 `NavigationCompleted` relays the browser engine's own completion notification, which does not say how
 far the page's scripts have got. WKWebView can raise it while `document.readyState` is still
@@ -198,8 +197,10 @@ captures through its DevTools protocol, which draws a frame only for a visible v
 hidden window fails with `InvalidOperationException` there; pass a cancellation token that bounds the
 wait on the other backends. WKWebView has no call for the part of a document outside the viewport, so
 `FullPage` reports `NotSupportedException` on macOS; query `NeoCapability.CaptureFullPage`. On macOS a
-region is scaled by the magnification only, which is exact while the view is not panned. The WebView2
-implementation was run on Windows 11; the WKWebView and WebKitGTK ones have not been run.
+region is scaled by the magnification only, which is exact while the view is not panned. The capture of
+the viewport and of a region was run on Windows 11, on macOS 15, and with WebKitGTK 2.52, and the
+capture of a whole document on Windows 11 and with WebKitGTK 2.52, by the screenshot scenario of the
+conformance harness.
 
 `NeoAutomation` works inside the page with standard DOM APIs, because the three engines share no
 debugging protocol. Its input is dispatched as untrusted DOM events, its console and network lists hold
