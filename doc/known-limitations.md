@@ -89,8 +89,49 @@ when it is done.
   macOS 26.5 for arm64, with the current `osx-arm64` runtime, the whole run completes with exit code
   0, in normal mode and with `--stress`. Neither Windows nor Linux was run after these changes. To do:
   run `dotnet run --project src/NeoAstra.Conformance -c Release -- --run --stress --timeout-seconds 30`
-  from the repository root on each platform. On Linux "navigation, history, and redirects" is expected
-  to time out until `CanGoBack` is reported there.
+  from the repository root on each platform. On Linux the run is expected to stop at "Promise results"
+  if WebKitGTK rejects a Promise result (see the next entry), and otherwise at "navigation, history,
+  and redirects" until `CanGoBack` is reported there.
+- **Conformance: a rejected Promise result is recognized on macOS only.** `IsUnsupportedResultType` in
+  `src/NeoAstra.Conformance/Program.cs` turns one error into a skip of the "Promise results" and
+  "IndexedDB" scenarios: a `NeoAstraException` with the domain `wkwebview` and the native code 5,
+  which is how WKWebView refuses to return a script result. WebKitGTK has an error of its own for
+  that, `WEBKIT_JAVASCRIPT_ERROR_INVALID_RESULT` (601), which its own tests expect for a DOM node, and
+  the GTK backend passes the code of an evaluation error on under the domain `webkitgtk`
+  (`script_finished` in `native/src/linux/gtk_backend.cpp`). If WebKitGTK reports a Promise that way,
+  "Promise results" ends the run on Linux with that exception, as it did on macOS. This follows from
+  the WebKitGTK source and has not been run. To do: run the harness on Linux and, if the scenario
+  fails with the native code 601, add that domain and code to `IsUnsupportedResultType`. A script that
+  throws is `WEBKIT_JAVASCRIPT_ERROR_SCRIPT_FAILED` (699) there and must keep failing its scenario.
+- **Conformance: "IndexedDB" is skipped on every backend.** The scenario evaluates an `async` function
+  and reads the value that `EvaluateScriptAsync` returns, so it can pass only where a Promise result
+  is awaited, and no backend is known to do that; see the next entry. IndexedDB itself is therefore
+  not checked anywhere. It does work on WKWebView in the harness configuration, which is an
+  application-defined scheme, a private environment, an ephemeral profile, and the content security
+  policy of the fixture: with handlers appended that store the value or the error in a global, and
+  the script ending in `true`, a later evaluation read `{"ok":"stored"}`. That was observed on macOS
+  26.5 for arm64 with a throwaway probe, not with the harness. To do: rewrite the scenario that way,
+  waiting for the stored outcome with `WaitUntilScriptAsync`, so that it no longer goes through
+  `RunPromiseCaseAsync`. The fixture's `script-src 'self'` refuses `eval` and `new Function`, so the
+  probe has to stay plain script. To decide: whether it then becomes a required case, which fails the
+  run on a backend where IndexedDB does not work for an application-defined scheme. The result of the
+  scenario changes on every platform, so run each.
+- **`EvaluateScriptAsync` cannot return the result of a Promise.** See the paragraph on
+  `EvaluateScriptAsync` under [backend capability differences](#backend-capability-differences):
+  WKWebView rejects such a result and WebView2 serializes the Promise object. The engines await a
+  Promise through a separate call, which takes the body of a function, with `return`, rather than a
+  script whose completion value is the result:
+  `callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:` on WKWebView from macOS
+  11, and `webkit_web_view_call_async_javascript_function` on WebKitGTK from 2.40. For WebView2 the
+  DevTools protocol method `Runtime.evaluate` with `awaitPromise`, reached through
+  `CallDevToolsProtocolMethod`, is a candidate. None of the three has been tried. Running an existing
+  script through them with `eval` is not an option, because a page whose content security policy
+  lacks `'unsafe-eval'` refuses it: under the `script-src 'self'` of the conformance fixture, `eval`,
+  indirect `eval`, and `new Function` all failed with an `EvalError` on WKWebView. To decide: whether
+  NeoAstra exposes that call as an operation of its own, with a function body and arguments, in the
+  native ABI and the managed API, or leaves asynchronous results to messaging. It needs a native
+  rebuild of every runtime, and on macOS it depends on the minimum supported version, which is not
+  frozen. Until then the conformance scenario "Promise results" cannot pass.
 - **Most checked-in native runtimes predate the latest fixes.** Only `osx-arm64` was rebuilt, for the
   macOS user-data root and history fixes. The other five runtimes under `src/NeoAstra.Core/runtimes`
   predate the fixes for their platform (the user-data root fixes for macOS and Linux, the macOS
