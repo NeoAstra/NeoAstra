@@ -2983,7 +2983,7 @@ Required stress scenarios:
 * Resource-stream cancellation.
 * Browser-process failure.
 
-The conformance executable runs bounded, low-count creation, concurrent-view, window-lifecycle, rapid-navigation, and repeated-environment probes under `--run`; `--stress` raises bounded counts and enables the 100,000-message scenario. Scenarios that would terminate the harness, require crash injection or trusted user activation, mutate user files, or require a cancellable public resource stream MUST be reported as explicit skips until they can run in an isolated automation host.
+The conformance executable runs bounded, low-count creation, concurrent-view, window-lifecycle, rapid-navigation, and repeated-environment probes under `--run`; `--stress` raises bounded counts and enables the 100,000-message scenario, which posts bursts of 10,000 messages and waits for each burst to arrive because WKWebView ends the web content process of a page that has 50,000 messages waiting for the host. Scenarios that would terminate the harness, require crash injection or trusted user activation, mutate user files, or require a cancellable public resource stream MUST be reported as explicit skips until they can run in an isolated automation host.
 
 ## 38.6 Sanitizers and analysis
 

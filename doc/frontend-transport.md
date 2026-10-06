@@ -82,6 +82,12 @@ Application frames are never accepted before a handshake. Production
 diagnostics contain stable codes and bounded metadata, never frame bodies, arguments, file paths, raw
 exceptions, or secrets.
 
+`send` hands a frame to the browser engine at once. It does not wait for the host, and the transport
+holds no frame back. On macOS, WKWebView ends the web content process of a page that has 50,000
+messages waiting for the host, so a document with that many frames to send should send them in groups
+and wait for an answer of the host between two groups; see the paragraph on message bursts under
+[backend capability differences](known-limitations.md#backend-capability-differences).
+
 `@neoastra/client/testing` installs no globals. `createMockClient()` supplies deterministic in-memory
 connections, selectable metadata/features, outbound recording, inbound injection, fake schedulers and
 IDs, protocol mismatch, malformed input, close, and document replacement.

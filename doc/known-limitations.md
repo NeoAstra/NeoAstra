@@ -75,16 +75,34 @@ when it is done.
   [backend capability differences](#backend-capability-differences). To decide: whether the backend
   should hold the event until the document has loaded, so that it means the same on every backend, or
   keep relaying the engine. WebKitGTK uses the same engine and has not been checked.
-- **Conformance: the 100,000-message scenario fails on macOS 15.** The harness was run with
-  `--run --stress --timeout-seconds 30` on the three platforms, with the runtimes built from `d2c38f6`
-  and `15ab7e2`. It completes on Windows 11 x64 with WebView2, on the runner of the conformance
-  workflow and on a development machine (28 passed, 19 skipped), and on Ubuntu 24.04 x64 with
-  WebKitGTK 2.52 in a WSL 2 desktop session (29 passed, 18 skipped). On the `macos-15-intel` runner of
-  the workflow every scenario passes up to "100,000 small messages", and there the evaluation that
-  posts the messages fails with the WKWebView error 5, "JavaScript execution returned a result of an
-  unsupported type", although its script ends in `true`. The same scenario passed on macOS 26.5 for
-  arm64. The cause is not established. To do: find what WKWebView on macOS 15 refuses there, for
-  example by posting the messages in smaller batches.
+- **macOS: nothing keeps a page from posting more messages than WKWebView lets wait.** WKWebView ends
+  the web content process of a page that has 50,000 messages waiting in the application process; see
+  the paragraph on message bursts under
+  [backend capability differences](#backend-capability-differences). That is what failed the
+  conformance scenario "100,000 small messages" on the `macos-15-intel` runner of the conformance
+  workflow, with the error of an unsupported script result, where its single loop of posts had passed
+  on macOS 26.5 for arm64. The scenario now posts bursts of 10,000 and waits for each one to arrive.
+  With that the harness, run with `--run --stress --timeout-seconds 30`, completes on that runner (30
+  passed, 19 skipped), on Windows 11 x64 with WebView2, on the runner of the workflow and on a
+  development machine (29 passed, 19 skipped), and on Ubuntu 24.04 x64 with WebKitGTK 2.52 in a WSL 2
+  desktop session (30 passed, 18 skipped). On the macOS runner the 100,000 messages took 13 to 20 s to
+  arrive, of the 30 s that the workflow gives a scenario. The frontend transport does no such thing:
+  `send` of `@neoastra/client` posts at once, so the page of an application can end the same way. To
+  decide: whether the bootstrap (`src/NeoAstra.Core/Transport/transport-bootstrap.js`) holds frames
+  back on WKWebView while too many are unanswered. `postMessage` on a script message handler returns a
+  Promise that settles when the application process has handled the message. A throwaway sender that
+  left at most 4,096 messages unanswered had no more than 4,098 waiting on the runner, and delivered
+  100,000 messages there in 11.6 s and with WebKitGTK 2.52 in 1.8 s. Such a sender goes on only while
+  the page runs, though, and the window of the harness is not shown: in another run on the runner the
+  web content process stopped taking the replies 8 s after its view was created, with 84,336 of the
+  100,000 messages delivered, and went on when the harness evaluated a script 25 s later. Whether a
+  page in a window that is shown stops that way was not checked.
+- **macOS: an evaluation in a view that lost its web content process reports an unsupported result.**
+  WKWebView completes it with `WKErrorJavaScriptResultTypeIsUnsupported` (5), whether the evaluation
+  was waiting when the process ended or was started afterwards, and the Cocoa backend relays that
+  error (`neo_platform_view_evaluate` in `native/src/macos/cocoa_backend.mm`). Only `ProcessFailed`
+  says what happened. To decide: whether the backend reports such an evaluation as a failure of the
+  process, with an error of its own. That changes the macOS runtimes.
 - **Conformance: "IndexedDB" is skipped on every backend.** The scenario evaluates an `async` function
   and reads the value that `EvaluateScriptAsync` returns, so it can pass only where a Promise result
   is awaited, and no backend is known to do that; see the next entry. IndexedDB itself is therefore
@@ -147,6 +165,7 @@ assuming that every browser engine supports every portable event.
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
 | Reload that leaves the cache out (`Reload(true)`) | Available through the DevTools protocol | Available | Available |
 | Browser automation (`NeoAutomation`) | Available | Available | Available |
+| Messages of a page that wait for the host | No limit met with 100,000 | The page ends at 50,000 | No limit met with 100,000 |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
@@ -177,7 +196,8 @@ Do not expect `EvaluateScriptAsync` to wait for a Promise. It returns the script
 the browser engine reports it, so a script that ends in a Promise, which every call to an `async`
 function does, gives no usable result. WKWebView fails such an evaluation at once with a
 `NeoAstraException` whose `Domain` is `wkwebview` and whose `NativeCode` is 5, the error it reports for
-any value it cannot return, a function or a DOM node included. A value that it does return but that
+any value it cannot return, a function or a DOM node included, and also for an evaluation in a view
+whose web content process has ended; see the next paragraph. A value that it does return but that
 has no JSON form, such as a date or a number that is not finite, is reported as `null`. A script that
 throws arrives as the same exception type with `NativeCode` 4. WebView2 completes the evaluation with
 the serialized Promise object instead. WebKitGTK fails the evaluation as WKWebView does, with the
@@ -186,6 +206,30 @@ a script that throws with the code 699. To read the outcome of asynchronous work
 it or post it as a message, then read it from a later evaluation or the message handler. The WKWebView
 behavior was observed on macOS 26 and the WebKitGTK one with WebKitGTK 2.52. The WebView2 behavior is
 the one the conformance harness was written against and was not re-checked for this note.
+
+On macOS a page must not post messages much faster than the host handles them. A message that a page
+posts goes from its web content process to the application process, where WebKit queues it for the
+main thread and hands over at most 600 messages for each turn of the run loop, and as few as 60 while
+the queue stays long. Once 50,000 messages of a web content process wait in that queue, WebKit ends
+the process as misbehaving and drops them (`maxPendingIncomingMessagesKillingThreshold` in WebKit's
+`Source/WebKit/Platform/IPC/Connection.cpp`, a limit compiled for the Apple platforms only). The view
+raises `ProcessFailed` with the kind `WebProcessExited` and the recovery action `RecreateView`. An
+evaluation that was waiting for its result fails with the `NativeCode` 5 described above, and so does
+an evaluation started later in that view, although no result is at fault: check `ProcessFailed` before
+reading that code as a result WKWebView cannot return. Whether a burst gets that far depends on the
+machine. On the `macos-15-intel` runner of the conformance workflow, with macOS 15.7 and WebKit
+20621.3.11, the page of the conformance fixture posted 10,000 messages through `@neoastra/client` in
+0.1 to 0.35 s, and the harness received 5,000 to 9,000 a second. A loop of 20,000 or of 45,000 `send`
+calls arrived there. A loop of 60,000, of 80,000, or of 100,000 ended the page after 0.8 to 1 s, when
+4,500 to 8,400 messages had arrived, and each time WebKit wrote to the system log "Over 50000
+incoming messages have been queued without the main thread processing them, terminating the remote
+process as it seems to be misbehaving". The loop of 100,000 had arrived on macOS 26.5 for arm64, and
+it arrives with WebView2 on Windows 11 and with WebKitGTK 2.52. A page that has that many messages
+should send them in groups and wait for an answer of the host between two groups, for example the
+result of a call. A timer between the groups does not tie the page to the host, and the engines slow
+the timers of a page that is not visible: a page that posted 1,000 messages from each turn of a
+zero-delay timer, in a window that is not shown, got 19,000 of them to the host in 26 s on that runner,
+36,000 in 25 s with WebKitGTK, and 32,000 in 25 s with WebView2.
 
 `NeoAstra.CaptureAsync` returns a PNG or JPEG image of what a view shows. The image is in device
 pixels: its size is the captured size in CSS pixels multiplied by the zoom and the device scale. A
