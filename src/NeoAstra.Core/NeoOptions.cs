@@ -364,6 +364,16 @@ public sealed class NeoBrowserFeatures
     /// <summary>Gets or sets whether the user can zoom the page with the mouse wheel, keyboard, or a pinch gesture.</summary>
     public bool? ZoomControls { get; set; }
 
+    /// <summary>Gets or sets whether the engine shows its own JavaScript dialogs for <c>alert</c>, <c>confirm</c>, <c>prompt</c>, and <c>beforeunload</c>.</summary>
+    /// <remarks>
+    /// While the dialogs are off, they reach <see cref="NeoAstra.ScriptDialogRequested"/> only, and a view without a handler
+    /// accepts an alert and cancels the others. The engine default differs: WebView2 shows its own dialogs and then
+    /// does not raise the request, WKWebView has none, and NeoAstra does not let WebKitGTK show its own unless this is
+    /// <see langword="true"/>. Assigning <see cref="NeoAstra.ScriptDialogRequested"/> turns the dialogs off.
+    /// WebView2 applies a change to the documents it loads afterwards, not to the one it is showing.
+    /// </remarks>
+    public bool? ScriptDialogs { get; set; }
+
     /// <summary>
     /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls.
     /// DevTools keep the engine default.

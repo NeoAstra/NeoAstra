@@ -68,6 +68,7 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_resource_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_resource_body_kind>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_bridge_policy>(0, 2);
+        AssertEnum<uint, NativeMethods.neoastra_view_setting>(0, 5);
     }
 
     [TestMethod]

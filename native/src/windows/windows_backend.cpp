@@ -2096,6 +2096,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:result=settings->put_AreDefaultContextMenusEnabled(value);break;
         case NEOASTRA_VIEW_SETTING_DEVTOOLS:result=settings->put_AreDevToolsEnabled(value);break;
         case NEOASTRA_VIEW_SETTING_STATUS_BAR:result=settings->put_IsStatusBarEnabled(value);break;
+        // WebView2 raises ScriptDialogOpening only while its own dialogs are off, and reads the switch when it loads a document.
+        case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:result=settings->put_AreDefaultScriptDialogsEnabled(value);break;
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:{
             // Pinch zoom is a separate setting on newer runtimes; older ones only have the wheel and keyboard control.
             result=settings->put_IsZoomControlEnabled(value);ComPtr<ICoreWebView2Settings5> settings5;if(SUCCEEDED(result)&&SUCCEEDED(settings.As(&settings5)))result=settings5->put_IsPinchZoomEnabled(value);break;}

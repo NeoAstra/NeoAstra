@@ -537,8 +537,8 @@ neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view,double
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_view_setting_t setting,bool enabled) noexcept {@autoreleasepool{
     auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
     switch(setting){
-        // WKWebView has no browser shortcuts or status bar of its own, so there is nothing to turn off or on.
-        case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:case NEOASTRA_VIEW_SETTING_STATUS_BAR:return enabled?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_OK;
+        // WKWebView has no browser shortcuts, status bar, or script dialogs of its own, so there is nothing to turn off or on.
+        case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:case NEOASTRA_VIEW_SETTING_STATUS_BAR:case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:return enabled?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_OK;
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:if(![state->webview isKindOfClass:[NeoAstraWebView class]])return NEOASTRA_ERROR_NOT_SUPPORTED;((NeoAstraWebView*)state->webview).contextMenusDisabled=!enabled;return NEOASTRA_OK;
         case NEOASTRA_VIEW_SETTING_DEVTOOLS:
             // Both switches are set through key-value coding: `inspectable` only exists on macOS 13.3 and later.

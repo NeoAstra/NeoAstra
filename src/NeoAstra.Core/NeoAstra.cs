@@ -20,6 +20,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
     private readonly NeoTransportCoordinator? _transport;
     private GCHandle _eventRoot;
+    private Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? _scriptDialogRequested;
     private NeoUserScript? _transportScript;
     private Uri? _source;
     private string _title = string.Empty;
@@ -101,7 +102,23 @@ public sealed class NeoAstra : IAsyncDisposable
     public Func<NeoNewWindowRequest, ValueTask<NeoNewWindowDecision>>? NewWindowRequested { get; set; }
 
     /// <summary>Gets or sets the single asynchronous JavaScript-dialog policy handler.</summary>
-    public Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? ScriptDialogRequested { get; set; }
+    /// <remarks>
+    /// Assigning a handler turns the engine's own dialogs off for this view, as
+    /// <see cref="NeoBrowserFeatures.ScriptDialogs"/> does, so that <c>alert</c>, <c>confirm</c>, <c>prompt</c>, and
+    /// <c>beforeunload</c> reach the handler: WebView2 does not raise the request while it shows its own dialogs.
+    /// Assign the handler before navigating, because WebView2 applies the switch to the documents it loads afterwards.
+    /// The dialogs stay off after the handler is removed; a view without a handler then accepts an alert and
+    /// cancels the others.
+    /// </remarks>
+    public Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? ScriptDialogRequested
+    {
+        get => _scriptDialogRequested;
+        set
+        {
+            _scriptDialogRequested = value;
+            if (value is not null) RouteScriptDialogsToHost();
+        }
+    }
 
     /// <summary>Gets or sets the single asynchronous file-chooser policy handler.</summary>
     public Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? FileChooserRequested { get; set; }
@@ -429,6 +446,7 @@ public sealed class NeoAstra : IAsyncDisposable
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEVTOOLS, features.DevTools);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_STATUS_BAR, features.StatusBar);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS, features.ZoomControls);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, features.ScriptDialogs);
 
         void Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)
         {
@@ -437,9 +455,39 @@ public sealed class NeoAstra : IAsyncDisposable
             {
                 NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_setting(NativeHandle, setting, value ? 1u : 0u), default, "set browser feature");
             }
-            catch (Exception exception) when (exception is NotSupportedException or EntryPointNotFoundException)
+            catch (Exception exception) when (exception is NotSupportedException or ArgumentException or EntryPointNotFoundException)
             {
                 // The engine has no such feature to switch, or the native library predates the setting.
+            }
+        }
+    }
+
+    // Turns the engine's own script dialogs off so that every dialog reaches the decision event. The setting belongs to
+    // the UI thread, while a handler may be assigned from any thread.
+    internal void RouteScriptDialogsToHost()
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        var dispatcher = Environment.Application.Dispatcher;
+        if (dispatcher.CheckAccess()) Apply();
+        else
+        {
+            try { dispatcher.Post(Apply); }
+            catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
+            {
+                // The application is shutting down; no dialog will be raised for this view.
+            }
+        }
+
+        void Apply()
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            try
+            {
+                ApplyBrowserFeatures(new NeoBrowserFeatures { ScriptDialogs = false });
+            }
+            catch (Exception exception) when (exception is ObjectDisposedException or InvalidOperationException or NeoAstraException)
+            {
+                // The view is going away, or the engine refused the switch; its own dialogs then stay as they are.
             }
         }
     }

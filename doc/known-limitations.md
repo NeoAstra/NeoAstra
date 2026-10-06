@@ -167,9 +167,17 @@ assuming that every browser engine supports every portable event.
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
 
-WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
-Linux, a handler that does not complete inline receives the documented safe default instead of an
-unbounded asynchronous deferral.
+WebKit callback contracts require some decisions synchronously: a popup request on macOS and Linux,
+and a file-chooser request on Linux. A handler for one of those that does not complete inline receives
+the documented safe default instead of an unbounded asynchronous deferral. A JavaScript dialog waits
+for its handler on every backend, for at most `NeoAstraOptions.DecisionTimeout`.
+
+The engine's own JavaScript dialogs and the `ScriptDialogRequested` handler exclude each other; see
+[built-in browser shortcuts and menus](chromeless-windows.md#built-in-browser-shortcuts-and-menus).
+WebView2 raises the request only while its own dialogs are off, and reads that switch when it loads a
+document: a handler assigned after a document has loaded gets the dialogs of the next one. This was
+observed on Windows 11 with the WebView2 Runtime 154. The WebKitGTK path, which keeps a dialog open
+until its decision arrives, was written from the WebKitGTK documentation and has not been run.
 
 `NavigationCompleted` relays the browser engine's own completion notification, which does not say how
 far the page's scripts have got. WKWebView can raise it while `document.readyState` is still

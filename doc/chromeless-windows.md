@@ -155,6 +155,7 @@ engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection to th
 | `AcceleratorKeys` | Find, print, reload, zoom, caret-browsing, and similar browser shortcuts | Switchable | Engine has none | Engine has none |
 | `ContextMenus` | The default context menu | Switchable | Switchable | Switchable |
 | `DevTools` | User access to DevTools | Switchable; on by default | Switchable; off by default | Switchable; off by default |
+| `ScriptDialogs` | The engine's own `alert`, `confirm`, `prompt`, and `beforeunload` dialogs | Switchable; on by default | Engine has none | Switchable; off by default |
 | `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
 | `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification; off by default | Engine has none |
 
@@ -169,5 +170,13 @@ shortcut is off. `NeoAstra.OpenDevTools()` opens them from application code on W
 WKWebView has no public way to open the Web Inspector, so on macOS it is reached through the context
 menu's Inspect Element item or Safari's Develop menu, and `OpenDevTools()` reports
 `NotSupportedException`.
+
+While `ScriptDialogs` is off, a JavaScript dialog is shown by nobody but the application: it reaches
+`NeoAstra.ScriptDialogRequested`, which answers it or shows a dialog of its own, and the page waits
+for that answer for at most `NeoAstraOptions.DecisionTimeout`. A view without a handler accepts an
+alert and cancels a confirmation, a prompt, and a `beforeunload` request. Assigning a handler turns
+the engine dialogs off, because WebView2 does not raise the request while it shows its own. WebView2
+reads the switch when it loads a document, so assign the handler, or set `ScriptDialogs`, before
+navigating.
 
 See [known limitations](known-limitations.md) for the validation status of each backend.

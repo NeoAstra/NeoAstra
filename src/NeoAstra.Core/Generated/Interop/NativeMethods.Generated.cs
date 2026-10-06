@@ -164,7 +164,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards.
         /// </summary>
         public enum neoastra_view_setting : uint
         {
@@ -177,6 +177,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_VIEW_SETTING_STATUS_BAR = unchecked((uint)3),
 
             NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = unchecked((uint)4),
+
+            NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = unchecked((uint)5),
         }
 
         public enum neoastra_option_state : uint
@@ -1295,7 +1297,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards.
         /// </summary>
         public readonly partial record struct neoastra_view_setting_t(NativeMethods.neoastra_view_setting Value)
         {

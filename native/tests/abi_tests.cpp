@@ -93,6 +93,7 @@ static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
 static_assert(NEOASTRA_RESOURCE_MANIFEST == 12);
 static_assert(NEOASTRA_RESOURCE_BODY_FILE == 2);
+static_assert(NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS == 5);
 static_assert(NEOASTRA_BRIDGE_DISABLED == 0 && NEOASTRA_BRIDGE_TRUSTED_ORIGINS == 1 && NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW == 2);
 static_assert(sizeof(void*) == 8, "ABI 1.0 targets the current 64-bit primary platforms");
 static_assert(sizeof(neoastra_struct_header_t) == 8);
@@ -228,6 +229,7 @@ int main() {
     assert(neoastra_window_set_title_bar(window, &title_bar) == NEOASTRA_OK);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_open_devtools(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(state == NEOASTRA_WINDOW_NORMAL);
     close_capture closes{};
     assert(neoastra_app_set_event_callback(app, capture_close, &closes) == NEOASTRA_OK);
