@@ -47,6 +47,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-1 libwebkitgtk-6.0-4 xvfb
+          # WebKitGTK starts its web process in a bubblewrap sandbox, which needs unprivileged user namespaces.
+          # Ubuntu 24.04 restricts those through AppArmor, and a page then fails to load on the runner with
+          # "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted".
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns > /dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Run desktop session smoke fixture
         shell: bash
         timeout-minutes: 10
