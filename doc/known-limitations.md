@@ -45,7 +45,7 @@ assuming that every browser engine supports every portable event.
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
-| Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Not mapped; persistent environments share the default session |
+| Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
@@ -76,8 +76,8 @@ macOS workflow, but it has not yet been run on a macOS host.
 ## Browser data and user-data roots
 
 `NeoEnvironmentOptions.UserDataRoot` names where an environment keeps cookies, local storage, IndexedDB,
-and other website data. Environments on different roots must not see each other's data, and an
-environment on the same root must find its data again. The backends do not all honor that yet:
+and other website data. Environments on different roots do not see each other's data, and an
+environment on the same root finds its data again. Where the data is kept depends on the browser engine:
 
 - **Windows.** The root is the WebView2 user-data folder. The data is in that directory and goes away
   with it. Without a root, WebView2 uses its default folder.
@@ -93,21 +93,29 @@ environment on the same root must find its data again. The backends do not all h
   which stores nothing. Without a root, the environment uses the application's default WebKit store.
   Before macOS 14 the root has no effect: every environment that is not private shares the default
   store, and the backend logs a warning when such an environment asks for a root.
-- **Linux.** The root is not mapped yet: every environment that is not private shares the default
-  WebKitGTK session.
+- **Linux.** Each root has a persistent WebKitGTK network session of its own, which keeps website data
+  in `data` and caches in `cache` under the root, and cookies in `data/cookies.sqlite`. The backend
+  creates the two directories, accessible to the user only, and fails the creation of the environment
+  when it cannot. The data goes away with the root directory. Environments of one process on the same
+  root share one session, however the path is spelled. Without a root, the environment uses the default
+  WebKitGTK session. WebKitGTK keeps that session in the user's data and cache directories under the
+  program name of the process. A NeoAstra host normally has no program name, and WebKitGTK then uses
+  `webkitgtk`, a directory that every such application shares. Cookies of the default session are in
+  memory only and do not survive a restart.
 
 A profile that is not ephemeral is the store of its environment on macOS and Linux, so it follows the
 root and the private mode of that environment. Named profiles have storage of their own on Windows only.
 A profile follows the private mode of its environment there as well; see
 [private environments](#private-environments).
 
-NeoAstra releases that ignored the root on macOS kept the data of every environment in the
-application's default store. That data stays there and is not copied into the store of a root: WebKit
-has no public way to copy a complete store, and nothing records which root the shared data belonged
-to. After an upgrade, an environment with a root therefore starts with empty storage on macOS, while an
-environment without a root still opens the earlier data. An application that wants one of its
-instances to keep that data leaves `UserDataRoot` unset for that instance on macOS and passes a root
-for the others.
+NeoAstra releases that ignored the root on macOS and Linux kept the data of every environment in the
+default store: the application's default WebKit store on macOS, the default WebKitGTK session on Linux.
+That data stays there and is not copied into the store of a root: WebKit has no public way to copy a
+complete store on macOS, and nothing records which root the shared data belonged to. After an upgrade,
+an environment with a root therefore starts with empty storage on macOS and Linux, while an environment
+without a root still opens the earlier data. An application that wants one of its instances to keep
+that data leaves `UserDataRoot` unset for that instance on those platforms and passes a root for the
+others.
 
 ### Private environments
 

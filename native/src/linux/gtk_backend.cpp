@@ -4,9 +4,12 @@
 #include <webkit/webkit.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <filesystem>
 #include <memory>
 #include <new>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -391,7 +394,37 @@ neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* window) n
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* window,neoastra_title_bar_t* value) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;value->height=window->title_bar.style==NEOASTRA_TITLE_BAR_DEFAULT?0:window->title_bar.height>0?window->title_bar.height:32;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_GTK_WINDOW&&kind!=NEOASTRA_NATIVE_HANDLE_GTK_WIDGET)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;handle->kind=kind;handle->value=state->widget;return NEOASTRA_OK;}
 
-bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():WEBKIT_NETWORK_SESSION(g_object_ref(webkit_network_session_get_default()));environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;return false;}if(!register_custom_schemes(environment,state->context,error)){g_object_unref(state->session);g_object_unref(state->context);delete state;environment->platform=nullptr;return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
+namespace {
+// One process must not open a data directory through two network sessions, so environments on the same root share one.
+// The registry is used on the UI thread only, does not keep a session alive, and is never destroyed: a session can outlive it.
+std::unordered_map<std::string,WebKitNetworkSession*>& root_sessions() {static auto* sessions=new std::unordered_map<std::string,WebKitNetworkSession*>;return *sessions;}
+void root_session_finalized(void* data,GObject*) noexcept {std::unique_ptr<std::string> root(static_cast<std::string*>(data));root_sessions().erase(*root);}
+// Without a root the environment keeps the default session, which is also where data stored before roots were honored remains.
+WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,neoastra_error_t** error) noexcept {
+    if(user_data_root.length==0)return WEBKIT_NETWORK_SESSION(g_object_ref(webkit_network_session_get_default()));
+    try{
+        // WebKitGTK fills the two directories below. Creating them first reports a root that cannot be used, and lets
+        // one directory be one session however it is spelled.
+        std::error_code failure;
+        auto root=std::filesystem::absolute(std::filesystem::path(neo_string(user_data_root)),failure);
+        if(!failure&&(g_mkdir_with_parents((root/"data").c_str(),0700)!=0||g_mkdir_with_parents((root/"cache").c_str(),0700)!=0))failure.assign(errno,std::generic_category());
+        if(!failure)root=std::filesystem::canonical(root,failure);
+        if(failure){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create the user-data root",failure.value(),"webkitgtk");return nullptr;}
+        auto& sessions=root_sessions();
+        if(const auto found=sessions.find(root.string());found!=sessions.end())return WEBKIT_NETWORK_SESSION(g_object_ref(found->second));
+        auto key=std::make_unique<std::string>(root.string());
+        g_object_ptr<WebKitNetworkSession> session(webkit_network_session_new((root/"data").c_str(),(root/"cache").c_str()));
+        if(!session)return nullptr;
+        // WebKitGTK keeps cookies in memory unless it is given a file for them.
+        webkit_cookie_manager_set_persistent_storage(webkit_network_session_get_cookie_manager(session.get()),(root/"data"/"cookies.sqlite").c_str(),WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE);
+        sessions.emplace(*key,session.get());
+        g_object_weak_ref(G_OBJECT(session.get()),root_session_finalized,key.release());
+        return session.release();
+    }catch(...){return nullptr;}
+}
+}
+
+bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error);environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;if(error&&!*error)neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create its web context or network session",0,"webkitgtk");return false;}if(!register_custom_schemes(environment,state->context,error)){g_object_unref(state->session);g_object_unref(state->context);delete state;environment->platform=nullptr;return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
 void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {auto* state=static_cast<gtk_environment*>(environment->platform);if(!state)return;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}if(state->context)g_object_unref(state->context);delete state;environment->platform=nullptr;}
 bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_profile;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile allocation failed");return false;}auto* environment=static_cast<gtk_environment*>(profile->environment->platform);state->session=profile->ephemeral?webkit_network_session_new_ephemeral():environment&&environment->session?WEBKIT_NETWORK_SESSION(g_object_ref(environment->session)):nullptr;if(!state->session){delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile network-session creation failed");return false;}if(profile->ephemeral)state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);profile->platform=state;return true;}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state)return;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}delete state;profile->platform=nullptr;}

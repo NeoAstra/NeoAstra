@@ -213,6 +213,19 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void LinuxNetworkSession_SourceGivesEachUserDataRootItsOwnSession()
+    {
+        // WebKitGTK has one default session, which a process without a program name shares with every other one. A
+        // backend that ignores the root makes every instance share local storage, whatever data root it was started on.
+        var gtk = File.ReadAllText(FindRepositoryFile("native", "src", "linux", "gtk_backend.cpp"));
+        StringAssert.Contains(gtk, "options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error)");
+        StringAssert.Contains(gtk, "webkit_network_session_new((root/\"data\").c_str(),(root/\"cache\").c_str())");
+        StringAssert.Contains(gtk, "(root/\"data\"/\"cookies.sqlite\").c_str(),WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE");
+        Assert.AreEqual(1, gtk.Split("webkit_network_session_get_default()").Length - 1,
+            "Only an environment without a root uses the default session.");
+    }
+
+    [TestMethod]
     public void WindowsPrivateEnvironment_SourceCreatesEveryViewInPrivate()
     {
         // WebView2 has no private environment: InPrivate is an option of each controller. A controller created without
