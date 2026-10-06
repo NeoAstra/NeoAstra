@@ -320,10 +320,16 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     /// <summary>Reloads the current document.</summary>
-    public void Reload()
+    public void Reload() => Reload(ignoreCache: false);
+
+    /// <summary>Reloads the current document, optionally without using the cache.</summary>
+    /// <param name="ignoreCache">Whether the document and its resources are fetched again instead of being taken from the cache.</param>
+    /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend refused the reload.</exception>
+    public void Reload(bool ignoreCache)
     {
         ThrowIfDisposed();
-        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_reload(NativeHandle, 0), default, "reload");
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_reload(NativeHandle, ignoreCache ? 1u : 0u), default, "reload");
     }
 
     /// <summary>Stops the current navigation.</summary>
