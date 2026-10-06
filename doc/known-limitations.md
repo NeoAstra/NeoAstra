@@ -53,20 +53,15 @@ when it is done.
   application started from a desktop session is affected. To do: on a Linux x64 desktop host, run
   `xvfb-run -a python eng/build_native.py --rid linux-x64 --clean` and a check that loads a page, such
   as the browser conformance harness.
-- **Linux: `CanGoBack` and `CanGoForward` are never reported.** The managed view updates the two
-  properties only from the native history-changed event (`NEOASTRA_EVENT_HISTORY_CHANGED`, handled in
-  `src/NeoAstra.Core/NeoAstra.cs`), and the GTK backend never raises it:
-  `native/src/linux/gtk_backend.cpp` connects nothing to the back/forward list of a view. Both
-  properties are therefore expected to stay `false` on Linux while `GoBack` and `GoForward` still
-  navigate, and the browser conformance scenario "navigation, history, and redirects", which waits for
-  `CanGoBack`, is expected to time out. macOS had the same defect until the Cocoa backend began
-  observing `canGoBack` and `canGoForward`. The Linux one follows from the source and has not been
-  run. To do: when a view is created, connect the `changed` signal of the list returned by
-  `webkit_web_view_get_back_forward_list` and raise the event with bit 0 from
-  `webkit_web_view_can_go_back` and bit 1 from `webkit_web_view_can_go_forward`, as `report_history`
-  does in `native/src/macos/cocoa_backend.mm`. Cover it in `native/tests/linux_backend_tests.cpp` the
-  way `native/tests/macos_history_tests.mm` does on macOS, which needs a host where pages load (see
-  the entry above), then update the back/forward row of the table in the next section.
+- **Linux: the history flags have no native test.** The GTK backend raises the history-changed event
+  (`NEOASTRA_EVENT_HISTORY_CHANGED`) from the `changed` signal of the back/forward list of a view, and
+  again as a document commits and before its load is reported as finished, with bit 0 from
+  `webkit_web_view_can_go_back` and bit 1 from `webkit_web_view_can_go_forward`. `CanGoBack` and
+  `CanGoForward` stayed `false` on Linux before that, and the browser conformance scenario "navigation,
+  history, and redirects" timed out there, as it was seen to do with WebKitGTK 2.52. That scenario is
+  the only check of the flags on Linux. To do: cover them in `native/tests/linux_backend_tests.cpp`
+  the way `native/tests/macos_history_tests.mm` does on macOS, which needs a host where pages load
+  (see the entry above).
 - **macOS: the history test has not run on the CI runners.** `native/tests/macos_history_tests.mm` is
   the first native test that loads pages, so WebKit's web content process must be able to start where
   `ctest` runs. It passed on macOS 26.5 for arm64, for x86_64 under Rosetta, and with the sanitizer
@@ -154,7 +149,7 @@ assuming that every browser engine supports every portable event.
 | Download pause/resume | Available when reported by the runtime | Not exposed | Not exposed |
 | Trusted message origins | Exact trusted-origin policy available | Exact trusted-origin policy available | Unavailable; sender-origin data is not trustworthy |
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
-| Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Not exposed; both stay `false` |
+| Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Available |
 | Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
 | Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |
 | Content extended into the title bar | Available | Available | Available where GTK draws client-side decorations |
