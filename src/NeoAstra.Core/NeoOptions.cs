@@ -53,6 +53,14 @@ public sealed class NeoApplicationOptions
 public sealed class NeoEnvironmentOptions
 {
     /// <summary>Gets or sets the persistent browser-data root.</summary>
+    /// <remarks>
+    /// Environments on different roots keep separate cookies, local storage, and other website data, and an
+    /// environment on the same root finds its data again. Windows and Linux keep the data in this directory and
+    /// create it when it is missing. On macOS 14 and later, each root selects a WebKit store of its own by its
+    /// resolved path; WebKit keeps that store in its per-application container rather than in this directory.
+    /// Earlier macOS releases do not use the root: every environment that is not private shares the default
+    /// store there. Without a root, an environment uses the default store of the browser engine.
+    /// </remarks>
     public string? UserDataRoot { get; set; }
 
     /// <summary>Gets or sets an explicit browser runtime directory.</summary>
@@ -64,7 +72,15 @@ public sealed class NeoEnvironmentOptions
     /// <summary>Gets or sets the preferred languages in priority order.</summary>
     public IReadOnlyList<string> PreferredLanguages { get; set; } = Array.Empty<string>();
 
-    /// <summary>Gets or sets whether the environment uses private storage by default.</summary>
+    /// <summary>Gets or sets whether the environment keeps website data in memory only.</summary>
+    /// <remarks>
+    /// A private environment writes no cookies, local storage, or other website data to persistent storage. Every
+    /// view of the environment is private, including a view on a profile that is not ephemeral. On macOS and Linux
+    /// each private environment has an in-memory store of its own, which lasts as long as the environment. On
+    /// Windows every view is a WebView2 InPrivate view: the user-data folder is still created and holds the files
+    /// of the browser but no website data, private environments on the same <see cref="UserDataRoot"/> share their
+    /// in-memory data, and that data is discarded when the last view using it closes.
+    /// </remarks>
     public bool IsPrivate { get; set; }
 
     /// <summary>Gets or sets custom URI schemes registered before environment creation.</summary>
@@ -204,6 +220,10 @@ public sealed class NeoProfileOptions
     public string? Name { get; set; }
 
     /// <summary>Gets or sets whether browser data is ephemeral.</summary>
+    /// <remarks>
+    /// A profile of an environment created with <see cref="NeoEnvironmentOptions.IsPrivate"/> keeps its data in
+    /// memory whether or not it is ephemeral.
+    /// </remarks>
     public bool IsEphemeral { get; set; }
 
     internal void Validate()

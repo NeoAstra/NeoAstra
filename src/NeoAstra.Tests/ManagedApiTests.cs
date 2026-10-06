@@ -200,6 +200,48 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void MacDataStore_SourceGivesEachUserDataRootItsOwnStore()
+    {
+        // WKWebView has one default store per application. A backend that ignores the root makes every instance of an
+        // application share cookies and local storage, whatever data root it was started on.
+        var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
+        StringAssert.Contains(cocoa, "persistent_data_store(environment->app,neo_string(options->user_data_root))");
+        StringAssert.Contains(cocoa, "[WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)]");
+        StringAssert.Contains(cocoa, "profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:environment->data_store");
+        Assert.AreEqual(2, cocoa.Split("[WKWebsiteDataStore defaultDataStore]").Length - 1,
+            "Only an environment without a root, and one on a system older than macOS 14, uses the default store.");
+    }
+
+    [TestMethod]
+    public void LinuxNetworkSession_SourceGivesEachUserDataRootItsOwnSession()
+    {
+        // WebKitGTK has one default session, which a process without a program name shares with every other one. A
+        // backend that ignores the root makes every instance share local storage, whatever data root it was started on.
+        var gtk = File.ReadAllText(FindRepositoryFile("native", "src", "linux", "gtk_backend.cpp"));
+        StringAssert.Contains(gtk, "options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error)");
+        StringAssert.Contains(gtk, "webkit_network_session_new((root/\"data\").c_str(),(root/\"cache\").c_str())");
+        StringAssert.Contains(gtk, "(root/\"data\"/\"cookies.sqlite\").c_str(),WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE");
+        Assert.AreEqual(1, gtk.Split("webkit_network_session_get_default()").Length - 1,
+            "Only an environment without a root uses the default session.");
+    }
+
+    [TestMethod]
+    public void WindowsPrivateEnvironment_SourceCreatesEveryViewInPrivate()
+    {
+        // WebView2 has no private environment: InPrivate is an option of each controller. A controller created without
+        // options uses the persistent default profile of the user-data folder, whatever the environment asked for.
+        var windows = File.ReadAllText(FindRepositoryFile("native", "src", "windows", "windows_backend.cpp"));
+        StringAssert.Contains(windows, "state->private_mode = options->private_mode != 0;");
+        StringAssert.Contains(windows, "const bool in_private = environment->private_mode || (view->profile && view->profile->ephemeral);");
+        StringAssert.Contains(windows, "if (view->profile || in_private) {");
+        StringAssert.Contains(windows, "controller_options->put_IsInPrivateModeEnabled(in_private ? TRUE : FALSE)");
+        Assert.AreEqual(1, windows.Split("->CreateCoreWebView2Controller(").Length - 1,
+            "Only a view that is neither private nor on a profile is created without controller options.");
+        Assert.AreEqual(1, windows.Split("->CreateCoreWebView2ControllerWithOptions(").Length - 1,
+            "Every view, a popup target included, selects its profile and its private mode in one place.");
+    }
+
+    [TestMethod]
     public void PlatformBackends_SourcePairSchemeHandlingAndBridgeLimitations()
     {
         var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
@@ -919,6 +961,133 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task PrivateEnvironment_KeepsWebsiteDataOutOfPersistentProfilesWhenDevelopmentLibraryIsAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // The private and the persistent environment use one user-data folder, so only the private mode separates them.
+        var root = Path.Combine(Path.GetTempPath(), $"neoastra-private-{Guid.NewGuid():N}");
+        try
+        {
+            var run = RunStaAsync(() => NeoApplication.Run(
+                new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoAstra private environment test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                },
+                async application =>
+                {
+                    const string write = "localStorage.setItem('neoastra-private', 'stored'); true";
+                    const string read = "localStorage.getItem('neoastra-private') ?? 'none'";
+                    const string profileName = "neoastra-private-test";
+                    await using var privateEnvironment = await application.CreateEnvironmentAsync(CreateOptions(root, isPrivate: true));
+                    await using var persistentEnvironment = await application.CreateEnvironmentAsync(CreateOptions(root, isPrivate: false));
+
+                    // A view without a profile is the usual one. It was created on the persistent default profile.
+                    await using var privateView = await OpenAsync(application, privateEnvironment, null);
+                    await privateView.EvaluateScriptAsync(write);
+
+                    // A profile that is not ephemeral and has no name is the store of its environment, so it is private too.
+                    await using var privateProfile = await privateEnvironment.CreateProfileAsync();
+                    await using var privateProfileView = await OpenAsync(application, privateEnvironment, privateProfile);
+                    Assert.AreEqual("\"stored\"", await privateProfileView.EvaluateScriptAsync(read), "A profile without a name is the store of its environment.");
+                    await privateProfile.SetCookieAsync(CreateCookie());
+                    Assert.IsTrue(await HasCookieAsync(privateProfile), "The private profile did not return its own cookie.");
+
+                    // A named profile has storage of its own on Windows, and that storage is private here as well.
+                    await using var privateNamedProfile = await privateEnvironment.CreateProfileAsync(new NeoProfileOptions { Name = profileName });
+                    await using var privateNamedView = await OpenAsync(application, privateEnvironment, privateNamedProfile);
+                    await privateNamedView.EvaluateScriptAsync(write);
+                    await privateNamedProfile.SetCookieAsync(CreateCookie());
+                    Assert.IsTrue(await HasCookieAsync(privateNamedProfile), "The named private profile did not return its own cookie.");
+
+                    // The persistent environment opens the profiles that the folder keeps for a later run.
+                    await using var persistentView = await OpenAsync(application, persistentEnvironment, null);
+                    Assert.AreEqual("\"none\"", await persistentView.EvaluateScriptAsync(read), "A private view without a profile wrote local storage to the persistent default profile.");
+                    await using var persistentProfile = await persistentEnvironment.CreateProfileAsync();
+                    await using var persistentProfileView = await OpenAsync(application, persistentEnvironment, persistentProfile);
+                    Assert.IsFalse(await HasCookieAsync(persistentProfile), "A private profile wrote a cookie to the persistent default profile.");
+                    await using var persistentNamedProfile = await persistentEnvironment.CreateProfileAsync(new NeoProfileOptions { Name = profileName });
+                    await using var persistentNamedView = await OpenAsync(application, persistentEnvironment, persistentNamedProfile);
+                    Assert.AreEqual("\"none\"", await persistentNamedView.EvaluateScriptAsync(read), "A named private profile wrote local storage to its persistent profile.");
+                    Assert.IsFalse(await HasCookieAsync(persistentNamedProfile), "A named private profile wrote a cookie to its persistent profile.");
+
+                    application.Shutdown(0);
+                }));
+
+            Assert.AreEqual(0, await run.WaitAsync(TimeSpan.FromSeconds(60)));
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
+        }
+        finally
+        {
+            // The browser processes of the folder exit shortly after their environments.
+            for (var attempt = 0; attempt < 20 && Directory.Exists(root); attempt++)
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    await Task.Delay(250);
+                }
+            }
+        }
+
+        static NeoEnvironmentOptions CreateOptions(string root, bool isPrivate) => new()
+        {
+            UserDataRoot = root,
+            IsPrivate = isPrivate,
+            CustomSchemes = [NeoCustomScheme.Application("app", new StoragePageResourceProvider())],
+        };
+
+        static async Task<global::NeoAstra.NeoAstra> OpenAsync(NeoApplication application, NeoEnvironment environment, NeoProfile? profile)
+        {
+            const string page = "app://neoastra/index.html";
+            var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+            var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { Profile = profile });
+            await view.NavigateAsync(new Uri(page));
+
+            // The document itself says when it is the storage page. Until then the view shows another document, or has
+            // no script context to evaluate in.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (true)
+            {
+                try
+                {
+                    if (await view.EvaluateScriptAsync($"location.href === '{page}' && document.readyState === 'complete'") == "true") return view;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException && DateTime.UtcNow < deadline)
+                {
+                }
+
+                Assert.IsTrue(DateTime.UtcNow < deadline, "The storage page did not load.");
+                await Task.Delay(20);
+            }
+        }
+
+        // The cookie outlives its session, so a profile that is not private keeps it on disk.
+        static NeoCookie CreateCookie() => new("neoastra_private", "stored", "private-environment.invalid")
+        {
+            IsSecure = true,
+            Expires = DateTimeOffset.UtcNow.AddHours(1),
+        };
+
+        static async Task<bool> HasCookieAsync(NeoProfile profile)
+            => (await profile.GetCookiesAsync(new Uri("https://private-environment.invalid/"))).Any(cookie => cookie.Name == "neoastra_private");
+    }
+
+    [TestMethod]
     public async Task WindowBounds_RoundTripClientSizeAndPositionWhenDevelopmentLibraryIsAvailable()
     {
         if (!OperatingSystem.IsWindows())
@@ -1115,6 +1284,12 @@ public sealed class ManagedApiTests
     private sealed class NullResourceProvider : INeoResourceProvider
     {
         public NeoResourceResponse? GetResponse(NeoResourceRequest request) => null;
+    }
+
+    private sealed class StoragePageResourceProvider : INeoResourceProvider
+    {
+        public NeoResourceResponse? GetResponse(NeoResourceRequest request)
+            => NeoResourceResponse.FromBytes("<!doctype html><title>storage</title>"u8.ToArray(), "text/html; charset=utf-8");
     }
 
     private sealed class SmokeResourceProvider : INeoResourceProvider

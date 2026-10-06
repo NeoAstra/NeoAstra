@@ -1,14 +1,17 @@
 #include "../common/native_internal.hpp"
 
 #import <Cocoa/Cocoa.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -84,6 +87,7 @@ struct cocoa_view {
     NeoAstraDelegate* delegate;
     NSMutableArray<NeoURLSchemeHandler*>* scheme_handlers;
     std::unordered_map<std::string,WKUserScript*> scripts;
+    uint64_t history{};
     ~cocoa_view() { if (delegate) delegate.nativeView=nullptr; }
 };
 
@@ -165,6 +169,8 @@ neoastra_result_t cocoa_download_command(neoastra_download_t* download,uint32_t 
 void destroy_cocoa_download(neoastra_download_t* download) noexcept {auto* state=static_cast<cocoa_download*>(download->platform);if(state){if(state->progress&&state->observer&&state->observes_completed){@try{[state->progress removeObserver:state->observer forKeyPath:@"completedUnitCount"];}@catch(NSException*){}}if(state->progress&&state->observer&&state->observes_total){@try{[state->progress removeObserver:state->observer forKeyPath:@"totalUnitCount"];}@catch(NSException*){}}if(state->progress)objc_setAssociatedObject(state->progress,@selector(downloadDidFinish:),nil,OBJC_ASSOCIATION_ASSIGN);if(state->value)objc_setAssociatedObject(state->value,@selector(downloadDidFinish:),nil,OBJC_ASSOCIATION_ASSIGN);delete state;}}
 struct download_destination_context { neoastra_download_t* download{}; NSURL* default_destination; void (^completion)(NSURL*); };
 void download_destination_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {@autoreleasepool{std::unique_ptr<download_destination_context> context(static_cast<download_destination_context*>(pointer));try{if(response->action==NEOASTRA_DECISION_DOWNLOAD){context->download->destination_path=neo_string(response->text);context->completion([NSURL fileURLWithPath:ns_string(context->download->destination_path)]);}else if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT){context->download->destination_path=utf8(context->default_destination.path);context->completion(context->default_destination);}else context->completion(nil);}catch(...){context->completion(nil);}}}
+// WebKit changes canGoBack and canGoForward together and notifies once for each, so the repeated pair is not reported twice.
+void report_history(neoastra_view_t* view,WKWebView* webview){auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;const uint64_t history=(webview.canGoBack?1u:0u)|(webview.canGoForward?2u:0u);if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
 void report_window_state(neoastra_window_t* value,neoastra_window_state_t state){auto* native=static_cast<cocoa_window*>(value->platform);if(!native||native->reported_state==state)return;native->reported_state=state;{std::lock_guard lock(value->state_mutex);value->state=state;}neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_STATE_CHANGED,value->id,nullptr,nullptr,state);}
 // Portable bounds pair the window's top-left corner with the size of its content area. The corner is measured downward
 // from the top of the primary display, as CoreGraphics display bounds are, while AppKit frames grow upward from its bottom.
@@ -306,7 +312,7 @@ void sync_bounds(neoastra_window_t* value,NSWindow* window){if(!window)return;co
 - (void)download:(WKDownload*)download decideDestinationUsingResponse:(NSURLResponse*)response suggestedFilename:(NSString*)suggestedFilename completionHandler:(void (^)(NSURL*))completionHandler API_AVAILABLE(macos(11.3)) { auto* native=(neoastra_download_t*)[objc_getAssociatedObject(download,@selector(downloadDidFinish:)) pointerValue];if(!native){completionHandler(nil);return;}std::string filename=utf8(suggestedFilename),mime=utf8(response.MIMEType);native->total_bytes=response.expectedContentLength<0?UINT64_MAX:(uint64_t)response.expectedContentLength;NSURL* downloads=[[[NSFileManager defaultManager] URLsForDirectory:NSDownloadsDirectory inDomains:NSUserDomainMask] firstObject];NSURL* default_destination=[downloads URLByAppendingPathComponent:suggestedFilename];for(NSUInteger index=1;[[NSFileManager defaultManager]fileExistsAtPath:default_destination.path];++index){NSString* stem=[suggestedFilename stringByDeletingPathExtension],*extension=[suggestedFilename pathExtension];NSString* candidate=[NSString stringWithFormat:@"%@ (%lu)%@%@",stem,(unsigned long)index,extension.length?@".":@"",extension];default_destination=[downloads URLByAppendingPathComponent:candidate];}auto* decision=new neoastra_decision;neo_configure_decision(decision,native->view,NEOASTRA_DECISION_DOWNLOAD_REQUEST,NEOASTRA_DECISION_CANCEL);decision->completion=download_destination_decided;decision->completion_context=new download_destination_context{native,default_destination,[completionHandler copy]};neo_event_details details{};details.text2=&mime;details.value2=1;details.download=native;native->event_published=true;neo_emit_view_detailed(native->view,NEOASTRA_EVENT_DOWNLOAD_REQUESTED,native->id,&filename,&native->source_uri,native->total_bytes,0,decision,details);neo_finish_decision_event(native->view,decision);if(decision->resolved_action.load()==NEOASTRA_DECISION_DEFAULT||decision->resolved_action.load()==NEOASTRA_DECISION_ALLOW||decision->resolved_action.load()==NEOASTRA_DECISION_DOWNLOAD){native->state.store(NEOASTRA_DOWNLOAD_IN_PROGRESS);neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_STARTED);}decision->release(); }
 - (void)downloadDidFinish:(WKDownload*)download API_AVAILABLE(macos(11.3)) { auto* native=(neoastra_download_t*)[objc_getAssociatedObject(download,@selector(downloadDidFinish:)) pointerValue];if(!native)return;auto expected=NEOASTRA_DOWNLOAD_IN_PROGRESS;if(native->state.compare_exchange_strong(expected,NEOASTRA_DOWNLOAD_COMPLETED)){native->bytes_received.store(native->total_bytes.load());neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED);neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_COMPLETED);native->release_lifecycle();} }
 - (void)download:(WKDownload*)download didFailWithError:(NSError*)error resumeData:(NSData*)resumeData API_AVAILABLE(macos(11.3)) { (void)resumeData;auto* native=(neoastra_download_t*)[objc_getAssociatedObject(download,@selector(downloadDidFinish:)) pointerValue];if(!native)return;const auto terminal=error.code==NSURLErrorCancelled?NEOASTRA_DOWNLOAD_CANCELED:NEOASTRA_DOWNLOAD_FAILED;auto expected=NEOASTRA_DOWNLOAD_IN_PROGRESS;if(!native->state.compare_exchange_strong(expected,terminal)){expected=NEOASTRA_DOWNLOAD_REQUESTED;if(!native->state.compare_exchange_strong(expected,terminal))return;}try{native->failure_reason=utf8(error.localizedDescription);}catch(...){ }neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_COMPLETED);native->release_lifecycle(); }
-- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id>*)change context:(void*)context { (void)change;(void)context;if([object isKindOfClass:[NSProgress class]]){auto* native=(neoastra_download_t*)[objc_getAssociatedObject(object,@selector(downloadDidFinish:)) pointerValue];if(native&&native->state.load()==NEOASTRA_DOWNLOAD_IN_PROGRESS){NSProgress* progress=(NSProgress*)object;native->bytes_received.store(progress.completedUnitCount<0?0:(uint64_t)progress.completedUnitCount);native->total_bytes.store(progress.totalUnitCount<0?UINT64_MAX:(uint64_t)progress.totalUnitCount);neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED);}return;}auto* view=self.nativeView;if(!view)return;WKWebView* webview=(WKWebView*)object;if([keyPath isEqualToString:@"title"]){view->title=utf8(webview.title);neo_emit_view(view,NEOASTRA_EVENT_TITLE_CHANGED,0,&view->title);}else if([keyPath isEqualToString:@"URL"]){view->source=utf8(webview.URL.absoluteString);neo_emit_view(view,NEOASTRA_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);} }
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id>*)change context:(void*)context { (void)change;(void)context;if([object isKindOfClass:[NSProgress class]]){auto* native=(neoastra_download_t*)[objc_getAssociatedObject(object,@selector(downloadDidFinish:)) pointerValue];if(native&&native->state.load()==NEOASTRA_DOWNLOAD_IN_PROGRESS){NSProgress* progress=(NSProgress*)object;native->bytes_received.store(progress.completedUnitCount<0?0:(uint64_t)progress.completedUnitCount);native->total_bytes.store(progress.totalUnitCount<0?UINT64_MAX:(uint64_t)progress.totalUnitCount);neo_download_emit(native,NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED);}return;}auto* view=self.nativeView;if(!view)return;WKWebView* webview=(WKWebView*)object;if([keyPath isEqualToString:@"title"]){view->title=utf8(webview.title);neo_emit_view(view,NEOASTRA_EVENT_TITLE_CHANGED,0,&view->title);}else if([keyPath isEqualToString:@"URL"]){view->source=utf8(webview.URL.absoluteString);neo_emit_view(view,NEOASTRA_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);}else if([keyPath isEqualToString:@"canGoBack"]||[keyPath isEqualToString:@"canGoForward"])report_history(view,webview); }
 @end
 
 namespace {
@@ -323,6 +329,34 @@ void apply_title_bar(neoastra_window_t* window,cocoa_window* state) {
     state->window.titleVisibility=extended?NSWindowTitleHidden:NSWindowTitleVisible;
     const NSWindowButton buttons[]={NSWindowCloseButton,NSWindowMiniaturizeButton,NSWindowZoomButton};
     for(const auto button:buttons)[state->window standardWindowButton:button].hidden=window->title_bar.style==NEOASTRA_TITLE_BAR_HIDDEN;
+}
+// WebKit selects a persistent store by identifier and keeps it in its own container, not in a directory the application chooses.
+// The identifier is the SHA-256 name-based UUID (RFC 9562, version 8) of the root. Deriving it any other way would detach
+// every root from the data already stored for it.
+NSUUID* data_store_identifier(const std::string& user_data_root) {
+    // One directory is one store however it is spelled: symbolic links and letter case are resolved for the part that exists.
+    std::error_code failure;
+    auto path=std::filesystem::weakly_canonical(std::filesystem::path(user_data_root),failure);
+    if(failure)path=std::filesystem::path(user_data_root).lexically_normal();
+    if(path.has_relative_path()&&!path.has_filename())path=path.parent_path();
+    const auto name=path.string();
+    static constexpr char scope[]="neoastra:user-data-root:";
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_CTX hash;
+    CC_SHA256_Init(&hash);
+    CC_SHA256_Update(&hash,scope,sizeof(scope)-1);
+    CC_SHA256_Update(&hash,name.data(),static_cast<CC_LONG>(name.size()));
+    CC_SHA256_Final(digest,&hash);
+    digest[6]=(digest[6]&0x0f)|0x80;
+    digest[8]=(digest[8]&0x3f)|0x80;
+    return [[NSUUID alloc]initWithUUIDBytes:digest];
+}
+// Without a root the environment keeps the default store, which is also where data stored before roots were honored remains.
+WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app,const std::string& user_data_root) {
+    if(user_data_root.empty())return [WKWebsiteDataStore defaultDataStore];
+    if(@available(macOS 14.0,*))return [WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)];
+    neo_log(app,NEOASTRA_LOG_WARNING,"environment","WKWebView cannot give a user-data root its own store before macOS 14; the default store is shared");
+    return [WKWebsiteDataStore defaultDataStore];
 }
 }
 
@@ -396,7 +430,7 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
                 }
                 auto state=std::make_unique<cocoa_environment>();
                 state->process_pool=[WKProcessPool new];
-                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];
+                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:persistent_data_store(environment->app,neo_string(options->user_data_root));
                 environment->platform=state.release();
                 callback(context,nullptr);
                 return true;
@@ -411,7 +445,8 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
     }
 }
 void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {delete static_cast<cocoa_environment*>(environment->platform);environment->platform=nullptr;}
-bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {@autoreleasepool{try{auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];profile->platform=state;return true;}catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
+// A profile that is not ephemeral is the store of its environment, so it follows the environment's user-data root and private mode.
+bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {@autoreleasepool{try{auto* environment=static_cast<cocoa_environment*>(profile->environment->platform);if(!environment||!environment->data_store){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"WKWebView environment is unavailable");return false;}auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:environment->data_store;profile->platform=state;return true;}catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {delete static_cast<cocoa_profile*>(profile->platform);profile->platform=nullptr;}
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t* profile,const std::string& uri,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->data_store||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie URI");[state->data_store.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie*>* values){@autoreleasepool{NSMutableArray* output=[NSMutableArray array];NSString* host=url.host.lowercaseString;NSString* request_path=url.path.length?url.path:@"/";for(NSHTTPCookie* cookie in values){NSString* domain=cookie.domain.lowercaseString;BOOL domain_match=[host isEqualToString:domain]||([domain hasPrefix:@"."]&&[host hasSuffix:domain]);BOOL path_match=[request_path hasPrefix:cookie.path.length?cookie.path:@"/"];if(!domain_match||!path_match||(cookie.secure&&![url.scheme.lowercaseString isEqualToString:@"https"]))continue;NSMutableDictionary* item=[@{@"name":cookie.name,@"value":cookie.value,@"domain":cookie.domain,@"path":cookie.path.length?cookie.path:@"/",@"secure":@(cookie.secure),@"httpOnly":@(cookie.HTTPOnly),@"sameSite":@0} mutableCopy];if(cookie.expiresDate)item[@"expiresUnixMs"]=@((int64_t)(cookie.expiresDate.timeIntervalSince1970*1000.0));[output addObject:item];}NSError* serialization_error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:output options:0 error:&serialization_error];neoastra_result_t requested=serialization_error?NEOASTRA_ERROR_NATIVE_FAILURE:NEOASTRA_OK,actual{};neoastra_error_t* native_error=serialization_error?make_error(requested,utf8(serialization_error.localizedDescription).c_str(),serialization_error.code):nullptr;auto* buffer=data?new neoastra_buffer(std::vector<uint8_t>((const uint8_t*)data.bytes,(const uint8_t*)data.bytes+data.length)):nullptr;if(operation->try_complete(requested,actual)){callback(context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();if(native_error)native_error->release();operation->release();}}];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_profile_set_cookie(neoastra_profile_t* profile,const neoastra_cookie_t* cookie,neoastra_completion_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);if(!state||!state->data_store)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WKWebView profile is not initialized");NSMutableDictionary* properties=[@{NSHTTPCookieName:ns_string(neo_string(cookie->name)),NSHTTPCookieValue:ns_string(neo_string(cookie->value)),NSHTTPCookieDomain:ns_string(neo_string(cookie->domain)),NSHTTPCookiePath:ns_string(neo_string(cookie->path))} mutableCopy];if(cookie->flags&1u)properties[NSHTTPCookieSecure]=@"TRUE";if(cookie->flags&2u)properties[@"HttpOnly"]=@"TRUE";if((cookie->flags&4u)==0&&cookie->expires_unix_ms>0)properties[NSHTTPCookieExpires]=[NSDate dateWithTimeIntervalSince1970:cookie->expires_unix_ms/1000.0];NSHTTPCookie* value=[NSHTTPCookie cookieWithProperties:properties];if(!value)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie");[state->data_store.httpCookieStore setCookie:value completionHandler:^{neoastra_result_t actual{};if(operation->try_complete(NEOASTRA_OK,actual))callback(context,actual,nullptr);operation->release();}];return NEOASTRA_OK;}}
@@ -471,6 +506,8 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 if (view->fill_parent) state->webview.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
                 [state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
+                [state->webview addObserver:state->delegate forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:nullptr];
+                [state->webview addObserver:state->delegate forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:nullptr];
                 [parent addSubview:state->webview];
                 view->platform=state.release();
                 callback(context,nullptr);
@@ -485,7 +522,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
         }
     }
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoBack"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoForward"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view->fill_parent?(NSViewWidthSizable|NSViewHeightSizable):NSViewNotSizable;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation URI");[state->webview loadRequest:[NSURLRequest requestWithURL:url]];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url||method.empty()||body_length>NSUIntegerMax)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation request");NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];request.HTTPMethod=ns_string(method);if(body_length)request.HTTPBody=[NSData dataWithBytes:body length:(NSUInteger)body_length];for(NSString* line in [ns_string(headers) componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]){NSRange separator=[line rangeOfString:@":"];if(separator.location==NSNotFound)continue;NSString* name=[[line substringToIndex:separator.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];NSString* value=[[line substringFromIndex:separator.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];if(name.length)[request setValue:value forHTTPHeaderField:name];}[state->webview loadRequest:request];return NEOASTRA_OK;}}

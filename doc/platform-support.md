@@ -56,6 +56,9 @@ All platforms require:
 - Browser features still depend on the WKWebView APIs available in the user's macOS release. See
   [known limitations](known-limitations.md) and query `NeoEnvironment.GetCapability` before exposing
   optional UX.
+- Separate browser data for each `NeoEnvironmentOptions.UserDataRoot` needs macOS 14 or later. On
+  earlier releases every environment that is not private shares the application's default store; see
+  [browser data and user-data roots](known-limitations.md#browser-data-and-user-data-roots).
 
 ### Linux
 
@@ -83,7 +86,9 @@ A separate native workflow runs automatically only when native sources, build in
 runtimes change; it compiles artifacts for all six RIDs and executes native tests on all except Windows
 ARM64. NativeAOT, extended package validation, delivery, and desktop conformance remain separately
 dispatchable workflows rather than checks on every managed change. The native tests cover the ABI,
-ownership, dispatch, teardown, and stress behavior; they do not by themselves prove end-to-end browser behavior.
+ownership, dispatch, teardown, and stress behavior and, on macOS and Linux, the WebKit data store or
+network session selected for each user-data root and profile and, on macOS, the back/forward
+availability a view reports; they do not by themselves prove end-to-end browser behavior.
 
 Normal CI does not invoke the browser harness with `--run`. The separate, manually dispatched
 `conformance.yml` now configures both desktop-service smoke and browser `--run --stress` execution on

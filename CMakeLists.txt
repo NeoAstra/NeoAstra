@@ -166,6 +166,23 @@ if(NEOASTRA_BUILD_TESTS)
   target_include_directories(neoastra_stress_tests PRIVATE native/include native/src/common)
   target_link_libraries(neoastra_stress_tests PRIVATE neoastra_native neoastra_sanitizers)
   add_test(NAME neoastra_stress_tests COMMAND neoastra_stress_tests)
+  if(APPLE)
+    add_executable(neoastra_macos_data_store_tests native/tests/macos_data_store_tests.mm)
+    target_compile_options(neoastra_macos_data_store_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_data_store_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_data_store_tests COMMAND neoastra_macos_data_store_tests)
+    add_executable(neoastra_macos_history_tests native/tests/macos_history_tests.mm)
+    target_compile_options(neoastra_macos_history_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_history_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa")
+    add_test(NAME neoastra_macos_history_tests COMMAND neoastra_macos_history_tests)
+  elseif(UNIX)
+    add_executable(neoastra_linux_backend_tests native/tests/linux_backend_tests.cpp)
+    target_link_libraries(neoastra_linux_backend_tests PRIVATE
+      neoastra_native neoastra_sanitizers PkgConfig::GTK PkgConfig::WEBKIT)
+    add_test(NAME neoastra_linux_backend_tests COMMAND neoastra_linux_backend_tests)
+  endif()
 endif()
 
 include(GNUInstallDirs)
