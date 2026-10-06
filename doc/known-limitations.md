@@ -36,6 +36,7 @@ assuming that every browser engine supports every portable event.
 | Download pause/resume | Available when reported by the runtime | Not exposed | Not exposed |
 | Trusted message origins | Exact trusted-origin policy available | Exact trusted-origin policy available | Unavailable; sender-origin data is not trustworthy |
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
+| Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Not exposed; both stay `false` |
 | Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
 | Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |
 | Content extended into the title bar | Available | Available | Available where GTK draws client-side decorations |
