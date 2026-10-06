@@ -166,6 +166,13 @@ if(NEOASTRA_BUILD_TESTS)
   target_include_directories(neoastra_stress_tests PRIVATE native/include native/src/common)
   target_link_libraries(neoastra_stress_tests PRIVATE neoastra_native neoastra_sanitizers)
   add_test(NAME neoastra_stress_tests COMMAND neoastra_stress_tests)
+  if(APPLE)
+    add_executable(neoastra_macos_data_store_tests native/tests/macos_data_store_tests.mm)
+    target_compile_options(neoastra_macos_data_store_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_data_store_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_data_store_tests COMMAND neoastra_macos_data_store_tests)
+  endif()
 endif()
 
 include(GNUInstallDirs)

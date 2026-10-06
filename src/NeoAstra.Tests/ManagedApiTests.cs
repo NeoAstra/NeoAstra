@@ -200,6 +200,19 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void MacDataStore_SourceGivesEachUserDataRootItsOwnStore()
+    {
+        // WKWebView has one default store per application. A backend that ignores the root makes every instance of an
+        // application share cookies and local storage, whatever data root it was started on.
+        var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));
+        StringAssert.Contains(cocoa, "persistent_data_store(environment->app,neo_string(options->user_data_root))");
+        StringAssert.Contains(cocoa, "[WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)]");
+        StringAssert.Contains(cocoa, "profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:environment->data_store");
+        Assert.AreEqual(2, cocoa.Split("[WKWebsiteDataStore defaultDataStore]").Length - 1,
+            "Only an environment without a root, and one on a system older than macOS 14, uses the default store.");
+    }
+
+    [TestMethod]
     public void PlatformBackends_SourcePairSchemeHandlingAndBridgeLimitations()
     {
         var cocoa = File.ReadAllText(FindRepositoryFile("native", "src", "macos", "cocoa_backend.mm"));

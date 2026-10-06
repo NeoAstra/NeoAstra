@@ -45,6 +45,7 @@ assuming that every browser engine supports every portable event.
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
+| Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Not mapped; persistent environments share the default session |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
 Linux, a handler that does not complete inline receives the documented safe default instead of an
@@ -70,6 +71,40 @@ position can be adjusted; the adjusted value is what `Position` then reports. Ap
 outside those limits is not clamped there as it is on Windows. The macOS conversion between this
 contract and AppKit's bottom-left-origin frames is checked by the native ABI test configured for the
 macOS workflow, but it has not yet been run on a macOS host.
+
+## Browser data and user-data roots
+
+`NeoEnvironmentOptions.UserDataRoot` names where an environment keeps cookies, local storage, IndexedDB,
+and other website data. Environments on different roots must not see each other's data, and an
+environment on the same root must find its data again. The backends do not all honor that yet:
+
+- **Windows.** The root is the WebView2 user-data folder. The data is in that directory and goes away
+  with it. Without a root, WebView2 uses its default folder.
+- **macOS.** WKWebView does not let an application choose a storage directory. From macOS 14, each
+  root selects a persistent WebKit store of its own by an identifier derived from the resolved absolute
+  path of the root: symbolic links and letter case are resolved for the part of the path that exists,
+  and the directory is neither created nor read. WebKit keeps these stores in its own per-application
+  container, `~/Library/WebKit/<bundle identifier or executable name>/WebsiteDataStore/`, not under
+  the root. Deleting, moving, or copying the root directory therefore does not delete, move, or copy
+  the data: a root at the same path finds its data again, a root at a new path starts empty, and a
+  root that is no longer used leaves its store behind. Clear a store with `NeoProfile.ClearDataAsync`
+  on a profile of its environment, and give throwaway instances such as tests a private environment,
+  which stores nothing. Without a root, the environment uses the application's default WebKit store.
+  Before macOS 14 the root has no effect: every environment that is not private shares the default
+  store, and the backend logs a warning when such an environment asks for a root.
+- **Linux.** The root is not mapped yet: every environment that is not private shares the default
+  WebKitGTK session.
+
+A profile that is not ephemeral is the store of its environment on macOS and Linux, so it follows the
+root and the private mode of that environment. Named profiles have storage of their own on Windows only.
+
+NeoAstra releases that ignored the root on macOS kept the data of every environment in the
+application's default store. That data stays there and is not copied into the store of a root: WebKit
+has no public way to copy a complete store, and nothing records which root the shared data belonged
+to. After an upgrade, an environment with a root therefore starts with empty storage on macOS, while an
+environment without a root still opens the earlier data. An application that wants one of its
+instances to keep that data leaves `UserDataRoot` unset for that instance on macOS and passes a root
+for the others.
 
 ## Custom schemes and the managed bridge
 
