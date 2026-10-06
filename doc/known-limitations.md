@@ -194,12 +194,13 @@ Do not expect `EvaluateScriptAsync` to wait for a Promise. It returns the script
 the browser engine reports it, so a script that ends in a Promise, which every call to an `async`
 function does, gives no usable result. WKWebView fails such an evaluation at once with a
 `NeoAstraException` whose `Domain` is `wkwebview` and whose `NativeCode` is 5, the error it reports for
-any value it cannot return, a function or a DOM node included. A script that throws arrives as the same
-exception type with `NativeCode` 4. WebView2 completes the evaluation with the serialized Promise object
-instead. To read the outcome of asynchronous work, have the page store it or post it as a message, then
-read it from a later evaluation or the message handler. The WKWebView behavior was observed on macOS 26.
-The WebView2 behavior is the one the conformance harness was written against and was not re-checked
-for this note, and WebKitGTK has not been checked.
+any value it cannot return, a function or a DOM node included. A value that it does return but that
+has no JSON form, such as a date or a number that is not finite, is reported as `null`. A script that
+throws arrives as the same exception type with `NativeCode` 4. WebView2 completes the evaluation with
+the serialized Promise object instead. To read the outcome of asynchronous work, have the page store it
+or post it as a message, then read it from a later evaluation or the message handler. The WKWebView
+behavior was observed on macOS 26. The WebView2 behavior is the one the conformance harness was written
+against and was not re-checked for this note, and WebKitGTK has not been checked.
 
 `NeoAstra.CaptureAsync` returns a PNG or JPEG image of what a view shows. The image is in device
 pixels: its size is the captured size in CSS pixels multiplied by the zoom and the device scale. A

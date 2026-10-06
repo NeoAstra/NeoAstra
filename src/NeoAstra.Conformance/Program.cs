@@ -157,6 +157,17 @@ internal static class Program
                     Require(result.RootElement.GetProperty("text").GetString() == "complete", "The JavaScript result changed.");
                 });
 
+                await RunCaseAsync("JavaScript results without a JSON form", async () =>
+                {
+                    // A number that is not finite and a date have no JSON form of their own. A backend reports null
+                    // for the number and null, an empty object, or its text for the date; neither may fail the
+                    // evaluation or the host.
+                    var number = await view.EvaluateScriptAsync("0 / 0");
+                    Require(number is null or "null", $"A number that is not finite was reported as {number}.");
+                    var date = await view.EvaluateScriptAsync("new Date(0)");
+                    Require(date is null or "null" or "{}" || date.StartsWith("\"1970-01-01T00:00:00", StringComparison.Ordinal), $"A date was reported as {date}.");
+                });
+
                 await RunPromiseCaseAsync("Promise results", async () =>
                 {
                     using var result = await EvaluateJsonAsync(view,
