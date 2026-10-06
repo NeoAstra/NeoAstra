@@ -172,6 +172,11 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_macos_data_store_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
     add_test(NAME neoastra_macos_data_store_tests COMMAND neoastra_macos_data_store_tests)
+  elseif(UNIX)
+    add_executable(neoastra_linux_backend_tests native/tests/linux_backend_tests.cpp)
+    target_link_libraries(neoastra_linux_backend_tests PRIVATE
+      neoastra_native neoastra_sanitizers PkgConfig::GTK PkgConfig::WEBKIT)
+    add_test(NAME neoastra_linux_backend_tests COMMAND neoastra_linux_backend_tests)
   endif()
 endif()
 
