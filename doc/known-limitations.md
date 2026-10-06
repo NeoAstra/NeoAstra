@@ -43,28 +43,24 @@ when it is done.
   [browser data and user-data roots](#browser-data-and-user-data-roots). To decide: whether a host
   gets default directories of its own, for example from `NeoApplicationOptions.ApplicationName`, and
   what happens to the data already in the shared ones.
-- **Linux: loading a page under Xvfb is unexplained on one host.** The user-data root and view
-  teardown fixes were built and tested in an Ubuntu 24.04 arm64 virtual machine with WebKitGTK 2.52.
-  In that virtual machine, reached over SSH and under Xvfb, loading a page aborted with
-  `Failed to fully launch dbus-proxy`, with or without `dbus-run-session`, so the end-to-end check of
-  local storage and cookies across processes ran with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`.
-  The cause was not established. Since then the native tests have passed on linux-x64 and linux-arm64
-  in the native workflow, under Xvfb, and the browser conformance harness, which loads pages, has
-  completed on Ubuntu 24.04 x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as
-  it is. To do: run the harness under Xvfb on the Linux runner of the conformance workflow, which the
-  entry on views that share a window keeps from happening.
-- **Linux: a second view that fills a window replaces the first.** A GTK window has one child, and the
-  GTK backend gives that place to the view created last (`gtk_window_set_child` in
-  `neo_platform_view_create_async`, `native/src/linux/gtk_backend.cpp`), which destroys the widget of
-  the view that had it. Windows and macOS stack the views of a window instead. The desktop smoke
-  fixture (`NeoAstra.NativeAotFixture --native-smoke`) creates two views in one window, so on Linux it
-  fails with "The native GTK context-menu target view is unavailable" for the first of them, and the
-  process ends with a segmentation fault or an abort. That was seen on the Linux runner of the
-  conformance workflow and under WSL 2. The job of that workflow ends there, so its browser harness
-  has not run on the Linux runner. To do: hold the views of a window in a container that stacks them,
-  such as a `GtkOverlay`, and take a view out of it in `neo_platform_view_destroy`. The menu presenter
-  (`src/NeoAstra/Desktop/LinuxMenus.cs`) replaces the child of a window too, with a box for the menu
-  bar and the content, so the two have to agree on that container.
+- **Linux: a page does not load on the runner of the conformance workflow.** WebKitGTK starts its web
+  process in a bubblewrap sandbox, which needs unprivileged user namespaces, and Ubuntu 24.04
+  restricts those through AppArmor. On the Linux runner of the workflow, Ubuntu 24.04 under Xvfb, the
+  desktop smoke fixture passes and the browser conformance harness then aborts at its first page with
+  `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. The harness completes on Ubuntu 24.04
+  x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as it is. To do: let the
+  workflow lift the restriction on its runner, with
+  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the harness, and run it
+  there. An Ubuntu 24.04 arm64 virtual machine, reached over SSH and under Xvfb, aborted with
+  `Failed to fully launch dbus-proxy` when it loaded a page, with or without `dbus-run-session`, and
+  the checks there ran with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`; whether that had the same
+  cause is not known.
+- **Linux: a command at the top level of a menu bar is dropped.** A GTK 4 menu bar
+  (`GtkPopoverMenuBar`) shows the submenus of its model and nothing else. The menu presenter
+  (`src/NeoAstra/Desktop/LinuxMenus.cs`) hands a command or a role item at the top level of an
+  application or window menu on to GTK, which logs "Don't know how to handle this item" and leaves it
+  out. The desktop smoke fixture sets such menus. To decide: whether the presenter refuses such an
+  item, as it refuses a role item without a label, or puts it into a submenu.
 - **Linux: the history flags have no native test.** The GTK backend raises the history-changed event
   (`NEOASTRA_EVENT_HISTORY_CHANGED`) from the `changed` signal of the back/forward list of a view, and
   again as a document commits and before its load is reported as finished, with bit 0 from
