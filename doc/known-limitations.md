@@ -46,6 +46,7 @@ assuming that every browser engine supports every portable event.
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Not mapped; persistent environments share the default session |
+| Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
 
 WebKit callback contracts sometimes require popup and dialog decisions synchronously. On macOS and
 Linux, a handler that does not complete inline receives the documented safe default instead of an
@@ -97,6 +98,8 @@ environment on the same root must find its data again. The backends do not all h
 
 A profile that is not ephemeral is the store of its environment on macOS and Linux, so it follows the
 root and the private mode of that environment. Named profiles have storage of their own on Windows only.
+A profile follows the private mode of its environment there as well; see
+[private environments](#private-environments).
 
 NeoAstra releases that ignored the root on macOS kept the data of every environment in the
 application's default store. That data stays there and is not copied into the store of a root: WebKit
@@ -105,6 +108,45 @@ to. After an upgrade, an environment with a root therefore starts with empty sto
 environment without a root still opens the earlier data. An application that wants one of its
 instances to keep that data leaves `UserDataRoot` unset for that instance on macOS and passes a root
 for the others.
+
+### Private environments
+
+`NeoEnvironmentOptions.IsPrivate` asks for an environment that keeps cookies, local storage, IndexedDB,
+caches, and other website data in memory only. Every view of a private environment is private, with or
+without a profile. A profile that is not ephemeral does not opt out: in a private environment its data
+is in memory as well. `NeoProfile.IsEphemeral` still reports what the profile was created with.
+
+- **Windows.** WebView2 has no private environment: InPrivate mode is chosen for each view, so NeoAstra
+  creates every view of a private environment as an InPrivate view. WebView2 keeps the InPrivate data of
+  a profile in memory, apart from the persistent data of the same profile. Views without a profile and
+  profiles without a name use the default profile and so share one in-memory store; a named profile has
+  an in-memory store of its own. Three things differ from macOS and Linux:
+  - The user-data folder is still used. WebView2 creates it, keeps its own browser files in it, and
+    creates a directory for each profile, named or default, but an InPrivate view stores no website data
+    there.
+  - An in-memory store belongs to the browser process of the user-data folder, not to one environment
+    or profile object, and everything on that root that selects it shares it. Private environments share
+    the store of the default profile with each other and with ephemeral profiles that have no name;
+    ephemeral profiles with the same name share theirs. Give a profile a name of its own to keep its
+    data apart.
+  - WebView2 discards the InPrivate data of a profile when the last view using it closes, which can be
+    before the environment is disposed.
+
+  A WebView2 Runtime without profile support, which came with version 101, cannot create InPrivate
+  views: view creation fails there rather than store the data of a private environment. The Windows
+  mapping has not yet been run on its target host.
+- **macOS.** A private environment has one non-persistent WebKit store, which lasts as long as the
+  environment. A profile that is not ephemeral uses that store, and an ephemeral profile has a
+  non-persistent store of its own.
+- **Linux.** A private environment has one ephemeral WebKitGTK network session, which lasts as long as
+  the environment. A profile that is not ephemeral uses that session, and an ephemeral profile has an
+  ephemeral session of its own.
+
+NeoAstra releases that ignored `IsPrivate` on Windows created a view of a private environment on a
+persistent profile of the user-data folder unless the view had an ephemeral profile. Website data
+written by those releases is still in that folder, and a private environment neither reads nor removes
+it. Delete the folder while nothing uses it, or clear it with `NeoProfile.ClearDataAsync` on a profile
+of an environment on the same root that is not private.
 
 ## Custom schemes and the managed bridge
 

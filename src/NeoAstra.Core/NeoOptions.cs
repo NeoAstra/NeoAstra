@@ -72,7 +72,15 @@ public sealed class NeoEnvironmentOptions
     /// <summary>Gets or sets the preferred languages in priority order.</summary>
     public IReadOnlyList<string> PreferredLanguages { get; set; } = Array.Empty<string>();
 
-    /// <summary>Gets or sets whether the environment uses private storage by default.</summary>
+    /// <summary>Gets or sets whether the environment keeps website data in memory only.</summary>
+    /// <remarks>
+    /// A private environment writes no cookies, local storage, or other website data to persistent storage. Every
+    /// view of the environment is private, including a view on a profile that is not ephemeral. On macOS and Linux
+    /// each private environment has an in-memory store of its own, which lasts as long as the environment. On
+    /// Windows every view is a WebView2 InPrivate view: the user-data folder is still created and holds the files
+    /// of the browser but no website data, private environments on the same <see cref="UserDataRoot"/> share their
+    /// in-memory data, and that data is discarded when the last view using it closes.
+    /// </remarks>
     public bool IsPrivate { get; set; }
 
     /// <summary>Gets or sets custom URI schemes registered before environment creation.</summary>
@@ -212,6 +220,10 @@ public sealed class NeoProfileOptions
     public string? Name { get; set; }
 
     /// <summary>Gets or sets whether browser data is ephemeral.</summary>
+    /// <remarks>
+    /// A profile of an environment created with <see cref="NeoEnvironmentOptions.IsPrivate"/> keeps its data in
+    /// memory whether or not it is ephemeral.
+    /// </remarks>
     public bool IsEphemeral { get; set; }
 
     internal void Validate()
