@@ -506,6 +506,12 @@ internal static partial class Program
                 {
                     await RunCaseAsync("100,000 small messages", async () =>
                     {
+                        // A page posts faster than a host receives, and WKWebView ends the web content process of a page
+                        // that has 50,000 messages waiting for the main thread of the application. The messages are
+                        // therefore posted in bursts well under that number, each one after the burst before it has
+                        // arrived; see the paragraph on message bursts in doc/known-limitations.md.
+                        const int total = 100_000;
+                        const int burst = 10_000;
                         var window = CreateHiddenWindow("NeoAstra message stress conformance");
                         try
                         {
@@ -514,25 +520,41 @@ internal static partial class Program
                             await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
                             await WaitForDocumentLoadAsync(view, options.Timeout);
                             var received = 0;
-                            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                            NeoProcessFailedEventArgs? processFailure = null;
                             void OnMessage(object? _, NeoWebMessageReceivedEventArgs message)
                             {
-                                if (!HasKind(message.Json, "stress")) return;
-                                if (Interlocked.Increment(ref received) == 100_000) completion.TrySetResult();
+                                if (HasKind(message.Json, "stress")) Interlocked.Increment(ref received);
                             }
 
+                            void OnProcessFailed(object? _, NeoProcessFailedEventArgs failure) => Volatile.Write(ref processFailure, failure);
+
                             view.MessageReceived += OnMessage;
+                            view.ProcessFailed += OnProcessFailed;
                             try
                             {
-                                _ = await view.EvaluateScriptAsync(
-                                    "for (let i = 0; i < 100000; i++) globalThis.__fixturePostMessage({ kind: 'stress', value: i }); true");
-                                await completion.Task.WaitAsync(options.Timeout);
+                                for (var posted = 0; posted < total; posted += burst)
+                                {
+                                    var end = posted + burst;
+                                    _ = await view.EvaluateScriptAsync(
+                                        $"for (let i = {posted}; i < {end}; i++) globalThis.__fixturePostMessage({{ kind: 'stress', value: i }}); true");
+                                    await WaitUntilAsync(() => Volatile.Read(ref received) >= end,
+                                        $"The messages up to number {end} did not all arrive.", options.Timeout);
+                                }
+                            }
+                            catch (NeoAstraException exception) when (Volatile.Read(ref processFailure) is { } failure)
+                            {
+                                // An evaluation that loses its web content process fails as if its result had no supported
+                                // type, so the event is what tells the two apart.
+                                throw new InvalidOperationException(
+                                    $"The web content process ended ({failure.Kind}) after {Volatile.Read(ref received)} of {total} messages had arrived.",
+                                    exception);
                             }
                             finally
                             {
                                 view.MessageReceived -= OnMessage;
+                                view.ProcessFailed -= OnProcessFailed;
                             }
-                            Require(received == 100_000, $"Expected 100,000 messages but received {received}.");
+                            Require(received == total, $"Expected {total} messages but received {received}.");
                         }
                         finally
                         {
