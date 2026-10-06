@@ -1155,6 +1155,12 @@
     }
   }
 
+  // A view that was never given a size, such as one in a window that was never shown on Linux, lays its document out
+  // in a viewport without area. A box says nothing about an element there: a block is as wide as the viewport.
+  function hasViewport(view) {
+    return view.innerWidth > 0 && view.innerHeight > 0;
+  }
+
   // The point a click on the element lands on: the middle of its first box that has an area, inside the viewport.
   function clickPoint(element) {
     const view = viewOf(element);
@@ -1164,7 +1170,11 @@
       if (rects[index].width > 0 && rects[index].height > 0) { rect = rects[index]; break; }
     }
     if (!rect) rect = element.getBoundingClientRect();
-    if (!(rect.width > 0 && rect.height > 0)) throw fail('not-visible', 'The element ' + describe(element) + ' has no visible box to interact with.');
+    if (!(rect.width > 0 && rect.height > 0)) {
+      // Without a viewport, an element that has a box at all is taken as drawn, and the event goes to it directly.
+      if (rects.length && !hasViewport(view)) return { x: rect.left, y: rect.top };
+      throw fail('not-visible', 'The element ' + describe(element) + ' has no visible box to interact with.');
+    }
     const left = Math.max(rect.left, 0), right = Math.min(rect.right, view.innerWidth);
     const top = Math.max(rect.top, 0), bottom = Math.min(rect.bottom, view.innerHeight);
     return { x: right > left ? (left + right) / 2 : rect.left + rect.width / 2, y: bottom > top ? (top + bottom) / 2 : rect.top + rect.height / 2 };
@@ -1566,7 +1576,7 @@
       const element = all[index];
       if (!isFocusable(element) || element.tabIndex < 0 || isHidden(element) || element.closest('[inert]')) continue;
       const rect = element.getBoundingClientRect();
-      if (!(rect.width > 0 || rect.height > 0)) continue;
+      if (!(rect.width > 0 || rect.height > 0) && (hasViewport(viewOf(element)) || !element.getClientRects().length)) continue;
       if (element.localName === 'input' && element.type === 'radio' && element.name && !element.checked) {
         // Only the checked radio button of a group, or its first one, takes part in the tab order.
         const group = doc.querySelectorAll('input[type=radio][name="' + (window.CSS && CSS.escape ? CSS.escape(element.name) : element.name) + '"]');

@@ -140,6 +140,9 @@ not get in its way. What follows from this design:
 - **Waiting** is clocked by the host, never by a timer of the page. An engine slows the timers of a
   view that is not shown down to one a second or less; automation keeps its pace there, while the
   page's own timers do not.
+- **A view without a size** still takes input. On Linux, a view in a window that was never shown has a
+  viewport without area, where the box of an element says nothing; an element that has a box at all is
+  then taken as drawn. Screenshots and `click_at` need a window that is shown.
 - **Dialogs** of JavaScript stay open until `handle_dialog` answers them, for at most
   `NeoAstraOptions.DecisionTimeout`. While automation is on, they do not reach the
   `ScriptDialogRequested` handler of the application.
