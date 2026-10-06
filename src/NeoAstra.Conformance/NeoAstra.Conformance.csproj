@@ -10,6 +10,11 @@
     <ProjectReference Include="../NeoAstra/NeoAstra.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The automation scenarios check the pixels of screenshots with the decoder of the test project. -->
+    <Compile Include="../NeoAstra.Tests/Fixtures/TestPng.cs" Link="TestPng.cs" />
+  </ItemGroup>
+
   <Import Project="../NeoAstra/Build/Sdk/NeoAstra.props" />
   <Import Project="../NeoAstra/Build/Sdk/NeoAstra.Build.targets" />
 

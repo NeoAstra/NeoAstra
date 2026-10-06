@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'">
+  <title>NeoAstra automation fixture</title>
+  <link rel="stylesheet" href="automation.css">
+  <script src="automation.js" defer></script>
+</head>
+<body>
+  <header><h1>Automation fixture</h1><nav aria-label="Main"><a href="second.html" id="next">Second page</a> <a href="#section">Jump</a></nav></header>
+  <main>
+    <p id="intro">Welcome to the <strong>fixture</strong> page.</p>
+    <button id="counter" type="button">Clicked 0 times</button>
+    <button id="disabled" disabled>Disabled</button>
+    <form id="form">
+      <label for="name">Name</label> <input id="name" name="name" placeholder="Your name">
+      <label>Email <input id="email" type="email" name="email" required></label>
+      <label for="color">Color</label>
+      <select id="color" name="color"><option value="r">Red</option><option value="g" selected>Green</option><option value="b">Blue</option></select>
+      <label><input id="agree" type="checkbox" name="agree"> I agree</label>
+      <fieldset><legend>Size</legend>
+        <label><input type="radio" name="size" value="s"> Small</label>
+        <label><input type="radio" name="size" value="l"> Large</label>
+      </fieldset>
+      <label for="notes">Notes</label> <textarea id="notes" name="notes"></textarea>
+      <div id="editor" contenteditable="true" role="textbox" aria-label="Editor"></div>
+      <input id="file" type="file" aria-label="Attachment">
+      <button id="submit" type="submit">Send</button>
+    </form>
+    <output id="result"></output>
+    <div id="hover-target">Hover me</div><span id="hover-state"></span>
+    <div id="drag-source" draggable="true">Drag me</div>
+    <div id="drop-target" class="drop">Drop here</div>
+    <div id="swatch" role="img" aria-label="Blue swatch"></div>
+    <div aria-hidden="true">Hidden from the tree</div>
+    <button id="confirm">Ask</button>
+    <button id="later">Show later</button>
+    <button id="log">Log</button>
+    <button id="fetch">Fetch</button>
+    <div id="spacer"></div>
+    <h2 id="section">Far section</h2>
+    <button id="far">Far button</button>
+  </main>
+</body>
+</html>

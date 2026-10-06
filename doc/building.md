@@ -56,6 +56,8 @@ dotnet run --project src/NeoAstra.Conformance -c Release -- --run
 
 Add `--stress` for the bounded high-volume scenarios or `--timeout-seconds N` to change the per-scenario limit. The harness uses only copied `conformance://` fixtures and prints an explicit `SKIP` when a backend capability, trusted user activation, destructive process failure, filesystem mutation, or subprocess isolation prevents safe automation.
 
+The `automation:` scenarios call the [browser automation](browser-automation.md) tools by name against a fixture whose content security policy allows no inline script. Unlike the other scenarios, each of them reports its own `FAIL` line and the following ones still run, so that one run shows everything that differs on a platform; the run fails at the end when any of them did. They keep their windows hidden, except for the last one, which shows its window to capture it, to click at coordinates, and to resize it.
+
 Run the dependency-free benchmark harness with:
 
 ```sh

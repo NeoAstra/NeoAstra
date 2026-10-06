@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using NeoAstra;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly Uri IndexUri = new("conformance://fixture/index.html");
     private static readonly Uri SecondUri = new("conformance://fixture/second.html");
@@ -52,7 +52,7 @@ internal static class Program
         application.Shutdown();
     }
 
-    private sealed class ConformanceSuite(NeoApplication application, HarnessOptions options)
+    private sealed partial class ConformanceSuite(NeoApplication application, HarnessOptions options)
     {
         private readonly Stopwatch _total = Stopwatch.StartNew();
         private int _passed;
@@ -375,6 +375,7 @@ internal static class Program
                 if (firstProfile is not null) await firstProfile.DisposeAsync();
             }
 
+            await RunAutomationScenariosAsync(environment);
             await RunLifecycleScenariosAsync(environment, environmentOptions);
             _total.Stop();
             Console.WriteLine($"PASS browser conformance: {_passed} passed, {_skipped} skipped, {_total.Elapsed.TotalSeconds:F2} s");
