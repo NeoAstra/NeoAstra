@@ -18,6 +18,7 @@ Build native desktop apps with web technologies.
 - [Application lifecycle, launch routing, and hosting](application-lifecycle-and-hosting.md) — manage startup, shutdown, windows, and host integration.
 - [Plugins and desktop services](desktop-services.md) — use native desktop features without granting implicit renderer authority.
 - [Chromeless windows and web title bars](chromeless-windows.md) — extend web content into the title bar while keeping native window behavior, and turn off built-in browser shortcuts and menus.
+- [Browser automation](browser-automation.md) — drive the views of an application with the operations of Chrome DevTools MCP, and surface them through an MCP server.
 - [Delivery and authenticated updates](delivery-and-updates.md) — create deterministic bundles and configure signed updates.
 
 ## Security guidance

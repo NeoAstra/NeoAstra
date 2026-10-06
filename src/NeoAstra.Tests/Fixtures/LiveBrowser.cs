@@ -73,6 +73,7 @@ internal static class LiveBrowser
             var mimeType = path.EndsWith(".js", StringComparison.Ordinal) ? "text/javascript; charset=utf-8"
                 : path.EndsWith(".json", StringComparison.Ordinal) ? "application/json; charset=utf-8"
                 : path.EndsWith(".txt", StringComparison.Ordinal) ? "text/plain; charset=utf-8"
+                : path.EndsWith(".css", StringComparison.Ordinal) ? "text/css; charset=utf-8"
                 : "text/html; charset=utf-8";
             return NeoResourceResponse.FromBytes(Encoding.UTF8.GetBytes(content), mimeType);
         }

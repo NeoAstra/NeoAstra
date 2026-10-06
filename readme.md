@@ -16,6 +16,7 @@ It uses the platform browser — WebView2 on Windows, WKWebView on macOS, and We
 - **Chromeless windows**: web-rendered title bars that keep the native frame, snapping, and window controls.
 - **Controlled local assets** without a localhost server, with explicit security boundaries.
 - **Development tooling**: project templates, frontend builds, and live development workflows.
+- **Browser automation**: the snapshot, input, navigation, and debugging tools of Chrome DevTools MCP for every platform browser, ready to expose through an MCP server.
 - **.NET 10 and NativeAOT-friendly** design with source-generated interop and serialization.
 
 ## 📖 User guide

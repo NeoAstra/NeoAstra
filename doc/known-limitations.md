@@ -166,6 +166,7 @@ assuming that every browser engine supports every portable event.
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
 | Reload that leaves the cache out (`Reload(true)`) | Available through the DevTools protocol | Available | Available |
+| Browser automation (`NeoAutomation`) | Available | Available | Available |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
@@ -213,6 +214,13 @@ wait on the other backends. WKWebView has no call for the part of a document out
 `FullPage` reports `NotSupportedException` on macOS; query `NeoCapability.CaptureFullPage`. On macOS a
 region is scaled by the magnification only, which is exact while the view is not panned. The WebView2
 implementation was run on Windows 11; the WKWebView and WebKitGTK ones have not been run.
+
+`NeoAutomation` works inside the page with standard DOM APIs, because the three engines share no
+debugging protocol. Its input is dispatched as untrusted DOM events, its console and network lists hold
+what a page can observe, and its snapshots are computed from the DOM rather than read from the
+accessibility tree of the engine; [browser automation](browser-automation.md#how-it-differs-from-chrome-devtools-mcp)
+lists what follows from that. The tools of Chrome DevTools MCP that depend on Chrome itself, such as
+emulation, performance traces, and heap snapshots, are not provided.
 
 Chromeless drag and resize entry points must be called while a native pointer press is still held.
 They deliberately do not synthesize global input. A backend reports `InvalidOperationException`

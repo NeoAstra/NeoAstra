@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Transport/transport-bootstrap.js" LogicalName="NeoAstra.Transport.transport-bootstrap.js" />
+    <EmbeddedResource Include="Automation/automation-agent.js" LogicalName="NeoAstra.Automation.automation-agent.js" />
     <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />

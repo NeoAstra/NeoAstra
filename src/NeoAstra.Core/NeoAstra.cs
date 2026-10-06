@@ -503,6 +503,12 @@ public sealed class NeoAstra : IAsyncDisposable
 
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
 
+    internal TimeSpan DecisionTimeout => _decisionTimeout;
+
+    // Browser automation answers the dialogs of the views it drives; the handler of the application stays in place
+    // and gets the dialogs back when automation lets go of the view.
+    internal Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? AutomationScriptDialogRequested { get; set; }
+
     internal bool TransportEnabled => _transport is not null;
 
     internal event Action<NeoTransportApplicationMessage>? TransportApplicationMessageReceived;
@@ -832,7 +838,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private void HandleScriptDialogDecision(NativeMethods.neoastra_event value, Uri? uri)
     {
         if (value.decision.Handle == 0) return;
-        var handler = ScriptDialogRequested;
+        var handler = AutomationScriptDialogRequested ?? ScriptDialogRequested;
         var kind = (NeoScriptDialogKind)(int)value.value;
         var safe = kind == NeoScriptDialogKind.Alert ? NeoDecisionAction.Allow : NeoDecisionAction.Cancel;
         if (handler is null) { CompleteImmediate(value.decision.Handle, new DecisionResponse(safe)); return; }

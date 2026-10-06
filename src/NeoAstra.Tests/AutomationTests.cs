@@ -1,0 +1,820 @@
+// Copyright (c) Alexandre Mutel. All rights reserved.
+// Licensed under the BSD-Clause 2 license.
+
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace NeoAstra.Tests;
+
+[TestClass]
+public sealed class AutomationTests
+{
+    // The tools of Chrome DevTools MCP that NeoAstra offers on every browser engine.
+    private static readonly string[] ExpectedTools =
+    [
+        "click", "click_at", "close_page", "drag", "evaluate_script", "fill", "fill_form", "get_console_message", "get_network_request",
+        "handle_dialog", "hover", "list_console_messages", "list_network_requests", "list_pages", "navigate_page", "new_page", "press_key",
+        "resize_page", "select_page", "take_screenshot", "take_snapshot", "type_text", "upload_file", "wait_for",
+    ];
+
+    // -------------------------------------------------------------------------------------------------------------
+    // Without a browser
+    // -------------------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public void KeyCombinationsResolveToKeysOfTheUsLayout()
+    {
+        var (key, modifiers) = NeoAutomationKeys.ParseCombination("Enter");
+        Assert.AreEqual(("Enter", "Enter", 13), (key.Key, key.Code, key.KeyCode));
+        Assert.IsEmpty(modifiers);
+
+        (key, modifiers) = NeoAutomationKeys.ParseCombination("Control+Shift+R");
+        Assert.AreEqual(("R", "KeyR", 82, "R"), (key.Key, key.Code, key.KeyCode, key.Text));
+        CollectionAssert.AreEqual(new[] { "Control", "Shift" }, modifiers.Select(static modifier => modifier.Key).ToArray());
+        Assert.IsTrue(modifiers.All(static modifier => modifier.IsModifier));
+
+        // A plus sign after a separator is the key itself.
+        (key, modifiers) = NeoAutomationKeys.ParseCombination("Control++");
+        Assert.AreEqual(("+", "NumpadAdd"), (key.Key, key.Code));
+        Assert.HasCount(1, modifiers);
+
+        (key, _) = NeoAutomationKeys.ParseCombination("Shift+a");
+        Assert.AreEqual(("A", "KeyA", "A"), (key.Key, key.Code, key.Text));
+        (key, _) = NeoAutomationKeys.ParseCombination("Space");
+        Assert.AreEqual((" ", "Space", 32, " "), (key.Key, key.Code, key.KeyCode, key.Text));
+        (key, _) = NeoAutomationKeys.ParseCombination("ArrowDown");
+        Assert.IsNull(key.Text);
+
+        Assert.AreEqual("invalid-key", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomationKeys.ParseCombination("Bogus")).Code);
+        StringAssert.Contains(Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomationKeys.ParseCombination("Control+Control")).Message, "duplicate keys");
+        Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomationKeys.ParseCombination(string.Empty));
+    }
+
+    [TestMethod]
+    public void SnapshotTextFollowsTheLayoutOfChromeDevToolsMcp()
+    {
+        const string json = """
+            {"snapshotId":"1","truncated":false,"root":{"i":"1_0","r":"RootWebArea","n":"My test page","p":{"url":"about:blank"},"c":[
+              {"i":"1_1","r":"button","n":"Click me","p":{"focused":true}},
+              {"i":"1_2","r":"textbox","p":{"value":"Input"}},
+              {"i":"1_3","r":"StaticText","n":"username"},
+              {"i":"1_4","r":"checkbox","n":"Agree","p":{"checked":true}},
+              {"i":"1_5","r":"checkbox","n":"Partly","p":{"checked":"mixed"}},
+              {"i":"1_6","r":"checkbox","n":"Off","p":{"checked":false}},
+              {"i":"1_7","r":"combobox","n":"Color","p":{"expanded":false,"haspopup":"menu","value":"Green"},"c":[
+                {"i":"1_8","r":"option","n":"Red","p":{"value":"Red"}},
+                {"i":"1_9","r":"option","n":"Green","p":{"selected":true,"value":"Green"}}]},
+              {"i":"1_10","r":"heading","n":"Title","p":{"level":2}},
+              {"i":"1_11","r":"button","n":"Off limits","p":{"disabled":true}},
+              {"i":"1_12","r":"none"},
+              {"i":"1_13","r":"link","n":"Read more","p":{"url":"https://example.com/"},"c":[{"i":"1_14","r":"StaticText","n":"Read  more"}]},
+              {"i":"1_15","r":"tab","n":"One","p":{"selected":true}}
+            ]}}
+            """;
+        using var document = JsonDocument.Parse(json);
+        var snapshot = NeoAutomationSnapshot.Parse(document.RootElement, verbose: false);
+        const string expected = """
+            uid=1_0 RootWebArea "My test page" url="about:blank"
+              uid=1_1 button "Click me" focusable focused
+              uid=1_2 textbox value="Input"
+              uid=1_3 "username"
+              uid=1_4 checkbox "Agree" checked
+              uid=1_5 checkbox "Partly" checked="mixed"
+              uid=1_6 checkbox "Off"
+              uid=1_7 combobox "Color" expandable haspopup="menu" value="Green"
+                uid=1_8 option "Red"
+                uid=1_9 option "Green" selected
+              uid=1_10 heading "Title" level="2"
+              uid=1_11 button "Off limits" disableable disabled
+              uid=1_12 ignored
+              uid=1_13 link "Read more" url="https://example.com/"
+              uid=1_15 tab "One" selectable selected
+
+            """;
+        Assert.AreEqual(expected.ReplaceLineEndings("\n"), snapshot.ToString());
+        Assert.AreEqual("1", snapshot.Id);
+        Assert.AreEqual("Green", snapshot.Find("1_9")!.Name);
+        Assert.AreEqual(2d, snapshot.Find("1_10")!.Properties["level"]);
+        Assert.IsNull(snapshot.Find("9_9"));
+
+        // A verbose snapshot keeps the text children that only repeat a name.
+        var verbose = NeoAutomationSnapshot.Parse(document.RootElement, verbose: true);
+        StringAssert.Contains(verbose.ToString(), "    uid=1_14 \"Read  more\"\n");
+    }
+
+    [TestMethod]
+    public void ToolCatalogHasTheToolsOfChromeDevToolsMcpWithObjectSchemas()
+    {
+        var tools = NeoAutomation.CreateTools(new NeoAutomationOptions());
+        CollectionAssert.AreEqual(ExpectedTools, tools.Select(static tool => tool.Name).ToArray());
+        foreach (var tool in tools)
+        {
+            Assert.IsFalse(string.IsNullOrWhiteSpace(tool.Description), tool.Name);
+            Assert.IsTrue(tool.Category is "input" or "navigation" or "emulation" or "network" or "debugging", tool.Name);
+            var root = tool.InputSchema;
+            Assert.AreEqual("object", root.GetProperty("type").GetString(), tool.Name);
+            Assert.IsFalse(root.GetProperty("additionalProperties").GetBoolean(), tool.Name);
+            var properties = root.GetProperty("properties");
+            foreach (var property in properties.EnumerateObject())
+            {
+                Assert.IsTrue(property.Value.TryGetProperty("type", out _), $"{tool.Name}.{property.Name}");
+                Assert.IsFalse(string.IsNullOrWhiteSpace(property.Value.GetProperty("description").GetString()), $"{tool.Name}.{property.Name}");
+            }
+
+            if (root.TryGetProperty("required", out var required))
+            {
+                foreach (var name in required.EnumerateArray()) Assert.IsTrue(properties.TryGetProperty(name.GetString()!, out _), $"{tool.Name}.{name}");
+            }
+        }
+
+        static string[] Required(NeoAutomationTool tool)
+            => tool.InputSchema.TryGetProperty("required", out var required) ? required.EnumerateArray().Select(static name => name.GetString()!).ToArray() : [];
+
+        static string[] Properties(NeoAutomationTool tool)
+            => tool.InputSchema.GetProperty("properties").EnumerateObject().Select(static property => property.Name).ToArray();
+
+        var click = tools.Single(static tool => tool.Name == "click");
+        CollectionAssert.AreEqual(new[] { "pageId", "uid", "dblClick", "includeSnapshot" }, Properties(click));
+        CollectionAssert.AreEqual(new[] { "uid" }, Required(click));
+        Assert.IsFalse(click.IsReadOnly);
+        var navigate = tools.Single(static tool => tool.Name == "navigate_page");
+        CollectionAssert.AreEqual(new[] { "pageId", "type", "url", "ignoreCache", "handleBeforeUnload", "initScript", "timeout" }, Properties(navigate));
+        Assert.IsEmpty(Required(navigate));
+        CollectionAssert.AreEqual(new[] { "pageId" }, Required(tools.Single(static tool => tool.Name == "close_page")));
+        Assert.IsEmpty(Properties(tools.Single(static tool => tool.Name == "list_pages")));
+        Assert.IsTrue(tools.Single(static tool => tool.Name == "list_pages").IsReadOnly);
+        CollectionAssert.AreEqual(new[] { "elements" }, Required(tools.Single(static tool => tool.Name == "fill_form")));
+    }
+
+    [TestMethod]
+    public void ToolCatalogLeavesCallerScriptsOutWhenScriptEvaluationIsOff()
+    {
+        var tools = NeoAutomation.CreateTools(new NeoAutomationOptions { AllowScriptEvaluation = false });
+        CollectionAssert.AreEqual(ExpectedTools.Where(static name => name != "evaluate_script").ToArray(), tools.Select(static tool => tool.Name).ToArray());
+        var schema = tools.Single(static tool => tool.Name == "navigate_page").InputSchema;
+        Assert.IsFalse(schema.GetProperty("properties").TryGetProperty("initScript", out _));
+    }
+
+    [TestMethod]
+    public void FilePathsOfToolCallsStayInsideTheAllowedDirectories()
+    {
+        var closed = new NeoAutomationOptions();
+        Assert.AreEqual("not-allowed", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomation.ResolveFilePath(closed, "shot.png", "filePath")).Code);
+
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-automation-tests", "allowed");
+        var other = Path.Combine(Path.GetTempPath(), "neoastra-automation-tests", "also-allowed");
+        var options = new NeoAutomationOptions();
+        options.AllowedDirectories.Add(root);
+        options.AllowedDirectories.Add(other);
+        // The options an automation works with hold resolved directories.
+        options = options.Clone();
+
+        Assert.AreEqual(Path.Combine(root, "shot.png"), NeoAutomation.ResolveFilePath(options, "shot.png", "filePath"));
+        Assert.AreEqual(Path.Combine(root, "nested", "shot.png"), NeoAutomation.ResolveFilePath(options, Path.Combine("nested", "shot.png"), "filePath"));
+        Assert.AreEqual(Path.Combine(other, "a.txt"), NeoAutomation.ResolveFilePath(options, Path.Combine(other, "a.txt"), "filePath"));
+        Assert.AreEqual("not-allowed", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomation.ResolveFilePath(options, Path.Combine("..", "escape.png"), "filePath")).Code);
+        Assert.AreEqual("not-allowed", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomation.ResolveFilePath(options, root + "-sibling" + Path.DirectorySeparatorChar + "a.png", "filePath")).Code);
+        Assert.AreEqual("not-allowed", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomation.ResolveFilePath(options, root, "filePath")).Code);
+        Assert.AreEqual("invalid-arguments", Assert.ThrowsExactly<NeoAutomationException>(() => NeoAutomation.ResolveFilePath(options, " ", "filePath")).Code);
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoAutomationOptions { DefaultTimeout = TimeSpan.Zero });
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoAutomationOptions { NavigationTimeout = TimeSpan.FromMinutes(11) });
+    }
+
+    // -------------------------------------------------------------------------------------------------------------
+    // With WebView2
+    // -------------------------------------------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task SnapshotListsThePageAndKeepsTheIdentifiersOfItsElements()
+    {
+        await RunAsync(async driver =>
+        {
+            var pages = await driver.CallAsync("list_pages");
+            StringAssert.StartsWith(pages, "## Pages\n1: ");
+            StringAssert.Contains(pages, "[selected]");
+
+            // A tool also takes no arguments at all, or arguments by name as a Model Context Protocol library hands them over.
+            Assert.AreEqual(pages, (await driver.Automation.CallToolAsync("list_pages", driver.CancellationToken)).Text);
+            using var one = JsonDocument.Parse("1");
+            var byName = new Dictionary<string, JsonElement> { ["pageId"] = one.RootElement, ["bringToFront"] = default };
+            var selected = await driver.Automation.CallToolAsync("select_page", byName, driver.CancellationToken);
+            Assert.IsFalse(selected.IsError, selected.Text);
+            StringAssert.Contains(selected.Text, "[selected]");
+            var missing = await driver.Automation.CallToolAsync("select_page", (IEnumerable<KeyValuePair<string, JsonElement>>?)null, driver.CancellationToken);
+            Assert.IsTrue(missing.IsError);
+            Assert.AreEqual("The argument \"pageId\" is required.", missing.Text);
+
+            Assert.AreEqual(
+                "Successfully navigated to app://neoastra/automation.html.\n## Pages\n1: Automation fixture (app://neoastra/automation.html) [selected]",
+                await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}"""));
+
+            var snapshot = await driver.CallAsync("take_snapshot");
+            StringAssert.StartsWith(snapshot, "## Latest page snapshot\nuid=1_0 RootWebArea \"Automation fixture\" url=\"app://neoastra/automation.html\"\n  uid=1_1 banner\n    uid=1_2 heading \"Automation fixture\" level=\"1\"\n");
+            StringAssert.Contains(snapshot, "    uid=1_3 navigation \"Main\"\n      uid=1_4 link \"Second page\" url=\"app://neoastra/second.html\"\n");
+            StringAssert.Contains(snapshot, " button \"Disabled\" disableable disabled\n");
+            StringAssert.Contains(snapshot, " textbox \"Email\" required\n");
+            StringAssert.Contains(snapshot, " textbox \"Notes\" multiline\n");
+            StringAssert.Contains(snapshot, " image \"Blue swatch\"\n");
+            StringAssert.Contains(snapshot, " heading \"Far section\" level=\"2\"\n");
+            // A select lists its options, by their text, and says which one is chosen.
+            StringAssert.Matches(snapshot, new Regex("""uid=\S+ combobox "Color" haspopup="menu" value="Green"\n\s+uid=\S+ option "Red"\n\s+uid=\S+ option "Green" selected\n\s+uid=\S+ option "Blue"\n"""));
+            // Text is listed where it stands alone, and left out where it only spells out the name of a control.
+            StringAssert.Matches(snapshot, new Regex("""uid=\S+ "Welcome to the"\n\s+uid=\S+ "fixture"\n\s+uid=\S+ "page\."\n\s+uid=\S+ button "Clicked 0 times"\n"""));
+            Assert.DoesNotContain("Hidden from the tree", snapshot);
+            Assert.DoesNotContain("Not rendered", snapshot);
+
+            var counter = driver.Uid("button \"Clicked 0 times\"");
+            var clicked = await driver.CallAsync("click", $$"""{"uid":"{{counter}}","includeSnapshot":true}""");
+            StringAssert.StartsWith(clicked, "Successfully clicked on the element\n## Latest page snapshot\n");
+            // The element keeps its identifier, shows its new name, and has the focus.
+            StringAssert.Contains(clicked, $"uid={counter} button \"Clicked 1 times\" focusable focused\n");
+
+            var verbose = await driver.CallAsync("take_snapshot", """{"verbose":true}""");
+            StringAssert.Contains(verbose, " paragraph\n");
+            StringAssert.Contains(verbose, " LabelText \"Name\"\n");
+            // A verbose snapshot spells out the text of a control as well.
+            StringAssert.Matches(verbose, new Regex("""uid=\S+ button "Disabled" disableable disabled\n\s+uid=\S+ "Disabled"\n"""));
+            StringAssert.Contains(verbose, " generic\n");
+
+            // The typed interface returns the same tree as an object.
+            var page = driver.Automation.SelectedPage!;
+            var typed = await page.TakeSnapshotAsync(cancellationToken: driver.CancellationToken);
+            Assert.AreSame(typed, page.LatestSnapshot);
+            Assert.AreEqual("RootWebArea", typed.Root.Role);
+            var button = typed.Find(counter)!;
+            Assert.AreEqual(("button", "Clicked 1 times"), (button.Role, button.Name));
+            Assert.IsTrue((bool)button.Properties["focused"]);
+            Assert.IsFalse(typed.IsVerbose);
+        });
+    }
+
+    [TestMethod]
+    public async Task InputToolsDriveAFormLikeAUser()
+    {
+        var directory = CreateDirectory();
+        File.WriteAllText(Path.Combine(directory, "upload.txt"), "hello upload");
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var counter = driver.Uid("button \"Clicked 0 times\"");
+            var name = driver.Uid("textbox \"Name\"");
+
+            Assert.AreEqual("Successfully double clicked on the element", await driver.CallAsync("click", $$"""{"uid":"{{counter}}","dblClick":true}"""));
+            Assert.AreEqual("""{"text":"Clicked 2 times","double":"yes"}""", await driver.EvaluateAsync("() => ({ text: document.getElementById('counter').textContent, double: document.getElementById('counter').dataset.double })"));
+
+            // A disabled element and an unknown one are refused with what to do about it.
+            var disabled = await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Disabled\"")}}"}""", expectError: true);
+            StringAssert.Contains(disabled, "is disabled");
+            Assert.AreEqual("Element uid \"99_99\" not found on the page. Take a new snapshot with take_snapshot.", await driver.CallAsync("click", """{"uid":"99_99"}""", expectError: true));
+
+            var form = $$"""
+                {"elements":[
+                  {"uid":"{{name}}","value":"Ada Lovelace"},
+                  {"uid":"{{driver.Uid("textbox \"Email\"")}}","value":"ada@example.com"},
+                  {"uid":"{{driver.Uid("combobox \"Color\"")}}","value":"Blue"},
+                  {"uid":"{{driver.Uid("checkbox \"I agree\"")}}","value":"true"},
+                  {"uid":"{{driver.Uid("radio \"Large\"")}}","value":"true"},
+                  {"uid":"{{driver.Uid("textbox \"Notes\"")}}","value":"Line one"},
+                  {"uid":"{{driver.Uid("textbox \"Editor\"")}}","value":"Rich text"}]}
+                """;
+            Assert.AreEqual("Successfully filled out the form", await driver.CallAsync("fill_form", form));
+
+            Assert.AreEqual("File uploaded from upload.txt.", await driver.CallAsync("upload_file", $$"""{"uid":"{{driver.Uid("button \"Attachment\"")}}","filePaths":["upload.txt"]}"""));
+            Assert.AreEqual("\"files upload.txt:12\"", await driver.EvaluateAsync("() => document.getElementById('result').textContent"));
+            Assert.AreEqual("\"hello upload\"", await driver.EvaluateAsync("async () => await document.getElementById('file').files[0].text()"));
+
+            Assert.AreEqual("Successfully clicked on the element", await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Send\"")}}"}"""));
+            using (var submitted = JsonDocument.Parse(JsonDocument.Parse(await driver.EvaluateAsync("() => document.getElementById('result').textContent")).RootElement.GetString()!))
+            {
+                var data = submitted.RootElement;
+                Assert.AreEqual("Ada Lovelace", data.GetProperty("name").GetString());
+                Assert.AreEqual("ada@example.com", data.GetProperty("email").GetString());
+                Assert.AreEqual("b", data.GetProperty("color").GetString());
+                Assert.AreEqual("on", data.GetProperty("agree").GetString());
+                Assert.AreEqual("l", data.GetProperty("size").GetString());
+                Assert.AreEqual("Line one", data.GetProperty("notes").GetString());
+                Assert.AreEqual("Rich text", data.GetProperty("editor").GetString());
+            }
+
+            // A toggle takes "true" or "false" only, and a select needs one of its options.
+            StringAssert.Contains(await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("checkbox \"I agree\"")}}","value":"yes"}""", expectError: true),
+                "Checkboxes, radio boxes and toggles require \"true\" or \"false\" value, but yes was used");
+            StringAssert.Contains(await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("combobox \"Color\"")}}","value":"Purple"}""", expectError: true),
+                "Could not find option with text \"Purple\"");
+            Assert.AreEqual("Successfully filled out the element", await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("checkbox \"I agree\"")}}","value":"false"}"""));
+            Assert.AreEqual("false", await driver.EvaluateAsync("() => document.getElementById('agree').checked"));
+            // An option is also chosen by clicking it.
+            Assert.AreEqual("Successfully clicked on the element", await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("option \"Red\"")}}"}"""));
+            Assert.AreEqual("\"r\"", await driver.EvaluateAsync("() => document.getElementById('color').value"));
+
+            Assert.AreEqual("Successfully hovered over the element", await driver.CallAsync("hover", $$"""{"uid":"{{driver.Uid("\"Hover me\"")}}"}"""));
+            Assert.AreEqual("Successfully dragged an element", await driver.CallAsync("drag", $$"""{"from_uid":"{{driver.Uid("\"Drag me\"")}}","to_uid":"{{driver.Uid("\"Drop here\"")}}"}"""));
+            Assert.AreEqual("""{"hover":"hovered","drop":"Dropped payload"}""",
+                await driver.EvaluateAsync("() => ({ hover: document.getElementById('hover-state').textContent, drop: document.getElementById('drop-target').textContent })"));
+
+            // The keyboard acts on the focused element: select all, type over it, and move on with Tab.
+            await driver.CallAsync("click", $$"""{"uid":"{{name}}"}""");
+            Assert.AreEqual("Successfully pressed key: Control+A", await driver.CallAsync("press_key", """{"key":"Control+A"}"""));
+            Assert.AreEqual("Typed text \"Grace + Tab\"", await driver.CallAsync("type_text", """{"text":"Grace","submitKey":"Tab"}"""));
+            Assert.AreEqual("Successfully pressed key: Control+k", await driver.CallAsync("press_key", """{"key":"Control+k"}"""));
+            Assert.AreEqual("""{"name":"Grace","active":"email","result":"shortcut"}""",
+                await driver.EvaluateAsync("() => ({ name: document.getElementById('name').value, active: document.activeElement.id, result: document.getElementById('result').textContent })"));
+            await driver.CallAsync("press_key", """{"key":"Shift+Tab"}""");
+            await driver.CallAsync("press_key", """{"key":"End"}""");
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            await driver.CallAsync("type_text", """{"text":"E!"}""");
+            Assert.AreEqual("\"GracE!\"", await driver.EvaluateAsync("() => document.getElementById('name').value"));
+            // Enter in a text field submits its form.
+            await driver.CallAsync("press_key", """{"key":"Enter"}""");
+            StringAssert.Contains(await driver.EvaluateAsync("() => document.getElementById('result').textContent"), "GracE!");
+            StringAssert.Contains(await driver.CallAsync("press_key", """{"key":"Bogus"}""", expectError: true), "Bogus is not a known key");
+
+            // A click on an element far down the page scrolls it into view first.
+            Assert.AreEqual("0", await driver.EvaluateAsync("() => scrollY"));
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Far button\"")}}"}""");
+            Assert.AreEqual("true", await driver.EvaluateAsync("() => scrollY > 0 && document.activeElement.id === 'far'"));
+            await driver.CallAsync("click_at", """{"x":5,"y":5}""");
+            Assert.AreEqual("\"BODY\"", await driver.EvaluateAsync("() => document.activeElement.tagName"));
+        }, directory);
+    }
+
+    [TestMethod]
+    public async Task ADialogStopsAnActionUntilItIsHandled()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var ask = driver.Uid("button \"Ask\"");
+            var page = driver.Automation.SelectedPage!;
+
+            Assert.AreEqual(
+                "The element was clicked and it opened a dialog.\n# Open dialog\nconfirm: Proceed?.\nCall handle_dialog to handle it before continuing.",
+                await driver.CallAsync("click", $$"""{"uid":"{{ask}}"}"""));
+            Assert.AreEqual(new NeoAutomationDialog(NeoScriptDialogKind.Confirm, "Proceed?", null), page.Dialog);
+
+            // The page runs no script while the dialog is open, so the tools that need it say so at once.
+            Assert.AreEqual("A dialog is open (confirm: Proceed?). Call handle_dialog to handle it before continuing.", await driver.CallAsync("take_snapshot", expectError: true));
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"() => 1"}""", expectError: true), "A dialog is open");
+            StringAssert.Contains(await driver.CallAsync("list_pages"), "# Open dialog\nconfirm: Proceed?.");
+
+            StringAssert.StartsWith(await driver.CallAsync("handle_dialog", """{"action":"accept"}"""), "Successfully accepted the dialog\n## Pages\n");
+            Assert.IsNull(page.Dialog);
+            Assert.AreEqual("\"Confirmed\"", await driver.EvaluateAsync("() => document.getElementById('confirm').textContent"));
+            Assert.AreEqual("No open dialog found", await driver.CallAsync("handle_dialog", """{"action":"accept"}""", expectError: true));
+
+            await driver.CallAsync("click", $$"""{"uid":"{{ask}}"}""");
+            StringAssert.StartsWith(await driver.CallAsync("handle_dialog", """{"action":"dismiss"}"""), "Successfully dismissed the dialog");
+            Assert.AreEqual("\"Declined\"", await driver.EvaluateAsync("() => document.getElementById('confirm').textContent"));
+
+            // A script answers the dialogs it opens itself: accepted by default, or as it says.
+            Assert.AreEqual("true", await driver.EvaluateAsync("() => confirm('sure?')"));
+            Assert.AreEqual("false", await driver.EvaluateAsync("() => confirm('sure?')", ""","dialogAction":"dismiss" """));
+            Assert.AreEqual("\"typed\"", await driver.EvaluateAsync("() => prompt('Value?', 'initial')", ""","dialogAction":"typed" """));
+            Assert.AreEqual("\"initial\"", await driver.EvaluateAsync("() => prompt('Value?', 'initial')"));
+            Assert.IsNull(page.Dialog);
+
+            // A prompt that an action opens is answered with a text, or with its default one.
+            await driver.EvaluateAsync("() => { document.getElementById('hover-target').onclick = () => { window.answer = prompt('Name?', 'nobody'); }; }");
+            StringAssert.Contains(await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("\"Hover me\"")}}"}"""), "# Open dialog\nprompt: Name? (default value: \"nobody\").");
+            await driver.CallAsync("handle_dialog", """{"action":"accept","promptText":"NeoAstra"}""");
+            Assert.AreEqual("\"NeoAstra\"", await driver.EvaluateAsync("() => window.answer"));
+        });
+    }
+
+    [TestMethod]
+    public async Task ConsoleAndNetworkLogsAreKeptForEachNavigation()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            StringAssert.Matches(await driver.CallAsync("list_console_messages"), new Regex("""^## Console messages\nShowing 1-1 of 1 \(Page 1 of 1\)\.\nmsgid=\d+ \[info\] fixture ready \(1 args\)$"""));
+
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Log\"")}}"}""");
+            var messages = await driver.CallAsync("list_console_messages");
+            StringAssert.Matches(messages, new Regex("""Showing 1-4 of 4 \(Page 1 of 1\)\.\nmsgid=\d+ \[info\] fixture ready \(1 args\)\nmsgid=\d+ \[log\] clicked log \{answer: 42\} \(3 args\)\nmsgid=\d+ \[warn\] careful \(1 args\)\nmsgid=\d+ \[error\] Error: boom \(1 args\)$"""));
+            var logId = Regex.Match(messages, """msgid=(\d+) \[log\]""").Groups[1].Value;
+
+            var errors = await driver.CallAsync("list_console_messages", """{"types":["error"],"includeStackTraces":true}""");
+            StringAssert.Contains(errors, "Showing 1-1 of 1 (Page 1 of 1).");
+            // The stack names the page, not the automation script that dispatched the click.
+            StringAssert.Matches(errors, new Regex("""\[error\] Error: boom \(1 args\)\nat \S.* \(app://neoastra/automation\.html:\d+:\d+\)\nNote: stack trace line and column numbers use 1-based indexing$"""));
+            Assert.DoesNotContain("neoastra-automation", errors);
+
+            var detail = await driver.CallAsync("get_console_message", $$"""{"msgid":{{logId}}}""");
+            StringAssert.Matches(detail, new Regex("""^ID: \d+\nMessage: log> clicked log \{answer: 42\}\nSource: app://neoastra/automation\.html:\d+:\d+\n### Arguments\nArg #0: clicked %s\nArg #1: log\nArg #2: \{answer: 42\}$"""));
+            StringAssert.Contains(await driver.CallAsync("get_console_message", """{"msgid":9999}""", expectError: true), "No console message with msgid 9999");
+
+            // Uncaught errors and rejections are messages too, and repeated ones are counted.
+            await driver.EvaluateAsync("() => { setTimeout(() => { throw new RangeError('late failure'); }, 0); Promise.reject(new Error('rejected')); for (let i = 0; i < 3; i++) console.debug('again'); }");
+            await driver.CallAsync("wait_for", """{"text":["Automation fixture"]}""");
+            var more = await driver.CallAsync("list_console_messages", """{"types":["error","debug"]}""");
+            StringAssert.Contains(more, "[error] Uncaught RangeError: late failure (0 args)");
+            StringAssert.Contains(more, "[error] Uncaught (in promise) Error: rejected (0 args)");
+            StringAssert.Matches(more, new Regex("""\[debug\] again \(1 args\) \[3 times\]"""));
+
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Fetch\"")}}"}""");
+            await driver.CallAsync("wait_for", """{"text":["fetched 7"]}""");
+            var requests = await driver.CallAsync("list_network_requests");
+            StringAssert.Matches(requests, new Regex("""^## Network requests\nShowing 1-2 of 2 \(Page 1 of 1\)\.\nreqid=\d+ GET app://neoastra/automation\.html \[200\]\nreqid=\d+ GET app://neoastra/data\.json \[200\]$"""));
+            var fetchId = Regex.Match(requests, """reqid=(\d+) GET \S+data\.json""").Groups[1].Value;
+            var request = await driver.CallAsync("get_network_request", $$"""{"reqid":{{fetchId}}}""");
+            StringAssert.StartsWith(request, "## Request app://neoastra/data.json\nStatus: 200\nResource type: fetch\n### Request Headers\n- x-test:1\n### Response Headers\n");
+            StringAssert.Contains(request, "- content-type:application/json; charset=utf-8\n");
+            StringAssert.EndsWith(request, "### Response Body\n{\"value\": 7}");
+            StringAssert.Matches(await driver.CallAsync("list_network_requests", """{"resourceTypes":["fetch"]}"""), new Regex("""Showing 1-1 of 1 \(Page 1 of 1\)\.\nreqid=\d+ GET \S+data\.json \[200\]$"""));
+            Assert.AreEqual("## Network requests\nNo requests found.", await driver.CallAsync("list_network_requests", """{"resourceTypes":["websocket"]}"""));
+
+            // A request that fails and one that posts a body.
+            await driver.EvaluateAsync("async () => { await fetch('missing.json').catch(() => 0); await fetch('data.json', { method: 'POST', body: JSON.stringify({ a: 1 }), headers: { 'content-type': 'application/json' } }).catch(() => 0); }");
+            var posted = await driver.CallAsync("list_network_requests", """{"resourceTypes":["fetch"]}""");
+            StringAssert.Matches(posted, new Regex("""reqid=\d+ GET app://neoastra/missing\.json \[404\]"""));
+            var postId = Regex.Match(posted, """reqid=(\d+) POST""").Groups[1].Value;
+            StringAssert.Contains(await driver.CallAsync("get_network_request", $$"""{"reqid":{{postId}}}"""), "### Request Body\n{\"a\":1}");
+
+            // A new document starts a new list; the earlier ones stay available.
+            await driver.CallAsync("take_snapshot");
+            StringAssert.Contains(await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("link \"Second page\"")}}"}"""), "Page navigated to app://neoastra/second.html.");
+            StringAssert.Matches(await driver.CallAsync("list_console_messages"), new Regex("""Showing 1-1 of 1 \(Page 1 of 1\)\.\nmsgid=\d+ \[log\] second ready \(1 args\)$"""));
+            var preserved = await driver.CallAsync("list_console_messages", """{"includePreservedMessages":true}""");
+            StringAssert.Contains(preserved, "[info] fixture ready (1 args)");
+            StringAssert.Contains(preserved, "[log] second ready (1 args)");
+            var paged = await driver.CallAsync("list_console_messages", """{"includePreservedMessages":true,"pageSize":2,"pageIdx":1}""");
+            StringAssert.Matches(paged, new Regex("""Showing 3-4 of \d+ \(Page 2 of \d+\)\.\nNext page: 2\nPrevious page: 0\n"""));
+            StringAssert.Contains(await driver.CallAsync("list_console_messages", """{"pageSize":2,"pageIdx":7}"""), "Invalid page number provided. Showing first page.");
+            StringAssert.Matches(await driver.CallAsync("list_network_requests"), new Regex("""Showing 1-1 of 1 \(Page 1 of 1\)\.\nreqid=\d+ GET app://neoastra/second\.html \[200\]$"""));
+            StringAssert.Contains(await driver.CallAsync("list_network_requests", """{"includePreservedRequests":true}"""), "data.json");
+
+            // The typed interface gives the same messages and requests as objects.
+            var page = driver.Automation.SelectedPage!;
+            var typedMessages = await page.GetConsoleMessagesAsync(includePreserved: true, driver.CancellationToken);
+            var warning = typedMessages.Single(static message => message.Type == "warn");
+            Assert.AreEqual("careful", warning.Text);
+            Assert.AreEqual("app://neoastra/automation.html", warning.Url);
+            Assert.IsGreaterThan(0, warning.Line);
+            Assert.AreSame(warning, await page.GetConsoleMessageAsync(warning.Id, driver.CancellationToken));
+            var typedRequests = await page.GetNetworkRequestsAsync(includePreserved: true, driver.CancellationToken);
+            var fetched = typedRequests.First(static request => request.Url.EndsWith("data.json", StringComparison.Ordinal) && request.Method == "GET");
+            Assert.AreEqual((200, "200", "fetch", "application/json"), (fetched.StatusCode, fetched.Status, fetched.ResourceType, fetched.MimeType));
+            Assert.AreEqual("1", fetched.RequestHeaders["X-Test"]);
+            Assert.AreEqual("{\"value\": 7}", fetched.ResponseBody);
+        });
+    }
+
+    [TestMethod]
+    public async Task NetworkLogListsTheFilesAPageLoadsFromItsOwnScheme()
+    {
+        await RunAsync(async driver =>
+        {
+            // Resource timing reports no load from a scheme other than http and https; the elements of the page do.
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/resources.html"}""");
+            await driver.CallAsync("wait_for", """{"text":["Resources"]}""");
+            Assert.AreEqual("\"Resources loaded\"", await driver.EvaluateAsync("() => document.title"));
+            var requests = await driver.CallAsync("list_network_requests");
+            StringAssert.Matches(requests, new Regex("""^## Network requests\nShowing 1-4 of 4 \(Page 1 of 1\)\.\nreqid=\d+ GET app://neoastra/resources\.html \[200\]\n"""));
+            StringAssert.Matches(requests, new Regex("""reqid=\d+ GET app://neoastra/style\.css \[(200|finished)\]"""));
+            StringAssert.Matches(requests, new Regex("""reqid=\d+ GET app://neoastra/script\.js \[(200|finished)\]"""));
+            // An address is listed once, however many elements ask for it.
+            Assert.HasCount(1, Regex.Matches(requests, """reqid=\d+ GET app://neoastra/missing\.png \[(404|failed to load)\]"""));
+            StringAssert.Matches(await driver.CallAsync("list_network_requests", """{"resourceTypes":["stylesheet","script"]}"""), new Regex("""Showing 1-2 of 2 \(Page 1 of 1\)\."""));
+            StringAssert.Matches(await driver.CallAsync("list_network_requests", """{"resourceTypes":["image"]}"""), new Regex("""Showing 1-1 of 1 \(Page 1 of 1\)\.\nreqid=\d+ GET \S+missing\.png """));
+            StringAssert.Contains(await driver.CallAsync("list_console_messages", """{"types":["error"]}"""), "[error] Failed to load resource: app://neoastra/missing.png (0 args)");
+
+            var typed = await driver.Automation.SelectedPage!.GetNetworkRequestsAsync(includePreserved: false, driver.CancellationToken);
+            Assert.AreEqual("stylesheet", typed.Single(static request => request.Url.EndsWith("style.css", StringComparison.Ordinal)).ResourceType);
+            Assert.AreEqual("script", typed.Single(static request => request.Url.EndsWith("script.js", StringComparison.Ordinal)).ResourceType);
+            Assert.AreEqual("image", typed.Single(static request => request.Url.EndsWith("missing.png", StringComparison.Ordinal)).ResourceType);
+        });
+    }
+
+    [TestMethod]
+    public async Task NavigationToolsFollowTheHistoryAndReportWhatHappened()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+
+            // A link that an action follows is reported with the action, and the next snapshot is of the new document.
+            var followed = await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("link \"Second page\"")}}","includeSnapshot":true}""");
+            StringAssert.StartsWith(followed, "Successfully clicked on the element\nPage navigated to app://neoastra/second.html.\n## Latest page snapshot\n");
+            StringAssert.Matches(followed, new Regex("""uid=\S+ RootWebArea "Second page" url="app://neoastra/second\.html"\n  uid=\S+ heading "Second" level="1"\n  uid=\S+ link "Back to first" url="app://neoastra/automation\.html"$"""));
+            // An identifier of the document that is gone names nothing in the new one.
+            StringAssert.Contains(await driver.CallAsync("click", """{"uid":"1_4"}""", expectError: true), "not found on the page");
+
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"type":"back"}"""), "Successfully navigated back to app://neoastra/automation.html.\n## Pages\n1: Automation fixture");
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"type":"forward"}"""), "Successfully navigated forward to app://neoastra/second.html.\n");
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"type":"forward"}"""), "Unable to navigate forward in the selected page: there is no such entry in the history.");
+            await driver.EvaluateAsync("() => { window.marker = 'set'; }");
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"type":"reload"}"""), "Successfully reloaded the page.\n");
+            Assert.AreEqual("undefined", await driver.EvaluateAsync("() => window.marker"));
+            // A reload that leaves the cache out is a reload all the same.
+            await driver.EvaluateAsync("() => { window.marker = 'set'; }");
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"type":"reload","ignoreCache":true}"""), "Successfully reloaded the page.\n");
+            Assert.AreEqual("undefined", await driver.EvaluateAsync("() => window.marker"));
+
+            // A script given with a navigation runs before the scripts of the document, for that navigation only.
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/second.html","initScript":"window.marker = 'early';"}""");
+            Assert.AreEqual("\"early\"", await driver.EvaluateAsync("() => window.marker"));
+            await driver.CallAsync("navigate_page", """{"type":"reload"}""");
+            Assert.AreEqual("undefined", await driver.EvaluateAsync("() => window.marker"));
+
+            // A move within the document is a navigation of the page, without a new document.
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            StringAssert.Contains(await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("link \"Jump\"")}}"}"""), "Page navigated to app://neoastra/automation.html#section.");
+
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"url":"app://neoastra/missing.html"}"""), "Unable to navigate in the selected page: ");
+            Assert.AreEqual("Either URL or a type is required.", await driver.CallAsync("navigate_page", "{}", expectError: true));
+            StringAssert.StartsWith(await driver.CallAsync("navigate_page", """{"url":"not a url"}""", expectError: true), "Invalid URL: \"not a url\".");
+
+            // A leave that the document asks to confirm is confirmed, unless the caller says otherwise.
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            await driver.EvaluateAsync("() => { window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; }); }");
+            // The engine asks only once the user has interacted with the document.
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Clicked 0 times\"")}}"}""");
+            var left = await driver.CallAsync("navigate_page", """{"url":"app://neoastra/second.html"}""");
+            StringAssert.StartsWith(left, "Successfully navigated to app://neoastra/second.html.");
+
+            // wait_for returns as soon as a text is there, and fails when none comes.
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Show later\"")}}"}""");
+            var waited = await driver.CallAsync("wait_for", """{"text":["Never there","Late arrival"],"timeout":5000}""");
+            StringAssert.StartsWith(waited, "Element matching one of [\"Never there\",\"Late arrival\"] found.\n## Latest page snapshot\n");
+            StringAssert.Matches(waited, new Regex("""uid=\S+ "Late arrival"$"""));
+            Assert.AreEqual("Timed out after 300 ms waiting for one of [\"Never there\"] to appear on the page.", await driver.CallAsync("wait_for", """{"text":["Never there"],"timeout":300}""", expectError: true));
+            // A text that is the name of an element, not rendered text, is found as well.
+            StringAssert.StartsWith(await driver.CallAsync("wait_for", """{"text":["Blue swatch"]}"""), "Element matching one of [\"Blue swatch\"] found.");
+
+            // The typed interface reports a navigation as a result.
+            var page = driver.Automation.SelectedPage!;
+            var result = await page.NavigateAsync(new NeoAutomationNavigationOptions { Url = new Uri("app://neoastra/second.html") }, driver.CancellationToken);
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(new Uri("app://neoastra/second.html"), result.Url);
+            Assert.AreEqual(new Uri("app://neoastra/second.html"), page.Url);
+            Assert.AreEqual("Second page", page.Title);
+        });
+    }
+
+    [TestMethod]
+    public async Task ScriptsReturnJsonAndSayWhyTheyFailed()
+    {
+        var directory = CreateDirectory();
+        File.WriteAllText(Path.Combine(directory, "script.js"), "() => document.title");
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var counter = driver.Uid("button \"Clicked 0 times\"");
+
+            Assert.AreEqual("Script ran on page and returned:\n```json\n\"Automation fixture\"\n```", await driver.CallAsync("evaluate_script", """{"function":"() => document.title"}"""));
+            Assert.AreEqual("""{"a":[1,2,3],"b":null}""", await driver.EvaluateAsync("() => ({ a: [1, 2, 3], b: null })"));
+            Assert.AreEqual("undefined", await driver.EvaluateAsync("() => undefined"));
+            // An asynchronous function is awaited, and elements of the snapshot are passed by their identifiers.
+            Assert.AreEqual("\"Clicked 0 times\"", await driver.EvaluateAsync("async (el) => { await new Promise(resolve => setTimeout(resolve, 30)); return el.textContent; }", $$""","args":["{{counter}}"]"""));
+            Assert.AreEqual("3", await driver.EvaluateAsync("1 + 2", ""","format":"script" """));
+            Assert.AreEqual("\"Automation fixture\"", await driver.EvaluateAsync(null, ""","sourcePath":"script.js" """));
+
+            Assert.AreEqual("TypeError: bad thing", await driver.CallAsync("evaluate_script", """{"function":"() => { throw new TypeError('bad thing'); }"}""", expectError: true));
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"async () => { await Promise.reject(new Error('later')); }"}""", expectError: true), "later");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(await driver.CallAsync("evaluate_script", """{"function":"() => { this is not javascript"}""", expectError: true)));
+            Assert.AreEqual("Specify exactly one of function or sourcePath.", await driver.CallAsync("evaluate_script", "{}", expectError: true));
+            Assert.AreEqual("args cannot be used when format is \"script\".", await driver.CallAsync("evaluate_script", $$"""{"function":"1","format":"script","args":["{{counter}}"]}""", expectError: true));
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"(el) => el","args":["77_1"]}""", expectError: true), "not found on the page");
+
+            // The output can go to a file of an allowed directory instead.
+            var saved = await driver.CallAsync("evaluate_script", """{"function":"() => [1, 2]","filePath":"out.json"}""");
+            Assert.AreEqual($"Script ran on page. Output saved to {Path.Combine(directory, "out.json")}.", saved);
+            Assert.AreEqual("[1,2]", File.ReadAllText(Path.Combine(directory, "out.json")));
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"() => 1","filePath":"../out.json"}""", expectError: true), "outside the directories");
+
+            // A script that navigates is reported with where the page went.
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"() => { location.href = 'second.html'; }"}"""), "Page navigated to app://neoastra/second.html.");
+        }, directory);
+    }
+
+    [TestMethod]
+    public async Task ScreenshotsShowThePageAnElementOrTheWholeDocument()
+    {
+        var directory = CreateDirectory();
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var scale = double.Parse(await driver.EvaluateAsync("() => devicePixelRatio"), System.Globalization.CultureInfo.InvariantCulture);
+            var viewportWidth = int.Parse(await driver.EvaluateAsync("() => innerWidth"));
+
+            var viewport = await driver.CallToolAsync("take_screenshot");
+            Assert.AreEqual("Took a screenshot of the current page's viewport.", viewport.Text);
+            Assert.HasCount(1, viewport.Images);
+            Assert.AreEqual("image/png", viewport.Images[0].ContentType);
+            Assert.AreEqual(viewportWidth * scale, TestPng.Decode(viewport.Images[0].Data.Span).Width, 2);
+
+            // The screenshot of an element shows that element, here a blue box.
+            var swatch = driver.Uid("image \"Blue swatch\"");
+            var element = await driver.CallToolAsync("take_screenshot", $$"""{"uid":"{{swatch}}"}""");
+            Assert.AreEqual($"Took a screenshot of node with uid \"{swatch}\".", element.Text);
+            var pixels = TestPng.Decode(element.Images[0].Data.Span);
+            Assert.AreEqual(80 * scale, pixels.Width, 2);
+            Assert.AreEqual(40 * scale, pixels.Height, 2);
+            var (red, green, blue) = pixels.GetPixel(pixels.Width / 2, pixels.Height / 2);
+            Assert.IsTrue(red < 20 && green < 20 && blue > 235, $"Expected blue but found ({red}, {green}, {blue}).");
+
+            // An element below the first screen is scrolled into view for its screenshot.
+            var far = await driver.CallToolAsync("take_screenshot", $$"""{"uid":"{{driver.Uid("button \"Far button\"")}}","format":"jpeg","quality":60}""");
+            Assert.AreEqual("image/jpeg", far.Images[0].ContentType);
+            Assert.IsGreaterThan(0, far.Images[0].Width);
+
+            var full = await driver.CallToolAsync("take_screenshot", """{"fullPage":true,"filePath":"full.png"}""");
+            Assert.AreEqual($"Took a screenshot of the full current page.\nSaved screenshot to {Path.Combine(directory, "full.png")}.", full.Text);
+            Assert.IsEmpty(full.Images);
+            var documentHeight = int.Parse(await driver.EvaluateAsync("() => document.documentElement.scrollHeight"));
+            Assert.AreEqual(documentHeight * scale, TestPng.Decode(File.ReadAllBytes(Path.Combine(directory, "full.png"))).Height, 2);
+
+            Assert.AreEqual("Providing both \"uid\" and \"fullPage\" is not allowed.", await driver.CallAsync("take_screenshot", $$"""{"uid":"{{swatch}}","fullPage":true}""", expectError: true));
+            StringAssert.Contains(await driver.CallAsync("take_screenshot", """{"format":"webp"}""", expectError: true), "Use \"png\" or \"jpeg\"");
+
+            // The snapshot can go to a file as well.
+            Assert.AreEqual($"Saved snapshot to {Path.Combine(directory, "page.txt")}.", await driver.CallAsync("take_snapshot", """{"filePath":"page.txt"}"""));
+            StringAssert.StartsWith(File.ReadAllText(Path.Combine(directory, "page.txt")), "uid=");
+
+            Assert.AreEqual("## Pages\n1: Automation fixture (app://neoastra/automation.html) [selected]", await driver.CallAsync("resize_page", """{"width":640,"height":480}"""));
+            Assert.AreEqual("[640,480]", await driver.EvaluateAsync("() => [innerWidth, innerHeight]"));
+        }, directory);
+    }
+
+    [TestMethod]
+    public async Task PagesAreOpenedSelectedAndClosed()
+    {
+        await RunAsync(async driver =>
+        {
+            var automation = driver.Automation;
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            Assert.AreEqual("The last open page cannot be closed. It is fine to keep it open.\n## Pages\n1: Automation fixture (app://neoastra/automation.html) [selected]",
+                await driver.CallAsync("close_page", """{"pageId":1}"""));
+
+            Assert.AreEqual("## Pages\n1: Automation fixture (app://neoastra/automation.html)\n2: Second page (app://neoastra/second.html) [selected]",
+                await driver.CallAsync("new_page", """{"url":"app://neoastra/second.html"}"""));
+            Assert.HasCount(2, automation.Pages);
+            Assert.AreEqual(2, automation.SelectedPage!.Id);
+            // A tool acts on the selected page, or on the one it names.
+            Assert.AreEqual("\"Second page\"", await driver.EvaluateAsync("() => document.title"));
+            Assert.AreEqual("\"Automation fixture\"", await driver.EvaluateAsync("() => document.title", ""","pageId":1"""));
+            StringAssert.StartsWith(await driver.CallAsync("take_snapshot", """{"pageId":1}"""), "## Latest page snapshot\nuid=1_0 RootWebArea \"Automation fixture\"");
+
+            Assert.AreEqual("## Pages\n1: Automation fixture (app://neoastra/automation.html) [selected]\n2: Second page (app://neoastra/second.html)",
+                await driver.CallAsync("select_page", """{"pageId":1,"bringToFront":true}"""));
+            Assert.AreEqual("\"Automation fixture\"", await driver.EvaluateAsync("() => document.title"));
+            Assert.AreEqual("No page found", await driver.CallAsync("select_page", """{"pageId":42}""", expectError: true));
+
+            // Pages of an isolated context do not share storage with the others.
+            await driver.EvaluateAsync("() => { localStorage.setItem('neo-automation', 'shared'); }");
+            var isolated = await driver.CallAsync("new_page", """{"url":"app://neoastra/second.html","isolatedContext":"clean","background":true}""");
+            StringAssert.EndsWith(isolated, "3: Second page (app://neoastra/second.html) [selected] isolatedContext=clean");
+            Assert.AreEqual("null", await driver.EvaluateAsync("() => localStorage.getItem('neo-automation')"));
+            Assert.AreEqual("\"shared\"", await driver.EvaluateAsync("() => localStorage.getItem('neo-automation')", ""","pageId":2"""));
+            await driver.EvaluateAsync("() => { localStorage.removeItem('neo-automation'); }", ""","pageId":1""");
+
+            // Closing the selected page selects another one and says so.
+            var closed = await driver.CallAsync("close_page", """{"pageId":3}""");
+            Assert.AreEqual("Note: the previously selected page was closed. Page 1 is now selected.\n## Pages\n1: Automation fixture (app://neoastra/automation.html) [selected]\n2: Second page (app://neoastra/second.html)", closed);
+            StringAssert.Contains(await driver.CallAsync("take_snapshot", """{"pageId":3}""", expectError: true), "No page found");
+            await driver.CallAsync("close_page", """{"pageId":2}""");
+            Assert.HasCount(1, automation.Pages);
+
+            Assert.AreEqual("Unknown tool \"no_such_tool\". Call a tool of the list of tools.", await driver.CallAsync("no_such_tool", expectError: true));
+            Assert.AreEqual("The argument \"uid\" is required.", await driver.CallAsync("click", "{}", expectError: true));
+            Assert.AreEqual("The argument \"uid\" must be a string.", await driver.CallAsync("click", """{"uid":5}""", expectError: true));
+            Assert.AreEqual("The arguments of a tool must be a JSON object.", await driver.CallAsync("click", "[]", expectError: true));
+        });
+    }
+
+    [TestMethod]
+    public async Task ToolsRefuseFilesWithoutAnAllowedDirectoryAndScriptsWhenTheyAreOff()
+    {
+        await RunAsync(async driver =>
+        {
+            CollectionAssert.DoesNotContain(driver.Automation.Tools.Select(static tool => tool.Name).ToArray(), "evaluate_script");
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            StringAssert.Contains(await driver.CallAsync("take_screenshot", """{"filePath":"shot.png"}""", expectError: true), "File access is turned off for this application");
+            StringAssert.Contains(await driver.CallAsync("upload_file", $$"""{"uid":"{{driver.Uid("button \"Attachment\"")}}","filePaths":["C:/Windows/win.ini"]}""", expectError: true), "File access is turned off");
+            StringAssert.Contains(await driver.CallAsync("evaluate_script", """{"function":"() => 1"}""", expectError: true), "Unknown tool");
+            StringAssert.Contains(await driver.CallAsync("navigate_page", """{"url":"app://neoastra/second.html","initScript":"1"}""", expectError: true), "Script evaluation is turned off");
+            StringAssert.Contains(await driver.CallAsync("navigate_page", """{"url":"javascript:alert(1)"}""", expectError: true), "not allowed when JavaScript evaluation is disabled");
+            var page = driver.Automation.SelectedPage!;
+            Assert.AreEqual("not-allowed", (await Assert.ThrowsExactlyAsync<NeoAutomationException>(async () => await page.EvaluateScriptAsync("() => 1", cancellationToken: driver.CancellationToken))).Code);
+            // The other tools still work.
+            Assert.AreEqual("Successfully clicked on the element", await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("button \"Clicked 0 times\"")}}"}"""));
+        }, configure: static options => options.AllowScriptEvaluation = false);
+    }
+
+    [TestMethod]
+    public async Task AutomationLeavesAViewAsItFoundIt()
+    {
+        await LiveBrowser.RunAsync(AutomationFixture.Pages, async session =>
+        {
+            var view = session.View;
+            var answered = 0;
+            view.ScriptDialogRequested = _ =>
+            {
+                answered++;
+                return ValueTask.FromResult(NeoScriptDialogDecision.Accept);
+            };
+            await session.NavigateAsync("automation.html");
+            Assert.AreEqual("\"undefined\"", await view.EvaluateScriptAsync("typeof window.__neoastraAutomation", session.CancellationToken));
+
+            var automation = new NeoAutomation(session.Application, new NeoAutomationOptions { PageFilter = candidate => ReferenceEquals(candidate, view) });
+            var page = automation.SelectedPage!;
+            Assert.AreSame(view, page.View);
+            Assert.AreSame(page, automation.FindPage(view));
+            Assert.AreSame(page, automation.GetPage(page.Id));
+            await page.TakeSnapshotAsync(cancellationToken: session.CancellationToken);
+            Assert.AreEqual("\"object\"", await view.EvaluateScriptAsync("typeof window.__neoastraAutomation", session.CancellationToken));
+
+            // While automation drives the view, it answers the dialogs; afterwards the application does again.
+            var result = await page.EvaluateScriptAsync("() => confirm('automation?')", new NeoAutomationEvaluateOptions { DialogAction = "dismiss" }, session.CancellationToken);
+            Assert.AreEqual("false", result.Json);
+            Assert.IsTrue(result.Action.DialogHandled);
+            Assert.AreEqual(0, answered);
+
+            await automation.DisposeAsync();
+            Assert.IsTrue(page.IsClosed);
+            Assert.IsEmpty(automation.Pages);
+            await Assert.ThrowsExactlyAsync<ObjectDisposedException>(async () => await page.TakeSnapshotAsync(cancellationToken: session.CancellationToken));
+            await Assert.ThrowsExactlyAsync<ObjectDisposedException>(async () => await automation.CallToolAsync("list_pages", default(JsonElement), session.CancellationToken));
+            Assert.AreEqual("true", await view.EvaluateScriptAsync("confirm('application?')", session.CancellationToken));
+            Assert.AreEqual(1, answered);
+
+            // A document loaded after automation was turned off has no trace of it.
+            await session.NavigateAsync("second.html");
+            Assert.AreEqual("\"undefined\"", await view.EvaluateScriptAsync("typeof window.__neoastraAutomation", session.CancellationToken));
+        }, new NeoAstraOptions { ViewLabel = "main" });
+    }
+
+    private static string CreateDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "neoastra-automation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static Task RunAsync(Func<AutomationDriver, Task> body, string? allowedDirectory = null, Action<NeoAutomationOptions>? configure = null)
+        => LiveBrowser.RunAsync(AutomationFixture.Pages, async session =>
+        {
+            var options = new NeoAutomationOptions();
+            if (allowedDirectory is not null) options.AllowedDirectories.Add(allowedDirectory);
+            configure?.Invoke(options);
+            await using var automation = new NeoAutomation(session.Application, options);
+            await body(new AutomationDriver(session, automation));
+        }, timeout: TimeSpan.FromSeconds(90));
+
+    /// <summary>Calls the tools of an automation as a Model Context Protocol server would, from their names and JSON arguments.</summary>
+    private sealed class AutomationDriver(LiveBrowserSession session, NeoAutomation automation)
+    {
+        private string _lastSnapshot = string.Empty;
+
+        internal NeoAutomation Automation { get; } = automation;
+
+        internal CancellationToken CancellationToken => session.CancellationToken;
+
+        internal async Task<NeoAutomationToolResult> CallToolAsync(string name, string? arguments = null, bool expectError = false)
+        {
+            session.Stage = $"{name} {arguments}";
+            var result = await Automation.CallToolAsync(name, arguments, session.CancellationToken);
+            Assert.AreEqual(expectError, result.IsError, $"{name} {arguments}: {result.Text}");
+            if (result.Text.Contains("## Latest page snapshot", StringComparison.Ordinal)) _lastSnapshot = result.Text;
+            return result;
+        }
+
+        internal async Task<string> CallAsync(string name, string? arguments = null, bool expectError = false)
+            => (await CallToolAsync(name, arguments, expectError)).Text;
+
+        /// <summary>Runs a function in the page and returns the JSON text of its result.</summary>
+        internal async Task<string> EvaluateAsync(string? function, string moreArguments = "")
+        {
+            var source = function is null ? string.Empty : $"\"function\":{JsonSerializer.Serialize(function, AutomationTestsJsonContext.Default.String)}";
+            if (function is null) moreArguments = moreArguments.TrimStart().TrimStart(',');
+            var text = await CallAsync("evaluate_script", $"{{{source}{moreArguments}}}");
+            var match = Regex.Match(text, "^Script ran on page and returned:\n```json\n(.*)\n```", RegexOptions.Singleline);
+            Assert.IsTrue(match.Success, text);
+            return match.Groups[1].Value;
+        }
+
+        /// <summary>Finds the identifier of the node of the latest snapshot whose line continues with the given text.</summary>
+        internal string Uid(string description)
+        {
+            var match = Regex.Match(_lastSnapshot, @"uid=(\S+) " + Regex.Escape(description) + @"(?: |$)", RegexOptions.Multiline);
+            Assert.IsTrue(match.Success, $"The latest snapshot has no node {description}:\n{_lastSnapshot}");
+            return match.Groups[1].Value;
+        }
+    }
+}
+
+[System.Text.Json.Serialization.JsonSerializable(typeof(string))]
+internal sealed partial class AutomationTestsJsonContext : System.Text.Json.Serialization.JsonSerializerContext;
