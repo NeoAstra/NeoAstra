@@ -157,14 +157,15 @@ internal static class Program
                     Require(result.RootElement.GetProperty("text").GetString() == "complete", "The JavaScript result changed.");
                 });
 
-                await RunOptionalCaseAsync("Promise results", async () =>
+                await RunPromiseCaseAsync("Promise results", async () =>
                 {
                     using var result = await EvaluateJsonAsync(view,
                         "Promise.resolve({ answer: 6 * 7, text: 'promise-complete' })");
                     return result.RootElement.ValueKind == JsonValueKind.Object &&
                            result.RootElement.TryGetProperty("answer", out var answer) && answer.GetInt32() == 42 &&
                            result.RootElement.TryGetProperty("text", out var text) && text.GetString() == "promise-complete";
-                }, "The active backend serializes the Promise object instead of awaiting its result.");
+                }, "The active backend serializes the Promise object instead of awaiting its result.",
+                    "The active backend rejects the Promise object as an unsupported result type instead of awaiting its result.");
 
                 await RunOptionalCaseAsync("JavaScript exceptions", async () =>
                 {
@@ -217,7 +218,7 @@ internal static class Program
                     Require(result.RootElement.GetString() == "stored", "Local storage did not round trip the fixture value.");
                 });
 
-                await RunOptionalCaseAsync("IndexedDB", async () =>
+                await RunPromiseCaseAsync("IndexedDB", async () =>
                 {
                     using var result = await EvaluateJsonAsync(view,
                         "(async () => { const name = 'neo-conformance-db'; await new Promise(resolve => { const request = indexedDB.deleteDatabase(name); " +
@@ -228,7 +229,8 @@ internal static class Program
                         "transaction.objectStore('values').put('stored', 'key'); transaction.oncomplete = () => resolve('stored'); " +
                         "transaction.onerror = () => reject(transaction.error); }); db.close(); indexedDB.deleteDatabase(name); return value; })()");
                     return result.RootElement.ValueKind == JsonValueKind.String && result.RootElement.GetString() == "stored";
-                }, "The IndexedDB probe is asynchronous and the active backend does not await Promise results.");
+                }, "The IndexedDB probe is asynchronous and the active backend does not await Promise results.",
+                    "The IndexedDB probe is asynchronous and the active backend rejects its Promise result instead of awaiting it.");
 
                 if (supportsCookies)
                 {
@@ -547,6 +549,25 @@ internal static class Program
             }
         }
 
+        // For an optional case whose script completes with a Promise. A backend that does not await it either serializes
+        // the Promise object, which the probe reports by returning false, or refuses to return it and fails the evaluation.
+        // That refusal is the only failure reported as a skip: a script that throws, or anything else, still fails the run.
+        private async ValueTask RunPromiseCaseAsync(
+            string name,
+            Func<ValueTask<bool>> action,
+            string serializedReason,
+            string rejectedReason)
+        {
+            try
+            {
+                await RunOptionalCaseAsync(name, action, serializedReason);
+            }
+            catch (NeoAstraException exception) when (IsUnsupportedResultType(exception))
+            {
+                Skip(name, rejectedReason);
+            }
+        }
+
         private void Skip(string name, string reason)
         {
             _skipped++;
@@ -728,6 +749,12 @@ internal static class Program
         if (json is null) throw new InvalidOperationException("JavaScript evaluation unexpectedly returned null.");
         return JsonDocument.Parse(json);
     }
+
+    // WKWebView fails an evaluation whose completion value it cannot return, a Promise included, with
+    // WKErrorJavaScriptResultTypeIsUnsupported (5). A script that throws fails with WKErrorJavaScriptExceptionOccurred (4),
+    // so the two are told apart by the native code: both arrive as a NeoAstraException.
+    private static bool IsUnsupportedResultType(NeoAstraException exception)
+        => exception is { Domain: "wkwebview", NativeCode: 5 };
 
     // A backend can report a navigation as finished before a deferred module script has run (WKWebView does),
     // so state set by the fixture module is read only after the document itself has loaded.
