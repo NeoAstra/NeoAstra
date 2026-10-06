@@ -1,14 +1,17 @@
 #include "../common/native_internal.hpp"
 
 #import <Cocoa/Cocoa.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <WebKit/WebKit.h>
 #import <dispatch/dispatch.h>
 #import <objc/runtime.h>
 #import <Security/Security.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -327,6 +330,34 @@ void apply_title_bar(neoastra_window_t* window,cocoa_window* state) {
     const NSWindowButton buttons[]={NSWindowCloseButton,NSWindowMiniaturizeButton,NSWindowZoomButton};
     for(const auto button:buttons)[state->window standardWindowButton:button].hidden=window->title_bar.style==NEOASTRA_TITLE_BAR_HIDDEN;
 }
+// WebKit selects a persistent store by identifier and keeps it in its own container, not in a directory the application chooses.
+// The identifier is the SHA-256 name-based UUID (RFC 9562, version 8) of the root. Deriving it any other way would detach
+// every root from the data already stored for it.
+NSUUID* data_store_identifier(const std::string& user_data_root) {
+    // One directory is one store however it is spelled: symbolic links and letter case are resolved for the part that exists.
+    std::error_code failure;
+    auto path=std::filesystem::weakly_canonical(std::filesystem::path(user_data_root),failure);
+    if(failure)path=std::filesystem::path(user_data_root).lexically_normal();
+    if(path.has_relative_path()&&!path.has_filename())path=path.parent_path();
+    const auto name=path.string();
+    static constexpr char scope[]="neoastra:user-data-root:";
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_CTX hash;
+    CC_SHA256_Init(&hash);
+    CC_SHA256_Update(&hash,scope,sizeof(scope)-1);
+    CC_SHA256_Update(&hash,name.data(),static_cast<CC_LONG>(name.size()));
+    CC_SHA256_Final(digest,&hash);
+    digest[6]=(digest[6]&0x0f)|0x80;
+    digest[8]=(digest[8]&0x3f)|0x80;
+    return [[NSUUID alloc]initWithUUIDBytes:digest];
+}
+// Without a root the environment keeps the default store, which is also where data stored before roots were honored remains.
+WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app,const std::string& user_data_root) {
+    if(user_data_root.empty())return [WKWebsiteDataStore defaultDataStore];
+    if(@available(macOS 14.0,*))return [WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)];
+    neo_log(app,NEOASTRA_LOG_WARNING,"environment","WKWebView cannot give a user-data root its own store before macOS 14; the default store is shared");
+    return [WKWebsiteDataStore defaultDataStore];
+}
 }
 
 bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t**) noexcept {@autoreleasepool{[NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];auto* state=new cocoa_app{};state->previous_delegate=NSApp.delegate;NeoApplicationDelegate* delegate=[NeoApplicationDelegate new];delegate.nativeApplication=app;delegate.previousDelegate=state->previous_delegate;state->delegate=delegate;NSApp.delegate=delegate;app->platform=state;return true;}}
@@ -399,7 +430,7 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
                 }
                 auto state=std::make_unique<cocoa_environment>();
                 state->process_pool=[WKProcessPool new];
-                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];
+                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:persistent_data_store(environment->app,neo_string(options->user_data_root));
                 environment->platform=state.release();
                 callback(context,nullptr);
                 return true;
@@ -414,7 +445,8 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
     }
 }
 void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {delete static_cast<cocoa_environment*>(environment->platform);environment->platform=nullptr;}
-bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {@autoreleasepool{try{auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:[WKWebsiteDataStore defaultDataStore];profile->platform=state;return true;}catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
+// A profile that is not ephemeral is the store of its environment, so it follows the environment's user-data root and private mode.
+bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {@autoreleasepool{try{auto* environment=static_cast<cocoa_environment*>(profile->environment->platform);if(!environment||!environment->data_store){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"WKWebView environment is unavailable");return false;}auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:environment->data_store;profile->platform=state;return true;}catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {delete static_cast<cocoa_profile*>(profile->platform);profile->platform=nullptr;}
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t* profile,const std::string& uri,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->data_store||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie URI");[state->data_store.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie*>* values){@autoreleasepool{NSMutableArray* output=[NSMutableArray array];NSString* host=url.host.lowercaseString;NSString* request_path=url.path.length?url.path:@"/";for(NSHTTPCookie* cookie in values){NSString* domain=cookie.domain.lowercaseString;BOOL domain_match=[host isEqualToString:domain]||([domain hasPrefix:@"."]&&[host hasSuffix:domain]);BOOL path_match=[request_path hasPrefix:cookie.path.length?cookie.path:@"/"];if(!domain_match||!path_match||(cookie.secure&&![url.scheme.lowercaseString isEqualToString:@"https"]))continue;NSMutableDictionary* item=[@{@"name":cookie.name,@"value":cookie.value,@"domain":cookie.domain,@"path":cookie.path.length?cookie.path:@"/",@"secure":@(cookie.secure),@"httpOnly":@(cookie.HTTPOnly),@"sameSite":@0} mutableCopy];if(cookie.expiresDate)item[@"expiresUnixMs"]=@((int64_t)(cookie.expiresDate.timeIntervalSince1970*1000.0));[output addObject:item];}NSError* serialization_error=nil;NSData* data=[NSJSONSerialization dataWithJSONObject:output options:0 error:&serialization_error];neoastra_result_t requested=serialization_error?NEOASTRA_ERROR_NATIVE_FAILURE:NEOASTRA_OK,actual{};neoastra_error_t* native_error=serialization_error?make_error(requested,utf8(serialization_error.localizedDescription).c_str(),serialization_error.code):nullptr;auto* buffer=data?new neoastra_buffer(std::vector<uint8_t>((const uint8_t*)data.bytes,(const uint8_t*)data.bytes+data.length)):nullptr;if(operation->try_complete(requested,actual)){callback(context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();if(native_error)native_error->release();operation->release();}}];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_profile_set_cookie(neoastra_profile_t* profile,const neoastra_cookie_t* cookie,neoastra_completion_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_profile*>(profile->platform);if(!state||!state->data_store)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WKWebView profile is not initialized");NSMutableDictionary* properties=[@{NSHTTPCookieName:ns_string(neo_string(cookie->name)),NSHTTPCookieValue:ns_string(neo_string(cookie->value)),NSHTTPCookieDomain:ns_string(neo_string(cookie->domain)),NSHTTPCookiePath:ns_string(neo_string(cookie->path))} mutableCopy];if(cookie->flags&1u)properties[NSHTTPCookieSecure]=@"TRUE";if(cookie->flags&2u)properties[@"HttpOnly"]=@"TRUE";if((cookie->flags&4u)==0&&cookie->expires_unix_ms>0)properties[NSHTTPCookieExpires]=[NSDate dateWithTimeIntervalSince1970:cookie->expires_unix_ms/1000.0];NSHTTPCookie* value=[NSHTTPCookie cookieWithProperties:properties];if(!value)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView cookie");[state->data_store.httpCookieStore setCookie:value completionHandler:^{neoastra_result_t actual{};if(operation->try_complete(NEOASTRA_OK,actual))callback(context,actual,nullptr);operation->release();}];return NEOASTRA_OK;}}

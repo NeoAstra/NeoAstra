@@ -22,7 +22,11 @@ public sealed unsafe class NeoProfile : IAsyncDisposable
         IsEphemeral = isEphemeral;
     }
 
-    /// <summary>Gets whether the profile avoids persistent browser storage.</summary>
+    /// <summary>Gets whether the profile was created as ephemeral.</summary>
+    /// <remarks>
+    /// A profile of an environment created with <see cref="NeoEnvironmentOptions.IsPrivate"/> avoids persistent
+    /// browser storage whatever this value is.
+    /// </remarks>
     public bool IsEphemeral { get; }
 
     /// <summary>Gets cookies matching an absolute URI.</summary>

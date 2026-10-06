@@ -48,7 +48,7 @@ struct windows_window {
     int caption_pressed{-1};
     windows_window() { restored_placement.length = sizeof(restored_placement); }
 };
-struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; };
+struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; bool private_mode{}; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
 struct windows_drop_registration { HWND window{}; ComPtr<IDropTarget> target; };
 struct windows_view {
@@ -1710,6 +1710,7 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
         if (FAILED(version_result)) { neo_fail(error, NEOASTRA_ERROR_RUNTIME_UNAVAILABLE, "Microsoft Edge WebView2 Runtime is unavailable. Install the Evergreen Runtime or configure BrowserRuntimePath.", version_result, "webview2"); return false; }
         auto* state = new windows_environment;
         state->version = take_string(version);
+        state->private_mode = options->private_mode != 0;
         environment->platform = state;
         auto environment_options = Make<CoreWebView2EnvironmentOptions>();
         const auto arguments = widen(neo_string(options->browser_arguments));
@@ -2050,16 +2051,23 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             return S_OK;
         });
     HRESULT result{};
-    if (view->profile) {
+    // WebView2 has no private environment: InPrivate is chosen for each controller, and a controller created
+    // without options uses the persistent default profile of the user-data folder. A private environment
+    // therefore makes every view InPrivate, with or without a profile and whatever that profile asked for.
+    // A popup target comes through here with the environment and profile of its opener, so it gets the same
+    // WebView2 profile, as put_NewWindow requires. A runtime without controller options fails the creation
+    // rather than storing the data of a private view.
+    const bool in_private = environment->private_mode || (view->profile && view->profile->ephemeral);
+    if (view->profile || in_private) {
         ComPtr<ICoreWebView2Environment10> environment10;
         ComPtr<ICoreWebView2ControllerOptions> controller_options;
         result = environment->value.As(&environment10);
         if (SUCCEEDED(result)) result = environment10->CreateCoreWebView2ControllerOptions(&controller_options);
-        if (SUCCEEDED(result) && !view->profile->name.empty()) {
+        if (SUCCEEDED(result) && view->profile && !view->profile->name.empty()) {
             try { result = controller_options->put_ProfileName(widen(view->profile->name).c_str()); }
             catch (...) { result = E_INVALIDARG; }
         }
-        if (SUCCEEDED(result)) result = controller_options->put_IsInPrivateModeEnabled(view->profile->ephemeral ? TRUE : FALSE);
+        if (SUCCEEDED(result)) result = controller_options->put_IsInPrivateModeEnabled(in_private ? TRUE : FALSE);
         if (SUCCEEDED(result)) result = environment10->CreateCoreWebView2ControllerWithOptions(parent, controller_options.Get(), completed.Get());
     } else {
         result = environment->value->CreateCoreWebView2Controller(parent, completed.Get());
