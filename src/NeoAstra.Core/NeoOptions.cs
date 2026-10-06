@@ -55,11 +55,11 @@ public sealed class NeoEnvironmentOptions
     /// <summary>Gets or sets the persistent browser-data root.</summary>
     /// <remarks>
     /// Environments on different roots keep separate cookies, local storage, and other website data, and an
-    /// environment on the same root finds its data again. Windows keeps the data in this directory. On macOS 14
-    /// and later, each root selects a WebKit store of its own by its resolved path; WebKit keeps that store in
-    /// its per-application container rather than in this directory. Earlier macOS releases and Linux do not use
-    /// the root: every environment that is not private shares the default store there. Without a root, an
-    /// environment uses the default store of the browser engine.
+    /// environment on the same root finds its data again. Windows and Linux keep the data in this directory and
+    /// create it when it is missing. On macOS 14 and later, each root selects a WebKit store of its own by its
+    /// resolved path; WebKit keeps that store in its per-application container rather than in this directory.
+    /// Earlier macOS releases do not use the root: every environment that is not private shares the default
+    /// store there. Without a root, an environment uses the default store of the browser engine.
     /// </remarks>
     public string? UserDataRoot { get; set; }
 
