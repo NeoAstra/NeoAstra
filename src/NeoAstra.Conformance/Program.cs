@@ -136,8 +136,9 @@ internal static class Program
                 await RunCaseAsync("custom-scheme navigation, local assets, and file-backed resource streaming", async () =>
                 {
                     await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
+                    await WaitForDocumentLoadAsync(view, options.Timeout);
                     using var result = await EvaluateJsonAsync(view,
-                        "({ externalAsset: globalThis.__fixtureExternalAsset, " +
+                        "({ externalAsset: globalThis.__fixtureExternalAsset ?? null, " +
                         "style: getComputedStyle(document.documentElement).getPropertyValue('--neoastra-fixture-style').trim(), " +
                         "title: document.title })");
                     var root = result.RootElement;
@@ -462,6 +463,7 @@ internal static class Program
                             await using var view = await environment.CreateWebViewAsync(
                                 NeoAstraHost.FillWindow(window), CreateViewOptions(null, bridgeMode));
                             await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
+                            await WaitForDocumentLoadAsync(view, options.Timeout);
                             var received = 0;
                             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                             void OnMessage(object? _, NeoWebMessageReceivedEventArgs message)
@@ -726,6 +728,11 @@ internal static class Program
         if (json is null) throw new InvalidOperationException("JavaScript evaluation unexpectedly returned null.");
         return JsonDocument.Parse(json);
     }
+
+    // A backend can report a navigation as finished before a deferred module script has run (WKWebView does),
+    // so state set by the fixture module is read only after the document itself has loaded.
+    private static ValueTask WaitForDocumentLoadAsync(NeoAstra.NeoAstra view, TimeSpan timeout)
+        => WaitUntilScriptAsync(view, "document.readyState === 'complete'", "The fixture document did not finish loading.", timeout);
 
     private static async ValueTask WaitUntilScriptAsync(
         NeoAstra.NeoAstra view,
