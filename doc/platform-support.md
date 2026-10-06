@@ -1,106 +1,71 @@
 # Platforms and runtime dependencies
 
-NeoAstra is pre-release software. The platforms below are the intended v1 support targets, not a
-claim that every target has passed release-level runtime validation. In this document:
+NeoAstra shows the browser engine of the platform and does not bundle one. The `NeoAstra.Core`
+package, which the `NeoAstra` application package depends on, carries a native library for each of
+these targets:
 
-- **Implemented** means a native backend and RID packaging path exist in source.
-- **Workflow coverage** means the repository configures a build, test, or publish job; it does not
-  prove that a particular workflow run passed.
-- **Runtime validated** means a real application created a browser view on that operating system and
-  architecture. No macOS or Linux runtime-validation result is asserted here.
+| Operating system | Architecture / RID | Browser engine | Checked with |
+| --- | --- | --- | --- |
+| Windows 10 and 11 | x64 / `win-x64` | WebView2 | Native tests, unit tests that drive a live browser, and the conformance harness |
+| Windows 10 and 11 | ARM64 / `win-arm64` | WebView2 | Cross-built only; not run on ARM64 hardware |
+| macOS 15 or later | x64 / `osx-x64` | WKWebView | Native tests and the conformance harness |
+| macOS 26 or later | ARM64 / `osx-arm64` | WKWebView | Native tests, and the conformance harness on a development machine |
+| Ubuntu 24.04 or later | x64 / `linux-x64` | WebKitGTK 6.0 | Native tests and the conformance harness |
+| Ubuntu 24.04 or later | ARM64 / `linux-arm64` | WebKitGTK 6.0 | Native tests; no browser run |
 
-## Support and validation matrix
+Linux distributions that use musl, such as Alpine, 32-bit architectures, and other RIDs are not
+supported.
 
-| Operating system | Architecture / RID | Browser backend | v1 intent | Repository status |
-| --- | --- | --- | --- | --- |
-| Windows 10/11 | x64 / `win-x64` | WebView2 | Required | Implemented. Native and managed CI, NativeAOT publish, native-load smoke coverage, and Windows-only live-browser test code are configured. |
-| Windows 10/11 | ARM64 / `win-arm64` | WebView2 | Required | Implemented. Native asset cross-build/package coverage is configured; native execution is skipped and no ARM64 browser run is established. |
-| macOS | x64 / `osx-x64` | WKWebView | Required | Implemented and source-reviewed. Native build/test coverage is configured; no release-level browser-runtime result is asserted. The minimum supported macOS version is not yet frozen. |
-| macOS | ARM64 / `osx-arm64` | WKWebView | Required | Implemented and source-reviewed. Native and managed CI plus NativeAOT publish coverage are configured; no release-level browser-runtime result is asserted. The minimum supported macOS version is not yet frozen. |
-| Ubuntu 24.04+ | x64 / `linux-x64` | WebKitGTK 6.0 | Required | Implemented and source-reviewed. Native tests under Xvfb, managed CI, NativeAOT publish, and native hardening jobs are configured; no release-level browser-runtime result is asserted. |
-| Ubuntu 24.04+ | ARM64 / `linux-arm64` | WebKitGTK 6.0 | Required | Implemented and source-reviewed. Native build/test/package coverage on ARM64 infrastructure is configured; no release-level browser-runtime result is asserted. |
-| Linux using musl | x64 or ARM64 | WebKitGTK | Not a v1 target | Unsupported. No musl RID assets, compatible dependency baseline, or musl runtime CI are present. |
-
-Thirty-two-bit architectures and RIDs other than those listed above are not supported. The .NET 10
-`NeoAstra.Core` package carries the native assets; the ordinary `NeoAstra` application package depends
-on that core. The packaging workflow assembles all six native assets; a workflow definition alone is
-not a release-validation record.
+The engines do not offer the same features. [Known limitations](known-limitations.md) lists what
+differs, and `NeoEnvironment.GetCapability` tells an application what the engine it runs on supports.
 
 ## Runtime requirements
 
-All platforms require:
+Every platform needs:
 
 - A .NET 10 runtime, unless the application is published self-contained or with NativeAOT.
-- A NeoAstra native asset matching the operating system and process architecture. The pre-release
-  ABI is `1.0`, and the current loader/bundler enforce major compatibility only. Strict managed/native
-  release pairing remains a release gate, not a control already enforced by the pre-release loader.
-- A graphical desktop session and use of the platform UI thread. Headless build success does not
-  establish that a browser view can be created.
+- A graphical desktop session. Application and browser operations start on the UI thread of the
+  platform.
 
 ### Windows
 
-- Windows 10 or Windows 11 on x64 or ARM64 is the v1 target.
-- The Microsoft Edge WebView2 Runtime must be installed for the process architecture, or the host
-  must explicitly provide a compatible fixed-version runtime path through NeoAstra environment
-  options.
-- NeoAstra uses the statically linked WebView2 loader, but it does **not** bundle the WebView2
-  browser runtime or another Chromium distribution.
+- The Microsoft Edge WebView2 Runtime, installed for the architecture of the process. Windows 11
+  includes it. A host can instead name a fixed-version runtime through the environment options.
+- NeoAstra links the WebView2 loader statically. It does not ship the WebView2 runtime or another
+  Chromium distribution.
 
 ### macOS
 
-- A system-provided Cocoa and WebKit/WKWebView implementation is required; NeoAstra does not
-  bundle a browser engine.
-- Both x64 and ARM64 native assets are implemented. The repository does not yet declare a minimum
-  supported macOS release, so a distributable application must set and validate its own deployment
-  target before claiming support.
-- Browser features still depend on the WKWebView APIs available in the user's macOS release. See
-  [known limitations](known-limitations.md) and query `NeoEnvironment.GetCapability` before exposing
-  optional UX.
-- Separate browser data for each `NeoEnvironmentOptions.UserDataRoot` needs macOS 14 or later. On
-  earlier releases every environment that is not private shares the application's default store; see
-  [browser data and user-data roots](known-limitations.md#browser-data-and-user-data-roots).
+- Nothing to install: WKWebView is part of the system.
+- A native library loads on the system it was built for and on later ones. The libraries of this
+  package are built on macOS 15 for x64 and on macOS 26 for ARM64, so an application on Apple silicon
+  needs macOS 26.
+- Browser features depend on the WKWebView of the user's macOS release. Query
+  `NeoEnvironment.GetCapability` before offering an optional feature.
 
 ### Linux
 
-- The initial target is Ubuntu 24.04 or later using glibc, with WebKitGTK API 6.0, GTK 4, libsoup 3,
-  GLib, and their transitive runtime libraries supplied by the distribution.
-- The build uses the `gtk4` and `webkitgtk-6.0` pkg-config modules. Repository CI installs
-  `libgtk-4-dev` and `libwebkitgtk-6.0-dev` to compile; deployed applications need the corresponding
-  distribution runtime libraries, not necessarily the development packages.
-- On Ubuntu 24.04, install the direct runtime packages with
-  `sudo apt-get install libgtk-4-1 libwebkitgtk-6.0-4`. APT installs the required
-  libsoup 3, GLib, and other transitive libraries.
-- GTK must be able to connect to an X11 or Wayland display. Backend initialization fails when no
-  usable display is available.
-- Other glibc distributions may work when they provide ABI-compatible GTK 4 and WebKitGTK 6.0
-  libraries, but they are not part of the current v1 support intent. Alpine and other musl systems
-  are unsupported.
+- Ubuntu 24.04 or later, with glibc, GTK 4, and WebKitGTK 6.0 from the distribution:
+  `sudo apt-get install libgtk-4-1 libwebkitgtk-6.0-4`. APT installs libsoup 3, GLib, and the other
+  libraries they need.
+- An X11 or Wayland display that GTK can connect to. The backend fails to start without one.
+- Another glibc distribution may work when it provides compatible GTK 4 and WebKitGTK 6.0 libraries,
+  but none is checked.
+- WebKitGTK runs its web process in a sandbox that needs unprivileged user namespaces. Where a system
+  restricts them, pages do not load. That was met on the Ubuntu 24.04 runner of GitHub Actions, not in
+  a desktop session.
 
-## What is and is not currently validated
+## How the platforms are checked
 
-The main CI workflow builds and tests `NeoAstra.slnx` on Windows x64, macOS ARM64, and Linux x64.
-After the macOS/Linux checks pass, Windows runs the shared `dotnet-releaser` action in its default
-`run` mode to build, test, and pack the solution with the checked-in native RID assets. Release tag
-pushes also publish NuGet packages via trusted publishing; pull requests and branch pushes do not publish.
-A separate native workflow runs automatically only when native sources, build inputs, or staged native
-runtimes change; it compiles artifacts for all six RIDs and executes native tests on all except Windows
-ARM64. NativeAOT, extended package validation, delivery, and desktop conformance remain separately
-dispatchable workflows rather than checks on every managed change. The native tests cover the ABI,
-ownership, dispatch, teardown, and stress behavior and, on macOS and Linux, the WebKit data store or
-network session selected for each user-data root and profile and, on macOS, the back/forward
-availability a view reports; they do not by themselves prove end-to-end browser behavior.
+- **Native tests** run in the native workflow for every target except Windows ARM64. They cover the
+  native interface, object ownership, dispatch, and teardown, and parts of the macOS and Linux
+  backends.
+- **Unit tests** run on Windows x64, macOS ARM64, and Linux x64 on every push. The tests that drive a
+  live browser run on Windows only.
+- **The conformance harness** drives a real browser view through navigation, scripts, storage,
+  messaging, and [browser automation](browser-automation.md). It passes on Windows 11 x64, on macOS 15
+  x64, and on Ubuntu 24.04 x64. A workflow runs it on request for Windows and macOS; on the Linux
+  runner of that workflow a page does not load yet, so the Linux run was made in a desktop session.
 
-Normal CI does not invoke the browser harness with `--run`. The separate, manually dispatched
-`conformance.yml` now configures both desktop-service smoke and browser `--run --stress` execution on
-Windows x64, macOS x64, and Linux x64, with per-step deadlines and retained logs including explicit
-skips. This is configured coverage, not a report that those jobs passed, and does not cover every RID.
-Ordinary managed CI also runs the dependency-free engineering tests, including ABI-header parsing.
-
-This page does not infer macOS or Linux runtime support from source review, compilation, native tests,
-Xvfb use, or NativeAOT publication. A v1 support claim still requires the platform sample and browser
-integration acceptance criteria to be run and recorded on each target. Record the OS/engine/RID,
-artifact identity, command, and pass/fail/skip results; review each skip against release requirements.
-
-For local verification, see the sample and conformance commands in the
-[building and verification guide](building.md). Passing those commands on one machine validates that tested
-environment only; it does not expand the support matrix.
+[Building and verification](building.md) has the commands to run these checks on your own machine,
+and [open follow-ups](open-follow-ups.md) lists what is still to check.

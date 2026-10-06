@@ -1,13 +1,10 @@
 # Getting started
 
-NeoAstra is under active development and not ready for public consumption. APIs and distribution may
-change before the first release.
-
 ## Requirements
 
 NeoAstra targets **.NET 10**. Running an application also requires a graphical desktop and the platform's
 browser runtime. See [platform support and runtime dependencies](platform-support.md) for target
-architectures and validation status, and [known limitations](known-limitations.md) for current platform differences.
+architectures, and [known limitations](known-limitations.md) for the differences between platforms.
 
 ## Packages
 
@@ -19,8 +16,7 @@ architectures and validation status, and [known limitations](known-limitations.m
 | `NeoAstra.Templates` | Vanilla TypeScript, React, and Vue `dotnet new` templates. |
 
 Follow the [create, run, develop, and publish guide](frontend-tooling-and-assets.md#consumer-path-create-run-develop-publish)
-for package installation and template commands. Use an exact available pre-release version rather than
-assuming a stable release exists, and keep the package, tool, and template versions aligned.
+for package installation and template commands. Keep the package, tool, and template versions aligned.
 
 ## Minimal application host
 

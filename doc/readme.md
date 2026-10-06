@@ -5,9 +5,8 @@ Build native desktop apps with web technologies.
 ## Start here
 
 - [Getting started](getting-started.md) — packages, a minimal application, and samples.
-- [Platforms and runtime dependencies](platform-support.md) — supported targets, browser backends, and validation status.
-- [Known limitations](known-limitations.md) — release-readiness gaps and current platform constraints.
-- [Building and verification](building.md) — source prerequisites, native and managed builds, frontend checks, and conformance tools.
+- [Platforms and runtime dependencies](platform-support.md) — supported targets, browser engines, and what each needs installed.
+- [Known limitations](known-limitations.md) — what differs between the platforms, and other limits to know about.
 
 ## Application development
 
@@ -25,3 +24,8 @@ Build native desktop apps with web technologies.
 
 - [Security threat model](security-threat-model.md) — understand trust boundaries, threats, and required controls.
 - [Security and resource-limit review](security-review.md) — review implemented protections and platform-specific limitations.
+
+## Working on NeoAstra
+
+- [Building and verification](building.md) — source prerequisites, native and managed builds, frontend checks, and conformance tools.
+- [Open follow-ups](open-follow-ups.md) — known defects and checks that are still to do.

@@ -4,10 +4,9 @@ The frontend targets included in the `NeoAstra` package, the `dotnet neoastra` t
 
 ## Consumer path: create, run, develop, publish
 
-The project is pre-release. Use an exact reviewed version available from your chosen feed, and keep
-the application package, tool, and templates aligned; replace every `<VERSION>` below. The template's
-`1.0.0` default is not evidence of a published or qualified v1. These are explicit consumer installation
-commands, not actions the build silently performs:
+Keep the application package, the tool, and the templates on the same version, and replace every
+`<VERSION>` below with it. These are explicit consumer installation commands, not actions the build
+silently performs:
 
 ```sh
 dotnet new install NeoAstra.Templates::<VERSION>

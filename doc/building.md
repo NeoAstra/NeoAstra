@@ -24,7 +24,7 @@ dotnet build -c Release
 dotnet test -c Release
 ```
 
-NeoAstra's pre-release native ABI remains `1.0`. Until the first release, the managed loader and bundler enforce only ABI major compatibility so existing pre-release RID assets can be regenerated without blocking local applications. Managed and RID-specific native assets will become a strictly paired release unit before release.
+The native ABI is `1.0`. The managed loader and the bundler check its major version only, so the checked-in native assets can be regenerated without blocking local applications.
 
 ## Samples and NativeAOT
 

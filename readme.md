@@ -5,9 +5,6 @@
 NeoAstra is a desktop application framework for .NET that brings your web UI to native windows.
 It uses the platform browser — WebView2 on Windows, WKWebView on macOS, and WebKitGTK on Linux — without bundling a browser engine.
 
-> [!WARNING]
-> NeoAstra is under active development and **not ready for public consumption**.
-
 ## ✨ Features
 
 - **Your choice of frontend**: plain HTML/JavaScript, React, Vue, or another web framework.
