@@ -42,16 +42,30 @@ static int RunNativeSmoke()
             var menu = new[] { NeoMenuItem.Command("run", "Run", "smoke.activate", "Ctrl+R"), NeoMenuItem.RoleItem("quit", NeoMenuRole.Quit, "Quitter 更新") };
             await services.Menus.SetMenuAsync("context:owner-view", menu); await services.Menus.SetMenuAsync("context:owner-view", [NeoMenuItem.Command("run", "Run 更新", "smoke.activate", "Ctrl+R", isChecked: true), NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy, "複製 Héllo")]); await Task.Run(async () => await services.Menus.SetMenuAsync("application", menu));
             if (OperatingSystem.IsWindows()) { _ = SmokeNative.SendMessage(owner.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, 0x0111, 100, 0); await commandActivated.Task.WaitAsync(TimeSpan.FromSeconds(2)); }
-            await services.Menus.RemoveMenuAsync("application"); await services.Menus.SetMenuAsync("window:owner", OperatingSystem.IsLinux() ? [NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy)] : menu); await services.Menus.SetMenuAsync("window:modal", [NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy, "複製")]); await services.Menus.SetMenuAsync("application", menu);
-            await Task.Run(async () => await services.Tray.SetAsync(new NeoTrayItemOptions { Id = "smoke", ToolTip = "NeoAstra Héllo", Menu = [NeoMenuItem.Command("run", "Run", "smoke.activate")] }));
-            services.Tray.Set(new NeoTrayItemOptions { Id = "smoke", ToolTip = "NeoAstra Héllo 更新", Menu = [NeoMenuItem.Command("run", "Run", "smoke.activate"), NeoMenuItem.RoleItem("quit", NeoMenuRole.Quit, "Quitter 更新")] });
+            await services.Menus.RemoveMenuAsync("application");
+            // GTK 4 has no stock labels: its presenter refuses a role item without a label of its own, and nothing of the refused menu stays.
+            if (OperatingSystem.IsLinux()) { try { await services.Menus.SetMenuAsync("window:owner", [NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy)]); throw new InvalidOperationException("The GTK menu presenter accepted a role item without a label."); } catch (NotSupportedException) { } if (services.Menus.GetMenu("window:owner").Count != 0) throw new InvalidOperationException("A refused menu was kept."); }
+            await services.Menus.SetMenuAsync("window:owner", OperatingSystem.IsLinux() ? [NeoMenuItem.Submenu("edit", "Edit", [NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy, "Copy")])] : menu); await services.Menus.SetMenuAsync("window:modal", [NeoMenuItem.RoleItem("copy", NeoMenuRole.Copy, "複製")]); await services.Menus.SetMenuAsync("application", menu);
+            // A Linux session has a tray only where something watches for StatusNotifierItem, which a bare X server and many shells do not. The service says so, and refuses an item there.
+            var hasTray = services.Tray.Support.SupportLevel != NeoSupportLevel.None;
+            if (hasTray)
+            {
+                await Task.Run(async () => await services.Tray.SetAsync(new NeoTrayItemOptions { Id = "smoke", ToolTip = "NeoAstra Héllo", Menu = [NeoMenuItem.Command("run", "Run", "smoke.activate")] }));
+                services.Tray.Set(new NeoTrayItemOptions { Id = "smoke", ToolTip = "NeoAstra Héllo 更新", Menu = [NeoMenuItem.Command("run", "Run", "smoke.activate"), NeoMenuItem.RoleItem("quit", NeoMenuRole.Quit, "Quitter 更新")] });
+            }
+            else
+            {
+                try { services.Tray.Set(new NeoTrayItemOptions { Id = "smoke", ToolTip = "NeoAstra Héllo", Menu = [NeoMenuItem.Command("run", "Run", "smoke.activate")] }); throw new InvalidOperationException("A tray item was accepted by a session that reports no tray."); }
+                catch (NotSupportedException) { }
+                if (services.Tray.Remove("smoke")) throw new InvalidOperationException("A refused tray item was kept.");
+            }
             var stateStore = new NeoJsonWindowStateStore(Path.Combine(smokeRoot, "window-state")); var stateController = new NeoWindowStateController(owner, stateStore, "owner", TimeSpan.FromMilliseconds(50));
             _ = await services.WindowPolish.SetEnabledAsync(owner, false); _ = await services.WindowPolish.SetEnabledAsync(owner, true); _ = await services.WindowPolish.RequestAttentionAsync(owner); _ = await services.WindowPolish.SetProgressAsync(owner, NeoWindowProgressState.Normal, 0.25); _ = await services.WindowPolish.SetBadgeAsync(owner, "1"); _ = await services.WindowPolish.SetContentProtectionAsync(owner, true); _ = await services.WindowPolish.SetContentProtectionAsync(owner, false); _ = await services.WindowPolish.SetTitleBarThemeAsync(owner, NeoWindowTitleBarTheme.System);
             var ownerClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var modalClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var effectiveState = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); owner.Closed += (_, _) => ownerClosed.TrySetResult(); modal.Closed += (_, _) => modalClosed.TrySetResult(); owner.StateChanged += (_, _) => effectiveState.TrySetResult();
             modal.Show(); owner.State = NeoWindowState.Minimized; owner.State = NeoWindowState.Normal; if (!OperatingSystem.IsLinux()) await effectiveState.Task.WaitAsync(TimeSpan.FromSeconds(2)); await stateController.DisposeAsync(); if (await stateStore.LoadAsync("owner") is null) throw new InvalidOperationException("Debounced atomic window-state persistence did not flush during teardown."); owner.Close();
             await Task.WhenAll(ownerClosed.Task, modalClosed.Task).WaitAsync(TimeSpan.FromSeconds(5));
             if (services.Menus.GetMenu("context:owner-view").Count != 0 || services.Menus.GetMenu("window:owner").Count != 0 || services.Menus.GetMenu("window:modal").Count != 0) throw new InvalidOperationException("A native menu outlived its destroyed window owner.");
-            if (!services.Tray.Remove("smoke")) throw new InvalidOperationException("The application-owned tray item did not survive window closure.");
+            if (hasTray && !services.Tray.Remove("smoke")) throw new InvalidOperationException("The application-owned tray item did not survive window closure.");
             await services.Menus.RemoveMenuAsync("application"); await services.Menus.RemoveMenuAsync("context:owner-view");
         }
         finally { application.ForceShutdown(); try { Directory.Delete(smokeRoot, recursive: true); } catch { } }
