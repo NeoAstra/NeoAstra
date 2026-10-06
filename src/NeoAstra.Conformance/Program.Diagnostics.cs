@@ -109,6 +109,10 @@ internal static partial class Program
 
                 DumpWebKitLog(started);
                 DumpCrashReports(started);
+
+                // The scenario "views sharing a window" compares this text with "/index.html" in quotes and fails on macOS.
+                await DiagnoseAsync(environment, bridgeMode, "location.pathname as returned", 0, waitForTransport: false, async (view, _, _) =>
+                    Console.WriteLine("DIAG location.pathname as returned: " + await view.EvaluateScriptAsync("location.pathname")));
             }
             catch (Exception exception)
             {

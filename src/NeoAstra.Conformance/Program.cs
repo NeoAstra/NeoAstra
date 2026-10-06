@@ -385,6 +385,13 @@ internal static partial class Program
             NeoEnvironment environment,
             NeoEnvironmentOptions environmentOptions)
         {
+            // TEMPORARY: see Program.Diagnostics.cs. Run before the lifecycle scenarios, so that a failure of one of
+            // them does not keep the diagnostics from running.
+            if (options.Stress && (OperatingSystem.IsMacOS() || Environment.GetEnvironmentVariable("NEOASTRA_DIAG") == "1"))
+            {
+                await RunMessageFloodDiagnosticsAsync(environment, GetBridgeMode(environment));
+            }
+
             var lifecycleCount = options.Stress ? 25 : 3;
             await RunCaseAsync($"repeated view creation and destruction ({lifecycleCount} iterations)", async () =>
             {
@@ -494,11 +501,6 @@ internal static partial class Program
                 }
                 else
                 {
-                    // TEMPORARY: see Program.Diagnostics.cs.
-                    if (OperatingSystem.IsMacOS() || Environment.GetEnvironmentVariable("NEOASTRA_DIAG") == "1")
-                    {
-                        await RunMessageFloodDiagnosticsAsync(environment, bridgeMode);
-                    }
                     await RunCaseAsync("100,000 small messages", async () =>
                     {
                         var window = CreateHiddenWindow("NeoAstra message stress conformance");
