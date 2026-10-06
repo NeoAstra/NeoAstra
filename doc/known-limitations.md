@@ -22,6 +22,43 @@ implemented source, configured workflow coverage, and actual runtime validation.
 - Linux musl, all 32-bit targets, and RIDs outside `win-x64`, `win-arm64`, `osx-x64`, `osx-arm64`,
   `linux-x64`, and `linux-arm64` are unsupported.
 
+## Open follow-ups
+
+Known or suspected defects that are not fixed yet, and checks that have not been run. Remove an entry
+when it is done.
+
+- **Linux: a download may be reported once for each environment that shares its session.** The GTK
+  backend connects a download handler to the network session of every environment it creates
+  (`neo_platform_environment_create_async` in `native/src/linux/gtk_backend.cpp`). Environments of one
+  process share a session when they are on the same `UserDataRoot` or have none, so a download from a
+  view of that session is expected to reach `download_started` once for each of them, and
+  `DownloadRequested` and the download events to be raised more than once for it. This follows from
+  the source and has not been reproduced. To do: reproduce it in `native/tests/linux_backend_tests.cpp`
+  with two environments on one root and one download, then connect the handler once for each session,
+  still canceling the downloads of views that NeoAstra does not own only while an environment uses
+  that session. Until then, create one environment for each root in a process.
+- **Linux: applications without a root share one default session.** A NeoAstra host has no GLib
+  program name, so WebKitGTK keeps the default session of every such application in the same
+  `webkitgtk` directories and keeps its cookies in memory; see
+  [browser data and user-data roots](#browser-data-and-user-data-roots). To decide: whether a host
+  gets default directories of its own, for example from `NeoApplicationOptions.ApplicationName`, and
+  what happens to the data already in the shared ones.
+- **Linux: the user-data root and view teardown fixes were run on arm64 only.** They were built and
+  tested in an Ubuntu 24.04 arm64 virtual machine with WebKitGTK 2.52: the native tests, the sanitizer
+  and static-analyzer presets, and the release build. Not run: linux-x64, and any check that loads a
+  page with WebKit's sandbox enabled. In that virtual machine, reached over SSH and under Xvfb, loading
+  a page aborted with `Failed to fully launch dbus-proxy`, with or without `dbus-run-session`, so the
+  end-to-end check of local storage and cookies across processes ran with
+  `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`. The cause was not established, nor whether an
+  application started from a desktop session is affected. To do: on a Linux x64 desktop host, run
+  `xvfb-run -a python eng/build_native.py --rid linux-x64 --clean` and a check that loads a page, such
+  as the browser conformance harness.
+- **Most checked-in native runtimes predate the latest fixes.** Only `osx-arm64` was rebuilt, for the
+  macOS user-data root fix. The other five runtimes under `src/NeoAstra.Core/runtimes` predate the
+  fixes for their platform (the user-data root fixes for macOS and Linux, the private-environment fix
+  for Windows, and the Linux view teardown fix) until they are replaced with the artifacts of a native
+  workflow run.
+
 ## Backend capability differences
 
 Applications should query `NeoEnvironment.GetCapability` and provide a safe fallback rather than
