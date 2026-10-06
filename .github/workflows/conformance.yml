@@ -56,6 +56,8 @@ jobs:
           command=(dotnet run --project src/NeoAstra.NativeAotFixture/NeoAstra.NativeAotFixture.csproj -c Release -- --native-smoke)
           if [[ "${{ runner.os }}" == "Linux" ]]; then xvfb-run -a "${command[@]}" 2>&1 | tee artifacts/conformance/desktop-smoke.log; else "${command[@]}" 2>&1 | tee artifacts/conformance/desktop-smoke.log; fi
       - name: Run browser conformance including stress
+        # The browser harness is a check of its own, so it also runs after the smoke fixture has failed.
+        if: ${{ !cancelled() }}
         shell: bash
         timeout-minutes: 10
         run: |
