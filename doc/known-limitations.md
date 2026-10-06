@@ -50,6 +50,15 @@ WebKit callback contracts sometimes require popup and dialog decisions synchrono
 Linux, a handler that does not complete inline receives the documented safe default instead of an
 unbounded asynchronous deferral.
 
+`NavigationCompleted` relays the browser engine's own completion notification, which does not say how
+far the page's scripts have got. WKWebView can raise it while `document.readyState` is still
+`interactive`, before a `<script type="module">` in the document has run and before `DOMContentLoaded`
+and `load`. Classic scripts, including `defer` scripts, had already run in the same checks. Do not read
+state set by a page script straight from a `NavigationCompleted` handler; wait for a signal from the
+page, such as the frontend transport handshake, or until `document.readyState` is `complete`. This was
+observed on macOS 26 for custom-scheme and HTTP documents. WebKitGTK uses the same engine but has not
+been checked.
+
 Chromeless drag and resize entry points must be called while a native pointer press is still held.
 They deliberately do not synthesize global input. A backend reports `InvalidOperationException`
 when no suitable press is active and `NotSupportedException` when the operation has no safe native
