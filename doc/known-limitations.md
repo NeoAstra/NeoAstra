@@ -53,11 +53,52 @@ when it is done.
   application started from a desktop session is affected. To do: on a Linux x64 desktop host, run
   `xvfb-run -a python eng/build_native.py --rid linux-x64 --clean` and a check that loads a page, such
   as the browser conformance harness.
+- **Linux: `CanGoBack` and `CanGoForward` are never reported.** The managed view updates the two
+  properties only from the native history-changed event (`NEOASTRA_EVENT_HISTORY_CHANGED`, handled in
+  `src/NeoAstra.Core/NeoAstra.cs`), and the GTK backend never raises it:
+  `native/src/linux/gtk_backend.cpp` connects nothing to the back/forward list of a view. Both
+  properties are therefore expected to stay `false` on Linux while `GoBack` and `GoForward` still
+  navigate, and the browser conformance scenario "navigation, history, and redirects", which waits for
+  `CanGoBack`, is expected to time out. macOS had the same defect until the Cocoa backend began
+  observing `canGoBack` and `canGoForward`. The Linux one follows from the source and has not been
+  run. To do: when a view is created, connect the `changed` signal of the list returned by
+  `webkit_web_view_get_back_forward_list` and raise the event with bit 0 from
+  `webkit_web_view_can_go_back` and bit 1 from `webkit_web_view_can_go_forward`, as `report_history`
+  does in `native/src/macos/cocoa_backend.mm`. Cover it in `native/tests/linux_backend_tests.cpp` the
+  way `native/tests/macos_history_tests.mm` does on macOS, which needs a host where pages load (see
+  the entry above), then update the back/forward row of the table in the next section.
+- **macOS: the history test has not run on the CI runners.** `native/tests/macos_history_tests.mm` is
+  the first native test that loads pages, so WebKit's web content process must be able to start where
+  `ctest` runs. It passed on macOS 26.5 for arm64, for x86_64 under Rosetta, and with the sanitizer
+  preset built for arm64. It has not run on macOS 15, on the `macos-15-intel` and `macos-latest`
+  runners of the native workflow, or in the x64 sanitizer job. To do: check
+  `neoastra_macos_history_tests` in the next native workflow run. Where pages cannot load, it fails at
+  its first page and prints the page and the history flags it saw last.
+- **macOS: `NavigationCompleted` can arrive before the module scripts of a page have run.** The Cocoa
+  backend relays WKWebView's own notification; see the paragraph on `NavigationCompleted` under
+  [backend capability differences](#backend-capability-differences). To decide: whether the backend
+  should hold the event until the document has loaded, so that it means the same on every backend, or
+  keep relaying the engine. WebKitGTK uses the same engine and has not been checked.
+- **Conformance: not rerun on Windows or Linux, and incomplete on macOS.** The first scenario and the
+  100,000-message stress scenario of `src/NeoAstra.Conformance/Program.cs` now wait until
+  `document.readyState` is `complete` before they use what the fixture module sets, because of the
+  `NavigationCompleted` timing above. On macOS 26.5 for arm64 the run then stops at the optional
+  "Promise results" scenario, and "IndexedDB" fails the same way: WKWebView rejects a script result
+  that is a Promise instead of serializing it, and `RunOptionalCaseAsync` turns only a `false` return
+  into a skip, not the exception. A fix for that was in progress on a separate branch when this was
+  written. With it, and with the current `osx-arm64` runtime, the whole run completed there with exit
+  code 0, in normal mode and with `--stress`. Neither Windows nor Linux was run after these changes.
+  To do: once the two scenarios are reported as skips on macOS, run
+  `dotnet run --project src/NeoAstra.Conformance -c Release -- --run --stress --timeout-seconds 30`
+  from the repository root on each platform. On Linux "navigation, history, and redirects" is expected
+  to time out until `CanGoBack` is reported there.
 - **Most checked-in native runtimes predate the latest fixes.** Only `osx-arm64` was rebuilt, for the
-  macOS user-data root fix. The other five runtimes under `src/NeoAstra.Core/runtimes` predate the
-  fixes for their platform (the user-data root fixes for macOS and Linux, the private-environment fix
-  for Windows, and the Linux view teardown fix) until they are replaced with the artifacts of a native
-  workflow run.
+  macOS user-data root and history fixes. The other five runtimes under `src/NeoAstra.Core/runtimes`
+  predate the fixes for their platform (the user-data root fixes for macOS and Linux, the macOS
+  history fix, the private-environment fix for Windows, and the Linux view teardown fix) until they
+  are replaced with the artifacts of a native workflow run. A macOS build takes its minimum system
+  version from the machine that builds it, so replacing `osx-x64`, which the workflow builds for
+  macOS 15, with a build from a newer macOS would raise it.
 
 ## Backend capability differences
 
