@@ -121,23 +121,104 @@ WebKitWebView* web_view(neoastra_view_t* view) {
     return WEBKIT_WEB_VIEW(handle.value);
 }
 
-// A window keeps a pointer to its child. A view that goes away has to clear it, or the window frees the view a second
-// time when it hosts the next one or closes.
-void test_view_leaves_its_window(neoastra_app_t* app) {
-    auto* environment = create_environment(app, "", true);
-    auto* window = create_window(app);
+GtkWindow* gtk_window(neoastra_window_t* window) {
     neoastra_native_handle_t handle{};
     handle.size = sizeof(handle);
     handle.version = 1;
     assert(neoastra_window_get_native_handle(window, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW, &handle) == NEOASTRA_OK);
-    auto* host = GTK_WINDOW(handle.value);
+    return GTK_WINDOW(handle.value);
+}
+
+// A GTK window has one child, so the views of a window share a stack that the window keeps. A view that goes away
+// has to leave the stack, or its widget is freed a second time when the window hosts the next view or closes.
+void test_view_leaves_its_window(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    GtkWidget* stack = nullptr;
     for (int index = 0; index < 2; index++) {
         auto* view = create_view(environment, window);
-        assert(gtk_window_get_child(host) == GTK_WIDGET(web_view(view)));
+        // The window gets its stack with its first view and keeps it for the next one.
+        assert(GTK_IS_OVERLAY(gtk_window_get_child(host)));
+        assert(stack == nullptr || stack == gtk_window_get_child(host));
+        stack = gtk_window_get_child(host);
+        assert(gtk_widget_get_parent(GTK_WIDGET(web_view(view))) == stack);
         neoastra_view_release(view);
-        assert(gtk_window_get_child(host) == nullptr);
+        assert(gtk_window_get_child(host) == stack);
+        assert(gtk_widget_get_first_child(stack) == nullptr);
     }
     neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+// The views of a window are stacked in the order they were created in, the newest on top, and each of them goes away
+// without taking another one with it. A second view used to take the place of the first, whose widget was destroyed.
+void test_views_share_their_window(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    auto* first = create_view(environment, window);
+    auto* first_widget = GTK_WIDGET(web_view(first));
+    auto* stack = gtk_window_get_child(host);
+    auto* second = create_view(environment, window);
+    auto* second_widget = GTK_WIDGET(web_view(second));
+    assert(gtk_window_get_child(host) == stack);
+    // The first view is still there, and still the widget that its handle names.
+    assert(GTK_WIDGET(web_view(first)) == first_widget);
+    assert(gtk_widget_get_parent(first_widget) == stack && gtk_widget_get_parent(second_widget) == stack);
+    // A later sibling is drawn over an earlier one.
+    assert(gtk_widget_get_first_child(stack) == first_widget && gtk_widget_get_next_sibling(first_widget) == second_widget);
+    auto* third = create_view(environment, window);
+    auto* third_widget = GTK_WIDGET(web_view(third));
+    assert(gtk_widget_get_last_child(stack) == third_widget);
+    // A view in the middle of the stack leaves the others where they are.
+    neoastra_view_release(second);
+    assert(gtk_widget_get_first_child(stack) == first_widget && gtk_widget_get_next_sibling(first_widget) == third_widget);
+    neoastra_view_release(first);
+    assert(gtk_widget_get_first_child(stack) == third_widget && gtk_widget_get_next_sibling(third_widget) == nullptr);
+    neoastra_view_release(third);
+    assert(gtk_window_get_child(host) == stack && gtk_widget_get_first_child(stack) == nullptr);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+// The menu presenter of the managed side (LinuxMenus.cs) puts a box, which it marks, between a window and its content
+// for a menu bar above the content. The views of the window stay together inside that box, whether the box came after
+// the first of them or before it.
+void test_views_follow_the_menu_host(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    for (int box_first = 0; box_first < 2; box_first++) {
+        auto* window = create_window(app);
+        auto* host = gtk_window(window);
+        auto* first = box_first ? nullptr : create_view(environment, window);
+        // What the menu presenter does for the first menu bar of a window.
+        auto* content = gtk_window_get_child(host);
+        if (content) g_object_ref(content);
+        gtk_window_set_child(host, nullptr);
+        auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        g_object_set_data(G_OBJECT(box), "neoastra.menu-host", box);
+        gtk_window_set_child(host, box);
+        if (content) {
+            gtk_box_append(GTK_BOX(box), content);
+            g_object_unref(content);
+        }
+        auto* bar = gtk_label_new("menu bar");
+        gtk_box_prepend(GTK_BOX(box), bar);
+
+        auto* second = create_view(environment, window);
+        // The box is still the child of the window, with the menu bar above the one stack.
+        assert(gtk_window_get_child(host) == box);
+        auto* stack = gtk_widget_get_parent(GTK_WIDGET(web_view(second)));
+        assert(GTK_IS_OVERLAY(stack) && gtk_widget_get_parent(stack) == box);
+        assert(gtk_widget_get_first_child(box) == bar && gtk_widget_get_next_sibling(bar) == stack && gtk_widget_get_next_sibling(stack) == nullptr);
+        if (first) {
+            assert(gtk_widget_get_parent(GTK_WIDGET(web_view(first))) == stack);
+            neoastra_view_release(first);
+        }
+        neoastra_view_release(second);
+        assert(gtk_widget_get_first_child(stack) == nullptr);
+        neoastra_window_release(window);
+    }
     neoastra_environment_release(environment);
 }
 
@@ -302,6 +383,8 @@ int main() {
     assert(neoastra_app_attach(&options, &app, nullptr) == NEOASTRA_OK && app != nullptr);
 
     test_view_leaves_its_window(app);
+    test_views_share_their_window(app);
+    test_views_follow_the_menu_host(app);
     test_user_data_roots(app, base);
 
     assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);

@@ -142,15 +142,20 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         }
     }
 
+    // Marks the box that holds a menu bar above the content of a window. The native GTK backend looks for the mark: the
+    // views of a window share one container, which it finds, and creates, inside this box (window_view_stack in
+    // native/src/linux/gtk_backend.cpp). Without it, a view created after a menu bar would take the place of the box.
+    private const string MenuHostKey = "neoastra.menu-host";
+
     private void Attach(Target target, nint menu)
     {
         if (!_hosts.TryGetValue(target.Window, out var host))
         {
-            var content = Native.gtk_window_get_child(target.Window);
-            if (content != 0) Native.g_object_ref(content);
-            Native.gtk_window_set_child(target.Window, 0);
             var box = Native.gtk_box_new(1, 0);
             if (box == 0) throw new InvalidOperationException("Unable to allocate a GTK4 menu host.");
+            Native.g_object_set_data(box, MenuHostKey, box);
+            var content = Native.gtk_window_get_child(target.Window);
+            if (content != 0) Native.g_object_ref(content);
             Native.gtk_window_set_child(target.Window, box);
             if (content != 0)
             {
@@ -160,7 +165,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
                 Native.g_object_unref(content);
             }
             target.ManagedWindow.Closed += WindowClosed;
-            host = new(box, content, 0, null, target.ManagedWindow);
+            host = new(box, 0, null, target.ManagedWindow);
             _hosts.Add(target.Window, host);
         }
         Native.gtk_box_prepend(host.Box, menu);
@@ -198,13 +203,22 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         _hosts.Remove(window);
         host.ManagedWindow.Closed -= WindowClosed;
         if (host.ManagedWindow.IsClosed) return;
-        if (host.Content != 0 && Native.gtk_widget_get_parent(host.Content) == host.Box) Native.g_object_ref(host.Content);
-        Native.gtk_window_set_child(window, 0);
-        if (host.Content != 0)
+        // The menu bars are gone by now, so what is left in the box is the content of the window, which becomes its
+        // child again. It is read from the box rather than remembered: the native backend may have put the container
+        // of the views there after the box was made.
+        var content = Native.gtk_widget_get_first_child(host.Box);
+        if (content == 0)
         {
-            Native.gtk_window_set_child(window, host.Content);
-            Native.g_object_unref(host.Content);
+            Native.gtk_window_set_child(window, 0);
+            return;
         }
+
+        // A window has one child. A box that holds more than that stays where it is.
+        if (Native.gtk_widget_get_next_sibling(content) != 0) return;
+        Native.g_object_ref(content);
+        Native.gtk_box_remove(host.Box, content);
+        Native.gtk_window_set_child(window, content);
+        Native.g_object_unref(content);
     }
 
     private void WindowClosed(object? sender, EventArgs args)
@@ -327,7 +341,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     private sealed record Entry(Target Target, nint Model, nint Actions, nint Widget, IReadOnlyList<GCHandle> Callbacks, long Generation);
     private sealed record ActivationContext(LinuxMenuPresenter Presenter, string TargetId, long Generation, string? CommandId, NeoMenuRole? Role);
     private sealed record RoleCandidate(NeoAstra View, NeoWindow? Owner, string? Label, nint Widget);
-    private sealed record Host(nint Box, nint Content, int References, string? ActiveId, NeoWindow ManagedWindow);
+    private sealed record Host(nint Box, int References, string? ActiveId, NeoWindow ManagedWindow);
     [StructLayout(LayoutKind.Sequential)] private struct Rectangle { internal int X, Y, Width, Height; }
 
     private static partial class Native
@@ -352,6 +366,8 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         [LibraryImport(Gtk)] internal static partial void gtk_widget_set_parent(nint widget, nint parent);
         [LibraryImport(Gtk)] internal static partial void gtk_widget_unparent(nint widget);
         [LibraryImport(Gtk)] internal static partial nint gtk_widget_get_parent(nint widget);
+        [LibraryImport(Gtk)] internal static partial nint gtk_widget_get_first_child(nint widget);
+        [LibraryImport(Gtk)] internal static partial nint gtk_widget_get_next_sibling(nint widget);
         [LibraryImport(Gtk)] internal static partial void gtk_widget_set_visible(nint widget, [MarshalAs(UnmanagedType.Bool)] bool visible);
         [LibraryImport(Gtk)] internal static partial void gtk_widget_set_vexpand(nint widget, [MarshalAs(UnmanagedType.Bool)] bool expand);
         [LibraryImport(Gtk)] internal static partial void gtk_widget_set_hexpand(nint widget, [MarshalAs(UnmanagedType.Bool)] bool expand);
@@ -365,6 +381,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         [LibraryImport(Gtk)] internal static partial void gtk_window_close(nint window);
         [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial nuint g_signal_connect_data(nint instance, string signal, nint callback, nint data, nint destroyData, uint flags);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial nint g_object_ref(nint value);
+        [LibraryImport("libgobject-2.0.so.0", StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_object_set_data(nint value, string key, nint data);
         [LibraryImport("libgobject-2.0.so.0")] internal static partial void g_object_unref(nint value);
         [LibraryImport("libwebkitgtk-6.0.so.4", StringMarshalling = StringMarshalling.Utf8)] internal static partial void webkit_web_view_execute_editing_command(nint view, string command);
     }

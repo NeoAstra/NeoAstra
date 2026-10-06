@@ -422,6 +422,31 @@ internal static partial class Program
                 }
             });
 
+            await RunCaseAsync("views sharing a window", async () =>
+            {
+                // A window can host several views, the newest over the others. A view under another one is not
+                // drawn, but it is still alive, and it outlives a newer view that goes away.
+                var window = CreateHiddenWindow("NeoAstra shared window conformance");
+                try
+                {
+                    await using var firstView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window));
+                    await NavigateAndWaitAsync(firstView, IndexUri, options.Timeout);
+                    await using (var secondView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window)))
+                    {
+                        await NavigateAndWaitAsync(secondView, SecondUri, options.Timeout);
+                        Require(await firstView.EvaluateScriptAsync("location.pathname") == "\"/index.html\"", "The first view of a window did not survive a second one.");
+                        Require(await secondView.EvaluateScriptAsync("location.pathname") == "\"/second.html\"", "The second view of a window does not show its own document.");
+                    }
+
+                    await NavigateAndWaitAsync(firstView, SecondUri, options.Timeout);
+                    Require(await firstView.EvaluateScriptAsync("location.pathname") == "\"/second.html\"", "The first view of a window did not survive the end of a second one.");
+                }
+                finally
+                {
+                    await window.DisposeAsync();
+                }
+            });
+
             await RunCaseAsync("repeated hidden top-level window lifecycle", async () =>
             {
                 for (var index = 0; index < lifecycleCount; index++)
