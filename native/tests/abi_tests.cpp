@@ -195,6 +195,12 @@ int main() {
     assert(neoastra_window_set_bounds(window, {placed.x, placed.y, 640, 480}) == NEOASTRA_OK);
     assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
     assert(bounds.x == placed.x && bounds.y == placed.y && bounds.width == 640 && bounds.height == 480);
+    // The scale of the display is known as soon as the window exists, and not only once it changes.
+    double scale_factor{};
+    assert(neoastra_window_get_scale_factor(nullptr, &scale_factor) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_scale_factor(window, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_scale_factor(window, &scale_factor) == NEOASTRA_OK);
+    assert(scale_factor >= 1.0 && scale_factor <= 16.0);
     assert(neoastra_window_set_maximum_size(window, {1200, 900}) == NEOASTRA_OK);
     assert(neoastra_window_set_minimum_size(window, {320, 200}) == NEOASTRA_OK);
     neoastra_size_t size{};

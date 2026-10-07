@@ -215,6 +215,9 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_ap
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t*, neoastra_rect_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_bounds(neoastra_window_t*, neoastra_rect_t);
+/* Display pixels per logical unit of the display the window is on: 1.5 at 150 percent, 2 on a Retina display.
+   NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED reports a change, with the scale in thousandths as its value. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_scale_factor(const neoastra_window_t*, double*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_minimum_size(const neoastra_window_t*, neoastra_size_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_minimum_size(neoastra_window_t*, neoastra_size_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_maximum_size(const neoastra_window_t*, neoastra_size_t*);

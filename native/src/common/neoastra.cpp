@@ -637,6 +637,17 @@ void neo_window_closed(neoastra_window_t* window) noexcept {
     if (should_quit) neoastra_app_quit(app, 0);
 }
 
+void neo_window_set_scale_factor(neoastra_window_t* window, double scale_factor, bool report) noexcept {
+    if (!window || !(scale_factor > 0) || !std::isfinite(scale_factor)) return;
+    {
+        std::lock_guard lock(window->state_mutex);
+        if (window->scale_factor == scale_factor) return;
+        window->scale_factor = scale_factor;
+    }
+    // The event carries thousandths, which every scale a display takes is a whole number of.
+    if (report) neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED, window->id, nullptr, nullptr, static_cast<uint64_t>(std::llround(scale_factor * 1000.0)));
+}
+
 void neo_finish_decision_event(neoastra_app_t* app, neoastra_decision_t* decision) noexcept {
     const auto state=decision->state.load(std::memory_order_acquire);
     if(state==neo_decision_state::pending){
@@ -871,6 +882,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_app_t* app,uint
 uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t* w){return w?w->id:0;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t* w,neoastra_rect_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->bounds;return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_set_bounds(neoastra_window_t* w,neoastra_rect_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<=0||value.height<=0)return NEOASTRA_ERROR_INVALID_ARGUMENT;{std::lock_guard lock(w->state_mutex);w->bounds=value;}return neo_platform_window_set_bounds(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_get_scale_factor(const neoastra_window_t* w,double* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->scale_factor;return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_minimum_size(const neoastra_window_t* w,neoastra_size_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->minimum_size;return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_set_minimum_size(neoastra_window_t* w,neoastra_size_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((w->maximum_size.width>0&&value.width>w->maximum_size.width)||(w->maximum_size.height>0&&value.height>w->maximum_size.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->minimum_size;w->minimum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->minimum_size=previous;}return result;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_maximum_size(const neoastra_window_t* w,neoastra_size_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->maximum_size;return NEOASTRA_OK;}

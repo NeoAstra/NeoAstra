@@ -129,6 +129,37 @@ GtkWindow* gtk_window(neoastra_window_t* window) {
     return GTK_WINDOW(handle.value);
 }
 
+// A window reports the size it has. The size it was asked for is what it starts with: once it is on screen GTK lays
+// it out, and the user, a screen, or a size limit can give it another size. The backend used to wait for the width and
+// height properties of the window, which a GTK 4 window does not have, and kept reporting the size it had asked for.
+void test_window_reports_the_size_it_has(neoastra_app_t* app) {
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    neoastra_rect_t bounds{};
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK && bounds.width == 640 && bounds.height == 480);
+    double scale_factor{};
+    assert(neoastra_window_get_scale_factor(window, &scale_factor) == NEOASTRA_OK);
+    assert(scale_factor == gtk_widget_get_scale_factor(GTK_WIDGET(host)));
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(GTK_WIDGET(host)) > 0; });
+    // A size the window takes without being asked through this library is what dragging an edge gives it.
+    gtk_window_set_default_size(host, 700, 500);
+    wait_until([&] { return gtk_widget_get_width(GTK_WIDGET(host)) == 700 && gtk_widget_get_height(GTK_WIDGET(host)) == 500; });
+    wait_until([&] { return neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK && bounds.width == 700 && bounds.height == 500; });
+    // A size asked for through the library is the one reported once the window has it.
+    assert(neoastra_window_set_bounds(window, {bounds.x, bounds.y, 520, 420}) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(GTK_WIDGET(host)) == 520 && gtk_widget_get_height(GTK_WIDGET(host)) == 420; });
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK && bounds.width == 520 && bounds.height == 420);
+    // A hidden window keeps the size it had, and takes a size it is asked for when it is shown again.
+    assert(neoastra_window_hide(window) == NEOASTRA_OK);
+    assert(neoastra_window_set_bounds(window, {bounds.x, bounds.y, 600, 450}) == NEOASTRA_OK);
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK && bounds.width == 600 && bounds.height == 450);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(GTK_WIDGET(host)) == 600 && gtk_widget_get_height(GTK_WIDGET(host)) == 450; });
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK && bounds.width == 600 && bounds.height == 450);
+    neoastra_window_release(window);
+}
+
 // A GTK window has one child, so the views of a window share a stack that the window keeps. A view that goes away
 // has to leave the stack, or its widget is freed a second time when the window hosts the next view or closes.
 void test_view_leaves_its_window(neoastra_app_t* app) {
@@ -382,6 +413,7 @@ int main() {
     neoastra_app_t* app = nullptr;
     assert(neoastra_app_attach(&options, &app, nullptr) == NEOASTRA_OK && app != nullptr);
 
+    test_window_reports_the_size_it_has(app);
     test_view_leaves_its_window(app);
     test_views_share_their_window(app);
     test_views_follow_the_menu_host(app);

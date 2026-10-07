@@ -405,6 +405,7 @@ struct neoastra_window final : neo_ui_ref_counted {
     neoastra_rect_t bounds{};
     neoastra_size_t minimum_size{};
     neoastra_size_t maximum_size{};
+    double scale_factor{1.0}; // Display pixels per logical unit of the display the window is on.
     neoastra_window_state_t state{NEOASTRA_WINDOW_NORMAL};
     uint32_t attributes{};
     neoastra_title_bar_t title_bar{}; // UI-thread-only requested style, height, and colors.
@@ -752,6 +753,8 @@ void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept;
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept;
 void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept;
 void neo_window_closed(neoastra_window_t* window) noexcept;
+// Records the scale of the display a window is on. A change is reported unless the window is still being created.
+void neo_window_set_scale_factor(neoastra_window_t* window, double scale_factor, bool report = true) noexcept;
 void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,
                               bool cancellation_permitted = true) noexcept;
 

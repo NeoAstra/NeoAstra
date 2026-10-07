@@ -1007,6 +1007,8 @@ enum caption_button : int { caption_none = -1, caption_minimize = 0, caption_max
 ATOM register_class(const wchar_t* name, WNDPROC procedure);
 
 UINT window_dpi(HWND hwnd) noexcept { const auto dpi = GetDpiForWindow(hwnd); return dpi ? dpi : USER_DEFAULT_SCREEN_DPI; }
+// What the system reports depends on the awareness of the process: a process that declares none is told 96 on every display.
+double window_scale_factor(HWND hwnd) noexcept { return window_dpi(hwnd) / static_cast<double>(USER_DEFAULT_SCREEN_DPI); }
 int scale_for_dpi(int value, UINT dpi) noexcept { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
 int title_bar_height(const neoastra_window_t* window) noexcept { return window->title_bar.height > 0 ? window->title_bar.height : caption_default_height; }
 POINT client_point(HWND hwnd, LPARAM screen) noexcept {
@@ -1397,9 +1399,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                          suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
             layout_title_bar(window);
-            const auto dpi = HIWORD(wparam);
-            neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED, window->id, nullptr, nullptr,
-                         static_cast<uint64_t>(dpi) * 1000u / 96u);
+            neo_window_set_scale_factor(window, HIWORD(wparam) / static_cast<double>(USER_DEFAULT_SCREEN_DPI));
             return 0;
         }
         case WM_GETMINMAXINFO: {
@@ -1615,6 +1615,8 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-outer.cx)/2,area.top+((area.bottom-area.top)-outer.cy)/2,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE);}
         else SetWindowPos(state->hwnd,nullptr,0,0,outer.cx,outer.cy,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         sync_bounds(window,state->hwnd);
+        // A window is told of a scale only when it changes, so the one it starts with is read here.
+        neo_window_set_scale_factor(window,window_scale_factor(state->hwnd),false);
         state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);state->modal_active=true;}}
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
         return true;

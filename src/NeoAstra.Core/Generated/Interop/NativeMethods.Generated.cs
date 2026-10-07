@@ -1924,6 +1924,14 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_set_bounds(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_rect_t arg1);
 
+        /// <summary>
+        /// Display pixels per logical unit of the display the window is on: 1.5 at 150 percent, 2 on a Retina display.
+        /// NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED reports a change, with the scale in thousandths as its value.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_scale_factor")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_scale_factor(NativeMethods.neoastra_window_t arg0, double* arg1);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_minimum_size")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_get_minimum_size(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_size_t* arg1);
