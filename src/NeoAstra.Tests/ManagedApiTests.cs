@@ -1226,6 +1226,95 @@ public sealed class ManagedApiTests
         }
     }
 
+    [TestMethod]
+    public async Task WindowState_LeavingFullscreenGivesTheStateThatWasAskedForWhenDevelopmentLibraryIsAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            var run = RunStaAsync(() => NeoApplication.Run(
+                new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoAstra window state test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                },
+                async application =>
+                {
+                    var normal = new NeoRect(120, 90, 640, 420);
+                    // The frame of a window changes with its title bar, and a window goes back to the placement it had
+                    // before it was fullscreen, which may be the maximized one.
+                    foreach (var style in new[] { NeoWindowTitleBarStyle.Default, NeoWindowTitleBarStyle.Overlay, NeoWindowTitleBarStyle.Hidden })
+                    foreach (var before in new[] { NeoWindowState.Normal, NeoWindowState.Maximized })
+                    foreach (var after in new[] { NeoWindowState.Normal, NeoWindowState.Maximized })
+                    {
+                        var name = $"{style}, from {before} to {after}";
+                        var options = new NeoWindowOptions
+                        {
+                            StartupLocation = NeoWindowStartupLocation.Manual, X = normal.X, Y = normal.Y, Width = normal.Width, Height = normal.Height,
+                            TitleBar = new NeoWindowTitleBar(style),
+                        };
+                        await using var window = application.CreateWindow(options);
+                        var states = new List<NeoWindowState>();
+                        window.StateChanged += (_, args) => states.Add(args.NewState);
+                        window.Show();
+                        window.State = before;
+                        window.State = NeoWindowState.Fullscreen;
+                        Assert.AreEqual(NeoWindowState.Fullscreen, window.State, name);
+                        states.Clear();
+
+                        // The window used to keep saying that it was fullscreen, or to come back maximized when it was
+                        // asked to be normal, depending on its title bar and on the state it had before.
+                        window.State = after;
+                        Assert.AreEqual(after, window.State, name);
+                        CollectionAssert.AreEqual(new[] { after }, states, name + ": " + string.Join(", ", states));
+                        if (after == NeoWindowState.Maximized)
+                        {
+                            Assert.AreNotEqual(normal.Size, window.ClientSize, name);
+                            window.State = NeoWindowState.Normal;
+                            Assert.AreEqual(NeoWindowState.Normal, window.State, name);
+                        }
+
+                        AssertWindowBounds(window, normal, name);
+                    }
+
+                    // A hidden window leaves the state without being shown, and has the state it was asked for when it is shown.
+                    foreach (var after in new[] { NeoWindowState.Normal, NeoWindowState.Maximized })
+                    {
+                        var name = $"hidden, to {after}";
+                        await using var window = application.CreateWindow(new NeoWindowOptions { StartupLocation = NeoWindowStartupLocation.Manual, X = normal.X, Y = normal.Y, Width = normal.Width, Height = normal.Height });
+                        var hwnd = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).GetWin32Hwnd();
+                        window.Show();
+                        window.State = NeoWindowState.Fullscreen;
+                        window.Hide();
+                        window.State = after;
+                        Assert.IsFalse(IsWindowVisible(hwnd), name);
+                        Assert.AreEqual(after, window.State, name);
+                        window.Show();
+                        Assert.IsTrue(IsWindowVisible(hwnd), name);
+                        Assert.AreEqual(after, window.State, name);
+                        window.State = NeoWindowState.Normal;
+                        AssertWindowBounds(window, normal, name);
+                    }
+
+                    application.Shutdown(0);
+                }));
+
+            Assert.AreEqual(0, await run.WaitAsync(TimeSpan.FromSeconds(30)));
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
+        }
+    }
+
     private static void AssertWindowBounds(NeoWindow window, NeoRect expected, string message)
     {
         Assert.AreEqual(expected.Size, window.ClientSize, message);
@@ -1322,6 +1411,10 @@ public sealed class ManagedApiTests
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(nint window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(nint window);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

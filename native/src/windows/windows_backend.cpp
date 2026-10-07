@@ -33,6 +33,7 @@ struct windows_app { HWND dispatcher{}; bool owns_com{}; std::vector<neoastra_de
 struct windows_window {
     HWND hwnd{};
     bool fullscreen{};
+    bool leaving_fullscreen{}; // The sizes a window passes through on its way out of the fullscreen state are not states of its own.
     DWORD restored_style{};
     WINDOWPLACEMENT restored_placement{};
     neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL};
@@ -1385,9 +1386,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             const auto state = native && native->fullscreen ? NEOASTRA_WINDOW_FULLSCREEN
                              : wparam == SIZE_MINIMIZED ? NEOASTRA_WINDOW_MINIMIZED
                              : wparam == SIZE_MAXIMIZED ? NEOASTRA_WINDOW_MAXIMIZED : NEOASTRA_WINDOW_NORMAL;
-            const auto state_changed = native && native->reported_state != state;
-            if (native) native->reported_state = state;
-            { std::lock_guard lock(window->state_mutex); window->bounds.width = LOWORD(lparam); window->bounds.height = HIWORD(lparam);window->state=state; }
+            // A window that leaves the fullscreen state says which state it reached once it is there.
+            const auto settled = !native || !native->leaving_fullscreen;
+            const auto state_changed = settled && native && native->reported_state != state;
+            if (settled && native) native->reported_state = state;
+            { std::lock_guard lock(window->state_mutex); window->bounds.width = LOWORD(lparam); window->bounds.height = HIWORD(lparam);if(settled)window->state=state; }
             for (auto* view : window->views) if (view && view->fill_parent) neo_platform_view_set_bounds(view);
             layout_title_bar(window);
             neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_RESIZED, window->id);
@@ -1639,8 +1642,10 @@ neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* w)
 neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
     auto* state = static_cast<windows_window*>(w->platform);
     if (!state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    // The window is told of each size it takes below and writes the state it then has over the one that was asked for.
+    const auto requested = w->state;
     const auto visible = IsWindowVisible(state->hwnd) != FALSE;
-    if (w->state == NEOASTRA_WINDOW_FULLSCREEN && !state->fullscreen) {
+    if (requested == NEOASTRA_WINDOW_FULLSCREEN && !state->fullscreen) {
         if (!visible) return NEOASTRA_OK;
         state->restored_style = static_cast<DWORD>(GetWindowLongW(state->hwnd, GWL_STYLE));
         state->restored_placement.length = sizeof(WINDOWPLACEMENT);
@@ -1658,18 +1663,36 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
         return NEOASTRA_ERROR_NATIVE_FAILURE;
     }
     if (state->fullscreen) {
+        // The window stops being fullscreen before it gets its frame and its placement back, so that its frame is computed
+        // for the title bar it has. On the way it is told of sizes that are not states of its own, and it says which state it
+        // reached when it is there. It used to keep saying that it was fullscreen where no later size told it otherwise, and
+        // to come back maximized, whatever it was asked for, where it had been maximized before.
+        state->fullscreen = false;
+        state->leaving_fullscreen = true;
+        // The placement has the bounds that the window goes back to. Its state is the one that is asked for now, which may
+        // be another one than the window had, and a hidden window stays hidden.
+        state->restored_placement.showCmd = !visible ? SW_HIDE
+                                          : requested == NEOASTRA_WINDOW_MINIMIZED ? SW_SHOWMINIMIZED
+                                          : requested == NEOASTRA_WINDOW_MAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
         SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style));
         SetWindowPlacement(state->hwnd, &state->restored_placement);
         SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        state->fullscreen = false;
-        // The frame above was computed while still fullscreen; recompute it so the caption is handed back to the client.
-        if (title_bar_extended(w, state->hwnd)) SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        state->leaving_fullscreen = false;
         layout_title_bar(w);
+        // A hidden window takes the state it was asked for when it is shown.
+        const auto reached = !visible ? requested
+                           : IsIconic(state->hwnd) ? NEOASTRA_WINDOW_MINIMIZED
+                           : IsZoomed(state->hwnd) ? NEOASTRA_WINDOW_MAXIMIZED : NEOASTRA_WINDOW_NORMAL;
+        const auto changed = state->reported_state != reached;
+        state->reported_state = reached;
+        { std::lock_guard lock(w->state_mutex); w->state = reached; }
+        if (changed) neo_emit_app(w->app, NEOASTRA_EVENT_WINDOW_STATE_CHANGED, w->id, nullptr, nullptr, reached);
+        return NEOASTRA_OK;
     }
     if (!visible) return NEOASTRA_OK;
-    const auto command = w->state == NEOASTRA_WINDOW_MINIMIZED ? SW_MINIMIZE
-                       : w->state == NEOASTRA_WINDOW_MAXIMIZED ? SW_MAXIMIZE : SW_RESTORE;
+    const auto command = requested == NEOASTRA_WINDOW_MINIMIZED ? SW_MINIMIZE
+                       : requested == NEOASTRA_WINDOW_MAXIMIZED ? SW_MAXIMIZE : SW_RESTORE;
     ShowWindow(state->hwnd, command);
     return NEOASTRA_OK;
 }
