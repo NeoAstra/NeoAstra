@@ -128,6 +128,15 @@ not get in its way. What follows from this design:
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
   the list of a `<select>` do not open, and features that ask for a user activation refuse.
+- **Focus in a window in the background** is told to the page by automation. A document without the
+  system focus (`document.hasFocus()` is `false`, as in a window that is hidden or behind another one)
+  gets no `focus`, `blur`, `focusin`, or `focusout` event from the engine when its active element
+  changes, and the element that was active when its window was deactivated was told `blur` while it
+  stays the active element. A page that goes by these events would then take what is typed for another
+  element, or for none. Automation remembers which element the page was last told has the focus, and
+  dispatches the missing events before the keys of `press_key` and `type_text`, before `fill`, and
+  after the press of a `click`, also when the page moved the focus in its own `mousedown` handler. A
+  document that has the focus hears from the engine alone.
 - **Typed text** goes through the keys of a US keyboard. The key events of a character carry the
   `code` and the key code of the key that types it, with `shiftKey` set for a capital letter and for
   the upper symbol of a key, and without events for the Shift key itself. A character that is on no
@@ -144,6 +153,9 @@ not get in its way. What follows from this design:
   EditContext is replaced. A `click` on an element that an editor keeps without area, as Monaco does at
   its cursor, lands on what the editor shows there. A read-only editor can take a text and ignore it
   without saying so, and a snapshot does not list a text that an editor hides from assistive technology.
+  Monaco gives what is typed or pasted to the editor that believes it has the focus, which it knows
+  from the focus events: in a window in the background, the events that automation dispatches are what
+  sends the text to the editor that was clicked, and not to the one that had the focus before.
 - **Console messages** are those of the `console` methods, uncaught errors, unhandled rejections, and
   elements that fail to load. Messages that the engine writes itself, such as a content security policy
   violation, are not seen.
@@ -192,4 +204,5 @@ The `automation:` scenarios of the
 [conformance harness](building.md#browser-conformance-and-benchmarks) call every tool. They pass on
 Windows 11 with WebView2, on macOS 15 with WKWebView, and on Ubuntu 24.04 with WebKitGTK 2.52. The
 scenario for an element with an EditContext runs on WebView2 only, because WebKit has no EditContext.
+The scenario for the focus events runs in the hidden window of the harness, on every engine.
 The unit tests, which go further into each tool, drive a live browser on Windows only.

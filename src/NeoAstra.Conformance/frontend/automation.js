@@ -47,5 +47,15 @@
       draw();
     });
   }
+  // Two fields that know whether they have the focus from their focus and blur events alone, as an editor does to
+  // know where the text that is typed belongs. The second one takes the focus by itself when it is pressed.
+  const focus = { first: false, second: false, events: [] };
+  for (const name of ['first', 'second']) {
+    const field = $('focus-' + name);
+    field.addEventListener('focus', () => { focus[name] = true; focus.events.push('focus ' + name); });
+    field.addEventListener('blur', () => { focus[name] = false; focus.events.push('blur ' + name); });
+  }
+  $('focus-second').addEventListener('mousedown', e => e.currentTarget.focus());
+  window.focusState = () => ({ first: focus.first, second: focus.second, events: focus.events.splice(0) });
   console.info('fixture ready');
 })();

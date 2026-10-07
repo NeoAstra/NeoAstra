@@ -195,6 +195,40 @@ internal static partial class Program
                     Require(cleared == "\"\"", $"Filling with nothing did not clear the EditContext: {cleared}");
                 });
 
+                await RunAsync("focus events in a document without the focus", async () =>
+                {
+                    await driver.OpenFixtureAsync();
+                    // The window of this harness is hidden, as the one of an application that is driven in the background:
+                    // its document has no focus, and the engine may change the active element without telling the page.
+                    if (await driver.EvaluateAsync("() => document.hasFocus()") != "false") throw new ScenarioSkippedException("The document of the window has the focus.");
+                    var first = driver.Uid("textbox \"First focus field\"");
+                    var second = driver.Uid("textbox \"Second focus field\"");
+                    await driver.CallAsync("click", $$"""{"uid":"{{first}}"}""");
+                    var state = await driver.EvaluateAsync("() => focusState()");
+                    Require(state == """{"first":true,"second":false,"events":["focus first"]}""", $"The clicked field was not told once that it has the focus: {state}");
+
+                    // A window that is deactivated tells its active element that it lost the focus, and keeps it active.
+                    await driver.EvaluateAsync("() => { const field = document.getElementById('focus-first'); field.dispatchEvent(new FocusEvent('blur')); field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); focusState(); }");
+                    await driver.CallAsync("type_text", """{"text":"a"}""");
+                    state = await driver.EvaluateAsync("() => focusState()");
+                    Require(state == """{"first":true,"second":false,"events":["focus first"]}""", $"The active field was not told that it has the focus before the keys: {state}");
+
+                    // An element that a script made the active one, with or without an event from the engine.
+                    await driver.EvaluateAsync("() => { document.getElementById('focus-second').focus(); }");
+                    await driver.CallAsync("type_text", """{"text":"b"}""");
+                    state = await driver.EvaluateAsync("() => { const { first, second } = focusState(); return { first, second }; }");
+                    Require(state == """{"first":false,"second":true}""", $"The page was not told about the element that a script focused: {state}");
+
+                    // A field that focuses itself when it is pressed leaves nothing to do but to tell the other one.
+                    await driver.CallAsync("click", $$"""{"uid":"{{first}}"}""");
+                    state = await driver.EvaluateAsync("() => focusState()");
+                    Require(state == """{"first":true,"second":false,"events":["blur second","focus first"]}""", $"A click did not move the focus from one field to the other: {state}");
+                    await driver.CallAsync("click", $$"""{"uid":"{{second}}"}""");
+                    await driver.CallAsync("type_text", """{"text":"c"}""");
+                    state = await driver.EvaluateAsync("() => ({ ...focusState(), values: [document.getElementById('focus-first').value, document.getElementById('focus-second').value] })");
+                    Require(state == """{"first":false,"second":true,"events":["blur first","focus second"],"values":["a","bc"]}""", $"The field that focused itself did not take the focus from the other one: {state}");
+                });
+
                 await RunAsync("file upload through a file input", async () =>
                 {
                     await driver.OpenFixtureAsync();

@@ -208,5 +208,91 @@ internal static class AutomationFixture
             </script>
             </body></html>
             """,
+        // Two editors that know whether they have the focus from the focus and blur events of their element alone, as
+        // Monaco does, in a document that says whether it has the focus.
+        ["focus.html"] = """
+            <!doctype html>
+            <html lang="en">
+            <head>
+            <meta charset="utf-8">
+            <title>Focus fixture</title>
+            <style>
+              body { font: 14px sans-serif; margin: 16px; }
+              .editor { width: 320px; min-height: 22px; border: 1px solid #888; white-space: pre-wrap; font: 14px monospace; }
+            </style>
+            </head>
+            <body>
+            <h1>Focus</h1>
+            <div id="prompt" class="editor" role="textbox" aria-label="Prompt editor" tabindex="0"></div>
+            <div id="code" class="editor" role="textbox" aria-label="Code editor" tabindex="0"></div>
+            <script>
+              // A window in the background has a document without the focus: the engine then moves the active element
+              // without an event. The document says so here by itself, whichever window is in front on the machine that
+              // runs the tests.
+              let documentFocused = false;
+              document.hasFocus = () => documentFocused;
+              window.setDocumentFocus = value => { documentFocused = value; };
+
+              const editors = [];
+              const events = [];
+              // What is typed or pasted, and the keys of an editor, go to the editor that believes it has the focus,
+              // whichever element the event came from.
+              const focusedEditor = () => editors.find(editor => editor.focused);
+
+              function focusEditor(id, focusesItself) {
+                const element = document.getElementById(id);
+                const context = new EditContext();
+                element.editContext = context;
+                const editor = { id, text: '', start: 0, end: 0, focused: false };
+                editor.replace = inserted => {
+                  editor.text = editor.text.slice(0, editor.start) + inserted + editor.text.slice(editor.end);
+                  editor.start = editor.end = editor.start + inserted.length;
+                  element.textContent = editor.text;
+                };
+                for (const type of ['focus', 'blur', 'focusin', 'focusout']) {
+                  element.addEventListener(type, () => {
+                    events.push(type + ' ' + id);
+                    if (type === 'focus') editor.focused = true; else if (type === 'blur') editor.focused = false;
+                  });
+                }
+                // An editor that takes the focus by itself when it is pressed, and leaves nothing for the engine to do.
+                if (focusesItself) element.addEventListener('mousedown', e => { e.preventDefault(); element.focus(); });
+                element.addEventListener('keydown', e => {
+                  const target = focusedEditor(), command = e.ctrlKey || e.metaKey;
+                  if (command && e.key.toLowerCase() === 'a') { if (target) { target.start = 0; target.end = target.text.length; } }
+                  else if (!command && e.key === 'Backspace') { if (target) { if (target.start === target.end) target.start = Math.max(target.start - 1, 0); target.replace(''); } }
+                  else return;
+                  e.preventDefault();
+                });
+                element.addEventListener('paste', e => {
+                  events.push('paste ' + id);
+                  e.preventDefault();
+                  const target = focusedEditor();
+                  if (target) target.replace(e.clipboardData.getData('text/plain'));
+                });
+                context.addEventListener('textupdate', e => {
+                  events.push('textupdate ' + id);
+                  const target = focusedEditor();
+                  if (target) target.replace(e.text);
+                });
+                editors.push(editor);
+              }
+
+              focusEditor('prompt', false);
+              focusEditor('code', true);
+              // The events that the active element gets when its window is deactivated; it stays the active element.
+              window.deactivate = () => {
+                const active = document.activeElement;
+                active.dispatchEvent(new FocusEvent('blur'));
+                active.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+                window.dispatchEvent(new FocusEvent('blur'));
+              };
+              window.focusState = () => ({
+                active: document.activeElement.id, focused: editors.filter(editor => editor.focused).map(editor => editor.id),
+                prompt: editors[0].text, code: editors[1].text, events: events.splice(0),
+              });
+            </script>
+            </body></html>
+            """,
     };
 }

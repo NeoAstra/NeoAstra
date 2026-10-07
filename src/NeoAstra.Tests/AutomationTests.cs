@@ -631,6 +631,85 @@ public sealed class AutomationTests
     }
 
     [TestMethod]
+    public async Task InputFollowsTheActiveElementOfADocumentWithoutTheFocus()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/focus.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var prompt = driver.Uid("textbox \"Prompt editor\"");
+            var code = driver.Uid("textbox \"Code editor\"");
+
+            await driver.CallAsync("click", $$"""{"uid":"{{prompt}}"}""");
+            Assert.AreEqual("""{"active":"prompt","focused":["prompt"],"prompt":"","code":"","events":["focus prompt","focusin prompt"]}""", await driver.EvaluateAsync("() => focusState()"));
+
+            // A window that is deactivated tells its active element that it lost the focus, and keeps it as the active
+            // element. An editor that goes by the events then takes nothing, so it is told that it has the focus again
+            // before the keys, and before a text that replaces its own.
+            foreach (var (tool, arguments, events, text) in new[]
+            {
+                ("type_text", """{"text":"ab"}""", """["focus prompt","focusin prompt","textupdate prompt","textupdate prompt"]""", "ab"),
+                ("press_key", """{"key":"c"}""", """["focus prompt","focusin prompt","textupdate prompt"]""", "abc"),
+                ("press_key", """{"key":"Backspace"}""", """["focus prompt","focusin prompt"]""", "ab"),
+                ("fill", $$"""{"uid":"{{prompt}}","value":"one\n  two ("}""", """["focus prompt","focusin prompt","paste prompt"]""", "one\\n  two ("),
+            })
+            {
+                Assert.AreEqual("""{"active":"prompt","focused":[],"events":["blur prompt","focusout prompt"]}""",
+                    await driver.EvaluateAsync("() => { deactivate(); const { active, focused, events } = focusState(); return { active, focused, events }; }"), tool);
+                await driver.CallAsync(tool, arguments);
+                Assert.AreEqual($$"""{"active":"prompt","focused":["prompt"],"prompt":"{{text}}","code":"","events":{{events}}}""", await driver.EvaluateAsync("() => focusState()"), $"{tool} {arguments}");
+            }
+
+            // A script makes an element the active one without an event where the document has no focus. The page is
+            // told before the keys: the editor that had the focus loses it, and the active one takes the text.
+            await driver.EvaluateAsync("() => { document.getElementById('code').focus(); focusState(); }");
+            await driver.CallAsync("type_text", """{"text":"x"}""");
+            StringAssert.StartsWith(await driver.EvaluateAsync("() => focusState()"), """{"active":"code","focused":["code"],"prompt":"one\n  two (","code":"x",""");
+
+            // An editor that focuses itself when it is pressed leaves the engine nothing to do, and the other one, which
+            // had the focus, would never hear that it lost it: what is typed and filled in next went into that one.
+            await driver.CallAsync("click", $$"""{"uid":"{{prompt}}"}""");
+            Assert.AreEqual("""{"active":"prompt","focused":["prompt"],"prompt":"one\n  two (","code":"x","events":["blur code","focusout code","focus prompt","focusin prompt"]}""", await driver.EvaluateAsync("() => focusState()"));
+            await driver.CallAsync("click", $$"""{"uid":"{{code}}"}""");
+            Assert.AreEqual("""{"active":"code","focused":["code"],"prompt":"one\n  two (","code":"x","events":["blur prompt","focusout prompt","focus code","focusin code"]}""", await driver.EvaluateAsync("() => focusState()"));
+            await driver.CallAsync("type_text", """{"text":"Z"}""");
+            Assert.AreEqual("""{"active":"code","focused":["code"],"prompt":"one\n  two (","code":"xZ","events":["textupdate code"]}""", await driver.EvaluateAsync("() => focusState()"));
+            await driver.CallAsync("fill", $$"""{"uid":"{{code}}","value":"new\ntext"}""");
+            Assert.AreEqual("""{"active":"code","focused":["code"],"prompt":"one\n  two (","code":"new\ntext","events":["paste code"]}""", await driver.EvaluateAsync("() => focusState()"));
+
+            // A click on nothing that takes the focus leaves no active element, which the editor hears as well.
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("heading \"Focus\"")}}"}""");
+            Assert.AreEqual("""{"active":"","focused":[],"prompt":"one\n  two (","code":"new\ntext","events":["blur code","focusout code"]}""", await driver.EvaluateAsync("() => focusState()"));
+        });
+    }
+
+    [TestMethod]
+    public async Task ADocumentWithTheFocusIsToldNothingByAutomation()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/focus.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var prompt = driver.Uid("textbox \"Prompt editor\"");
+            await driver.CallAsync("click", $$"""{"uid":"{{prompt}}"}""");
+
+            // The engine tells a document that has the focus about it. What the page did with those events is its own
+            // business: an editor that was told otherwise is not told again, whatever the active element is.
+            await driver.EvaluateAsync("() => { setDocumentFocus(true); deactivate(); focusState(); }");
+            await driver.CallAsync("type_text", """{"text":"ab"}""");
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            await driver.CallAsync("fill", $$"""{"uid":"{{prompt}}","value":"filled"}""");
+            await driver.CallAsync("click", $$"""{"uid":"{{prompt}}"}""");
+            Assert.AreEqual("""{"active":"prompt","focused":[],"prompt":"","code":"","events":["textupdate prompt","textupdate prompt","paste prompt"]}""", await driver.EvaluateAsync("() => focusState()"));
+
+            // Once the document has no focus any more, the next input tells the editor.
+            await driver.EvaluateAsync("() => { setDocumentFocus(false); }");
+            await driver.CallAsync("type_text", """{"text":"c"}""");
+            Assert.AreEqual("""{"active":"prompt","focused":["prompt"],"prompt":"c","code":"","events":["focus prompt","focusin prompt","textupdate prompt"]}""", await driver.EvaluateAsync("() => focusState()"));
+        });
+    }
+
+    [TestMethod]
     public async Task ADialogStopsAnActionUntilItIsHandled()
     {
         await RunAsync(async driver =>

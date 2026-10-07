@@ -1269,25 +1269,104 @@
     fireMouse(target, 'mousemove', move);
   }
 
-  // Focuses an element. A document that does not have the system focus, such as one in a background or hidden
-  // window, moves its active element without telling the page, so the focus events are dispatched here in that case.
+  // ---- Focus ----
+
+  // A document that does not have the system focus, such as one in a background or hidden window, changes its active
+  // element without telling the page, and the element that was the active one when its window was deactivated was
+  // told that it lost the focus while it stays the active one. A page that goes by the events, as an editor does to
+  // know where the text that is typed belongs, is then out of step with the active element. What is kept for each
+  // document is the element that the page was last told has the focus, by the engine or from here.
+  const focusStates = new WeakMap();
+
+  // The element of a document that has the focus as the engine sees it, inside the shadow trees, or null when it is
+  // the body or nothing.
+  function focusedIn(doc) {
+    let active = doc.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    return active && active.nodeType === 1 && active !== doc.body && active !== doc.documentElement ? active : null;
+  }
+
+  function focusStateOf(doc) {
+    let state = focusStates.get(doc);
+    if (state) return state;
+    // A frame has an agent of its own, which has heard the events of its document from the start.
+    if (doc !== document) {
+      try {
+        const other = doc.defaultView && doc.defaultView[KEY];
+        if (other && typeof other.focusState === 'function') state = other.focusState();
+      } catch (error) { state = null; }
+    }
+    if (!state) {
+      // A document that has the focus was told about its active element by the engine.
+      state = { believed: typeof doc.hasFocus === 'function' && doc.hasFocus() ? focusedIn(doc) : null };
+      const heard = function (event) {
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+        const target = path.length ? path[0] : event.target;
+        if (!target || target.nodeType !== 1 || target.ownerDocument !== doc) return;
+        if (event.type === 'focus') state.believed = target;
+        else if (state.believed === target) state.believed = null;
+      };
+      // These events do not bubble; they are heard on their way down, before the page hears them, and the ones
+      // dispatched from here are heard as well.
+      const view = doc.defaultView || doc;
+      view.addEventListener('focus', heard, true);
+      view.addEventListener('blur', heard, true);
+    }
+    focusStates.set(doc, state);
+    return state;
+  }
+
+  function isFrame(element) {
+    return element.localName === 'iframe' || element.localName === 'frame';
+  }
+
+  function syncDocumentFocus(doc, moved) {
+    // The engine tells a document that has the focus by itself. A focus that was moved from here is told whatever
+    // the document says, unless the engine did: the page hears of it once.
+    if (!moved && (typeof doc.hasFocus !== 'function' || doc.hasFocus())) return;
+    const state = focusStateOf(doc);
+    const view = doc.defaultView || window;
+    const previous = state.believed;
+    let active = focusedIn(doc);
+    if (previous === active) return;
+    if (previous) {
+      state.believed = null;
+      if (previous.isConnected) {
+        previous.dispatchEvent(new view.FocusEvent('blur', { relatedTarget: active, composed: true }));
+        previous.dispatchEvent(new view.FocusEvent('focusout', { relatedTarget: active, bubbles: true, composed: true }));
+        // The page may have moved the focus as it heard.
+        active = focusedIn(doc);
+      }
+    }
+    if (!active || state.believed === active) return;
+    state.believed = active;
+    // The focus inside a frame is the business of its document: the element of the frame hears nothing.
+    if (isFrame(active)) return;
+    active.dispatchEvent(new view.FocusEvent('focus', { relatedTarget: previous, composed: true }));
+    active.dispatchEvent(new view.FocusEvent('focusin', { relatedTarget: previous, bubbles: true, composed: true }));
+  }
+
+  // Brings a page that has no system focus in step with its active element: the element that the page believes has
+  // the focus is told that it lost it, and the active one that it has it. It does this for a document and for the
+  // documents around its frame, and nothing where the engine has told the page already.
+  function syncFocus(doc, moved) {
+    for (let current = doc; current; moved = false) {
+      syncDocumentFocus(current, moved);
+      let frame = null;
+      try { frame = current.defaultView && current.defaultView.frameElement; } catch (error) { frame = null; }
+      current = frame ? frame.ownerDocument : null;
+    }
+  }
+
+  // Focuses an element, and tells the page where the engine does not.
   function focusElement(element) {
     const doc = element.ownerDocument;
-    const view = viewOf(element);
-    const previous = deepActiveElement(doc);
-    if (previous === element) return;
-    let notified = false;
-    const listener = function () { notified = true; };
-    element.addEventListener('focus', listener, true);
-    try { element.focus({ preventScroll: true }); } catch (error) { try { element.focus(); } catch (failure) { /* not focusable */ } }
-    element.removeEventListener('focus', listener, true);
-    if (notified || deepActiveElement(doc) !== element) return;
-    if (previous && previous !== doc.body && previous.isConnected) {
-      previous.dispatchEvent(new view.FocusEvent('blur', { relatedTarget: element, composed: true }));
-      previous.dispatchEvent(new view.FocusEvent('focusout', { relatedTarget: element, bubbles: true, composed: true }));
+    let moved = false;
+    if (deepActiveElement(doc) !== element) {
+      try { element.focus({ preventScroll: true }); } catch (error) { try { element.focus(); } catch (failure) { /* not focusable */ } }
+      moved = deepActiveElement(doc) === element;
     }
-    element.dispatchEvent(new view.FocusEvent('focus', { relatedTarget: previous, composed: true }));
-    element.dispatchEvent(new view.FocusEvent('focusin', { relatedTarget: previous, bubbles: true, composed: true }));
+    syncFocus(doc, moved);
   }
 
   function focusForPress(target) {
@@ -1298,13 +1377,20 @@
     if (active && active !== target.ownerDocument.body && typeof active.blur === 'function') active.blur();
   }
 
+  // Presses the button on a target. The focus goes where the press sends it, unless the page keeps the press for
+  // itself; a page that does may have moved the focus in its own handler, as an editor does.
+  function pressTarget(target, down) {
+    if (fireMouse(target, 'mousedown', down)) focusForPress(target);
+    syncFocus(target.ownerDocument);
+  }
+
   // A full click at a point, sent to whatever is on top there, as a real pointer would.
   function clickTarget(target, point, count) {
     movePointer(target, point);
     for (let click = 1; click <= count; click++) {
       const down = mouseInit(target, point, { detail: click, buttons: 1 });
       firePointer(target, 'pointerdown', down);
-      if (fireMouse(target, 'mousedown', down)) focusForPress(target);
+      pressTarget(target, down);
       const up = mouseInit(target, point, { detail: click });
       firePointer(target, 'pointerup', up);
       fireMouse(target, 'mouseup', up);
@@ -1867,6 +1953,8 @@
 
   // Presses and releases a key, and returns whether the page took the key for itself by canceling its keydown.
   function pressOne(definition) {
+    // The keys go to the active element, which the page of a window in the background may not know to have the focus.
+    syncFocus(keyTarget().ownerDocument);
     let target = keyTarget();
     // The engine gives the keys pressed inside an element with an EditContext to that element, which it focuses first.
     const host = editContextHost(target);
@@ -1982,7 +2070,7 @@
     movePointer(origin, from);
     const down = mouseInit(origin, from, { detail: 1, buttons: 1 });
     firePointer(origin, 'pointerdown', down);
-    if (fireMouse(origin, 'mousedown', down)) focusForPress(origin);
+    pressTarget(origin, down);
 
     const draggable = isDraggable(origin);
     const dataTransfer = createDataTransfer(viewOf(source));
@@ -2401,6 +2489,12 @@
     drainFrame: function () {
       return { documentId: documentId, console: consoleEntries.splice(0), network: takeNetwork() };
     },
+
+    // What this document was last told about the focus, for the agent of the document around its frame, which is the
+    // one that acts on its elements.
+    focusState: function () {
+      return focusStateOf(document);
+    },
   };
 
   try { Object.defineProperty(window, KEY, { value: agent, enumerable: false, configurable: false, writable: false }); }
@@ -2409,5 +2503,6 @@
   try { installConsoleCapture(); } catch (error) { /* the page keeps its console */ }
   try { installNetworkCapture(); } catch (error) { /* the page keeps its network functions */ }
   try { installNavigationIntent(); } catch (error) { /* the host then learns of a navigation from the engine alone */ }
+  try { focusStateOf(document); } catch (error) { /* the page is then told about the focus from what is active alone */ }
 })();
 //# sourceURL=neoastra-automation-agent.js
