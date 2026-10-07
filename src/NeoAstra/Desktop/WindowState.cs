@@ -6,11 +6,11 @@ using System.Text.Json.Serialization;
 
 namespace NeoAstra.Desktop.WindowState;
 
-/// <summary>Contains portable persisted normal window placement in logical desktop units.</summary>
-/// <param name="NormalBounds">Last normal bounds.</param>
+/// <summary>Contains the persisted placement of a window, in the units its window counts in.</summary>
+/// <param name="NormalBounds">Last normal bounds: the position and the client size that <see cref="NeoWindow.Position"/> and <see cref="NeoWindow.ClientSize"/> report and accept.</param>
 /// <param name="State">Last effective state.</param>
 /// <param name="DisplayId">Stable-in-session display affinity hint.</param>
-/// <param name="DisplayScaleFactor">Scale when saved.</param>
+/// <param name="DisplayScaleFactor">The <see cref="NeoWindow.ScaleFactor"/> of the window when it was saved.</param>
 /// <param name="WasVisible">Optional saved visibility.</param>
 public sealed record NeoWindowPlacement(NeoRect NormalBounds, NeoWindowState State, string? DisplayId, double DisplayScaleFactor, bool? WasVisible);
 
@@ -83,20 +83,46 @@ public sealed class NeoJsonWindowStateStore : INeoWindowStateStore
 public static class NeoWindowStateRestore
 {
     /// <summary>Restores a safe placement. Minimized state is normalized by default.</summary>
+    /// <param name="saved">The placement that was saved.</param>
+    /// <param name="displays">The displays there are now.</param>
+    /// <param name="restoreMinimized">Whether a window that was saved minimized comes back minimized.</param>
+    /// <returns>The placement to give the window, in the units of <paramref name="saved"/>.</returns>
+    /// <remarks>
+    /// The window keeps the size its content had. Where a window is counted in logical units, on macOS and with GTK, that
+    /// is the saved size on every display. Where it is counted in the pixels of its display, on Windows, the size follows
+    /// the scale of the display that the window comes back on, and the work areas, which a display snapshot carries in
+    /// logical units, are compared with the window in those pixels.
+    /// </remarks>
     public static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreMinimized = false)
+        => Clamp(saved, displays, restoreMinimized, OperatingSystem.IsWindows());
+
+    internal static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreMinimized, bool countsInDisplayPixels)
     {
         NeoJsonWindowStateStore.ValidatePlacement(saved); ArgumentNullException.ThrowIfNull(displays);
         if (displays.Count == 0) return saved with { State = saved.State == NeoWindowState.Minimized && !restoreMinimized ? NeoWindowState.Normal : saved.State };
         if (displays.Any(static value => value.WorkArea.Width <= 0 || value.WorkArea.Height <= 0 || !double.IsFinite(value.ScaleFactor) || value.ScaleFactor is < 0.25 or > 16)) throw new ArgumentException("A display snapshot is malformed.", nameof(displays));
-        var display = displays.FirstOrDefault(value => value.Id == saved.DisplayId) ?? displays.OrderByDescending(value => IntersectionArea(saved.NormalBounds, value.WorkArea)).ThenByDescending(static value => value.IsPrimary).First();
-        var work = display.WorkArea;
-        var ratio = saved.DisplayScaleFactor / display.ScaleFactor;
+        var display = displays.FirstOrDefault(value => value.Id == saved.DisplayId) ?? displays.OrderByDescending(value => IntersectionArea(saved.NormalBounds, WorkArea(value, countsInDisplayPixels))).ThenByDescending(static value => value.IsPrimary).First();
+        var work = WorkArea(display, countsInDisplayPixels);
+        // A logical unit is the same on every display; a pixel is worth what the scale of its display says.
+        var ratio = countsInDisplayPixels ? display.ScaleFactor / saved.DisplayScaleFactor : 1d;
         var width = (int)Math.Clamp(Math.Round(saved.NormalBounds.Width * ratio), Math.Min(100, work.Width), work.Width);
         var height = (int)Math.Clamp(Math.Round(saved.NormalBounds.Height * ratio), Math.Min(100, work.Height), work.Height);
         var x = (int)Math.Clamp((long)saved.NormalBounds.X, work.X, (long)work.X + work.Width - width);
         var y = (int)Math.Clamp((long)saved.NormalBounds.Y, work.Y, (long)work.Y + work.Height - height);
         var state = saved.State == NeoWindowState.Minimized && !restoreMinimized ? NeoWindowState.Normal : saved.State;
         return new(new(x, y, width, height), state, display.Id, display.ScaleFactor, saved.WasVisible);
+    }
+
+    // The work area of a display in the units that its windows are counted in.
+    private static NeoRect WorkArea(SystemInfo.NeoDisplaySnapshot display, bool countsInDisplayPixels)
+    {
+        var area = display.WorkArea;
+        if (!countsInDisplayPixels) return area;
+        var scale = display.ScaleFactor;
+        int left = Pixels(area.X * scale), top = Pixels(area.Y * scale);
+        return new(left, top, Math.Max(1, Pixels(((long)area.X + area.Width) * scale) - left), Math.Max(1, Pixels(((long)area.Y + area.Height) * scale) - top));
+
+        static int Pixels(double value) => (int)Math.Clamp(Math.Round(value), int.MinValue / 2, int.MaxValue / 2);
     }
 
     private static long IntersectionArea(NeoRect left, NeoRect right)

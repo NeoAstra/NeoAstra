@@ -783,6 +783,110 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void WindowStateKeepsTheSizeOfAWindowWhateverTheScaleOfItsDisplay()
+    {
+        static NeoDisplaySnapshot Display(string id, NeoRect bounds, double scale, bool primary = true) => new(id, bounds, new NeoRect(bounds.X, bounds.Y, bounds.Width, bounds.Height - 48), scale, primary, null, null);
+        static NeoWindowPlacement Saved(NeoRect bounds, double scale) => new(bounds, NeoWindowState.Normal, null, scale, true);
+
+        // A window counted in logical units, as on macOS and with GTK, has the same size on every display. The size used
+        // to be scaled by the scale saved with the window over the scale of the display, and the saved one was always 1
+        // on those platforms: a window came back at half its size on a display with two pixels for each unit.
+        var retina = Display("retina", new NeoRect(0, 0, 1440, 900), 2);
+        foreach (var savedScale in new[] { 1d, 2d })
+        {
+            var logical = NeoWindowStateRestore.Clamp(Saved(new NeoRect(200, 100, 800, 600), savedScale), [retina], restoreMinimized: false, countsInDisplayPixels: false);
+            Assert.AreEqual(new NeoRect(200, 100, 800, 600), logical.NormalBounds, $"saved at {savedScale}");
+            Assert.AreEqual(2d, logical.DisplayScaleFactor);
+        }
+
+        // A window counted in the pixels of its display, as on Windows, is compared with the displays in those pixels: at
+        // 150 percent a display of 3840 by 2160 pixels is 2560 by 1440 logical units, which is not where its windows end.
+        var scaled = Display("scaled", new NeoRect(0, 0, 2560, 1440), 1.5);
+        var pixels = NeoWindowStateRestore.Clamp(Saved(new NeoRect(2400, 1000, 1200, 900), 1.5), [scaled], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(2400, 1000, 1200, 900), pixels.NormalBounds);
+        var wide = NeoWindowStateRestore.Clamp(Saved(new NeoRect(0, 0, 3000, 1800), 1.5), [scaled], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(0, 0, 3000, 1800), wide.NormalBounds);
+        var beyond = NeoWindowStateRestore.Clamp(Saved(new NeoRect(3500, 2000, 1200, 900), 1.5), [scaled], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(3840 - 1200, 2088 - 900, 1200, 900), beyond.NormalBounds);
+
+        // On a display with another scale such a window keeps the size its content has, so it takes other pixels.
+        var plain = Display("plain", new NeoRect(0, 0, 1920, 1080), 1);
+        var smaller = NeoWindowStateRestore.Clamp(Saved(new NeoRect(100, 100, 1200, 900), 1.5), [plain], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(100, 100, 800, 600), smaller.NormalBounds);
+        Assert.AreEqual(1d, smaller.DisplayScaleFactor);
+        var larger = NeoWindowStateRestore.Clamp(Saved(new NeoRect(100, 100, 800, 600), 1), [scaled], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(100, 100, 1200, 900), larger.NormalBounds);
+
+        // The display a window is on is found in the same units: here the second display begins at pixel 3840.
+        var second = Display("second", new NeoRect(3840, 0, 1920, 1080), 1, primary: false);
+        var onSecond = NeoWindowStateRestore.Clamp(Saved(new NeoRect(4000, 100, 800, 600), 1), [scaled, second], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual("second", onSecond.DisplayId);
+        Assert.AreEqual(new NeoRect(4000, 100, 800, 600), onSecond.NormalBounds);
+        var onFirst = NeoWindowStateRestore.Clamp(Saved(new NeoRect(2700, 100, 900, 600), 1.5), [scaled, second], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual("scaled", onFirst.DisplayId);
+        Assert.AreEqual(new NeoRect(2700, 100, 900, 600), onFirst.NormalBounds);
+
+        // The public form counts as the windows of the platform it runs on do.
+        var here = NeoWindowStateRestore.Clamp(Saved(new NeoRect(100, 100, 1200, 900), 1.5), [scaled]);
+        Assert.AreEqual(new NeoSize(1200, 900), here.NormalBounds.Size);
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowStateRestoresAWindowWhereItWasOnAScaledDisplay()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            // The windows of a thread that is aware of the scale of its display are counted in the pixels of the display, as in an
+            // application that declares that awareness. The other thread is told of a display in logical units and of a scale of 1.
+            foreach (var aware in new[] { true, false })
+            {
+                await RunStaAsync(() =>
+                {
+                    if (aware) SetThreadDpiAwarenessContext(-4);
+                    return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window state test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                    {
+                        var displays = NeoSystemInfoPlatform.ReadInitialDisplays();
+                        var primary = displays.First(static display => display.IsPrimary);
+                        var scale = primary.ScaleFactor;
+                        if (!aware) Assert.AreEqual(1d, scale);
+                        // Half of the work area, towards its far corner: on a display that scales, that is beyond the logical units of the display.
+                        var size = new NeoSize((int)(primary.WorkArea.Width * scale * 0.5), (int)(primary.WorkArea.Height * scale * 0.5));
+                        var position = new NeoPoint((int)((primary.WorkArea.X + primary.WorkArea.Width * 0.45) * scale), (int)((primary.WorkArea.Y + primary.WorkArea.Height * 0.4) * scale));
+                        var store = new NeoJsonWindowStateStore(Path.Combine(root, aware ? "aware" : "unaware"));
+                        await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Manual, X = position.X, Y = position.Y, Width = size.Width, Height = size.Height }))
+                        {
+                            Assert.AreEqual(scale, window.ScaleFactor);
+                            await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                        }
+
+                        var saved = await store.LoadAsync("main");
+                        Assert.IsNotNull(saved);
+                        Assert.AreEqual(new NeoRect(position.X, position.Y, size.Width, size.Height), saved.NormalBounds);
+                        Assert.AreEqual(scale, saved.DisplayScaleFactor);
+
+                        // What the next launch does: a window of some default size takes the placement back.
+                        for (var launch = 0; launch < 2; launch++)
+                        {
+                            await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 });
+                            await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                            Assert.IsNotNull(await controller.RestoreAsync(displays));
+                            Assert.AreEqual(size, window.ClientSize, $"launch {launch}, aware {aware}");
+                            Assert.AreEqual(position, window.Position, $"launch {launch}, aware {aware}");
+                        }
+
+                        application.Shutdown(0);
+                    });
+                });
+            }
+        }
+        catch (NeoAstraNativeLibraryException) { }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task WindowsSafeStorageRoundTripsWithoutPlaintextOnDisk()
     {
         if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Windows DPAPI verification requires Windows.");
@@ -825,6 +929,9 @@ public sealed class DesktopServicesTests
     private static string Subscribe(string id) => $"{{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"{id}\",\"event\":\"desktop.drag-drop.inbound\"}}";
 
 #pragma warning disable SYSLIB1054 // Test-only Win32 inspection does not need source-generated interop.
+    [DllImport("user32.dll")]
+    private static extern nint SetThreadDpiAwarenessContext(nint context);
+
     [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowEx(nint parent, nint after, string? className, string? windowName);
 
