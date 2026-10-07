@@ -159,6 +159,11 @@ internal static partial class Program
                     await driver.CallAsync("type_text", """{"text":"Ada"}""");
                     var replaced = await driver.EvaluateAsync("() => document.getElementById('name').value");
                     Require(replaced == "\"Ada\"", $"Typing over a selection did not replace it: {replaced}");
+                    // The keys of a typed text say which keys they are, as those of a keyboard do: a letter, a symbol, and the upper symbol of a key.
+                    await driver.EvaluateAsync("() => { window.typedKeys = []; document.getElementById('name').addEventListener('keydown', e => window.typedKeys.push([e.key, e.code, e.keyCode, e.shiftKey])); return true; }");
+                    await driver.CallAsync("type_text", """{"text":"a.?"}""");
+                    var keys = await driver.EvaluateAsync("() => window.typedKeys");
+                    Require(keys == """[["a","KeyA",65,false],[".","Period",190,false],["?","Slash",191,true]]""", $"The keys of a typed text did not say which keys they are: {keys}");
 
                     await driver.CallAsync("hover", $$"""{"uid":"{{driver.Uid("\"Hover me\"")}}"}""");
                     await driver.CallAsync("drag", $$"""{"from_uid":"{{driver.Uid("\"Drag me\"")}}","to_uid":"{{driver.Uid("\"Drop here\"")}}"}""");

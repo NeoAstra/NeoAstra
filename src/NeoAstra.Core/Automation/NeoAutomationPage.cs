@@ -259,6 +259,11 @@ public sealed class NeoAutomationPage
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>What the typing led to.</returns>
     /// <exception cref="NeoAutomationException">The submit key is not known, or a dialog is open.</exception>
+    /// <remarks>
+    /// The text is typed on the keys of a US keyboard: the key events of a character say which key types it, with Shift for a
+    /// capital letter and for the upper symbol of a key. A character that is on no key of that keyboard is typed with events
+    /// that name no key.
+    /// </remarks>
     public ValueTask<NeoAutomationActionResult> TypeTextAsync(string text, string? submitKey = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -266,6 +271,17 @@ public sealed class NeoAutomationPage
         return ActAsync("typeText", writer =>
         {
             writer.WriteString("text", text);
+            // The key of each character of the text that has one, for the page to hear which key types it.
+            writer.WriteStartObject("keys");
+            var written = new HashSet<char>();
+            foreach (var character in text)
+            {
+                if (!written.Add(character) || !NeoAutomationKeys.TryResolveCharacter(character, out var key)) continue;
+                writer.WritePropertyName(character.ToString());
+                key.Write(writer);
+            }
+
+            writer.WriteEndObject();
             if (submit is { } definition)
             {
                 writer.WritePropertyName("submitKey");

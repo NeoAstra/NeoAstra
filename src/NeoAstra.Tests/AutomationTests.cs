@@ -401,6 +401,88 @@ public sealed class AutomationTests
     }
 
     [TestMethod]
+    public async Task TypedCharactersCarryTheCodesOfTheirKeys()
+    {
+        // Keys of the main block of a US keyboard: the code and the key code of each, and the two characters that it types.
+        (string Code, int KeyCode, char Lower, char Upper)[] keys =
+        [
+            ("Backquote", 192, '`', '~'), ("Digit1", 49, '1', '!'), ("Digit2", 50, '2', '@'), ("Digit3", 51, '3', '#'), ("Digit4", 52, '4', '$'),
+            ("Digit5", 53, '5', '%'), ("Digit6", 54, '6', '^'), ("Digit7", 55, '7', '&'), ("Digit8", 56, '8', '*'), ("Digit9", 57, '9', '('),
+            ("Digit0", 48, '0', ')'), ("Minus", 189, '-', '_'), ("Equal", 187, '=', '+'), ("BracketLeft", 219, '[', '{'), ("BracketRight", 221, ']', '}'),
+            ("Backslash", 220, '\\', '|'), ("Semicolon", 186, ';', ':'), ("Quote", 222, '\'', '"'), ("Comma", 188, ',', '<'), ("Period", 190, '.', '>'),
+            ("Slash", 191, '/', '?'), ("KeyA", 65, 'a', 'A'), ("KeyZ", 90, 'z', 'Z'),
+        ];
+        // The space has a key as well, and the last character is on no key of that keyboard.
+        var text = string.Concat(keys.Select(static key => $"{key.Lower}{key.Upper}")) + " \u00e9";
+
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/automation.html"}""");
+            await driver.CallAsync("take_snapshot");
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("textbox \"Notes\"")}}"}""");
+            Assert.AreEqual("true", await driver.EvaluateAsync("""
+                () => {
+                  window.keys = [];
+                  for (const type of ['keydown', 'keypress', 'keyup']) {
+                    document.getElementById('notes').addEventListener(type, e => window.keys.push(
+                      { type: e.type, key: e.key, code: e.code, keyCode: e.keyCode, which: e.which, charCode: e.charCode, location: e.location, shift: e.shiftKey }));
+                  }
+                  return true;
+                }
+                """));
+
+            await driver.CallAsync("type_text", $$"""{"text":{{JsonSerializer.Serialize(text, AutomationTestsJsonContext.Default.String)}}}""");
+            using (var typed = JsonDocument.Parse(await driver.EvaluateAsync("() => document.getElementById('notes').value"))) Assert.AreEqual(text, typed.RootElement.GetString());
+
+            // A key that types a character says which key it is when it goes down and up, as a keyboard does: a page
+            // that reads the code or the key code of an event took a typed "." for no key at all. Shift is held for the
+            // upper character of a key, so that "?" is not taken for the "/" of the same key.
+            using (var recorded = JsonDocument.Parse(await driver.EvaluateAsync("() => window.keys")))
+            {
+                var events = recorded.RootElement;
+                Assert.AreEqual(text.Length * 3, events.GetArrayLength());
+                for (var index = 0; index < text.Length; index++)
+                {
+                    var character = text[index];
+                    var key = keys.FirstOrDefault(key => key.Lower == character || key.Upper == character);
+                    var (code, keyCode, shift) = character == ' ' ? ("Space", 32, false) : key.Code is null ? (string.Empty, 0, false) : (key.Code, key.KeyCode, key.Upper == character);
+                    var where = $"'{character}'";
+                    AssertKey(events[index * 3], "keydown", character, code, keyCode, 0, shift, where);
+                    AssertKey(events[index * 3 + 1], "keypress", character, code, character, character, shift, where);
+                    AssertKey(events[index * 3 + 2], "keyup", character, code, keyCode, 0, shift, where);
+                }
+            }
+
+            // press_key takes the names of Puppeteer, where "-" is the key of the numeric keypad: a text is typed on the
+            // main block. Where a name is the key of a character there, both tools press the same key.
+            Assert.AreEqual("true", await driver.EvaluateAsync("() => { window.keys.length = 0; return true; }"));
+            await driver.CallAsync("press_key", """{"key":"-"}""");
+            await driver.CallAsync("press_key", """{"key":"."}""");
+            using (var recorded = JsonDocument.Parse(await driver.EvaluateAsync("() => window.keys.filter(e => e.type === 'keydown')")))
+            {
+                var events = recorded.RootElement;
+                Assert.AreEqual(2, events.GetArrayLength());
+                Assert.AreEqual("NumpadSubtract", events[0].GetProperty("code").GetString());
+                Assert.AreEqual(109, events[0].GetProperty("keyCode").GetInt32());
+                Assert.AreEqual(3, events[0].GetProperty("location").GetInt32());
+                AssertKey(events[1], "keydown", '.', "Period", 190, 0, false, "press_key");
+            }
+
+            static void AssertKey(JsonElement actual, string type, char key, string code, int keyCode, int charCode, bool shift, string where)
+            {
+                Assert.AreEqual(type, actual.GetProperty("type").GetString(), where);
+                Assert.AreEqual(key.ToString(), actual.GetProperty("key").GetString(), $"{where} {type} key");
+                Assert.AreEqual(code, actual.GetProperty("code").GetString(), $"{where} {type} code");
+                Assert.AreEqual(keyCode, actual.GetProperty("keyCode").GetInt32(), $"{where} {type} keyCode");
+                Assert.AreEqual(keyCode, actual.GetProperty("which").GetInt32(), $"{where} {type} which");
+                Assert.AreEqual(charCode, actual.GetProperty("charCode").GetInt32(), $"{where} {type} charCode");
+                Assert.AreEqual(0, actual.GetProperty("location").GetInt32(), $"{where} {type} location");
+                Assert.AreEqual(shift, actual.GetProperty("shift").GetBoolean(), $"{where} {type} shiftKey");
+            }
+        });
+    }
+
+    [TestMethod]
     public async Task TypingGoesIntoAnElementThatTakesItsTextFromAnEditContext()
     {
         await RunAsync(async driver =>

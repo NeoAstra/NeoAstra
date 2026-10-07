@@ -1906,24 +1906,24 @@
     return {};
   }
 
-  function characterDefinition(character) {
-    const upper = character.toUpperCase();
-    let code = '';
-    let keyCode = 0;
-    if (/^[a-zA-Z]$/.test(character)) { code = 'Key' + upper; keyCode = upper.charCodeAt(0); }
-    else if (/^[0-9]$/.test(character)) { code = 'Digit' + character; keyCode = character.charCodeAt(0); }
-    else if (character === ' ') { code = 'Space'; keyCode = 32; }
-    else if (character === '\n' || character === '\r') return { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13, text: '' };
-    else if (character === '\t') return { key: 'Tab', code: 'Tab', keyCode: 9, text: '' };
-    return { key: character, code: code, keyCode: keyCode, charCode: character.codePointAt(0), text: character };
+  // The host says which key of a US keyboard types a character, and whether Shift is held for it. A character that is on
+  // none of those keys has no key to name: its events carry the character alone.
+  function characterDefinition(character, keys) {
+    if (character === '\n' || character === '\r') return { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13, text: '' };
+    if (character === '\t') return { key: 'Tab', code: 'Tab', keyCode: 9, text: '' };
+    if (keys && Object.prototype.hasOwnProperty.call(keys, character)) return keys[character];
+    return {
+      key: character, code: '', keyCode: 0, charCode: character.codePointAt(0), text: character,
+      shift: character !== character.toLowerCase() && character === character.toUpperCase(),
+    };
   }
 
   function typeText(options) {
     const text = String(options.text);
     // Iterating by code point keeps a surrogate pair together.
     for (const character of text) {
-      const definition = characterDefinition(character);
-      const shifted = definition.text && character !== character.toLowerCase() && character === character.toUpperCase();
+      const definition = characterDefinition(character, options.keys);
+      const shifted = !!definition.shift;
       if (shifted) modifiers.shift = true;
       try { pressOne(definition); } finally { if (shifted) modifiers.shift = false; }
     }

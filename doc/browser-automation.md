@@ -128,6 +128,12 @@ not get in its way. What follows from this design:
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
   the list of a `<select>` do not open, and features that ask for a user activation refuse.
+- **Typed text** goes through the keys of a US keyboard. The key events of a character carry the
+  `code` and the key code of the key that types it, with `shiftKey` set for a capital letter and for
+  the upper symbol of a key, and without events for the Shift key itself. A character that is on no
+  key of that keyboard is typed with events that name no key. `press_key` takes the key names of
+  Puppeteer, where `*`, `+`, `-`, and `/` are the keys of the numeric keypad; `type_text` types these
+  four on the main block of the keyboard.
 - **Editors on an EditContext**, such as Monaco in WebView2, are neither inputs nor editable content:
   the engine hands what is typed to an
   [EditContext](https://developer.mozilla.org/docs/Web/API/EditContext_API), and the editor draws it.

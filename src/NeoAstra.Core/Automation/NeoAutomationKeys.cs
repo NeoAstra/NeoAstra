@@ -6,7 +6,16 @@ using System.Text.Json;
 namespace NeoAstra;
 
 /// <summary>A key of the US keyboard layout as a keyboard event describes it.</summary>
-internal readonly record struct NeoAutomationKey(string Key, string Code, int KeyCode, int Location, string? Text)
+/// <param name="Key">The <c>key</c> of the event.</param>
+/// <param name="Code">The <c>code</c> of the event.</param>
+/// <param name="KeyCode">The legacy <c>keyCode</c> of the event.</param>
+/// <param name="Location">The <c>location</c> of the event.</param>
+/// <param name="Text">The text that the key types, or <see langword="null"/>.</param>
+/// <param name="Shift">
+/// Whether Shift is held for the text: it is the upper symbol of its key, or a capital letter. Only a typed text says so;
+/// a key combination names the keys that are held.
+/// </param>
+internal readonly record struct NeoAutomationKey(string Key, string Code, int KeyCode, int Location, string? Text, bool Shift = false)
 {
     internal bool IsModifier => Key is "Shift" or "Control" or "Alt" or "Meta";
 
@@ -23,6 +32,7 @@ internal readonly record struct NeoAutomationKey(string Key, string Code, int Ke
             writer.WriteNumber("charCode", char.ConvertToUtf32(Text, 0));
         }
 
+        if (Shift) writer.WriteBoolean("shift", true);
         writer.WriteEndObject();
     }
 }
@@ -34,6 +44,7 @@ internal readonly record struct NeoAutomationKey(string Key, string Code, int Ke
 internal static class NeoAutomationKeys
 {
     private static readonly Dictionary<string, NeoAutomationKey> Keys = Create();
+    private static readonly Dictionary<char, NeoAutomationKey> Characters = CreateCharacters();
 
     /// <summary>Splits a key combination such as <c>Control+Shift+R</c> into its key and the modifiers held with it.</summary>
     /// <exception cref="NeoAutomationException">The combination is empty, repeats a key, or names an unknown key.</exception>
@@ -84,6 +95,35 @@ internal static class NeoAutomationKeys
     }
 
     internal static bool IsKnown(string name) => Keys.ContainsKey(name);
+
+    /// <summary>Finds the key of the main block of the keyboard that types a character, with Shift for the upper symbol of a key.</summary>
+    /// <remarks>
+    /// The names of <see cref="Resolve"/> take <c>*</c>, <c>+</c>, <c>-</c>, and <c>/</c> for the keys of the numeric keypad, as
+    /// Puppeteer does. A text is typed on the main block, where each of the four is on a key as well.
+    /// </remarks>
+    internal static bool TryResolveCharacter(char character, out NeoAutomationKey key) => Characters.TryGetValue(character, out key);
+
+    private static Dictionary<char, NeoAutomationKey> CreateCharacters()
+    {
+        // The keys of the main block that type a character, by their code, each with its lower and its upper symbol.
+        (string Code, string Symbols)[] symbols =
+        [
+            ("Backquote", "`~"), ("Digit1", "1!"), ("Digit2", "2@"), ("Digit3", "3#"), ("Digit4", "4$"), ("Digit5", "5%"), ("Digit6", "6^"),
+            ("Digit7", "7&"), ("Digit8", "8*"), ("Digit9", "9("), ("Digit0", "0)"), ("Minus", "-_"), ("Equal", "=+"), ("BracketLeft", "[{"),
+            ("BracketRight", "]}"), ("Backslash", "\\|"), ("Semicolon", ";:"), ("Quote", "'\""), ("Comma", ",<"), ("Period", ".>"), ("Slash", "/?"),
+        ];
+        var characters = new Dictionary<char, NeoAutomationKey> { [' '] = Keys["Space"] };
+        foreach (var (code, pair) in symbols) Add(code, pair[0], pair[1]);
+        for (var letter = 'a'; letter <= 'z'; letter++) Add("Key" + char.ToUpperInvariant(letter), letter, char.ToUpperInvariant(letter));
+        return characters;
+
+        void Add(string code, char lower, char upper)
+        {
+            var key = Keys[code];
+            characters[lower] = key with { Key = lower.ToString(), Text = lower.ToString() };
+            characters[upper] = key with { Key = upper.ToString(), Text = upper.ToString(), Shift = true };
+        }
+    }
 
     private static Dictionary<string, NeoAutomationKey> Create()
     {
