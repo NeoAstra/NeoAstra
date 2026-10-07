@@ -133,6 +133,8 @@ awareness gets logical units and a `ScaleFactor` of 1, and the system scales wha
 `ScaleFactor` is known from the moment a window exists, and `ScaleFactorChanged` reports a change;
 with GTK it is a whole number. Display snapshots are in logical units, and
 `NeoWindowStateRestore.Clamp` compares a window with them in the units of the window.
+On Windows a minimized window reports a position of -32000 by -32000 and a client size of 0 by 0, as
+Win32 does. `NeoWindowStateController` saves the bounds that such a window goes back to.
 
 With GTK the size of a window includes a title bar that the window draws itself. A GTK window that is
 on screen takes a size when it is laid out next: `ClientSize` returns the assigned value until then

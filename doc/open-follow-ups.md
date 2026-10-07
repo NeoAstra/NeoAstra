@@ -39,14 +39,23 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   GTK 4.14 in a WSL 2 desktop session and under Xvfb on the runners, where no window manager maximizes
   a window, and a user who drags an edge is stood in for by a size given through GTK
   (`test_window_reports_the_size_it_has` in `native/tests/linux_backend_tests.cpp`).
-- **Window state: the bounds of a maximized window are saved as its normal bounds.**
-  `NeoWindowStateController` takes every `BoundsChanged` for the normal bounds of its window
-  (`OnBoundsChanged` in `src/NeoAstra/Desktop/WindowState.cs`), also while the window is maximized or
-  fullscreen. A window that is closed maximized is then expected to come back maximized over a normal
-  size as large as its screen, and to stay that large when it leaves the maximized state. On Windows a
-  minimized window reports a client size of 0 by 0, which the store refuses, so that write is expected
-  to fail without a trace. Both follow from the source and have not been reproduced. To do: reproduce
-  them, then keep the bounds only while the state of the window is normal.
+- **Window state was run on Windows only.** `NeoWindowStateController` saves the bounds that a window
+  has in its normal state, and reads the window once it was left alone for its delay. That is what
+  keeps the normal bounds of a window that the user maximizes: Windows tells a window of its new
+  bounds before it tells it of its new state. It was run on Windows 11 with the commands that a title
+  bar sends (`WindowStateKeepsTheNormalBoundsOfAWindowThatIsNotInItsNormalState`). It was not run on
+  macOS and with GTK, where a change of state takes the platform some time. A window that is read on
+  the way there, because an earlier change started the delay or because the controller ends just
+  then, can show the state it goes to with the bounds it comes from, and that is what is saved until
+  its next change. Normal bounds that the backend reports, from the placement of Win32 and the
+  default size of a GTK window, would not depend on the timing. On Windows a window that the user
+  snaps to a side of its screen is in its normal state, so the snapped bounds are saved as its normal
+  bounds, where the system itself keeps the ones from before.
+- **Windows: a minimized window reports no size.** `Position` is -32000 by -32000 and `ClientSize` is
+  0 by 0 while a window is minimized, which is what `WM_MOVE` and `WM_SIZE` say
+  (`native/src/windows/windows_backend.cpp`). `NeoWindowStateController` leaves such bounds out. To
+  decide: whether the backend keeps reporting the bounds that the window goes back to while it is
+  minimized.
 - **Linux: a download may be reported once for each environment that shares its session.** The GTK
   backend connects a download handler to the network session of every environment it creates
   (`neo_platform_environment_create_async` in `native/src/linux/gtk_backend.cpp`). Environments of one
