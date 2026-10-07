@@ -1011,7 +1011,7 @@ Required portable properties:
 
 A window MUST NOT depend on a specific managed UI framework.
 
-Window coordinates exposed by the portable API MUST be logical units. The backend MUST translate to platform pixels and report scale-factor changes. Position requests MUST account for the selected monitor work area where possible, and platform constraints or compositor-controlled positioning MUST be documented through capabilities.
+Window coordinates exposed by the portable API MUST be in the units that the platform counts a window in: logical units on macOS and Linux, and on Windows the units that the system gives the process, which are display pixels for a process that declares awareness of display scaling and logical units for one that declares none. The backend MUST report the scale factor of a window from its creation and report scale-factor changes. Converting the Windows backend to logical units is an open follow-up. Position requests MUST account for the selected monitor work area where possible, and platform constraints or compositor-controlled positioning MUST be documented through capabilities.
 
 An owned window MUST remain associated with its owner for z-order, minimize and close behavior using the nearest platform semantics. NeoAstra MUST surface owner closure to managed code and MUST NOT leave an inaccessible modal or popup window alive. Modal behavior, if provided, SHOULD be asynchronous and MUST NOT require user code to start a nested event loop.
 

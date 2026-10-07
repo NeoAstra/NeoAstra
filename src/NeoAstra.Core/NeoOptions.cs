@@ -250,25 +250,26 @@ public sealed class NeoWindowOptions
     /// <summary>Gets or sets the initial title.</summary>
     public string Title { get; set; } = "NeoAstra";
 
-    /// <summary>Gets or sets the initial horizontal position.</summary>
+    /// <summary>Gets or sets the initial horizontal position, in the units of <see cref="NeoWindow.Position"/>.</summary>
     public int X { get; set; }
 
-    /// <summary>Gets or sets the initial vertical position.</summary>
+    /// <summary>Gets or sets the initial vertical position, in the units of <see cref="NeoWindow.Position"/>.</summary>
     public int Y { get; set; }
 
-    /// <summary>Gets or sets the initial client width.</summary>
+    /// <summary>Gets or sets the initial client width, in the units of <see cref="NeoWindow.ClientSize"/>.</summary>
+    /// <remarks>On Windows those are the pixels of the display for an application that is aware of display scaling: a width that is meant in logical units is multiplied by the scale of the display there.</remarks>
     public int Width { get; set; } = 800;
 
-    /// <summary>Gets or sets the initial client height.</summary>
+    /// <summary>Gets or sets the initial client height, in the units of <see cref="NeoWindow.ClientSize"/>.</summary>
     public int Height { get; set; } = 600;
 
     /// <summary>Gets or sets the initial placement policy.</summary>
     public NeoWindowStartupLocation StartupLocation { get; set; } = NeoWindowStartupLocation.Default;
 
-    /// <summary>Gets or sets the minimum client size. An empty value means no managed minimum.</summary>
+    /// <summary>Gets or sets the minimum client size, in the units of <see cref="NeoWindow.ClientSize"/>. An empty value means no managed minimum.</summary>
     public NeoSize MinimumClientSize { get; set; }
 
-    /// <summary>Gets or sets the maximum client size. An empty value means no managed maximum.</summary>
+    /// <summary>Gets or sets the maximum client size, in the units of <see cref="NeoWindow.ClientSize"/>. An empty value means no managed maximum.</summary>
     public NeoSize MaximumClientSize { get; set; }
 
     /// <summary>Gets or sets whether the window has normal platform decorations.</summary>

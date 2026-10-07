@@ -6,22 +6,47 @@ checks that have not been run. Remove an entry when it is done. What an applicat
 
 - **Windows ARM64 has not been run.** The `win-arm64` library is cross-built and packaged, and its
   native tests are skipped. No browser view was created on ARM64 hardware.
-- **Windows: a window is counted in the pixels of its display, and `ScaleFactor` is 1 until the scale
-  changes.** `NeoWindow.ClientSize`, `Position`, and the size limits are documented as logical units,
-  which is also what the specification asks of a backend. The Windows backend reports and takes what
-  Win32 does (`sync_bounds` and `neo_platform_window_set_bounds` in
-  `native/src/windows/windows_backend.cpp`): pixels of the display in a process whose manifest declares
-  per-monitor awareness, and scaled units in a process that declares none. It raises the scale-factor
-  event from `WM_DPICHANGED` only, so a window created on a display that scales keeps a `ScaleFactor`
-  of 1 until the scale changes; the macOS and GTK backends never raise the event. Seen on Windows 11 at
-  150 percent in a process with per-monitor awareness: a window with a `ClientSize` of 900 by 700 and
-  a `ScaleFactor` of 1 showed a page of 600 by 467 CSS pixels with a device pixel ratio of 1.5. This
-  is why `resize_page` of [browser automation](browser-automation.md) reads the scale from the page.
-  `NeoWindowStateController` saves `ScaleFactor` with a placement, and `NeoWindowStateRestore.Clamp`
-  scales the saved size by its ratio to the scale of the display, so a placement saved on such a display
-  is expected to come back at two thirds of its size. That follows from the source and has not been
-  reproduced. To decide: whether the backend converts to logical units or the documentation says
-  pixels. To do: report the scale of a window when it is created. Both change the Windows runtimes.
+- **Windows: a window is counted in pixels where the application is aware of display scaling.** The
+  specification asked for logical units on every platform, which is what `NeoWindow.ClientSize`,
+  `Position`, the size limits, and the sizes of `NeoWindowOptions` are on macOS and with GTK. The
+  Windows backend reports and takes what Win32 does (`sync_bounds`, `WM_SIZE`, `WM_GETMINMAXINFO`, and
+  `neo_platform_window_set_bounds` in `native/src/windows/windows_backend.cpp`): the pixels of the
+  display in a process that declares awareness, and logical units in a process that declares none. On
+  2026-10-07 this was kept and documented, with `ScaleFactor` reported from the creation of a window,
+  because converting changes the size of every window of an aware application. To do, in a version
+  that may break those: convert in the backend, together with the bounds of a view (`view_bounds`) and
+  the positions of a drop, which are in the same pixels. What goes by the pixels today:
+  `NeoAutomationPage.ResizeCoreAsync`, which takes the scale from the page on Windows,
+  `NeoWindowStateRestore.Clamp` with its `countsInDisplayPixels`, and the test
+  `WindowBounds_RoundTripClientSizeAndPositionWhenDevelopmentLibraryIsAvailable`. To settle first:
+  WebView2 gives a page the CSS pixels that cover its window, so a logical size has to become pixels
+  rounded down for the page to have that size; and displays with different scales have logical
+  coordinates that overlap or leave gaps, because a display snapshot divides each display by its own
+  scale, so a position needs a rule for the display it is on.
+- **Window sizes and scale were run at one scale.** `ScaleFactor` at the creation of a window, and a
+  placement that `NeoWindowStateController` saves and restores, were run on Windows 11 at 150 percent,
+  in a thread with per-monitor awareness and in one without. Not run: a window that moves between
+  displays with different scales (`WM_DPICHANGED`), other scales, and a restore onto a display with
+  another scale, which only the unit test
+  `WindowStateKeepsTheSizeOfAWindowWhateverTheScaleOfItsDisplay` covers, with made-up displays. A
+  placement that was saved before `ScaleFactor` was right carries a scale of 1: on Windows, in an
+  aware application on a display that scales, such a window comes back larger by that scale once. The
+  macOS backend reads `backingScaleFactor` and follows `windowDidChangeBackingProperties:`. The
+  conformance scenario "a window reports the scale of its display and the size it has" passes on the
+  `macos-15-intel` runner of the conformance workflow, where the scale of a window is the device pixel
+  ratio of its page and a maximized window reports its size; whether that display has two pixels for a
+  point is not known, and a change of scale was not run. The GTK backend was run at a scale of 1, with
+  GTK 4.14 in a WSL 2 desktop session and under Xvfb on the runners, where no window manager maximizes
+  a window, and a user who drags an edge is stood in for by a size given through GTK
+  (`test_window_reports_the_size_it_has` in `native/tests/linux_backend_tests.cpp`).
+- **Window state: the bounds of a maximized window are saved as its normal bounds.**
+  `NeoWindowStateController` takes every `BoundsChanged` for the normal bounds of its window
+  (`OnBoundsChanged` in `src/NeoAstra/Desktop/WindowState.cs`), also while the window is maximized or
+  fullscreen. A window that is closed maximized is then expected to come back maximized over a normal
+  size as large as its screen, and to stay that large when it leaves the maximized state. On Windows a
+  minimized window reports a client size of 0 by 0, which the store refuses, so that write is expected
+  to fail without a trace. Both follow from the source and have not been reproduced. To do: reproduce
+  them, then keep the bounds only while the state of the window is normal.
 - **Linux: a download may be reported once for each environment that shares its session.** The GTK
   backend connects a download handler to the network session of every environment it creates
   (`neo_platform_environment_create_async` in `native/src/linux/gtk_backend.cpp`). Environments of one
@@ -38,30 +63,16 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   [browser data and user-data roots](known-limitations.md#browser-data-and-user-data-roots). To decide: whether a host
   gets default directories of its own, for example from `NeoApplicationOptions.ApplicationName`, and
   what happens to the data already in the shared ones.
-- **Linux: a page does not load on the runner of the conformance workflow.** WebKitGTK starts its web
-  process in a bubblewrap sandbox, which needs unprivileged user namespaces, and Ubuntu 24.04
-  restricts those through AppArmor. On the Linux runner of the workflow, Ubuntu 24.04 under Xvfb, the
-  desktop smoke fixture passes and the browser conformance harness then aborts at its first page with
-  `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. The harness completes on Ubuntu 24.04
-  x64 in a WSL 2 desktop session with WebKitGTK 2.52 and the sandbox left as it is. The workflow now
-  lifts the restriction on its runner, with
-  `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the harness. To do: run the
-  workflow and see that the harness completes there. An Ubuntu 24.04 arm64 virtual machine, reached over SSH and under Xvfb, aborted with
-  `Failed to fully launch dbus-proxy` when it loaded a page, with or without `dbus-run-session`, and
-  the checks there ran with `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`; whether that had the same
-  cause is not known.
-- **Linux: `ClientSize` is the size a window was asked for, not the one it has.** The GTK backend
-  keeps the size it was last given and hands it to `gtk_window_set_default_size`
-  (`neo_platform_window_set_bounds` in `native/src/linux/gtk_backend.cpp`). It means to follow the
-  window through `notify::width` and `notify::height`, which a `GtkWindow` of GTK 4 does not have, so
-  `window_size_changed` is not expected to run. Seen with WebKitGTK 2.52 in a WSL 2 desktop session: a
-  window with a `ClientSize` of 1000 by 737 still reported that size when it was maximized and its page
-  was 3840 by 2051 CSS pixels, and a window given 6000 by 4037 reported that size while its page stayed
-  2123 CSS pixels high, the height of the screen less the title bar. `resize_page` therefore goes by
-  the sizes it gave a window and by what the page shows. Whether a window that the user resizes is
-  followed, and whether `BoundsChanged` is raised for it, was not checked. To do: follow
-  `notify::default-width` and `notify::default-height`, and a maximized or fullscreen window through
-  the size of its surface. That changes the Linux runtimes.
+- **Linux arm64: a page did not load in a virtual machine.** An Ubuntu 24.04 arm64 virtual machine,
+  reached over SSH and under Xvfb, aborted with `Failed to fully launch dbus-proxy` when it loaded a
+  page, with or without `dbus-run-session`, and the checks there ran with
+  `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`. The cause is not known. It may be the one that kept
+  the x64 runner of the conformance workflow, Ubuntu 24.04 under Xvfb, from loading a page: WebKitGTK
+  starts its web process in a bubblewrap sandbox, which needs unprivileged user namespaces, and
+  Ubuntu 24.04 restricts those through AppArmor, so the harness aborted at its first page with
+  `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. The workflow lifts the restriction
+  on its runner, with `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` before the
+  harness, and the harness completes there since (31 passed, 19 skipped on 2026-10-07).
 - **Linux: a command at the top level of a menu bar is dropped.** A GTK 4 menu bar
   (`GtkPopoverMenuBar`) shows the submenus of its model and nothing else. The menu presenter
   (`src/NeoAstra/Desktop/LinuxMenus.cs`) hands a command or a role item at the top level of an
@@ -77,25 +88,27 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   built from `15ab7e2` the scenario passes. It is the only check of the flags on Linux. To do: cover
   them in `native/tests/linux_backend_tests.cpp` the way `native/tests/macos_history_tests.mm` does on
   macOS, which needs a host where pages load.
-- **Automation: the size of a page was checked on one display scale, and not on macOS.** `resize_page`
-  takes a CSS pixel of a page for as many units of its window as the zoom of the view says on macOS
-  and Linux: the `magnification` of a WKWebView, the zoom level of a WebKitGTK view. The conformance
-  scenario "screenshots, coordinates, and resizing in a shown window" checks it with a page of 400 by
-  300 CSS pixels in a view zoomed to 200 percent. With that scenario, and with the one for an element
-  with an EditContext, the harness run with `--run --stress --timeout-seconds 30` completes on Windows
-  11 x64 with WebView2 (30 passed, 19 skipped) and on Ubuntu 24.04 x64 with WebKitGTK 2.52 in a WSL 2
-  desktop session (30 passed, 19 skipped; the EditContext scenario is one of the skipped, because
-  WebKit has no EditContext). It was not run on macOS. That `innerWidth` of a magnified WKWebView
+- **Automation: the size of a page was checked on one display scale.** `resize_page` takes a CSS pixel
+  of a page for as many units of its window as the zoom of the view says on macOS and Linux: the
+  `magnification` of a WKWebView, the zoom level of a WebKitGTK view. The conformance scenario
+  "screenshots, coordinates, and resizing in a shown window" checks it with a page of 400 by 300 CSS
+  pixels in a view zoomed to 200 percent. With that scenario, the one for an element with an
+  EditContext, and the one for the scale and the size of a window, the harness run with
+  `--run --stress --timeout-seconds 30` completes on Windows 11 x64 with WebView2 (31 passed, 19
+  skipped), on Ubuntu 24.04 x64 with WebKitGTK 2.52 in a WSL 2 desktop session (31 passed, 19 skipped;
+  the EditContext scenario is one of the skipped, because WebKit has no EditContext), and on the three
+  runners of the conformance workflow, where macOS ran it for the first time on 2026-10-07, on
+  `macos-15-intel` with WKWebView (31 passed, 20 skipped). That `innerWidth` of a magnified WKWebView
   shrinks by the magnification follows from the WebKit source, where
   `LocalFrameView::mapFromLayoutToCSSUnits` divides the size of the view by the page zoom and by the
-  scale of the frame. Where it does not, the size that the page shows after the first try still leads
-  `resize_page` to the next one. On Windows the harness is not aware of the scale of its display, so
+  scale of the frame; the scenario passes there, which does not tell whether the first try gave the
+  size or a later one. On Windows the harness is not aware of the scale of its display, so
   the unit test `ResizePageGivesThePageItsSizeWhereAWindowIsCountedInThePixelsOfItsDisplay` is what
   runs a window counted in pixels. It ran on a display at 150 percent. The scales of 100, 125, 175,
   200, and 250 percent were forced on WebView2 with `--force-device-scale-factor` in a throwaway host,
   and each page size from 300 to 420 CSS pixels asked for: all of them were shown, but for the sizes
-  of 4n + 1 CSS pixels at 125 percent, which no window size gave. To do: run the conformance workflow,
-  and the unit test on a display at another scale.
+  of 4n + 1 CSS pixels at 125 percent, which no window size gave. To do: run the unit test on a
+  display at another scale.
 - **macOS: `NavigationCompleted` can arrive before the module scripts of a page have run.** The Cocoa
   backend relays WKWebView's own notification; see the paragraph on `NavigationCompleted` under
   [backend capability differences](known-limitations.md#backend-capability-differences). To decide: whether the backend

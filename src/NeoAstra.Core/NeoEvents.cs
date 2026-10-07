@@ -136,7 +136,7 @@ public sealed class NeoWindowClosingEventArgs : EventArgs
     public bool Cancel { get; set; }
 }
 
-/// <summary>Provides data when a window's logical bounds change.</summary>
+/// <summary>Provides data when the bounds of a window change, in the units of <see cref="NeoWindow.ClientSize"/>.</summary>
 /// <param name="oldBounds">The previous bounds.</param>
 /// <param name="newBounds">The new bounds.</param>
 public sealed class NeoWindowBoundsChangedEventArgs(NeoRect oldBounds, NeoRect newBounds) : EventArgs
@@ -147,7 +147,7 @@ public sealed class NeoWindowBoundsChangedEventArgs(NeoRect oldBounds, NeoRect n
     public NeoRect NewBounds { get; } = newBounds;
 }
 
-/// <summary>Provides data when a window's logical position changes.</summary>
+/// <summary>Provides data when the position of a window changes, in the units of <see cref="NeoWindow.Position"/>.</summary>
 /// <param name="oldPosition">The previous position.</param>
 /// <param name="newPosition">The new position.</param>
 public sealed class NeoWindowPositionChangedEventArgs(NeoPoint oldPosition, NeoPoint newPosition) : EventArgs
@@ -158,7 +158,7 @@ public sealed class NeoWindowPositionChangedEventArgs(NeoPoint oldPosition, NeoP
     public NeoPoint NewPosition { get; } = newPosition;
 }
 
-/// <summary>Provides data when a window's logical client size changes.</summary>
+/// <summary>Provides data when the client size of a window changes, in the units of <see cref="NeoWindow.ClientSize"/>.</summary>
 /// <param name="oldSize">The previous client size.</param>
 /// <param name="newSize">The new client size.</param>
 public sealed class NeoWindowClientSizeChangedEventArgs(NeoSize oldSize, NeoSize newSize) : EventArgs

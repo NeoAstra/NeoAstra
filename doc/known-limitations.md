@@ -122,6 +122,23 @@ outside those limits is not clamped there as it is on Windows. The macOS convers
 contract and AppKit's bottom-left-origin frames is checked by the native ABI test, which passes on the
 macOS runners of the native workflow.
 
+`Position`, `ClientSize`, the size limits, and the position and size of `NeoWindowOptions` are in the
+units that the platform counts a window in. On macOS and with GTK those are logical units: the same
+on every display, and the size of a CSS pixel of a page at 100 percent zoom. On Windows they are the
+units that the system gives the process. An application whose manifest declares awareness of display
+scaling gets the pixels of the display, and `NeoWindow.ScaleFactor` of them make one logical unit: at
+150 percent a window with a `ClientSize` of 900 by 700 shows a page of 600 by 467 CSS pixels, and a
+size that is meant in logical units is multiplied by `ScaleFactor`. An application that declares no
+awareness gets logical units and a `ScaleFactor` of 1, and the system scales what it draws.
+`ScaleFactor` is known from the moment a window exists, and `ScaleFactorChanged` reports a change;
+with GTK it is a whole number. Display snapshots are in logical units, and
+`NeoWindowStateRestore.Clamp` compares a window with them in the units of the window.
+
+With GTK the size of a window includes a title bar that the window draws itself. A GTK window that is
+on screen takes a size when it is laid out next: `ClientSize` returns the assigned value until then
+and the size that the window has from then on, and `ClientSizeChanged` reports a size that the
+screen, a size limit, the state of the window, or the user gave it.
+
 ## Browser data and user-data roots
 
 `NeoEnvironmentOptions.UserDataRoot` names where an environment keeps cookies, local storage, IndexedDB,

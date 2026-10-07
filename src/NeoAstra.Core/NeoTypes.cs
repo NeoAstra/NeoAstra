@@ -392,12 +392,12 @@ public enum NeoCookieSameSite
     Strict,
 }
 
-/// <summary>Represents an integer point in logical units.</summary>
+/// <summary>Represents an integer point, in the units of the member that takes or returns it.</summary>
 /// <param name="X">The horizontal coordinate.</param>
 /// <param name="Y">The vertical coordinate.</param>
 public readonly record struct NeoPoint(int X, int Y);
 
-/// <summary>Represents an integer size in logical units.</summary>
+/// <summary>Represents an integer size, in the units of the member that takes or returns it.</summary>
 /// <param name="Width">The width.</param>
 /// <param name="Height">The height.</param>
 public readonly record struct NeoSize(int Width, int Height)
@@ -406,7 +406,7 @@ public readonly record struct NeoSize(int Width, int Height)
     public static NeoSize Empty => default;
 }
 
-/// <summary>Represents an integer rectangle in logical units.</summary>
+/// <summary>Represents an integer rectangle, in the units of the member that takes or returns it.</summary>
 /// <param name="X">The horizontal coordinate.</param>
 /// <param name="Y">The vertical coordinate.</param>
 /// <param name="Width">The width.</param>
