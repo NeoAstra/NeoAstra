@@ -465,6 +465,90 @@ internal static partial class Program
                 }
             });
 
+            await RunCaseAsync("a window reports the scale of its display and the size it has", async () =>
+            {
+                var window = application.CreateWindow(new NeoWindowOptions { Title = "NeoAstra window size conformance", Width = 480, Height = 360, IsVisible = false, ShowInTaskbar = false });
+                try
+                {
+                    // Both are known before the window is shown: the size is the one it was created with.
+                    var scale = window.ScaleFactor;
+                    Require(scale is >= 1 and <= 16, $"A new window reports the scale {scale}.");
+                    Require(window.ClientSize == new NeoSize(480, 360), $"A new window of 480 by 360 reports {window.ClientSize}.");
+
+                    await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window));
+                    window.Show();
+                    await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
+
+                    async ValueTask<(int Width, int Height, double Ratio)> PageAsync()
+                    {
+                        using var page = await EvaluateJsonAsync(view, "[innerWidth, innerHeight, devicePixelRatio]");
+                        return (page.RootElement[0].GetInt32(), page.RootElement[1].GetInt32(), page.RootElement[2].GetDouble());
+                    }
+
+                    // The page is as wide as the window. Only Windows counts a window in pixels of which a page may take several
+                    // for one of its own, and a window may be higher than its page by a title bar that it draws itself.
+                    async ValueTask<bool> PageFillsWindowAsync()
+                    {
+                        var page = await PageAsync();
+                        var client = window.ClientSize;
+                        var perPixel = OperatingSystem.IsWindows() ? window.ScaleFactor : 1;
+                        return page.Width > 0 && Math.Abs(client.Width / perPixel - page.Width) <= 1 && client.Height / perPixel - page.Height is >= -1 and <= 128;
+                    }
+
+                    async ValueTask RequirePageFillsWindowAsync(string when)
+                    {
+                        var deadline = Stopwatch.StartNew();
+                        while (!await PageFillsWindowAsync())
+                        {
+                            if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                            {
+                                var page = await PageAsync();
+                                throw new InvalidOperationException($"A window {when} reports {window.ClientSize} at the scale {window.ScaleFactor} while its page is {page.Width} by {page.Height}.");
+                            }
+
+                            await Task.Delay(50);
+                        }
+                    }
+
+                    await RequirePageFillsWindowAsync("that was shown");
+                    var shown = await PageAsync();
+                    Require(Math.Abs(shown.Ratio - window.ScaleFactor * view.ZoomFactor) < 0.01, $"A window reports the scale {window.ScaleFactor} while its page is drawn with {shown.Ratio} pixels for each of its own.");
+
+                    var sizes = new List<NeoSize>();
+                    window.ClientSizeChanged += (_, args) => { lock (sizes) sizes.Add(args.NewSize); };
+
+                    window.ClientSize = new NeoSize(520, 400);
+                    await RequirePageFillsWindowAsync("that was given 520 by 400");
+                    Require(window.ClientSize == new NeoSize(520, 400), $"A window that was given 520 by 400 reports {window.ClientSize}.");
+
+                    // A maximized window has a size that nobody asked for through the library. A desktop without a window manager
+                    // does not maximize a window, which then keeps its size.
+                    var before = window.ClientSize;
+                    var pageBefore = (await PageAsync()).Width;
+                    window.State = NeoWindowState.Maximized;
+                    var waited = Stopwatch.StartNew();
+                    while (waited.Elapsed < TimeSpan.FromSeconds(5) && (await PageAsync()).Width == pageBefore) await Task.Delay(50);
+                    await RequirePageFillsWindowAsync("that was maximized");
+                    var maximized = window.ClientSize;
+                    if (maximized != before)
+                    {
+                        bool reported;
+                        lock (sizes) reported = sizes.Contains(maximized);
+                        Require(reported, $"A window that was maximized to {maximized} did not report that size as a change.");
+                    }
+
+                    window.State = NeoWindowState.Normal;
+                    waited.Restart();
+                    while (waited.Elapsed < TimeSpan.FromSeconds(5) && window.ClientSize != before) await Task.Delay(50);
+                    await RequirePageFillsWindowAsync("that is no longer maximized");
+                    Require(window.ClientSize == before, $"A window that is no longer maximized reports {window.ClientSize}, and it was {before}.");
+                }
+                finally
+                {
+                    await window.DisposeAsync();
+                }
+            });
+
             await RunCaseAsync("rapid navigation cancellation and recovery", async () =>
             {
                 var window = CreateHiddenWindow("NeoAstra navigation cancellation conformance");
