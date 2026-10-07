@@ -887,6 +887,132 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowStateKeepsTheNormalBoundsOfAWindowThatIsNotInItsNormalState()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            await RunStaAsync(() => NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window state test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+            {
+                var displays = NeoSystemInfoPlatform.ReadInitialDisplays();
+                var store = new RecordingWindowStateStore(new NeoJsonWindowStateStore(root));
+                var delay = TimeSpan.FromMilliseconds(50);
+                var normal = new NeoRect(120, 90, 640, 420);
+
+                // What the store holds once a change had the time to be written.
+                async Task<NeoWindowPlacement> SavedAsync()
+                {
+                    await Task.Delay(400);
+                    var saved = await store.LoadAsync("main");
+                    Assert.IsNotNull(saved);
+                    return saved;
+                }
+
+                // The commands that the title bar and the taskbar send for the user. The window hears of its new bounds before
+                // it hears of its new state, which a state that the application asks for does not show.
+                static void Command(NeoWindow window, nuint command) => SendMessage(window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).GetWin32Hwnd(), 0x0112, command, 0);
+                const nuint minimize = 0xF020, maximize = 0xF030, restore = 0xF120;
+
+                // First launch: the user maximizes the window, minimizes it, and leaves.
+                await using (var window = application.CreateWindow(new NeoWindowOptions { StartupLocation = NeoWindowStartupLocation.Manual, X = normal.X, Y = normal.Y, Width = normal.Width, Height = normal.Height }))
+                {
+                    window.Show();
+                    await using var controller = new NeoWindowStateController(window, store, "main", delay);
+                    Command(window, maximize);
+                    Assert.AreEqual(NeoWindowState.Maximized, window.State);
+                    // The bounds of a maximized window used to be saved as the ones it goes back to.
+                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, window.ScaleFactor, true), await SavedAsync(), "maximized");
+
+                    // A minimized window has no size, which a store refuses: it goes back to the state it had, at its normal bounds.
+                    Command(window, minimize);
+                    Assert.AreEqual(NeoWindowState.Minimized, window.State);
+                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, window.ScaleFactor, true), await SavedAsync(), "minimized");
+                }
+
+                Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, 1, true), await store.LoadAsync("main"), "closed");
+
+                // Second launch: the window comes back maximized and stays so.
+                await using (var window = application.CreateWindow(new NeoWindowOptions { Width = 400, Height = 300 }))
+                {
+                    await using var controller = new NeoWindowStateController(window, store, "main", delay);
+                    Assert.IsNotNull(await controller.RestoreAsync(displays));
+                    window.Show();
+                    Assert.AreEqual(NeoWindowState.Maximized, window.State);
+                    Assert.AreEqual(normal, (await SavedAsync()).NormalBounds, "restored");
+                }
+
+                Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, 1, true), await store.LoadAsync("main"), "closed maximized");
+
+                // Third launch: the user leaves the maximized state, and the window has its normal bounds back.
+                await using (var window = application.CreateWindow(new NeoWindowOptions { Width = 400, Height = 300 }))
+                {
+                    await using var controller = new NeoWindowStateController(window, store, "main", delay);
+                    Assert.IsNotNull(await controller.RestoreAsync(displays));
+                    window.Show();
+                    Command(window, restore);
+                    Assert.AreEqual(NeoWindowState.Normal, window.State);
+                    Assert.AreEqual(normal, new NeoRect(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height));
+                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "no longer maximized");
+
+                    // The normal bounds follow the window while it is in its normal state.
+                    window.ClientSize = new NeoSize(700, 500);
+                    var resized = normal with { Width = 700, Height = 500 };
+                    Assert.AreEqual(resized, (await SavedAsync()).NormalBounds, "resized");
+
+                    window.State = NeoWindowState.Fullscreen;
+                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Fullscreen, null, 1, true), await SavedAsync(), "fullscreen");
+                    window.State = NeoWindowState.Normal;
+                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "no longer fullscreen");
+
+                    Command(window, minimize);
+                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "minimized from normal");
+                }
+
+                // The store was never handed a placement that it refuses.
+                Assert.IsTrue(store.Failures.IsEmpty, string.Join("; ", store.Failures.Select(static failure => failure.Message)));
+                Assert.IsTrue(store.Saved.All(static placement => placement.NormalBounds is { Width: > 0, Height: > 0, X: > -30000, Y: > -30000 }), string.Join("; ", store.Saved));
+                application.Shutdown(0);
+            }));
+        }
+        catch (NeoAstraNativeLibraryException) { }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowStateReportsAPlacementThatCouldNotBeSaved()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var logged = new ConcurrentQueue<NeoLogMessage>();
+        try
+        {
+            await RunStaAsync(() => NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window state test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit, LogCallback = logged.Enqueue }, async application =>
+            {
+                var store = new RecordingWindowStateStore(new FailingWindowStateStore());
+                await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false }))
+                {
+                    await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                    window.ClientSize = new NeoSize(700, 500);
+                    await Task.Delay(400);
+                    // A write that fails does not keep the next one from being tried.
+                    window.ClientSize = new NeoSize(720, 520);
+                    await Task.Delay(400);
+                }
+
+                // Two changes and the end of the controller: each write was tried, and each failure was said.
+                Assert.AreEqual(3, store.Failures.Count);
+                var reported = logged.Where(static message => message.Category == "window.state").ToArray();
+                Assert.AreEqual(3, reported.Length);
+                Assert.IsTrue(reported.All(static message => message.Level == NeoLogLevel.Error && message.Message.Contains("The disk is full.", StringComparison.Ordinal)));
+                application.Shutdown(0);
+            }));
+        }
+        catch (NeoAstraNativeLibraryException) { }
+    }
+
+    [TestMethod]
     public async Task WindowsSafeStorageRoundTripsWithoutPlaintextOnDisk()
     {
         if (!OperatingSystem.IsWindows()) Assert.Inconclusive("Windows DPAPI verification requires Windows.");
@@ -931,6 +1057,9 @@ public sealed class DesktopServicesTests
 #pragma warning disable SYSLIB1054 // Test-only Win32 inspection does not need source-generated interop.
     [DllImport("user32.dll")]
     private static extern nint SetThreadDpiAwarenessContext(nint context);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessage(nint window, uint message, nuint wide, nint value);
 
     [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowEx(nint parent, nint after, string? className, string? windowName);
@@ -1003,6 +1132,30 @@ public sealed class DesktopServicesTests
     {
         var path = Path.Combine(Path.GetTempPath(), "neoastra-desktop-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path); return path;
+    }
+
+    /// <summary>Keeps what a controller hands to a store, and what the store answers with an exception.</summary>
+    private sealed class RecordingWindowStateStore(INeoWindowStateStore inner) : INeoWindowStateStore
+    {
+        internal ConcurrentQueue<NeoWindowPlacement> Saved { get; } = new();
+
+        internal ConcurrentQueue<Exception> Failures { get; } = new();
+
+        public ValueTask<NeoWindowPlacement?> LoadAsync(string key, CancellationToken cancellationToken = default) => inner.LoadAsync(key, cancellationToken);
+
+        public async ValueTask SaveAsync(string key, NeoWindowPlacement placement, CancellationToken cancellationToken = default)
+        {
+            Saved.Enqueue(placement);
+            try { await inner.SaveAsync(key, placement, cancellationToken); }
+            catch (Exception exception) { Failures.Enqueue(exception); throw; }
+        }
+    }
+
+    private sealed class FailingWindowStateStore : INeoWindowStateStore
+    {
+        public ValueTask<NeoWindowPlacement?> LoadAsync(string key, CancellationToken cancellationToken = default) => ValueTask.FromResult<NeoWindowPlacement?>(null);
+
+        public ValueTask SaveAsync(string key, NeoWindowPlacement placement, CancellationToken cancellationToken = default) => ValueTask.FromException(new IOException("The disk is full."));
     }
 
     private sealed class StubPlugin(string id, IReadOnlyList<NeoPluginDependency>? dependencies = null) : INeoAstraPlugin

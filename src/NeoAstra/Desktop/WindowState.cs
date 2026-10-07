@@ -134,6 +134,20 @@ public static class NeoWindowStateRestore
 }
 
 /// <summary>Debounces atomic window-state writes and detaches deterministically.</summary>
+/// <remarks>
+/// <para>
+/// What is saved is the placement that the window goes back to. Its normal bounds are the bounds that the window has
+/// while it is in its normal state: a window that is maximized, fullscreen, or minimized keeps the ones it had before.
+/// Its state is the state of the window, or the one it had before it was minimized. A window that is not in its
+/// normal state when the controller first sees it has the bounds it then has for its normal bounds, until it is
+/// restored from a store or returns to its normal state.
+/// </para>
+/// <para>
+/// The window is read once it has been left alone for the delay, so that a change of state that takes the platform
+/// some time is over by then. A write that the store refuses is reported to the log of the application as an error
+/// of the category <c>window.state</c>, and the next change is written again.
+/// </para>
+/// </remarks>
 public sealed class NeoWindowStateController : IAsyncDisposable
 {
     private readonly object _sync = new();
@@ -142,7 +156,8 @@ public sealed class NeoWindowStateController : IAsyncDisposable
     private readonly string _key;
     private readonly TimeSpan _debounce;
     private readonly Timer _timer;
-    private NeoRect _normalBounds;
+    private NeoRect? _normalBounds;
+    private NeoWindowState _state;
     private bool _disposed;
     private Task _lastWrite = Task.CompletedTask;
 
@@ -153,9 +168,12 @@ public sealed class NeoWindowStateController : IAsyncDisposable
         _ = new NeoJsonWindowStateStoreValidator(key);
         _debounce = debounce ?? TimeSpan.FromMilliseconds(250);
         if (_debounce < TimeSpan.FromMilliseconds(50) || _debounce > TimeSpan.FromSeconds(10)) throw new ArgumentOutOfRangeException(nameof(debounce));
-        _window = window; _store = store; _key = key; _normalBounds = new(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height);
+        _window = window; _store = store; _key = key;
+        _normalBounds = Usable(new(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height));
+        _state = window.State is var state && state != NeoWindowState.Minimized ? state : NeoWindowState.Normal;
         _timer = new Timer(static state => ((NeoWindowStateController)state!).QueueWrite(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        window.BoundsChanged += OnBoundsChanged;
+        window.BoundsChanged += OnChanged;
+        window.StateChanged += OnChanged;
     }
 
     /// <summary>Loads and clamps state before a window is shown.</summary>
@@ -163,7 +181,13 @@ public sealed class NeoWindowStateController : IAsyncDisposable
     {
         var saved = await _store.LoadAsync(_key, cancellationToken).ConfigureAwait(false); if (saved is null) return null;
         var restored = NeoWindowStateRestore.Clamp(saved, displays);
-        await _window.Application.Dispatcher.InvokeAsync(() => { _window.Position = restored.NormalBounds.Position; _window.ClientSize = restored.NormalBounds.Size; _window.State = restored.State; if (restoreVisibility && restored.WasVisible == true) _window.Show(); }, cancellationToken).ConfigureAwait(false);
+        await _window.Application.Dispatcher.InvokeAsync(() =>
+        {
+            _window.Position = restored.NormalBounds.Position; _window.ClientSize = restored.NormalBounds.Size; _window.State = restored.State;
+            // A window that comes back in another state than the normal one never shows these bounds, and still goes back to them.
+            lock (_sync) { _normalBounds = restored.NormalBounds; _state = restored.State == NeoWindowState.Minimized ? NeoWindowState.Normal : restored.State; }
+            if (restoreVisibility && restored.WasVisible == true) _window.Show();
+        }, cancellationToken).ConfigureAwait(false);
         return restored;
     }
 
@@ -171,34 +195,52 @@ public sealed class NeoWindowStateController : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         lock (_sync) { if (_disposed) return; _disposed = true; _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); }
-        _window.BoundsChanged -= OnBoundsChanged;
+        _window.BoundsChanged -= OnChanged;
+        _window.StateChanged -= OnChanged;
         _timer.Dispose();
         QueueWrite(force: true);
         Task write; lock (_sync) write = _lastWrite;
         try { await write.ConfigureAwait(false); } catch { }
     }
 
-    private void OnBoundsChanged(object? sender, NeoWindowBoundsChangedEventArgs args)
+    // The window is read when it is written, not here: a window may hear of its new bounds before it hears of its new state.
+    private void OnChanged(object? sender, EventArgs args)
     {
-        lock (_sync) { if (_disposed) return; _normalBounds = args.NewBounds; _timer.Change(_debounce, Timeout.InfiniteTimeSpan); }
+        lock (_sync) { if (_disposed) return; _timer.Change(_debounce, Timeout.InfiniteTimeSpan); }
     }
 
     private void QueueWrite(bool force = false)
     {
-        NeoRect bounds;
-        lock (_sync) { if (_disposed && !force) return; bounds = _normalBounds; _lastWrite = _lastWrite.ContinueWith(_ => WriteAsync(bounds), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap(); }
+        lock (_sync) { if (_disposed && !force) return; _lastWrite = _lastWrite.ContinueWith(_ => WriteAsync(), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap(); }
     }
 
-    private async Task WriteAsync(NeoRect bounds)
+    private async Task WriteAsync()
     {
         try
         {
-            NeoWindowPlacement placement = null!;
-            await _window.Application.Dispatcher.InvokeAsync(() => placement = new(bounds, _window.State == NeoWindowState.Minimized ? NeoWindowState.Normal : _window.State, null, _window.ScaleFactor, _window.IsVisible)).ConfigureAwait(false);
-            await _store.SaveAsync(_key, placement).ConfigureAwait(false);
+            NeoWindowPlacement? placement = null;
+            await _window.Application.Dispatcher.InvokeAsync(() => placement = Observe()).ConfigureAwait(false);
+            if (placement is not null) await _store.SaveAsync(_key, placement).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) { }
+        catch (Exception exception) { _window.Application.ReportLifecycleFailure("window.state", exception, _window.Id); }
     }
+
+    // What the window goes back to, from what it is now. Runs on the UI thread.
+    private NeoWindowPlacement? Observe()
+    {
+        var state = _window.State;
+        var bounds = Usable(new(_window.Position.X, _window.Position.Y, _window.ClientSize.Width, _window.ClientSize.Height));
+        lock (_sync)
+        {
+            if (state == NeoWindowState.Normal && bounds is not null) _normalBounds = bounds;
+            if (state != NeoWindowState.Minimized) _state = state;
+            return _normalBounds is { } normal ? new(normal, _state, null, _window.ScaleFactor, _window.IsVisible) : null;
+        }
+    }
+
+    // A minimized window may report no size at all, as it does on Windows.
+    private static NeoRect? Usable(NeoRect bounds) => bounds.Width > 0 && bounds.Height > 0 ? bounds : null;
 
     private readonly struct NeoJsonWindowStateStoreValidator
     {
