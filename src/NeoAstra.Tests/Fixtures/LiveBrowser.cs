@@ -11,12 +11,21 @@ internal static class LiveBrowser
     internal const string Origin = "app://neoastra";
 
     /// <summary>Serves <paramref name="pages"/> from <c>app://neoastra/</c>, opens a window with one view, and runs the body.</summary>
+    /// <param name="pages">The files of the site, by their path.</param>
+    /// <param name="body">The test.</param>
+    /// <param name="viewOptions">The options of the view, or <see langword="null"/> for a view with the label <c>main</c>.</param>
+    /// <param name="timeout">How long the body may take, or <see langword="null"/> for a minute.</param>
+    /// <param name="perMonitorDpiAware">
+    /// Whether the window is one of an application that is aware of the scale of its display, which counts the window in
+    /// the pixels of the display. The test host is not such an application by itself.
+    /// </param>
     /// <remarks>The test is inconclusive off Windows and where the native runtime is not staged.</remarks>
     internal static async Task RunAsync(
         IReadOnlyDictionary<string, string> pages,
         Func<LiveBrowserSession, Task> body,
         NeoAstraOptions? viewOptions = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        bool perMonitorDpiAware = false)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -32,6 +41,8 @@ internal static class LiveBrowser
         {
             try
             {
+                // The windows that this thread creates are then sized for their monitor (per-monitor awareness, version 2).
+                if (perMonitorDpiAware) SetThreadDpiAwarenessContext(-4);
                 NeoApplication.Run(new NeoApplicationOptions { ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
                 {
                     try
@@ -42,6 +53,9 @@ internal static class LiveBrowser
                         await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                         {
                             CustomSchemes = [NeoCustomScheme.Application("app", new PageProvider(pages))],
+                            // WebView2 runs the views of one data folder in one browser process, which takes the windows
+                            // of one kind of awareness only: the others would be refused while that process lives.
+                            UserDataRoot = perMonitorDpiAware ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "per-monitor-dpi-aware") : null,
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions ?? new NeoAstraOptions { ViewLabel = "main" });
                         session = new LiveBrowserSession(application, environment, window, view, cancellation.Token);
@@ -63,6 +77,9 @@ internal static class LiveBrowser
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { Assert.Fail($"The live browser test timed out during {session?.Stage ?? "startup"}."); }
         catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The native runtime is not staged."); }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint SetThreadDpiAwarenessContext(nint context);
 
     private sealed class PageProvider(IReadOnlyDictionary<string, string> pages) : INeoResourceProvider
     {

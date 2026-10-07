@@ -32,6 +32,9 @@ public sealed class NeoAutomationPage
     private static readonly TimeSpan AnnouncedNavigationStartWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ActionNavigationTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan StableDomTimeout = TimeSpan.FromSeconds(3);
+    // How many sizes a window is given for the size of its page, and how long the page is given to take each one.
+    private const int MaximumResizeAttempts = 5;
+    private static readonly TimeSpan ResizeSettleTime = TimeSpan.FromMilliseconds(500);
 
     private readonly NeoAutomation _owner;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -375,48 +378,110 @@ public sealed class NeoAutomationPage
     }
 
     /// <summary>Resizes the window of the page so that the page has the given size.</summary>
-    /// <param name="width">The width of the page in logical units.</param>
-    /// <param name="height">The height of the page in logical units.</param>
+    /// <param name="width">The width of the page in CSS pixels.</param>
+    /// <param name="height">The height of the page in CSS pixels.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>A task that completes after the window was resized.</returns>
+    /// <remarks>
+    /// The window gets the size that the page needs on its display and at the zoom of its view. A window that cannot
+    /// take that size, because its screen ends or because it has a size it does not go below, leaves the page as near
+    /// to the size as it gets; so does a scale of the display or a zoom at which no size of the window comes to the
+    /// one asked for.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">A size is not positive.</exception>
     /// <exception cref="NeoAutomationException">The view is hosted by a window that NeoAstra does not own.</exception>
     public ValueTask ResizeAsync(int width, int height, CancellationToken cancellationToken = default)
+        => new(ResizeToAsync(width, height, cancellationToken).AsTask());
+
+    /// <summary>Resizes the window of the page as <see cref="ResizeAsync"/> does, and returns the size the page has afterwards.</summary>
+    /// <returns>The size of the page in CSS pixels, or <see langword="null"/> when the page does not say.</returns>
+    internal ValueTask<NeoSize?> ResizeToAsync(int width, int height, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
-        return new ValueTask(_owner.InvokeAsync(() => ExclusiveAsync(async () =>
-        {
-            ThrowIfClosed();
-            var window = View.OwnedWindow ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
-            if (window.State != NeoWindowState.Normal) window.State = NeoWindowState.Normal;
-
-            // The size is the one of the page, and a window can be larger than its page: a GTK window draws its title
-            // bar inside its own size, and an application may lay other things out around the view. What the window
-            // has beyond the page now is what it keeps beyond the page it is asked for.
-            var extraWidth = 0;
-            var extraHeight = 0;
-            if (View.ZoomFactor == 1d && await ReadViewportAsync(cancellationToken) is { Width: > 0, Height: > 0 } before)
-            {
-                var client = window.ClientSize;
-                extraWidth = Math.Max(client.Width - before.Width, 0);
-                extraHeight = Math.Max(client.Height - before.Height, 0);
-            }
-
-            window.ClientSize = new NeoSize(width + extraWidth, height + extraHeight);
-            // The page learns its new size from a resize that the engine delivers a moment later.
-            var clock = Stopwatch.StartNew();
-            do
-            {
-                await Task.Delay(25, cancellationToken);
-            }
-            while (clock.ElapsedMilliseconds < 500 && await ReadViewportAsync(cancellationToken) is { } now && (now.Width != width || now.Height != height));
-            return true;
-        }, cancellationToken), cancellationToken).AsTask());
+        return _owner.InvokeAsync(() => ExclusiveAsync(() => ResizeCoreAsync(new NeoSize(width, height), cancellationToken), cancellationToken), cancellationToken);
     }
 
-    /// <summary>Reads the size of the viewport of the page, or <see langword="null"/> when the page does not say.</summary>
-    private async Task<NeoSize?> ReadViewportAsync(CancellationToken cancellationToken)
+    private async Task<NeoSize?> ResizeCoreAsync(NeoSize wanted, CancellationToken cancellationToken)
+    {
+        ThrowIfClosed();
+        var window = View.OwnedWindow ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
+        if (window.State != NeoWindowState.Normal)
+        {
+            // A window that leaves another state takes a moment to have the size it had before, and so does its page.
+            var former = (await ReadViewportAsync(cancellationToken))?.Size;
+            window.State = NeoWindowState.Normal;
+            await WaitForViewportAsync(wanted, former, cancellationToken);
+        }
+
+        var viewport = await ReadViewportAsync(cancellationToken);
+        var shown = viewport?.Size;
+        if (shown == wanted) return shown;
+
+        // The size is the one of the page in CSS pixels, and a window has its own units. On Windows they are the
+        // pixels of the display, of which a CSS pixel takes as many as the device pixel ratio of the page says: the
+        // scale of the display times the zoom of the view. macOS and GTK count a window in units that a display does
+        // not change, of which a CSS pixel takes as many as the zoom of the view says.
+        var scale = View.ZoomFactor;
+        if (OperatingSystem.IsWindows()) scale = viewport?.Ratio is > 0 and < 1000 and var ratio ? ratio : scale * window.ScaleFactor;
+        var widths = new LengthSearch(wanted.Width, scale, !OperatingSystem.IsWindows());
+        var heights = new LengthSearch(wanted.Height, scale, !OperatingSystem.IsWindows());
+        var client = window.ClientSize;
+        for (var attempt = 1; shown != wanted && attempt <= MaximumResizeAttempts; attempt++)
+        {
+            // From the second size on, the size that counts is the one the window was given: what a GTK window
+            // reports is that size too, whatever the window made of it.
+            var target = new NeoSize(widths.Next(client.Width, shown?.Width ?? 0), heights.Next(client.Height, shown?.Height ?? 0));
+            if (target == client)
+            {
+                // The window has the first size already, which the page then answers for; later, no size is left to try.
+                if (attempt > 1 || shown is null) break;
+                continue;
+            }
+
+            window.ClientSize = target;
+            var before = shown;
+            shown = await WaitForViewportAsync(wanted, before, cancellationToken);
+            // A page that kept its size, though its window was given another one by a CSS pixel or more, has a window
+            // that does not take the size: its screen ends there, or it has a size that it does not go below.
+            var moved = Math.Max(Math.Abs(target.Width - client.Width), Math.Abs(target.Height - client.Height));
+            if (shown is null) break;
+            if (shown == before && moved >= scale)
+            {
+                // The size before this one is the one that the page shows. The first size stays as it was given: a
+                // window manager may only be slow to give it.
+                if (attempt > 1) window.ClientSize = client;
+                break;
+            }
+
+            client = target;
+        }
+
+        return shown;
+    }
+
+    /// <summary>
+    /// Reads the size of the page until it is the one wanted, or another one than before that stays, or until the time
+    /// is up: the page learns its size from a resize that the engine delivers a moment after the window has changed.
+    /// </summary>
+    private async Task<NeoSize?> WaitForViewportAsync(NeoSize wanted, NeoSize? before, CancellationToken cancellationToken)
+    {
+        var clock = Stopwatch.StartNew();
+        NeoSize? last = null;
+        var same = 0;
+        while (true)
+        {
+            await Task.Delay(25, cancellationToken);
+            var now = (await ReadViewportAsync(cancellationToken))?.Size;
+            same = now == last ? same + 1 : 0;
+            if (now is null || now == wanted || (now != before && same >= 2) || clock.Elapsed >= ResizeSettleTime) return now;
+            last = now;
+        }
+    }
+
+    /// <summary>Reads the viewport of the page, or <see langword="null"/> when the page does not say.</summary>
+    /// <returns>The size of the viewport in CSS pixels, and the pixels of the display that one of them takes.</returns>
+    private async Task<(NeoSize Size, double Ratio)?> ReadViewportAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -424,7 +489,8 @@ public sealed class NeoAutomationPage
             if (info.IsOk && info.Value.TryGetProperty("viewport", out var viewport) &&
                 viewport.TryGetProperty("width", out var width) && viewport.TryGetProperty("height", out var height))
             {
-                return new NeoSize((int)Math.Round(width.GetDouble()), (int)Math.Round(height.GetDouble()));
+                var ratio = viewport.TryGetProperty("scale", out var scale) && scale.ValueKind == JsonValueKind.Number ? scale.GetDouble() : 0d;
+                return (new NeoSize((int)Math.Round(width.GetDouble()), (int)Math.Round(height.GetDouble())), ratio);
             }
         }
         catch (DialogInterruptedException) { }
@@ -1289,6 +1355,80 @@ public sealed class NeoAutomationPage
     // -------------------------------------------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Finds, along one axis, the length of a window that gives its page the length wanted. The window is counted in
+    /// its own units and the page in CSS pixels, and each length that was tried says which one to try next.
+    /// </summary>
+    /// <param name="wanted">The length wanted for the page, in CSS pixels.</param>
+    /// <param name="scale">The units of the window that one CSS pixel of the page is expected to take.</param>
+    /// <param name="pageRoundsDown">
+    /// Whether the engine gives a page the CSS pixels that fit in its window, as WebKit does, rather than the ones it
+    /// takes to cover the window, of which the last one may be cut, as Chromium does.
+    /// </param>
+    internal struct LengthSearch(int wanted, double scale, bool pageRoundsDown)
+    {
+        private const double Tolerance = 1e-6;
+        private const int MaximumLength = 1 << 24;
+        private const int MaximumBeyond = 256;
+
+        // The length that was seen last with the page it showed, and whether the two belong together.
+        private bool _started;
+        private bool _known;
+        private int _client;
+        private int _shown;
+
+        // The longest length that showed too short a page and the shortest one that showed too long a page, or zero.
+        private int _tooShort;
+        private int _shortPage;
+        private int _tooLong;
+        private int _longPage;
+
+        /// <summary>Gets the length to give the window next.</summary>
+        /// <param name="client">The length of the client area of the window now, in its own units.</param>
+        /// <param name="shown">The length of the page now, in CSS pixels, or zero when the page does not say.</param>
+        /// <returns>The length to try, which is the length of the window now when no other one is worth trying.</returns>
+        internal int Next(int client, int shown)
+        {
+            // What a CSS pixel took of the window between the last two lengths says more than what it was expected
+            // to take: the zoom of the view or the scale of the display may have changed a moment ago.
+            var perPixel = scale;
+            if (_known && shown != _shown && (double)(client - _client) / (shown - _shown) is var measured && measured >= scale / 2 && measured <= scale * 2)
+            {
+                perPixel = measured;
+            }
+
+            var first = !_started;
+            (_started, _known, _client, _shown) = (true, true, client, shown);
+            if (first)
+            {
+                // What the window has beyond its page stays: a GTK window draws its title bar inside its own size. A
+                // window with less than its page, or with more than a title bar and a menu bar take, does not have the
+                // size it reports: a GTK window reports the size it was given, also where its screen ended before.
+                var beyond = shown > 0 ? client - (int)Math.Round(shown * scale) : 0;
+                _known = shown > 0 && beyond >= -Math.Ceiling(scale) && beyond <= MaximumBeyond;
+                if (!_known || beyond < 0) beyond = 0;
+                // The length is the longest, or the shortest, that comes to the page wanted in the rounding of the engine.
+                var page = wanted * scale;
+                return (int)Math.Clamp(pageRoundsDown ? Math.Ceiling(page - Tolerance) : Math.Floor(page + Tolerance), 1, MaximumLength) + beyond;
+            }
+
+            if (shown == wanted || shown <= 0) return Math.Max(client, 1);
+            if (shown < wanted) { if (client > _tooShort) (_tooShort, _shortPage) = (client, shown); }
+            else if (_tooLong == 0 || client < _tooLong) (_tooLong, _longPage) = (client, shown);
+            if (_tooShort != 0 && _tooLong != 0)
+            {
+                // Between a length that is too short and one that is too long, the one to try is where a line through
+                // the pages they showed puts the page wanted. Once the two are next to each other, no length is left.
+                if (_tooLong - _tooShort <= 1) return Math.Max(client, 1);
+                var between = _tooShort + (double)(wanted - _shortPage) * (_tooLong - _tooShort) / (_longPage - _shortPage);
+                return (int)Math.Clamp(Math.Round(between), _tooShort + 1, _tooLong - 1);
+            }
+
+            var step = (int)Math.Clamp(Math.Abs(wanted - shown) * perPixel, 1, MaximumLength);
+            return shown < wanted ? client + step : Math.Max(client - step, 1);
+        }
+    }
 
     private sealed class NavigationLog
     {

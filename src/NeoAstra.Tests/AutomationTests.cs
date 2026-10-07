@@ -181,6 +181,66 @@ public sealed class AutomationTests
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoAutomationOptions { NavigationTimeout = TimeSpan.FromMinutes(11) });
     }
 
+    [TestMethod]
+    public void ResizeCountsAWindowInItsOwnUnitsAndItsPageInCssPixels()
+    {
+        // The first length to try is the one that comes to the page wanted. Windows at 150 percent: a window of 900 by
+        // 700 pixels of the display shows a page of 600 by 467 CSS pixels, of which the last one may be cut.
+        Assert.AreEqual(2400, new NeoAutomationPage.LengthSearch(1600, 1.5, pageRoundsDown: false).Next(900, 600));
+        Assert.AreEqual(1500, new NeoAutomationPage.LengthSearch(1000, 1.5, pageRoundsDown: false).Next(700, 467));
+        Assert.AreEqual(1201, new NeoAutomationPage.LengthSearch(801, 1.5, pageRoundsDown: false).Next(900, 600));
+        Assert.AreEqual(1600, new NeoAutomationPage.LengthSearch(1600, 1, pageRoundsDown: false).Next(900, 900));
+        // A view zoomed to 110 percent: 800 CSS pixels are 880 units, not one more for what a product of doubles adds.
+        Assert.AreEqual(880, new NeoAutomationPage.LengthSearch(800, 1.1, pageRoundsDown: true).Next(1100, 1000));
+        Assert.AreEqual(1002, new NeoAutomationPage.LengthSearch(801, 1.25, pageRoundsDown: true).Next(1000, 800));
+        // What a window has beyond its page stays: the title bar that a GTK window draws inside its own size.
+        Assert.AreEqual(437, new NeoAutomationPage.LengthSearch(400, 1, pageRoundsDown: true).Next(637, 600));
+        Assert.AreEqual(837, new NeoAutomationPage.LengthSearch(400, 2, pageRoundsDown: true).Next(637, 300));
+        // A page that does not say its size has a window without anything beyond it.
+        Assert.AreEqual(1200, new NeoAutomationPage.LengthSearch(800, 1.5, pageRoundsDown: false).Next(900, 0));
+
+        // A length that gave another page than the one wanted leads to the next one to try. The pages are the ones
+        // WebView2 showed at 150 percent with a zoom of 125 percent, where a CSS pixel takes 1.875 pixels.
+        var zoomed = new Dictionary<int, int>
+        {
+            [1200] = 640, [1201] = 641, [1202] = 641, [1203] = 641, [1204] = 642, [1205] = 643, [1206] = 643,
+            [1207] = 644, [1208] = 645, [1209] = 645, [1210] = 646, [1211] = 646, [1212] = 646,
+        };
+        for (var wanted = 640; wanted <= 646; wanted++) Assert.AreEqual(wanted, Search(wanted, 1.875, false, 1206, 643, client => zoomed[client]).Page, $"{wanted}");
+        // The page of 642 pixels takes a second length: the first one, 1203, shows 641.
+        Assert.AreEqual((1204, 642, 2), Search(642, 1.875, false, 1206, 643, client => zoomed[client]));
+
+        // No length gives a page of 961 CSS pixels where one of them takes 1.25 pixels by a zoom below 100 percent:
+        // the search ends next to it.
+        var skipping = new Dictionary<int, int> { [1198] = 959, [1199] = 960, [1200] = 960, [1201] = 962, [1202] = 962, [1203] = 962, [1204] = 964 };
+        var (_, nearest, tries) = Search(961, 1.25, false, 1204, 964, client => skipping[client]);
+        Assert.IsTrue(nearest is 960 or 962, $"{nearest}");
+        Assert.IsLessThanOrEqualTo(4, tries);
+
+        // A scale that is not the one of the page any more, as right after a zoom, is replaced by what the first
+        // length shows: a page that takes 1.875 pixels for a CSS pixel when 1.5 were expected.
+        Assert.AreEqual((1500, 800, 2), Search(800, 1.5, false, 900, 480, client => (int)Math.Ceiling(client / 1.875)));
+        // WebKit counts the CSS pixels that fit: a view zoomed to 125 percent in a GTK window with a title bar.
+        Assert.AreEqual((1039, 801, 1), Search(801, 1.25, true, 637, 480, client => (int)Math.Floor((client - 37) / 1.25)));
+        // A GTK window reports the size it was given, also where its screen ended before: what it reports beyond its
+        // page is then no title bar, and the page says what the window has beyond it.
+        Assert.AreEqual((737, 700, 2), Search(700, 1, true, 20037, 2123, client => Math.Min(client, 2160) - 37));
+        // With such a window and a scale that is wrong as well, a length that is too long and one that is too short
+        // lead to the one between them.
+        Assert.AreEqual((538, 400, 3), Search(400, 2, true, 5000, 300, client => (int)Math.Floor((client - 37) / 1.25)));
+
+        static (int Client, int Page, int Tries) Search(int wanted, double scale, bool pageRoundsDown, int client, int page, Func<int, int> show)
+        {
+            var search = new NeoAutomationPage.LengthSearch(wanted, scale, pageRoundsDown);
+            for (var tries = 0; ; tries++)
+            {
+                var next = search.Next(client, page);
+                if (next == client || tries == 4) return (client, page, tries);
+                (client, page) = (next, show(next));
+            }
+        }
+    }
+
     // -------------------------------------------------------------------------------------------------------------
     // With WebView2
     // -------------------------------------------------------------------------------------------------------------
@@ -797,6 +857,68 @@ public sealed class AutomationTests
     }
 
     [TestMethod]
+    public async Task ResizePageGivesThePageItsSizeWhereAWindowIsCountedInThePixelsOfItsDisplay()
+    {
+        await RunAsync(async driver =>
+        {
+            const string pages = "## Pages\n1: Second page (app://neoastra/second.html) [selected]";
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/second.html"}""");
+            var view = driver.Automation.SelectedPage!.View;
+            var scale = double.Parse(await driver.EvaluateAsync("() => devicePixelRatio"), System.Globalization.CultureInfo.InvariantCulture);
+
+            // Asks for a size and returns the one the page has, which the answer names when it is another one.
+            async Task<(int Width, int Height)> ResizeAsync(int width, int height)
+            {
+                var answer = await driver.CallAsync("resize_page", $$"""{"width":{{width}},"height":{{height}}}""");
+                using var size = JsonDocument.Parse(await driver.EvaluateAsync("() => [innerWidth, innerHeight]"));
+                var shown = (Width: size.RootElement[0].GetInt32(), Height: size.RootElement[1].GetInt32());
+                Assert.AreEqual(shown == (width, height) ? pages : $"The page is {shown.Width}x{shown.Height}, not {width}x{height}: its window did not take the size for it.\n{pages}", answer);
+                return shown;
+            }
+
+            // The page has the size, or the one next to it where the engine has no page of that size at this scale.
+            async Task ExpectAsync(int width, int height, bool exact, string where)
+            {
+                var shown = await ResizeAsync(width, height);
+                if (exact) Assert.AreEqual((width, height), shown, where);
+                else Assert.IsTrue(Math.Abs(shown.Width - width) <= 1 && Math.Abs(shown.Height - height) <= 1, $"{shown.Width}x{shown.Height} for {width}x{height} {where}");
+            }
+
+            // On a display that scales, a pixel of the window is not a CSS pixel of the page. One call gives the page
+            // its size, whether or not the size comes to a whole number of pixels. These are the scales at which
+            // WebView2 was seen to have a page of each of these sizes; at 125 percent it has none of 4n + 1 pixels.
+            var everySize = scale is 1 or 1.25 or 1.5 or 1.75 or 2 or 2.5;
+            foreach (var (width, height) in new[] { (640, 480), (803, 603), (500, 375), (335, 446) })
+            {
+                await ExpectAsync(width, height, everySize, $"at a scale of {scale}");
+            }
+
+            // The zoom of a view changes what a CSS pixel takes of the window, on every display. The sizes leave the
+            // window inside a small screen at a zoom of 200 percent.
+            foreach (var zoom in new[] { 1.25, 2 })
+            {
+                view.ZoomFactor = zoom;
+                await ExpectAsync(320, 240, scale is 1 or 1.5, $"at a zoom of {zoom}");
+                await ExpectAsync(401, 301, scale is 1 or 1.5, $"at a zoom of {zoom}");
+                Assert.AreEqual(scale * zoom, double.Parse(await driver.EvaluateAsync("() => devicePixelRatio"), System.Globalization.CultureInfo.InvariantCulture), 0.001);
+            }
+
+            // Zoomed out, a pixel of the window is more than a CSS pixel, and not every size has a window.
+            view.ZoomFactor = 0.8;
+            await ExpectAsync(501, 401, exact: false, "at a zoom of 0.8");
+            view.ZoomFactor = 1;
+
+            // A window stops at its screen and at the least size of its frame, and the answer says so.
+            Assert.AreNotEqual((30000, 20000), await ResizeAsync(30000, 20000));
+            Assert.AreNotEqual((20, 10), await ResizeAsync(20, 10));
+
+            // A window that is maximized is restored for the size.
+            view.OwnedWindow!.State = NeoWindowState.Maximized;
+            await ExpectAsync(640, 480, everySize, "from a maximized window");
+        }, perMonitorDpiAware: true);
+    }
+
+    [TestMethod]
     public async Task PagesAreOpenedSelectedAndClosed()
     {
         await RunAsync(async driver =>
@@ -912,7 +1034,7 @@ public sealed class AutomationTests
         return directory;
     }
 
-    private static Task RunAsync(Func<AutomationDriver, Task> body, string? allowedDirectory = null, Action<NeoAutomationOptions>? configure = null)
+    private static Task RunAsync(Func<AutomationDriver, Task> body, string? allowedDirectory = null, Action<NeoAutomationOptions>? configure = null, bool perMonitorDpiAware = false)
         => LiveBrowser.RunAsync(AutomationFixture.Pages, async session =>
         {
             var options = new NeoAutomationOptions();
@@ -920,7 +1042,7 @@ public sealed class AutomationTests
             configure?.Invoke(options);
             await using var automation = new NeoAutomation(session.Application, options);
             await body(new AutomationDriver(session, automation));
-        }, timeout: TimeSpan.FromSeconds(90));
+        }, timeout: TimeSpan.FromSeconds(90), perMonitorDpiAware: perMonitorDpiAware);
 
     /// <summary>Calls the tools of an automation as a Model Context Protocol server would, from their names and JSON arguments.</summary>
     private sealed class AutomationDriver(LiveBrowserSession session, NeoAutomation automation)

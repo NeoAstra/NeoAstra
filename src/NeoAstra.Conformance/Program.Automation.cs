@@ -404,17 +404,35 @@ internal static partial class Program
                                 Skip("automation: full-page screenshot", CapabilityReason(environment, NeoCapability.CaptureFullPage));
                             }
 
-                            var resized = await driver.CallAsync("resize_page", """{"width":500,"height":400}""");
-                            Require(resized.StartsWith("## Pages\n", StringComparison.Ordinal), $"Unexpected result of resizing the page: {resized}");
-                            // The page learns its size from the window, which a window manager resizes in its own time.
-                            var size = string.Empty;
-                            for (var attempt = 0; attempt < 30 && size != "[500,400]"; attempt++)
+                            async Task ResizeAsync(int width, int height, string where)
                             {
-                                if (attempt != 0) await Task.Delay(100);
-                                size = await driver.EvaluateAsync("() => [innerWidth, innerHeight]");
+                                var resized = await driver.CallAsync("resize_page", $$"""{"width":{{width}},"height":{{height}}}""");
+                                Require(resized.Contains("## Pages\n", StringComparison.Ordinal), $"Unexpected result of resizing the page {where}: {resized}");
+                                // The page learns its size from the window, which a window manager resizes in its own time:
+                                // the tool may have answered before, with the size that the page had then.
+                                var size = string.Empty;
+                                for (var attempt = 0; attempt < 30 && size != $"[{width},{height}]"; attempt++)
+                                {
+                                    if (attempt != 0) await Task.Delay(100);
+                                    size = await driver.EvaluateAsync("() => [innerWidth, innerHeight]");
+                                }
+
+                                Require(size == $"[{width},{height}]", $"The page is {size} after it was resized to [{width},{height}] {where}.");
                             }
 
-                            Require(size == "[500,400]", $"The page is {size} after it was resized to [500,400].");
+                            await ResizeAsync(500, 400, "in a view that is not zoomed");
+                            await ResizeAsync(501, 401, "in a view that is not zoomed");
+                            // A window is not counted in the CSS pixels of its page: what a CSS pixel takes of it
+                            // depends on the zoom of the view, and on Windows on the scale of the display.
+                            view.ZoomFactor = 2;
+                            try
+                            {
+                                await ResizeAsync(400, 300, "in a view zoomed to 200 percent");
+                            }
+                            finally
+                            {
+                                view.ZoomFactor = 1;
+                            }
                         }
                         finally
                         {

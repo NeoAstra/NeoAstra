@@ -550,7 +550,12 @@ public sealed partial class NeoAutomation
                     var width = call.OptionalInteger("width") ?? throw NeoAutomationToolCall.Missing("width");
                     var height = call.OptionalInteger("height") ?? throw NeoAutomationToolCall.Missing("height");
                     if (width <= 0 || height <= 0) throw new NeoAutomationException("invalid-arguments", "The page width and height must be positive.");
-                    await page.ResizeAsync(width, height, call.CancellationToken);
+                    // A window stops at its screen and at the least size of its frame, which the caller cannot know.
+                    if (await page.ResizeToAsync(width, height, call.CancellationToken) is { } shown && (shown.Width != width || shown.Height != height))
+                    {
+                        call.Lines.Add($"The page is {shown.Width}x{shown.Height}, not {width}x{height}: its window did not take the size for it.");
+                    }
+
                     call.IncludePages = true;
                 }),
 
