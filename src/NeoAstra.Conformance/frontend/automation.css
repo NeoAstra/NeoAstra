@@ -3,3 +3,4 @@ body { font: 14px sans-serif; padding: 16px; }
 #spacer { height: 1400px; }
 .drop { width: 120px; height: 60px; border: 1px solid #888; }
 #swatch { width: 80px; height: 40px; background: #00f; }
+#context-editor { width: 240px; min-height: 20px; border: 1px solid #888; white-space: pre-wrap; }

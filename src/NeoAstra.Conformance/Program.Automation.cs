@@ -55,6 +55,10 @@ internal static partial class Program
                         _passed++;
                         Console.WriteLine($"PASS automation: {name} ({stopwatch.Elapsed.TotalMilliseconds:F1} ms)");
                     }
+                    catch (ScenarioSkippedException skipped)
+                    {
+                        Skip($"automation: {name}", skipped.Message);
+                    }
                     catch (Exception exception)
                     {
                         failures.Add(name);
@@ -163,6 +167,27 @@ internal static partial class Program
                     Require(pointer == """{"hover":"hovered","drop":"Dropped payload","double":"yes","text":"Clicked 2 times"}""", $"Pointer input did not arrive as expected: {pointer}");
                     var unknown = await driver.CallAsync("press_key", """{"key":"Bogus"}""", expectError: true);
                     Require(unknown.Length != 0, "An unknown key was not refused.");
+                });
+
+                await RunAsync("typing and filling in an element with an EditContext", async () =>
+                {
+                    await driver.OpenFixtureAsync();
+                    // An editor such as Monaco takes its text from an EditContext, which WebKit does not have.
+                    if (await driver.EvaluateAsync("() => typeof EditContext === 'function'") != "true") throw new ScenarioSkippedException("The browser engine has no EditContext.");
+                    var editor = driver.Uid("textbox \"Context editor\"");
+                    await driver.CallAsync("click", $$"""{"uid":"{{editor}}"}""");
+                    await driver.CallAsync("type_text", """{"text":"Hi 1"}""");
+                    await driver.CallAsync("press_key", """{"key":"Enter"}""");
+                    await driver.CallAsync("type_text", """{"text":"ab"}""");
+                    await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+                    var typed = await driver.EvaluateAsync("() => { const editor = document.getElementById('context-editor'); return [editor.editContext.text, editor.textContent, document.activeElement.id]; }");
+                    Require(typed == """["Hi 1\na","Hi 1\na","context-editor"]""", $"The typed text did not reach the EditContext as typed: {typed}");
+                    Require(await driver.CallAsync("fill", $$"""{"uid":"{{editor}}","value":"filled (\n  twice"}""") == "Successfully filled out the element", "The editor was not filled out.");
+                    var filled = await driver.EvaluateAsync("() => document.getElementById('context-editor').editContext.text");
+                    Require(filled == "\"filled (\\n  twice\"", $"Filling did not replace the text of the EditContext: {filled}");
+                    await driver.CallAsync("fill", $$"""{"uid":"{{editor}}","value":""}""");
+                    var cleared = await driver.EvaluateAsync("() => document.getElementById('context-editor').editContext.text");
+                    Require(cleared == "\"\"", $"Filling with nothing did not clear the EditContext: {cleared}");
                 });
 
                 await RunAsync("file upload through a file input", async () =>
@@ -422,6 +447,9 @@ internal static partial class Program
                 : pixel is { Red: < 90, Green: < 90, Blue: > 160 };
             Require(matches, $"Expected {(white ? "white" : "blue")} at {where} but found ({pixel.Red}, {pixel.Green}, {pixel.Blue}).");
         }
+
+        /// <summary>Ends a scenario that the browser engine has nothing to run against.</summary>
+        private sealed class ScenarioSkippedException(string reason) : Exception(reason);
 
         /// <summary>Calls the automation tools by name with JSON arguments and reads their text results.</summary>
         private sealed class AutomationDriver(NeoAutomation automation)

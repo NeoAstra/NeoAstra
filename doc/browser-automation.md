@@ -128,6 +128,16 @@ not get in its way. What follows from this design:
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
   the list of a `<select>` do not open, and features that ask for a user activation refuse.
+- **Editors on an EditContext**, such as Monaco in WebView2, are neither inputs nor editable content:
+  the engine hands what is typed to an
+  [EditContext](https://developer.mozilla.org/docs/Web/API/EditContext_API), and the editor draws it.
+  `type_text` and `press_key` do what the engine does there, with the same events, so an editor reacts
+  as it does to typing: it closes brackets, indents, and offers suggestions. `fill` replaces the text
+  in one change. It first presses the keys that select everything. An editor that takes them for
+  itself, as Monaco does, then gets the text as a paste over its selection; otherwise the text of the
+  EditContext is replaced. A `click` on an element that an editor keeps without area, as Monaco does at
+  its cursor, lands on what the editor shows there. A read-only editor can take a text and ignore it
+  without saying so, and a snapshot does not list a text that an editor hides from assistive technology.
 - **Console messages** are those of the `console` methods, uncaught errors, unhandled rejections, and
   elements that fail to load. Messages that the engine writes itself, such as a content security policy
   violation, are not seen.
@@ -167,5 +177,6 @@ caller's own scripts but not its control over the page.
 
 The `automation:` scenarios of the
 [conformance harness](building.md#browser-conformance-and-benchmarks) call every tool. They pass on
-Windows 11 with WebView2, on macOS 15 with WKWebView, and on Ubuntu 24.04 with WebKitGTK 2.52. The unit
-tests, which go further into each tool, drive a live browser on Windows only.
+Windows 11 with WebView2, on macOS 15 with WKWebView, and on Ubuntu 24.04 with WebKitGTK 2.52. The
+scenario for an element with an EditContext runs on WebView2 only, because WebKit has no EditContext.
+The unit tests, which go further into each tool, drive a live browser on Windows only.

@@ -649,6 +649,28 @@
     return !/^(button|checkbox|color|file|hidden|image|radio|range|reset|submit)$/.test(element.type);
   }
 
+  // An element with an EditContext is an editing host of another kind: the engine gives the text that is entered to
+  // the EditContext and tells the page with a textupdate event, and the page draws the text. Such an element is no
+  // input and need not be editable content. This is how the Monaco editor takes its text.
+  function editContextOf(element) {
+    const context = element.editContext;
+    return context && typeof context.updateText === 'function' && typeof viewOf(element).TextUpdateEvent === 'function' ? context : null;
+  }
+
+  // The element whose EditContext takes the text entered with the focus on an element: the outermost of the editable
+  // elements around it, when that one has an EditContext. A form control and content marked as not editable keep the
+  // keyboard to themselves, and editable content around an element with an EditContext takes the text itself.
+  function editContextHost(element) {
+    let host = null;
+    for (let current = element; current && current.nodeType === 1; current = parentOf(current)) {
+      const tag = current.localName;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return null;
+      if (current.getAttribute('contenteditable') === 'false') break;
+      if (current.isContentEditable || editContextOf(current)) host = current;
+    }
+    return host && editContextOf(host) ? host : null;
+  }
+
   function isFocusable(element) {
     if (isDisabled(element) && element.getAttribute('aria-disabled') !== 'true') return false;
     if (element.hasAttribute('tabindex')) return !isNaN(parseInt(element.getAttribute('tabindex'), 10));
@@ -663,7 +685,9 @@
       case 'summary': return !!element.parentElement && element.parentElement.localName === 'details';
       case 'audio':
       case 'video': return element.hasAttribute('controls');
-      default: return isEditableContent(element) && (!element.parentElement || !element.parentElement.isContentEditable);
+      default:
+        if (isEditableContent(element)) return !element.parentElement || !element.parentElement.isContentEditable;
+        return !!editContextOf(element) && editContextHost(element) === element;
     }
   }
 
@@ -1173,6 +1197,9 @@
     if (!(rect.width > 0 && rect.height > 0)) {
       // Without a viewport, an element that has a box at all is taken as drawn, and the event goes to it directly.
       if (rects.length && !hasViewport(view)) return { x: rect.left, y: rect.top };
+      // An editor may keep the element with its EditContext out of sight where its cursor is, as Monaco does with an
+      // element without width. A click there lands on what the editor draws, which gives the focus to that element.
+      if (rects.length && editContextOf(element)) return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
       throw fail('not-visible', 'The element ' + describe(element) + ' has no visible box to interact with.');
     }
     const left = Math.max(rect.left, 0), right = Math.min(rect.right, view.innerWidth);
@@ -1387,6 +1414,112 @@
     selection.addRange(range);
   }
 
+  // ---- EditContext ----
+
+  function fireTextUpdate(host, context, text, start, end, caret) {
+    context.dispatchEvent(new (viewOf(host).TextUpdateEvent)('textupdate', {
+      text: text, updateRangeStart: start, updateRangeEnd: end, selectionStart: caret, selectionEnd: caret,
+    }));
+  }
+
+  // Puts a text in place of a range of an EditContext, as the engine does for a text that is entered: the EditContext
+  // has the text, and the cursor behind it, by the time the page hears of them.
+  function replaceInEditContext(host, start, end, text) {
+    const context = editContextOf(host);
+    if (!context) return;
+    const caret = start + text.length;
+    context.updateText(start, end, text);
+    context.updateSelection(caret, caret);
+    fireTextUpdate(host, context, text, start, end, caret);
+  }
+
+  // Takes a range out of an EditContext, as the engine does for a key that deletes: its selection reaches over what
+  // goes, and becomes a cursor only once the page has heard.
+  function deleteInEditContext(host, start, end) {
+    const context = editContextOf(host);
+    if (!context || start === end) return;
+    if (context.selectionStart === context.selectionEnd) context.updateSelection(start, end);
+    context.updateText(start, end, '');
+    fireTextUpdate(host, context, '', start, end, start);
+    const caret = Math.min(context.selectionStart, context.selectionEnd);
+    context.updateSelection(caret, caret);
+  }
+
+  // The character at an offset as a reader sees it, which the engine deletes whole: a surrogate pair, or a letter with
+  // the marks on it.
+  function characterAt(text, offset) {
+    try {
+      const found = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text).containing(offset);
+      if (found) return { start: found.index, end: found.index + found.segment.length };
+    } catch (error) { /* an engine with an EditContext has a segmenter */ }
+    return { start: offset, end: offset + 1 };
+  }
+
+  // Enters a text at the selection of the EditContext of an element, unless the page refuses it.
+  function insertIntoEditContext(host, text, inputType) {
+    if (!fireBeforeInput(host, inputType, text)) return false;
+    const context = editContextOf(host);
+    if (!context) return false;
+    replaceInEditContext(host, Math.min(context.selectionStart, context.selectionEnd), Math.max(context.selectionStart, context.selectionEnd), text);
+    return true;
+  }
+
+  function deleteFromEditContext(host, forward) {
+    // The engine asks the page before it looks for something to delete.
+    if (!fireBeforeInput(host, forward ? 'deleteContentForward' : 'deleteContentBackward', null)) return;
+    const context = editContextOf(host);
+    if (!context) return;
+    let start = Math.min(context.selectionStart, context.selectionEnd), end = Math.max(context.selectionStart, context.selectionEnd);
+    if (start === end) {
+      if (forward) { if (end < context.text.length) end = characterAt(context.text, end).end; }
+      else if (start > 0) start = characterAt(context.text, start - 1).start;
+    }
+    deleteInEditContext(host, start, end);
+  }
+
+  // Offers a text to the page as a paste, and returns whether the page left it alone.
+  function firePaste(target, text) {
+    const view = viewOf(target);
+    const data = createDataTransfer(view);
+    data.setData('text/plain', text);
+    let event;
+    try {
+      event = new view.ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: data });
+      if (event.clipboardData !== data) Object.defineProperty(event, 'clipboardData', { value: data });
+    } catch (error) {
+      return true;
+    }
+    return target.dispatchEvent(event);
+  }
+
+  const selectAllKey = { key: 'a', code: 'KeyA', keyCode: 65, charCode: 97, text: 'a' };
+  const commandKey = /Mac|iPhone|iPad|iPod/.test(navigator.platform || '')
+    ? { key: 'Meta', code: 'MetaLeft', keyCode: 91, location: 1 }
+    : { key: 'Control', code: 'ControlLeft', keyCode: 17, location: 1 };
+  const backspaceKey = { key: 'Backspace', code: 'Backspace', keyCode: 8 };
+
+  // Replaces the text of an editor that takes it from an EditContext. What an EditContext holds is for the editor to
+  // say: the whole text, or the part of it around the selection, as with Monaco, which keeps its text in a model of
+  // its own and brings its EditContext up to date when it draws. The keys that select everything tell the two apart.
+  // An editor that takes them for itself has made its own selection, which the text replaces as a paste does, or the
+  // key that deletes when there is no text: it is then one change, without what the editor does for each character
+  // that is typed, such as closing a bracket or indenting a line. Otherwise the EditContext is replaced whole.
+  function fillEditContext(host, value) {
+    if (host.getAttribute('aria-readonly') === 'true') throw fail('readonly', 'The element ' + describe(host) + ' is read-only.');
+    scrollIntoViewIfNeeded(host);
+    focusElement(host);
+    if (keyTarget() === host && pressChord(selectAllKey, [commandKey])) {
+      if (value === '') pressChord(backspaceKey, []);
+      else if (firePaste(host, value)) insertIntoEditContext(host, value, 'insertReplacementText');
+      return;
+    }
+    if (!fireBeforeInput(host, value === '' ? 'deleteContentBackward' : 'insertReplacementText', value === '' ? null : value)) return;
+    const context = editContextOf(host);
+    if (!context) return;
+    if (value === '') deleteInEditContext(host, 0, context.text.length);
+    else replaceInEditContext(host, 0, context.text.length, value);
+  }
+
   function isToggle(element) {
     if (element.localName === 'input') return element.type === 'checkbox' || element.type === 'radio';
     const role = element.getAttribute('role');
@@ -1452,6 +1585,13 @@
       return;
     }
 
+    // An editor is named by the element with its EditContext, or by a text that it draws.
+    const host = editContextHost(element);
+    if (host && (host === element || !isFocusable(element))) {
+      fillEditContext(host, value);
+      return;
+    }
+
     if (isEditableContent(element)) {
       scrollIntoViewIfNeeded(element);
       focusElement(element);
@@ -1513,6 +1653,8 @@
   }
 
   function insertText(target, text) {
+    const host = editContextHost(target);
+    if (host) return insertIntoEditContext(host, text, 'insertText');
     if (target.localName === 'input' || target.localName === 'textarea') {
       if (!isTextControl(target) || target.readOnly || isDisabled(target)) return false;
       if (!fireBeforeInput(target, 'insertText', text)) return false;
@@ -1551,6 +1693,8 @@
   }
 
   function deleteText(target, forward) {
+    const host = editContextHost(target);
+    if (host) { deleteFromEditContext(host, forward); return; }
     if (target.localName === 'input' || target.localName === 'textarea') {
       if (!isTextControl(target) || target.readOnly || isDisabled(target)) return;
       let start = null, end = null;
@@ -1675,11 +1819,12 @@
   // What the engine itself does for a real key press and does not do for a synthesized one.
   function defaultKeyAction(target, definition) {
     const key = definition.key;
-    const editing = (target.localName === 'input' && isTextControl(target)) || target.localName === 'textarea' || isEditableContent(target);
+    const host = editContextHost(target);
+    const editing = (target.localName === 'input' && isTextControl(target)) || target.localName === 'textarea' || isEditableContent(target) || !!host;
     const command = modifiers.ctrl || modifiers.meta;
     if (command && !modifiers.alt) {
       if (key.toLowerCase() === 'a' && editing) {
-        if (isEditableContent(target)) selectContents(target);
+        if (host || isEditableContent(target)) selectContents(host || target);
         else { try { target.select(); } catch (error) { /* this input type has no selection */ } }
       }
       return;
@@ -1687,7 +1832,9 @@
     if (modifiers.alt) return;
     switch (key) {
       case 'Enter':
-        if (target.localName === 'textarea' || isEditableContent(target)) { fireKey(target, 'keypress', definition); insertText(target, '\n'); }
+        // The line break of an element with an EditContext is for the page to put in.
+        if (host) { if (fireKey(target, 'keypress', definition)) fireBeforeInput(host, modifiers.shift ? 'insertLineBreak' : 'insertParagraph', null); }
+        else if (target.localName === 'textarea' || isEditableContent(target)) { fireKey(target, 'keypress', definition); insertText(target, '\n'); }
         else if (activates(target, key)) fireMouse(target, 'click', mouseInit(target, { x: 0, y: 0 }));
         else if (target.localName === 'input') { fireKey(target, 'keypress', definition); submitImplicitly(target); }
         return;
@@ -1718,18 +1865,23 @@
     }
   }
 
+  // Presses and releases a key, and returns whether the page took the key for itself by canceling its keydown.
   function pressOne(definition) {
-    const target = keyTarget();
+    let target = keyTarget();
+    // The engine gives the keys pressed inside an element with an EditContext to that element, which it focuses first.
+    const host = editContextHost(target);
+    if (host && host !== target) { focusElement(host); target = keyTarget(); }
     if (setModifier(definition.key, true)) {
       fireKey(target, 'keydown', definition);
-      return target;
+      return false;
     }
-    if (fireKey(target, 'keydown', definition)) defaultKeyAction(target, definition);
+    const taken = !fireKey(target, 'keydown', definition);
+    if (!taken) defaultKeyAction(target, definition);
     const after = target.isConnected ? target : keyTarget();
     fireKey(after, 'keyup', definition);
     // A button or a toggle is activated when the space bar is released.
     if (definition.key === ' ' && after === target && activates(target, ' ') && !modifiers.ctrl && !modifiers.meta && !modifiers.alt) fireMouse(target, 'click', mouseInit(target, { x: 0, y: 0 }));
-    return target;
+    return taken;
   }
 
   function releaseModifier(definition) {
@@ -1737,15 +1889,20 @@
     fireKey(keyTarget(), 'keyup', definition);
   }
 
-  function pressKey(options) {
-    const held = [];
+  // Presses a key with other keys held, and returns whether the page took the key for itself.
+  function pressChord(key, held) {
+    const down = [];
     try {
-      (options.modifiers || []).forEach(function (definition) { pressOne(definition); held.push(definition); });
-      pressOne(options.key);
+      held.forEach(function (definition) { pressOne(definition); down.push(definition); });
+      return pressOne(key);
     } finally {
-      held.reverse().forEach(releaseModifier);
+      down.reverse().forEach(releaseModifier);
       modifiers.shift = modifiers.ctrl = modifiers.alt = modifiers.meta = false;
     }
+  }
+
+  function pressKey(options) {
+    pressChord(options.key, options.modifiers || []);
     return {};
   }
 

@@ -100,5 +100,113 @@ internal static class AutomationFixture
             """,
         ["style.css"] = "h1 { color: #036; }",
         ["script.js"] = "document.title = 'Resources loaded';",
+        // Editors that take their text from an EditContext, as Monaco does: no input, no text area, and, but for one,
+        // no editable content.
+        ["editcontext.html"] = """
+            <!doctype html>
+            <html lang="en">
+            <head>
+            <meta charset="utf-8">
+            <title>EditContext fixture</title>
+            <style>
+              body { font: 14px sans-serif; margin: 16px; }
+              .editor { position: relative; width: 320px; min-height: 22px; border: 1px solid #888; white-space: pre-wrap; font: 14px monospace; }
+              #code { position: absolute; left: 4px; top: 2px; width: 0; height: 18px; }
+            </style>
+            </head>
+            <body>
+            <h1>Editors</h1>
+            <div id="plain" class="editor" role="textbox" aria-label="Plain editor" tabindex="0"></div>
+            <div id="bare" class="editor">Bare editor</div>
+            <div id="both" class="editor" role="textbox" aria-label="Editable editor" contenteditable="true"></div>
+            <div id="code-view" class="editor"><div id="code-text" aria-hidden="true"></div><div id="code" role="textbox" aria-label="Code editor" aria-multiline="true" tabindex="0"></div></div>
+            <div id="locked" class="editor" role="textbox" aria-label="Locked editor" aria-readonly="true" tabindex="0"></div>
+            <script>
+              const editors = {};
+              const cancel = {};
+
+              // An editor whose EditContext holds its whole text. The engine gives what is typed to the EditContext and
+              // says so with a textupdate event; the editor draws the text and puts in the line breaks.
+              function plainEditor(id) {
+                const element = document.getElementById(id);
+                const context = new EditContext({ text: element.textContent, selectionStart: element.textContent.length, selectionEnd: element.textContent.length });
+                const events = [];
+                element.editContext = context;
+                const draw = () => { element.textContent = context.text; };
+                context.addEventListener('textupdate', e => {
+                  events.push(`textupdate ${JSON.stringify(e.text)} ${e.updateRangeStart}-${e.updateRangeEnd} ${e.selectionStart}-${e.selectionEnd}`);
+                  draw();
+                });
+                for (const type of ['keydown', 'keypress', 'keyup']) {
+                  element.addEventListener(type, e => { events.push(`${type} ${JSON.stringify(e.key)}`); if (cancel[type]) e.preventDefault(); });
+                }
+                element.addEventListener('input', () => events.push('input'));
+                element.addEventListener('beforeinput', e => {
+                  events.push('beforeinput ' + e.inputType + (e.data === null ? '' : ' ' + JSON.stringify(e.data)));
+                  if (cancel.beforeinput) e.preventDefault();
+                  else if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') {
+                    const start = Math.min(context.selectionStart, context.selectionEnd);
+                    context.updateText(start, Math.max(context.selectionStart, context.selectionEnd), '\n');
+                    context.updateSelection(start + 1, start + 1);
+                    draw();
+                  }
+                });
+                editors[id] = { text: () => context.text, selection: () => [context.selectionStart, context.selectionEnd], events, context };
+              }
+
+              // An editor that keeps its text in a model of its own, as Monaco does. The element with its EditContext has
+              // no width and sits where the cursor is, in front of nothing: the editor draws its text next to it and gives
+              // it the focus when the text is clicked. Its EditContext holds the lines of the selection only and is brought
+              // up to date later, when the editor draws. The editor selects everything, deletes, and pastes by itself, and
+              // puts the text that is typed where its own selection is.
+              function codeEditor(id) {
+                const element = document.getElementById(id);
+                const context = new EditContext();
+                const events = [];
+                element.editContext = context;
+                element.parentElement.addEventListener('mousedown', e => { e.preventDefault(); element.focus(); });
+                let text = '', start = 0, end = 0, known = [0, 0], pending = false;
+                const draw = () => {
+                  pending = false;
+                  const from = text.lastIndexOf('\n', start - 1) + 1;
+                  const next = text.indexOf('\n', end);
+                  context.updateText(0, context.text.length, text.slice(from, next < 0 ? text.length : next));
+                  known = [start - from, end - from];
+                  context.updateSelection(known[0], known[1]);
+                  document.getElementById(id + '-text').textContent = text;
+                };
+                const changed = () => { if (!pending) { pending = true; setTimeout(draw, 0); } };
+                const replace = (from, to, inserted) => { text = text.slice(0, from) + inserted + text.slice(to); start = end = from + inserted.length; changed(); };
+                element.addEventListener('keydown', e => {
+                  const command = e.ctrlKey || e.metaKey;
+                  if (command && e.key.toLowerCase() === 'a') { start = 0; end = text.length; changed(); }
+                  else if (!command && e.key === 'Backspace') replace(start === end ? Math.max(start - 1, 0) : start, end, '');
+                  else return;
+                  events.push('own ' + e.key);
+                  e.preventDefault();
+                });
+                element.addEventListener('beforeinput', e => { if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') replace(start, end, '\n'); });
+                element.addEventListener('paste', e => { events.push('paste'); e.preventDefault(); replace(start, end, e.clipboardData.getData('text/plain')); });
+                context.addEventListener('textupdate', e => {
+                  // What the engine replaced is read from the selection the EditContext had, and done at the selection of the model.
+                  const before = Math.max(known[0] - e.updateRangeStart, 0), after = Math.max(e.updateRangeEnd - known[1], 0);
+                  known = [e.selectionStart, e.selectionEnd];
+                  events.push('textupdate');
+                  if (before === 0 && after === 0) replace(start, end, e.text);
+                  // More than the selection is replaced on the line of a cursor only, and not at all over a selection.
+                  else if (start === end) {
+                    const from = text.lastIndexOf('\n', start - 1) + 1, next = text.indexOf('\n', start);
+                    replace(Math.max(start - before, from), Math.min(start + after, next < 0 ? text.length : next), e.text);
+                  }
+                });
+                editors[id] = { text: () => text, selection: () => [start, end], events, set: (value, from, to) => { text = value; start = from; end = to; draw(); } };
+              }
+
+              for (const id of ['plain', 'bare', 'both', 'locked']) plainEditor(id);
+              codeEditor('code');
+              window.editorState = id => ({ text: editors[id].text(), selection: editors[id].selection(), events: editors[id].events.splice(0) });
+            </script>
+            </body></html>
+            """,
     };
 }

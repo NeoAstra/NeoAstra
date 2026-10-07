@@ -341,6 +341,154 @@ public sealed class AutomationTests
     }
 
     [TestMethod]
+    public async Task TypingGoesIntoAnElementThatTakesItsTextFromAnEditContext()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/editcontext.html"}""");
+            await driver.CallAsync("take_snapshot");
+
+            // The keys arrive as they do from a keyboard: the EditContext has the character by the time the page hears of it.
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("textbox \"Plain editor\"")}}"}""");
+            Assert.AreEqual("Typed text \"a B\"", await driver.CallAsync("type_text", """{"text":"a B"}"""));
+            Assert.AreEqual(
+                """{"text":"a B","selection":[3,3],"events":["keydown \"a\"","keypress \"a\"","beforeinput insertText \"a\"","textupdate \"a\" 0-0 1-1","keyup \"a\"","keydown \" \"","keypress \" \"","beforeinput insertText \" \"","textupdate \" \" 1-1 2-2","keyup \" \"","keydown \"B\"","keypress \"B\"","beforeinput insertText \"B\"","textupdate \"B\" 2-2 3-3","keyup \"B\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+            await driver.CallAsync("press_key", """{"key":"c"}""");
+            Assert.AreEqual("\"a Bc\"", await driver.EvaluateAsync("() => editorState('plain').text"));
+
+            // The keys that delete take the selection, or the character next to the cursor.
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            Assert.AreEqual(
+                """{"text":"a B","selection":[3,3],"events":["keydown \"Backspace\"","beforeinput deleteContentBackward","textupdate \"\" 3-4 3-3","keyup \"Backspace\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+            await driver.EvaluateAsync("() => { editors.plain.context.updateSelection(2, 0); }");
+            await driver.CallAsync("type_text", """{"text":"X"}""");
+            Assert.AreEqual(
+                """{"text":"XB","selection":[1,1],"events":["keydown \"X\"","keypress \"X\"","beforeinput insertText \"X\"","textupdate \"X\" 0-2 1-1","keyup \"X\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+            await driver.CallAsync("press_key", """{"key":"Delete"}""");
+            await driver.CallAsync("press_key", """{"key":"Delete"}""");
+            // The page is asked before the engine looks for something to delete.
+            Assert.AreEqual(
+                """{"text":"X","selection":[1,1],"events":["keydown \"Delete\"","beforeinput deleteContentForward","textupdate \"\" 1-2 1-1","keyup \"Delete\"","keydown \"Delete\"","beforeinput deleteContentForward","keyup \"Delete\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+
+            // A line break is asked of the page, which puts it in.
+            await driver.CallAsync("press_key", """{"key":"Enter"}""");
+            await driver.CallAsync("press_key", """{"key":"Shift+Enter"}""");
+            Assert.AreEqual(
+                """{"text":"X\n\n","selection":[3,3],"events":["keydown \"Enter\"","keypress \"Enter\"","beforeinput insertParagraph","keyup \"Enter\"","keydown \"Shift\"","keydown \"Enter\"","keypress \"Enter\"","beforeinput insertLineBreak","keyup \"Enter\"","keyup \"Shift\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+
+            // A character of two code units, or one with a mark, is deleted whole.
+            await driver.CallAsync("type_text", """{"text":"😀é"}""");
+            Assert.AreEqual("[7,7,7]", await driver.EvaluateAsync("() => [editorState('plain').text.length, ...editors.plain.selection()]"));
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            Assert.AreEqual(
+                """{"text":"X\n\n","selection":[3,3],"events":["keydown \"Backspace\"","beforeinput deleteContentBackward","textupdate \"\" 5-7 5-5","keyup \"Backspace\"","keydown \"Backspace\"","beforeinput deleteContentBackward","textupdate \"\" 3-5 3-3","keyup \"Backspace\""]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+
+            // A page that cancels an event stops what follows it.
+            foreach (var (canceled, events) in new[]
+            {
+                ("beforeinput", """["keydown \"z\"","keypress \"z\"","beforeinput insertText \"z\"","keyup \"z\"","keydown \"Backspace\"","beforeinput deleteContentBackward","keyup \"Backspace\"","keydown \"Enter\"","keypress \"Enter\"","beforeinput insertParagraph","keyup \"Enter\""]"""),
+                ("keypress", """["keydown \"z\"","keypress \"z\"","keyup \"z\"","keydown \"Backspace\"","beforeinput deleteContentBackward","textupdate \"\" 2-3 2-2","keyup \"Backspace\"","keydown \"Enter\"","keypress \"Enter\"","keyup \"Enter\""]"""),
+                ("keydown", """["keydown \"z\"","keyup \"z\"","keydown \"Backspace\"","keyup \"Backspace\"","keydown \"Enter\"","keyup \"Enter\""]"""),
+            })
+            {
+                await driver.EvaluateAsync($"() => {{ editors.plain.context.updateText(0, 99, 'X\\n\\n'); editors.plain.context.updateSelection(3, 3); cancel.{canceled} = true; }}");
+                await driver.CallAsync("type_text", """{"text":"z"}""");
+                await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+                await driver.CallAsync("press_key", """{"key":"Enter"}""");
+                Assert.AreEqual(events, await driver.EvaluateAsync($"() => {{ delete cancel.{canceled}; return editorState('plain').events; }}"), canceled);
+            }
+
+            // An element with an EditContext takes the focus like editable content, without a tab index.
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("\"Bare editor\"")}}"}""");
+            await driver.CallAsync("type_text", """{"text":"!"}""");
+            Assert.AreEqual("""["bare","Bare editor!"]""", await driver.EvaluateAsync("() => [document.activeElement.id, editorState('bare').text]"));
+
+            // The EditContext of an element comes before its editable content, which the engine leaves alone.
+            await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("textbox \"Editable editor\"")}}"}""");
+            await driver.CallAsync("type_text", """{"text":"ok"}""");
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            var both = await driver.EvaluateAsync("() => editorState('both')");
+            StringAssert.StartsWith(both, """{"text":"o","selection":[1,1],""");
+            Assert.DoesNotContain("\"input\"", both);
+
+            // An editor with a model of its own puts the text where its selection is, and takes its keys itself. The
+            // element with its EditContext has no width, as in Monaco: a click on it lands on what the editor draws.
+            await driver.EvaluateAsync("() => { editors.code.set('one\\ntwo\\nthree', 5, 5); }");
+            StringAssert.Matches(await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("textbox \"Code editor\"")}}"}"""),
+                new Regex("""^Successfully clicked on the element\nAnother element, <div id="code-(view|text)".*>, covers that point of the element and received the event instead\.$"""));
+            Assert.AreEqual("\"code\"", await driver.EvaluateAsync("() => document.activeElement.id"));
+            await driver.CallAsync("type_text", """{"text":"X"}""");
+            await driver.CallAsync("press_key", """{"key":"Enter"}""");
+            Assert.AreEqual("\"one\\ntX\\nwo\\nthree\"", await driver.EvaluateAsync("() => editorState('code').text"));
+            await driver.CallAsync("press_key", """{"key":"Backspace"}""");
+            await driver.CallAsync("press_key", """{"key":"Control+A"}""");
+            await driver.CallAsync("type_text", """{"text":"Z"}""");
+            Assert.AreEqual("""{"text":"Z","selection":[1,1],"events":["own Backspace","own A","textupdate"]}""", await driver.EvaluateAsync("() => editorState('code')"));
+        });
+    }
+
+    [TestMethod]
+    public async Task FillReplacesTheTextOfAnEditorWithAnEditContext()
+    {
+        await RunAsync(async driver =>
+        {
+            await driver.CallAsync("navigate_page", """{"url":"app://neoastra/editcontext.html"}""");
+            await driver.CallAsync("take_snapshot");
+            var plain = driver.Uid("textbox \"Plain editor\"");
+            var code = driver.Uid("textbox \"Code editor\"");
+
+            // The keys that select everything are offered to the page first. A page that leaves them alone has its
+            // text in the EditContext, which is replaced whole.
+            Assert.AreEqual("Successfully filled out the element", await driver.CallAsync("fill", $$"""{"uid":"{{plain}}","value":"first"}"""));
+            Assert.AreEqual(
+                """{"text":"first","selection":[5,5],"events":["keydown \"Control\"","keydown \"a\"","keyup \"a\"","keyup \"Control\"","beforeinput insertReplacementText \"first\"","textupdate \"first\" 0-0 5-5"]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+            Assert.AreEqual("\"plain\"", await driver.EvaluateAsync("() => document.activeElement.id"));
+            await driver.EvaluateAsync("() => { editors.plain.context.updateSelection(2, 2); }");
+            await driver.CallAsync("fill", $$"""{"uid":"{{plain}}","value":"second\n  line ("}""");
+            Assert.AreEqual(
+                """{"text":"second\n  line (","selection":[15,15],"events":["keydown \"Control\"","keydown \"a\"","keyup \"a\"","keyup \"Control\"","beforeinput insertReplacementText \"second\\n  line (\"","textupdate \"second\\n  line (\" 0-5 15-15"]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+            await driver.CallAsync("fill", $$"""{"uid":"{{plain}}","value":""}""");
+            await driver.CallAsync("fill", $$"""{"uid":"{{plain}}","value":""}""");
+            Assert.AreEqual(
+                """{"text":"","selection":[0,0],"events":["keydown \"Control\"","keydown \"a\"","keyup \"a\"","keyup \"Control\"","beforeinput deleteContentBackward","textupdate \"\" 0-15 0-0","keydown \"Control\"","keydown \"a\"","keyup \"a\"","keyup \"Control\"","beforeinput deleteContentBackward"]}""",
+                await driver.EvaluateAsync("() => editorState('plain')"));
+
+            // An editor that selects everything itself holds a part of its text in its EditContext only. The text
+            // replaces the selection as a paste does, without what the editor does for typed characters.
+            await driver.EvaluateAsync("() => { editors.code.set('one\\ntwo\\nthree', 5, 5); }");
+            await driver.CallAsync("fill", $$"""{"uid":"{{code}}","value":"new\n  text ("}""");
+            Assert.AreEqual("""{"text":"new\n  text (","selection":[12,12],"events":["own a","paste"]}""", await driver.EvaluateAsync("() => editorState('code')"));
+            await driver.EvaluateAsync("() => { editors.code.set('one\\ntwo\\nthree', 4, 9); }");
+            await driver.CallAsync("fill", $$"""{"uid":"{{code}}","value":"Q"}""");
+            Assert.AreEqual("\"Q\"", await driver.EvaluateAsync("() => editorState('code').text"));
+            await driver.EvaluateAsync("() => { editors.code.set('one\\ntwo\\nthree', 5, 5); }");
+            await driver.CallAsync("fill", $$"""{"uid":"{{code}}","value":""}""");
+            Assert.AreEqual("""{"text":"","selection":[0,0],"events":["own a","own Backspace"]}""", await driver.EvaluateAsync("() => editorState('code')"));
+
+            // A text of the editor names the editor, and an editor that is editable content as well is filled through its EditContext.
+            await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("\"Bare editor\"")}}","value":"bare"}""");
+            await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("textbox \"Editable editor\"")}}","value":"both"}""");
+            Assert.AreEqual("""["bare","both",false]""", await driver.EvaluateAsync("() => [editorState('bare').text, editorState('both').text, editorState('both').events.includes('input')]"));
+
+            var form = $$"""{"elements":[{"uid":"{{plain}}","value":"one"},{"uid":"{{code}}","value":"two\nlines"}]}""";
+            Assert.AreEqual("Successfully filled out the form", await driver.CallAsync("fill_form", form));
+            Assert.AreEqual("""["one","two\nlines"]""", await driver.EvaluateAsync("() => [editorState('plain').text, editorState('code').text]"));
+
+            StringAssert.Contains(await driver.CallAsync("fill", $$"""{"uid":"{{driver.Uid("textbox \"Locked editor\"")}}","value":"no"}""", expectError: true), "is read-only");
+            Assert.AreEqual("\"\"", await driver.EvaluateAsync("() => editorState('locked').text"));
+        });
+    }
+
+    [TestMethod]
     public async Task ADialogStopsAnActionUntilItIsHandled()
     {
         await RunAsync(async driver =>

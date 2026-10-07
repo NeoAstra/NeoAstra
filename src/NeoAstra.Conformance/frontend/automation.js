@@ -30,5 +30,22 @@
   });
   $('file').addEventListener('change', e => { $('result').textContent = 'files ' + Array.from(e.target.files).map(f => f.name + ':' + f.size).join(','); });
   document.addEventListener('keydown', e => { if (e.key === 'k' && e.ctrlKey) $('result').textContent = 'shortcut'; });
+  // An editor that takes its text from an EditContext, where the engine has one: the element is no input and no
+  // editable content. The engine gives the text that is typed to the EditContext, and the editor draws it and puts in
+  // the line breaks.
+  if (typeof EditContext === 'function') {
+    const editor = $('context-editor');
+    const context = new EditContext();
+    const draw = () => { editor.textContent = context.text; };
+    editor.editContext = context;
+    context.addEventListener('textupdate', draw);
+    editor.addEventListener('beforeinput', e => {
+      if (e.inputType !== 'insertParagraph' && e.inputType !== 'insertLineBreak') return;
+      const start = Math.min(context.selectionStart, context.selectionEnd);
+      context.updateText(start, Math.max(context.selectionStart, context.selectionEnd), '\n');
+      context.updateSelection(start + 1, start + 1);
+      draw();
+    });
+  }
   console.info('fixture ready');
 })();

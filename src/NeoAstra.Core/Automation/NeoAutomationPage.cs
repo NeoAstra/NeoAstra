@@ -184,6 +184,10 @@ public sealed class NeoAutomationPage
     /// <param name="value">The text, the text of the option, or <c>true</c> or <c>false</c> for a toggle.</param>
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>What the change led to.</returns>
+    /// <remarks>
+    /// The text replaces what the element holds. Editable content takes a text as well, and so does an editor that
+    /// takes its text from an <c>EditContext</c>, such as Monaco.
+    /// </remarks>
     /// <exception cref="NeoAutomationException">The element cannot take the value, or a dialog is open.</exception>
     public ValueTask<NeoAutomationActionResult> FillAsync(string uid, string value, CancellationToken cancellationToken = default)
     {
