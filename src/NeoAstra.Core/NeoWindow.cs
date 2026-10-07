@@ -38,6 +38,7 @@ public sealed class NeoWindow : IAsyncDisposable
         _isVisible = options.IsVisible;
         _state = options.State;
         Id = NativeMethods.neoastra_window_get_id(NativeHandle);
+        _scaleFactor = ReadScaleFactor(1d);
         _titleBar = options.TitleBar;
         // The creation flags carry only the style; the remaining title-bar settings need the full native call.
         if (_titleBar != new NeoWindowTitleBar(_titleBar.Style))
@@ -73,7 +74,7 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the position of the window, including its frame, in logical units.</summary>
+    /// <summary>Gets or sets the position of the window, including its frame, in the units of <see cref="ClientSize"/>.</summary>
     /// <remarks>The position is the top-left corner of the window measured from the top-left corner of the primary display, with the vertical axis pointing down on every platform.</remarks>
     public NeoPoint Position
     {
@@ -85,8 +86,21 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the client size in logical units.</summary>
-    /// <remarks>The client area excludes the window frame and a standard title bar, so a value read here can be assigned back without resizing the window.</remarks>
+    /// <summary>Gets or sets the client size, in the units that the platform counts a window in.</summary>
+    /// <remarks>
+    /// <para>The client area excludes the window frame and a standard title bar, so a value read here can be assigned back without resizing the window. With GTK it includes a title bar that the window draws itself.</para>
+    /// <para>
+    /// On macOS and with GTK the units are logical: the same on every display, and what a CSS pixel of a page is at 100 percent
+    /// zoom. On Windows they are the units that the system gives the process: the pixels of the display for an application
+    /// that declares itself aware of display scaling, of which <see cref="ScaleFactor"/> make one logical unit, and logical
+    /// units for an application that leaves the scaling to the system.
+    /// </para>
+    /// <para>
+    /// A window may not take the size it is given: its screen, its size limits, or its state can keep it at another one. The
+    /// value read back is the size it has. With GTK a window on screen takes a size when it is laid out next, so the value
+    /// read back until then is the one that was assigned, and <see cref="ClientSizeChanged"/> tells of another outcome.
+    /// </para>
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is not positive.</exception>
     public NeoSize ClientSize
     {
@@ -103,7 +117,7 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the native minimum client-size constraint.</summary>
+    /// <summary>Gets or sets the native minimum client-size constraint, in the units of <see cref="ClientSize"/>.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
     /// <exception cref="ArgumentException">The minimum exceeds the configured maximum.</exception>
     public unsafe NeoSize MinimumClientSize
@@ -129,7 +143,7 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
-    /// <summary>Gets or sets the native maximum client-size constraint. Zero disables a dimension's maximum.</summary>
+    /// <summary>Gets or sets the native maximum client-size constraint, in the units of <see cref="ClientSize"/>. Zero disables a dimension's maximum.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
     /// <exception cref="ArgumentException">The maximum is less than the configured minimum.</exception>
     public unsafe NeoSize MaximumClientSize
@@ -164,7 +178,12 @@ public sealed class NeoWindow : IAsyncDisposable
     /// <summary>Gets whether native closure or disposal has completed for this window.</summary>
     public bool IsClosed => Volatile.Read(ref _closed) != 0 || Volatile.Read(ref _disposed) != 0;
 
-    /// <summary>Gets the current logical-to-physical scale factor.</summary>
+    /// <summary>Gets how many pixels of its display the window has for one logical unit: 1.5 at 150 percent, 2 on a Retina display.</summary>
+    /// <remarks>
+    /// The value is known as soon as the window exists, and <see cref="ScaleFactorChanged"/> reports when it changes. On
+    /// Windows it is what the system tells the process: the scale of the display for an application that declares itself
+    /// aware of display scaling, and 1 for an application that leaves the scaling to the system. GTK reports whole numbers.
+    /// </remarks>
     public double ScaleFactor => _scaleFactor;
 
     /// <summary>Gets or sets the native window presentation state.</summary>
@@ -264,16 +283,16 @@ public sealed class NeoWindow : IAsyncDisposable
     /// <summary>Occurs once after the native window has closed.</summary>
     public event EventHandler? Closed;
 
-    /// <summary>Occurs when the logical position or client size changes.</summary>
+    /// <summary>Occurs when the position or the client size changes.</summary>
     public event EventHandler<NeoWindowBoundsChangedEventArgs>? BoundsChanged;
 
-    /// <summary>Occurs when the logical window position changes.</summary>
+    /// <summary>Occurs when the window position changes.</summary>
     public event EventHandler<NeoWindowPositionChangedEventArgs>? PositionChanged;
 
-    /// <summary>Occurs when the logical client size changes.</summary>
+    /// <summary>Occurs when the client size changes, also when the user, the screen, or the state of the window gave it the size.</summary>
     public event EventHandler<NeoWindowClientSizeChangedEventArgs>? ClientSizeChanged;
 
-    /// <summary>Occurs when the effective scale factor changes.</summary>
+    /// <summary>Occurs when <see cref="ScaleFactor"/> changes, as when the window moves to a display with another scale.</summary>
     public event EventHandler<NeoWindowScaleFactorChangedEventArgs>? ScaleFactorChanged;
 
     /// <summary>Occurs when keyboard focus changes.</summary>
@@ -599,6 +618,9 @@ public sealed class NeoWindow : IAsyncDisposable
     internal void OnScaleFactorChanged(double scaleFactor)
     {
         var old = _scaleFactor;
+        // The event carries thousandths; the window has the exact value.
+        try { scaleFactor = ReadScaleFactor(scaleFactor); } catch (ObjectDisposedException) { }
+        if (scaleFactor == old) return;
         _scaleFactor = scaleFactor;
         try { ScaleFactorChanged?.Invoke(this, new NeoWindowScaleFactorChangedEventArgs(old, scaleFactor)); } catch { }
     }
@@ -659,6 +681,14 @@ public sealed class NeoWindow : IAsyncDisposable
         }
 
         static NativeMethods.neoastra_color ToNative(NeoColor color) => new() { red = color.Red, green = color.Green, blue = color.Blue, alpha = color.Alpha };
+    }
+
+    private unsafe double ReadScaleFactor(double fallback)
+    {
+        double value;
+        return NativeError.Code(NativeMethods.neoastra_window_get_scale_factor(NativeHandle, &value)) == NeoErrorCode.Success && double.IsFinite(value) && value > 0
+            ? value
+            : fallback;
     }
 
     private unsafe NeoRect GetBounds()

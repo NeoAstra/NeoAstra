@@ -1179,6 +1179,53 @@ public sealed class ManagedApiTests
         }
     }
 
+    [TestMethod]
+    public async Task WindowScaleFactor_IsTheScaleOfItsDisplayFromCreationWhenDevelopmentLibraryIsAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            // What a window is told about its display depends on what the thread that creates it declares: the scale of the
+            // display for a thread that is aware of it, and 1 for a thread that leaves the scaling to the system.
+            foreach (var aware in new[] { true, false })
+            {
+                var run = RunStaAsync(() =>
+                {
+                    if (aware) SetThreadDpiAwarenessContext(-4);
+                    return NeoApplication.Run(
+                        new NeoApplicationOptions
+                        {
+                            ApplicationName = "NeoAstra window scale test",
+                            ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                        },
+                        async application =>
+                        {
+                            await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                            var hwnd = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).GetWin32Hwnd();
+                            // The scale used to be 1 until the window moved to a display with another scale.
+                            Assert.AreEqual(GetDpiForWindow(hwnd) / 96d, window.ScaleFactor, aware ? "aware" : "unaware");
+                            if (!aware) Assert.AreEqual(1d, window.ScaleFactor);
+                            application.Shutdown(0);
+                        });
+                });
+
+                Assert.AreEqual(0, await run.WaitAsync(TimeSpan.FromSeconds(10)));
+            }
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
+        }
+    }
+
     private static void AssertWindowBounds(NeoWindow window, NeoRect expected, string message)
     {
         Assert.AreEqual(expected.Size, window.ClientSize, message);
@@ -1272,6 +1319,9 @@ public sealed class ManagedApiTests
 
     [DllImport("user32.dll")]
     private static extern nint SetThreadDpiAwarenessContext(nint context);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(nint window);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
