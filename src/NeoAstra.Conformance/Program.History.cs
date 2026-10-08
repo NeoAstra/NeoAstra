@@ -22,6 +22,9 @@ internal static partial class Program
                         var completion = WaitForNavigationAsync(view, expected, options.Timeout);
                         await start();
                         await completion;
+                        // WebKit reports a document that is left before it has loaded as a failed navigation when the view
+                        // comes back to it, so the next step waits for the document.
+                        await WaitForDocumentLoadAsync(view, options.Timeout);
                         var request = requests.LastOrDefault(candidate => candidate.IsMainFrame && SameLocation(candidate.Uri, expected));
                         Require(request is not null, $"No navigation request was raised for '{expected}'.");
                         Require(request!.Kind == kind, $"The request for '{expected}' was reported as {request.Kind} instead of {kind}.");
@@ -31,19 +34,18 @@ internal static partial class Program
                     await ExpectAsync(SecondUri, NeoNavigationKind.NewDocument, () => view.NavigateAsync(SecondUri));
                     await WaitUntilAsync(() => view.CanGoBack, "Backward history did not become available.", options.Timeout);
                     await ExpectAsync(IndexUri, NeoNavigationKind.BackForward, () => { view.GoBack(); return ValueTask.CompletedTask; });
-                    await WaitForDocumentLoadAsync(view, options.Timeout);
                     await ExpectAsync(SecondUri, NeoNavigationKind.BackForward, async () => _ = await view.EvaluateScriptAsync("history.forward(); true"));
                     await ExpectAsync(SecondUri, NeoNavigationKind.Reload, () => { view.Reload(); return ValueTask.CompletedTask; });
                     // An entry of the history with the address of the document that is shown is not a reload.
                     await ExpectAsync(IndexUri, NeoNavigationKind.NewDocument, () => view.NavigateAsync(IndexUri));
                     await ExpectAsync(SecondUri, NeoNavigationKind.NewDocument, () => view.NavigateAsync(SecondUri));
-                    await WaitForDocumentLoadAsync(view, options.Timeout);
                     await ExpectAsync(SecondUri, NeoNavigationKind.BackForward, async () => _ = await view.EvaluateScriptAsync("history.go(-2); true"));
                 }));
 
                 await RunCaseAsync(turnedOff, () => WithViewAsync(environment, new NeoBrowserFeatures { HistoryNavigation = false }, async (view, requests) =>
                 {
                     await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
+                    await WaitForDocumentLoadAsync(view, options.Timeout);
                     await NavigateAndWaitAsync(view, SecondUri, options.Timeout);
                     await WaitForDocumentLoadAsync(view, options.Timeout);
                     _ = await view.EvaluateScriptAsync("globalThis.__neoMarker = 'set'; true");
