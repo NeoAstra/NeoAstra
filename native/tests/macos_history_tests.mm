@@ -16,14 +16,17 @@ struct completion {
     bool done{};
     neoastra_result_t result{NEOASTRA_ERROR_UNKNOWN};
     void* value{};
+    std::string text;
 };
 
 // What the view has reported: its latest history flags, the page of the navigation it finished last,
-// and whether a navigation failed or its web process exited.
+// whether a navigation failed or its web process exited, and the navigation requests with the kind of the last one.
 struct view_events {
     uint64_t history{};
     std::string page;
     bool failed{};
+    uint64_t requests{};
+    uint64_t kind{};
 };
 
 // A history-changed event carries one bit for each direction that has an entry to go to.
@@ -61,12 +64,22 @@ void complete(void* context, neoastra_result_t result, void* value) {
 
 void NEOASTRA_CALL environment_created(void* context, neoastra_result_t result, neoastra_environment_t* value, const neoastra_error_t*) { complete(context, result, value); }
 void NEOASTRA_CALL view_created(void* context, neoastra_result_t result, neoastra_view_t* value, const neoastra_error_t*) { complete(context, result, value); }
+void NEOASTRA_CALL script_evaluated(void* context, neoastra_result_t result, neoastra_string_view_t value, const neoastra_error_t*) {
+    auto* state = static_cast<completion*>(context);
+    if (value.data) state->text.assign(reinterpret_cast<const char*>(value.data), static_cast<size_t>(value.length));
+    complete(context, result, nullptr);
+}
 
 void NEOASTRA_CALL record_event(void* context, const neoastra_event_t* event) {
     auto* events = static_cast<view_events*>(context);
     switch (event->header.type) {
     case NEOASTRA_EVENT_HISTORY_CHANGED:
         events->history = event->value;
+        break;
+    // The decision of the request is left alone, which allows the navigation.
+    case NEOASTRA_EVENT_NAVIGATION_REQUESTED:
+        events->requests++;
+        events->kind = event->value & NEOASTRA_NAVIGATION_REQUEST_KIND_MASK;
         break;
     case NEOASTRA_EVENT_NAVIGATION_COMPLETED:
         events->page.clear();
@@ -94,6 +107,34 @@ void go_back(neoastra_view_t* view, view_events& events) {
 void go_forward(neoastra_view_t* view, view_events& events) {
     events.page.clear();
     assert(neoastra_view_go_forward(view) == NEOASTRA_OK);
+}
+
+void reload(neoastra_view_t* view, view_events& events) {
+    events.page.clear();
+    assert(neoastra_view_reload(view, 0) == NEOASTRA_OK);
+}
+
+// Returns the JSON text of the value the script evaluates to.
+std::string evaluate(neoastra_view_t* view, const std::string& script) {
+    completion state;
+    assert(neoastra_view_evaluate_script_async(view, string_view(script), script_evaluated, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    return state.text;
+}
+
+// Gives the view the time to start what it was asked for, when the test expects that it starts nothing.
+void settle() {
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:0.5];
+    while (deadline.timeIntervalSinceNow > 0) pump();
+}
+
+void expect_history(const view_events& events, uint64_t history) {
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:60];
+    while (events.history != history) {
+        assert(deadline.timeIntervalSinceNow > 0);
+        pump();
+    }
 }
 
 // Waits until the navigation just started has finished on `page` and the view reports `history`.
@@ -171,6 +212,41 @@ int main() {
         expect_page(events, first_page, can_go_forward);
         navigate(view, events, third_page);
         expect_page(events, third_page, can_go_back);
+
+        // A request tells whether it asks for a new document, an entry of the history, or a reload.
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT);
+        go_back(view, events);
+        expect_page(events, first_page, can_go_forward);
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD);
+        reload(view, events);
+        expect_page(events, first_page, can_go_forward);
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD);
+        go_forward(view, events);
+        expect_page(events, third_page, can_go_back);
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD);
+
+        // While history navigation is off the view reports no direction to go in, refuses the commands of the history,
+        // and stays on its page when the page walks the history itself: it is not even asked. A reload still loads the page.
+        assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_OK);
+        expect_history(events, 0);
+        assert(neoastra_view_go_back(view) == NEOASTRA_ERROR_INVALID_STATE);
+        assert(neoastra_view_go_forward(view) == NEOASTRA_ERROR_INVALID_STATE);
+        const auto requests = events.requests;
+        events.page.clear();
+        evaluate(view, "history.back();0");
+        settle();
+        assert(events.requests == requests && events.page.empty() && !events.failed);
+        assert(evaluate(view, "document.body.textContent") == "\"third\"");
+        reload(view, events);
+        expect_page(events, third_page, 0);
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD);
+
+        // Turned on again, the view reports the directions that its history has, and goes there.
+        assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 1) == NEOASTRA_OK);
+        expect_history(events, can_go_back);
+        go_back(view, events);
+        expect_page(events, first_page, can_go_forward);
+        assert(events.kind == NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD);
 
         neoastra_view_release(view);
         neoastra_environment_release(environment);

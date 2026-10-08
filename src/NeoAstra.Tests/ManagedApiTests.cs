@@ -99,9 +99,9 @@ public sealed class ManagedApiTests
             new NeoAstraOptions { Transport = new NeoTransportOptions { HandshakeTimeout = TimeSpan.Zero } }.Validate(null!));
         Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAstraOptions { BrowserFeatures = null! }.Validate(null!));
         var defaultFeatures = new NeoAstraOptions().BrowserFeatures;
-        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null });
+        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null, HistoryNavigation: null });
         var shellFeatures = NeoBrowserFeatures.ApplicationShell();
-        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true });
+        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true, HistoryNavigation: null });
         Assert.AreNotSame(shellFeatures, NeoBrowserFeatures.ApplicationShell());
 
         var provider = new NullResourceProvider();
@@ -492,6 +492,27 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void NavigationKind_IsUnknownUnlessTheBackendReportsIt()
+    {
+        // The kind is a number in the bits 4 to 7 of the value of a navigation request, next to the bits of the test above.
+        Assert.AreEqual(NeoNavigationKind.Unknown, NeoAstra.DecodeNavigationKind(0));
+        Assert.AreEqual(NeoNavigationKind.Unknown, NeoAstra.DecodeNavigationKind(1 | 2 | 4 | 8));
+        Assert.AreEqual(NeoNavigationKind.NewDocument, NeoAstra.DecodeNavigationKind(1 << 4));
+        Assert.AreEqual(NeoNavigationKind.Reload, NeoAstra.DecodeNavigationKind(2 << 4));
+        Assert.AreEqual(NeoNavigationKind.BackForward, NeoAstra.DecodeNavigationKind(3 << 4));
+        Assert.AreEqual(NeoNavigationKind.BackForward, NeoAstra.DecodeNavigationKind((3 << 4) | 1 | 2 | 8));
+        // The other bits are not part of it, and a kind of a later native library is one this version cannot name.
+        Assert.AreEqual(NeoNavigationKind.Reload, NeoAstra.DecodeNavigationKind((2 << 4) | (1UL << 8) | (1UL << 63)));
+        for (var later = 4; later <= 15; later++) Assert.AreEqual(NeoNavigationKind.Unknown, NeoAstra.DecodeNavigationKind((ulong)later << 4));
+        // The link activation of a request is read from its own bits.
+        Assert.IsNull(NeoAstra.DecodeLinkActivation(3 << 4));
+
+        var request = new NeoNavigationRequest(new Uri("https://example.com/"));
+        Assert.AreEqual(NeoNavigationKind.Unknown, request.Kind);
+        Assert.AreEqual(NeoNavigationKind.BackForward, (request with { Kind = NeoNavigationKind.BackForward }).Kind);
+    }
+
+    [TestMethod]
     public void ExternalOpen_DecodesWhatBecameOfTheAddress()
     {
         var address = new Uri("https://example.com/page");
@@ -508,6 +529,10 @@ public sealed class ManagedApiTests
         Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 3, false).ChecksExternalOpen);
         Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 0, false).ChecksExternalOpen);
         Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 2, false).ChecksExternalOpen);
+        // The second flag: the kind of a navigation request, and the switch of history navigation.
+        Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 2, false).ControlsHistoryNavigation);
+        Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 3, false).ControlsHistoryNavigation);
+        Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 1, false).ControlsHistoryNavigation);
         // A status from a later native library is not one that opened the address.
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, 3, 0).Status);
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, ulong.MaxValue, 0).Status);

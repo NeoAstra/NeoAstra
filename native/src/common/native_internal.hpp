@@ -438,6 +438,8 @@ struct neoastra_view final : neo_ui_ref_counted {
     uint32_t maximum_message_size{NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE};
     neoastra_bridge_policy_t bridge_policy{NEOASTRA_BRIDGE_DISABLED};
     std::vector<std::string> bridge_origins;
+    // UI-thread-only: NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION is off.
+    bool history_navigation_disabled{};
     neo_callback_slot<neoastra_event_callback_t> events;
     void* platform{};
     explicit neoastra_view(neoastra_environment_t* value) : neo_ui_ref_counted(value->app), environment(value) { environment->retain(); }
@@ -445,6 +447,15 @@ struct neoastra_view final : neo_ui_ref_counted {
     void destroy_ui() noexcept override;
 };
 
+// Whether a navigation request with these bits is refused without asking the host: an entry of the history while history
+// navigation is off for the view.
+inline bool neo_refuses_navigation(const neoastra_view_t* view, uint64_t flags) noexcept {
+    return view->history_navigation_disabled && (flags & NEOASTRA_NAVIGATION_REQUEST_KIND_MASK) == NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD;
+}
+// The value of NEOASTRA_EVENT_HISTORY_CHANGED: no direction while history navigation is off for the view.
+inline uint64_t neo_history_directions(const neoastra_view_t* view, bool back, bool forward) noexcept {
+    return view->history_navigation_disabled ? 0u : (back ? 1u : 0u) | (forward ? 2u : 0u);
+}
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
 bool neo_bridge_access_allowed(const neoastra_view_t* view, std::string_view uri) noexcept;
 bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept;

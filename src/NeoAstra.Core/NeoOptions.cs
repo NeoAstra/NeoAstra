@@ -383,6 +383,34 @@ public sealed class NeoBrowserFeatures
     /// </remarks>
     public bool? TabFocusesLinks { get; set; }
 
+    /// <summary>Gets or sets whether the view loads the documents of its history again: back and forward.</summary>
+    /// <remarks>
+    /// <para>
+    /// A view keeps a history of the documents it has shown, and the engine walks it without the host: the back and
+    /// forward buttons of a mouse or a keyboard, <c>Alt+Left</c> and <c>Alt+Right</c>, a swipe, the items of the default
+    /// context menu, and <c>history.back()</c>, <c>history.forward()</c>, or <c>history.go(n)</c> of a page. While this
+    /// is <see langword="false"/> none of them loads a document, in any frame: the view refuses the request without
+    /// raising <see cref="NeoAstra.NavigationRequested"/>, and stays on the document it shows.
+    /// <see cref="NeoAstra.GoBack"/> and <see cref="NeoAstra.GoForward"/> then throw
+    /// <see cref="InvalidOperationException"/>, and <see cref="NeoAstra.CanGoBack"/> and
+    /// <see cref="NeoAstra.CanGoForward"/> are <see langword="false"/>.
+    /// </para>
+    /// <para>
+    /// A reload is not a history navigation and keeps working, as do the navigations of the host, of links, and of
+    /// scripts. The entries that a document adds for itself, with <c>history.pushState</c> or a fragment, load no
+    /// document: they stay with the page, which can still walk them.
+    /// </para>
+    /// <para>
+    /// Turn it off for a view whose documents the host chooses, for example a start-up screen followed by the
+    /// application: with the engine default, "back" returns to the start-up screen. A host that wants history
+    /// navigation for some documents only leaves it on and decides each request by its
+    /// <see cref="NeoNavigationRequest.Kind"/>. WebView2 tells a history navigation from the WebView2 Runtime 115 on; an
+    /// older runtime keeps it. <see cref="NeoRuntimeInfo.ControlsHistoryNavigation"/> tells whether the native library has
+    /// the switch.
+    /// </para>
+    /// </remarks>
+    public bool? HistoryNavigation { get; set; }
+
     /// <summary>
     /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls,
     /// and a Tab key that stops on links on every platform. DevTools keep the engine default.

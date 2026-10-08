@@ -58,6 +58,7 @@ struct windows_view {
     ComPtr<ICoreWebView2> core;
     HWND drop_window{};
     EventRegistrationToken navigation_starting{};
+    EventRegistrationToken frame_navigation_starting{};
     // The main-frame navigation that the host refused last, without its fragment, and when it did.
     std::string refused_navigation;
     ULONGLONG refused_navigation_time{};
@@ -408,6 +409,7 @@ void sync_window_view_visibility(neoastra_window_t* window, bool visible) noexce
 void remove_view_events(windows_view* state) noexcept {
     if (!state || !state->core || !state->events_registered) return;
     state->core->remove_NavigationStarting(state->navigation_starting);
+    state->core->remove_FrameNavigationStarting(state->frame_navigation_starting);
     state->core->remove_NavigationCompleted(state->navigation_completed);
     state->core->remove_SourceChanged(state->source_changed);
     state->core->remove_DocumentTitleChanged(state->title_changed);
@@ -618,6 +620,26 @@ uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEB
     return value;
 }
 
+// WebView2 tells the kind of a navigation from the runtime 115 on.
+uint64_t navigation_kind(ICoreWebView2NavigationStartingEventArgs* args) noexcept {
+    ComPtr<ICoreWebView2NavigationStartingEventArgs3> args3;
+    COREWEBVIEW2_NAVIGATION_KIND kind{};
+    if (FAILED(args->QueryInterface(IID_PPV_ARGS(&args3))) || FAILED(args3->get_NavigationKind(&kind))) return NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN;
+    switch (kind) {
+        case COREWEBVIEW2_NAVIGATION_KIND_NEW_DOCUMENT: return NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
+        case COREWEBVIEW2_NAVIGATION_KIND_RELOAD: return NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD;
+        case COREWEBVIEW2_NAVIGATION_KIND_BACK_OR_FORWARD: return NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD;
+        default: return NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN;
+    }
+}
+
+void report_history(neoastra_view_t* view, ICoreWebView2* core) noexcept {
+    BOOL back{}, forward{};
+    core->get_CanGoBack(&back);
+    core->get_CanGoForward(&forward);
+    neo_emit_view(view, NEOASTRA_EVENT_HISTORY_CHANGED, 0, nullptr, nullptr, neo_history_directions(view, back, forward));
+}
+
 HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     state->events_registered = true;
     HRESULT result = state->core->add_NavigationStarting(
@@ -629,6 +651,12 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             args->get_IsUserInitiated(&user_initiated);
             args->get_IsRedirected(&redirected);
             auto uri = take_string(raw_uri);
+            const auto kind = navigation_kind(args);
+            if (neo_refuses_navigation(view, kind)) {
+                args->put_Cancel(TRUE);
+                remember_navigation(view, uri, true);
+                return S_OK;
+            }
 
             auto context = std::make_unique<navigation_decision_context>();
             context->args = args;
@@ -640,7 +668,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             decision->completion_context = context.release();
             decision->external_uri = uri;
             neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri,
-                          NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME | (user_initiated && !redirected ? NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED : 0), 0, decision);
+                          NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME | (user_initiated && !redirected ? NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED : 0) | kind, 0, decision);
             const auto decision_state = decision->state.load(std::memory_order_acquire);
             // NavigationStarting has no WebView2 deferral API. A managed handler may
             // defer the portable decision, but WebView2 requires the final Cancel
@@ -657,6 +685,14 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             if (allowed) neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_STARTED, 0, nullptr, &uri, 1);
             return S_OK;
         }).Get(), &state->navigation_starting);
+    if (FAILED(result)) return result;
+
+    // The navigations of the other frames are not reported to the host. One that walks the history is refused like that of the main frame.
+    result = state->core->add_FrameNavigationStarting(
+        Callback<ICoreWebView2NavigationStartingEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            if (neo_refuses_navigation(view, navigation_kind(args))) args->put_Cancel(TRUE);
+            return S_OK;
+        }).Get(), &state->frame_navigation_starting);
     if (FAILED(result)) return result;
 
     result=state->core->add_ScriptDialogOpening(Callback<ICoreWebView2ScriptDialogOpeningEventHandler>([view](ICoreWebView2*,ICoreWebView2ScriptDialogOpeningEventArgs* args)->HRESULT{
@@ -718,10 +754,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
 
     result = state->core->add_HistoryChanged(
         Callback<ICoreWebView2HistoryChangedEventHandler>([view](ICoreWebView2* core, IUnknown*) -> HRESULT {
-            BOOL back{}, forward{};
-            core->get_CanGoBack(&back);
-            core->get_CanGoForward(&forward);
-            neo_emit_view(view, NEOASTRA_EVENT_HISTORY_CHANGED, 0, nullptr, nullptr, (back ? 1u : 0u) | (forward ? 2u : 0u));
+            report_history(view, core);
             return S_OK;
         }).Get(), &state->history_changed);
     if (FAILED(result)) return result;
@@ -2173,6 +2206,9 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         case NEOASTRA_VIEW_SETTING_STATUS_BAR:result=settings->put_IsStatusBarEnabled(value);break;
         // WebView2 raises ScriptDialogOpening only while its own dialogs are off, and reads the switch when it loads a document.
         case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:result=settings->put_AreDefaultScriptDialogsEnabled(value);break;
+        // The requests that walk the history are refused as they come, whatever asks for them. The swipe is switched as well, so
+        // that it does not draw the page it would go to; a runtime without that setting only refuses the request of the swipe.
+        case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION:{ComPtr<ICoreWebView2Settings6> settings6;if(SUCCEEDED(settings.As(&settings6)))(void)settings6->put_IsSwipeNavigationEnabled(value);report_history(view,state->core.Get());return NEOASTRA_OK;}
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:{
             // Pinch zoom is a separate setting on newer runtimes; older ones only have the wheel and keyboard control.
             result=settings->put_IsZoomControlEnabled(value);ComPtr<ICoreWebView2Settings5> settings5;if(SUCCEEDED(result)&&SUCCEEDED(settings.As(&settings5)))result=settings5->put_IsPinchZoomEnabled(value);break;}

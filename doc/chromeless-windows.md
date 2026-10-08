@@ -132,8 +132,9 @@ resize borders.
 ## Built-in browser shortcuts and menus
 
 A browser engine brings shortcuts and user interface of its own: a find bar, a print dialog, reload
-and zoom keys, a context menu, and a status bubble for hovered links. An application that defines its
-own shortcuts and menus can turn them off per view with `NeoBrowserFeatures`:
+and zoom keys, a context menu, a status bubble for hovered links, and the back and forward of its
+history. An application that defines its own shortcuts and menus can turn them off per view with
+`NeoBrowserFeatures`:
 
 ```csharp
 var view = await environment.CreateWebViewAsync(
@@ -159,6 +160,7 @@ to the main view of a `NeoApp` application.
 | `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
 | `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification; off by default | Engine has none |
 | `TabFocusesLinks` | The Tab key stopping on links | Always on; cannot be turned off | Switchable; off by default | Switchable; on by default |
+| `HistoryNavigation` | Loading a document of the history again: back and forward, whatever asks for it | Switchable; on by default. WebView2 Runtime 115 or later | Switchable; on by default | Switchable; on by default |
 
 On macOS, WKWebView moves the focus with the Tab key between text fields only, and reaches links and
 the other controls with Option+Tab. `TabFocusesLinks` makes Tab stop on them, as it does on Windows
@@ -173,6 +175,71 @@ still receives `contextmenu` events when the default menu is off, so it can show
 The DevTools shortcut follows `DevTools` rather than `AcceleratorKeys`. With DevTools enabled, `F12`
 opens them on Windows (together with `Ctrl+Shift+I`) and on Linux even when every other browser
 shortcut is off. `NeoAstra.OpenDevTools()` opens them from application code on Windows and Linux.
+
+### History navigation
+
+A view keeps a history of the documents it has shown, and the engine walks it without the host. On
+Windows these all load the previous document again: the back button of a mouse, the browser-back key
+of a keyboard, `Alt+Left` while the accelerator keys are on, a swipe on a touch screen,
+`history.back()` and `history.go(n)` of a page, and `NeoAstra.GoBack()`, which the automation tool
+`navigate_page` calls. An application that shows a start-up screen and then its main
+document in the same view has both in that history, so "back" returns to the start-up screen, which
+nothing leaves again.
+
+`NeoBrowserFeatures.HistoryNavigation = false` turns that off for a view:
+
+- No history navigation loads a document, in any frame, whatever asks for it. The view refuses the
+  request itself and does not raise `NavigationRequested`; the document that is shown stays as it is,
+  with what its scripts hold.
+- `GoBack()` and `GoForward()` throw `InvalidOperationException`, `CanGoBack` and `CanGoForward` are
+  `false`, and `navigate_page` answers that history navigation is turned off for the view.
+- The swipe of the engine is switched off as well: `IsSwipeNavigationEnabled` of WebView2, and
+  `allowsBackForwardNavigationGestures` and `enable-back-forward-navigation-gestures` of WKWebView and
+  WebKitGTK, which are off unless a host turns them on through the native view.
+- A reload is not a history navigation: `Reload()`, `location.reload()`, and the reload key keep
+  working. So do the navigations of the host, of links, and of scripts.
+- The entries that a document adds for itself, with `history.pushState` or a fragment, load no
+  document, so no engine asks about them. They stay with the page: a single-page application keeps
+  its own routes, and the back button of a mouse walks them until the next entry is another document.
+
+`ApplicationShell()` keeps history navigation, so an application shell turns it off on the selection
+that it gets:
+
+```csharp
+var features = NeoBrowserFeatures.ApplicationShell();
+features.HistoryNavigation = false;
+```
+
+An application that wants history navigation for some documents only leaves it on and decides each
+request. `NeoNavigationRequest.Kind` tells a new document, a reload, and an entry of the history
+apart, which the address does not: an entry of the history can have the address of the document that
+is shown, and then looks like a reload.
+
+```csharp
+view.NavigationRequested = request => ValueTask.FromResult(
+    request.Kind == NeoNavigationKind.BackForward && request.Uri.AbsolutePath == "/splash.html"
+        ? NeoNavigationDecision.Cancel
+        : NeoNavigationDecision.Allow);
+```
+
+`Kind` is `Unknown` where the engine does not tell: with a WebView2 Runtime before 115, and on macOS
+and Linux for the reload or the history navigation of a document that a form submission produced,
+which WebKit names with one type. A view whose history navigation is off does not refuse a request of
+an unknown kind.
+
+No engine lets its host replace the entry of the history that is shown, or drop the history:
+WebView2 has `GoBack`, `GoForward`, and `HistoryChanged` and nothing else for it, and the back-forward
+lists of WKWebView and WebKitGTK are read-only. NeoAstra therefore has no navigation that leaves no
+entry behind. A document does it for itself with `location.replace`, which a host can run for a
+start-up screen that should not stay in the history of a view that keeps history navigation:
+
+```csharp
+await view.EvaluateScriptAsync($"location.replace({JsonSerializer.Serialize(target.AbsoluteUri)})");
+```
+
+That is a navigation of the page and has its limits: it needs a document that runs scripts, an engine
+refuses some addresses to a page that it takes from its host (Chromium does not let a page navigate
+its top-level document to a `data:` address), and nothing reports an address that was refused.
 WKWebView has no public way to open the Web Inspector, so on macOS it is reached through the context
 menu's Inspect Element item or Safari's Develop menu, and `OpenDevTools()` reports
 `NotSupportedException`.

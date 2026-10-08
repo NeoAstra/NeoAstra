@@ -164,7 +164,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off. While HISTORY_NAVIGATION is off the view loads no document from its history: a navigation request of the kind BACK_FORWARD is refused in any frame without NEOASTRA_EVENT_NAVIGATION_REQUESTED, whatever asked for it (a mouse button, a key, a swipe, a menu, history.back() of a page), neoastra_view_go_back and neoastra_view_go_forward return NEOASTRA_ERROR_INVALID_STATE, NEOASTRA_EVENT_HISTORY_CHANGED reports no direction to go in, and the swipe that walks the history is off. A reload is not a history navigation, and the entries that a document adds for itself, with history.pushState or a fragment, load no document and stay with the page.
         /// </summary>
         public enum neoastra_view_setting : uint
         {
@@ -181,6 +181,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = unchecked((uint)5),
 
             NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = unchecked((uint)6),
+
+            NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION = unchecked((uint)7),
         }
 
         public enum neoastra_option_state : uint
@@ -1362,7 +1364,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off. While HISTORY_NAVIGATION is off the view loads no document from its history: a navigation request of the kind BACK_FORWARD is refused in any frame without NEOASTRA_EVENT_NAVIGATION_REQUESTED, whatever asked for it (a mouse button, a key, a swipe, a menu, history.back() of a page), neoastra_view_go_back and neoastra_view_go_forward return NEOASTRA_ERROR_INVALID_STATE, NEOASTRA_EVENT_HISTORY_CHANGED reports no direction to go in, and the swipe that walks the history is off. A reload is not a history navigation, and the entries that a document adds for itself, with history.pushState or a fragment, load no document and stay with the page.
         /// </summary>
         public readonly partial record struct neoastra_view_setting_t(NativeMethods.neoastra_view_setting Value)
         {
@@ -2110,6 +2112,9 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_reload(NativeMethods.neoastra_view_t arg0, uint arg1);
 
+        /// <summary>
+        /// Go to the previous or the next entry of the history. NEOASTRA_ERROR_INVALID_STATE while NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION is off.
+        /// </summary>
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_go_back")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_go_back(NativeMethods.neoastra_view_t arg0);

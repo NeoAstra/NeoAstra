@@ -93,14 +93,16 @@ static_assert(std::is_same_v<std::underlying_type_t<neoastra_external_open_statu
 static_assert(NEOASTRA_EXTERNAL_OPEN_OPENED == 0 && NEOASTRA_EXTERNAL_OPEN_REFUSED == 1 && NEOASTRA_EXTERNAL_OPEN_FAILED == 2);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME == 1 && NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED == 2 && NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED == 1);
 static_assert(NEOASTRA_REQUEST_LINK_ACTIVATED == 4 && NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED == 8);
-static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1);
+static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_MASK == 0xf0 && NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN == 0);
+static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT == 0x10 && NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD == 0x20 && NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD == 0x30);
+static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
 static_assert(NEOASTRA_RESOURCE_MANIFEST == 12);
 static_assert(NEOASTRA_RESOURCE_BODY_FILE == 2);
 static_assert(NEOASTRA_CAPTURE_FORMAT_PNG == 0 && NEOASTRA_CAPTURE_FORMAT_JPEG == 1);
-static_assert(NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS == 5 && NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS == 6);
+static_assert(NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS == 5 && NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS == 6 && NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION == 7);
 static_assert(NEOASTRA_BRIDGE_DISABLED == 0 && NEOASTRA_BRIDGE_TRUSTED_ORIGINS == 1 && NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW == 2);
 static_assert(sizeof(void*) == 8, "ABI 1.0 targets the current 64-bit primary platforms");
 static_assert(sizeof(neoastra_struct_header_t) == 8);
@@ -167,6 +169,7 @@ int main() {
     assert(neoastra_get_runtime_info(&info, &error) == NEOASTRA_OK);
     assert(error == nullptr && info.backend_name.length != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK) != 0);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION) != 0);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);
@@ -247,6 +250,7 @@ int main() {
     assert(neoastra_view_open_devtools(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     neoastra_capture_options_t capture{};
     capture.size = sizeof(capture);
     capture.version = 1;

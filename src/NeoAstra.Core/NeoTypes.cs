@@ -468,6 +468,19 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
     /// runs with one must validate the address itself before it answers <see cref="NeoDecisionAction.OpenExternal"/>.
     /// </remarks>
     public bool ChecksExternalOpen => (BuildFeatures & ExternalOpenCheck) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION of native/include/neoastra.h.
+    private const ulong HistoryNavigation = 1UL << 1;
+
+    /// <summary>
+    /// Gets whether the native library reports the <see cref="NeoNavigationRequest.Kind"/> of a navigation request and
+    /// applies <see cref="NeoBrowserFeatures.HistoryNavigation"/>.
+    /// </summary>
+    /// <remarks>
+    /// With a native library from before them, every request has the kind <see cref="NeoNavigationKind.Unknown"/> and
+    /// a view keeps its history navigation whatever its features say.
+    /// </remarks>
+    public bool ControlsHistoryNavigation => (BuildFeatures & HistoryNavigation) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

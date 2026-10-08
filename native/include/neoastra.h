@@ -78,8 +78,8 @@ typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 
 typedef enum neoastra_window_resize_edge : uint32_t { NEOASTRA_WINDOW_RESIZE_LEFT = 0, NEOASTRA_WINDOW_RESIZE_TOP = 1, NEOASTRA_WINDOW_RESIZE_RIGHT = 2, NEOASTRA_WINDOW_RESIZE_BOTTOM = 3, NEOASTRA_WINDOW_RESIZE_TOP_LEFT = 4, NEOASTRA_WINDOW_RESIZE_TOP_RIGHT = 5, NEOASTRA_WINDOW_RESIZE_BOTTOM_LEFT = 6, NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = 7 } neoastra_window_resize_edge_t;
 /** Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls. */
 typedef enum neoastra_title_bar_style : uint32_t { NEOASTRA_TITLE_BAR_DEFAULT = 0, NEOASTRA_TITLE_BAR_OVERLAY = 1, NEOASTRA_TITLE_BAR_HIDDEN = 2 } neoastra_title_bar_style_t;
-/** Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off. */
-typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = 5, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = 6 } neoastra_view_setting_t;
+/** Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off. While HISTORY_NAVIGATION is off the view loads no document from its history: a navigation request of the kind BACK_FORWARD is refused in any frame without NEOASTRA_EVENT_NAVIGATION_REQUESTED, whatever asked for it (a mouse button, a key, a swipe, a menu, history.back() of a page), neoastra_view_go_back and neoastra_view_go_forward return NEOASTRA_ERROR_INVALID_STATE, NEOASTRA_EVENT_HISTORY_CHANGED reports no direction to go in, and the swipe that walks the history is off. A reload is not a history navigation, and the entries that a document adds for itself, with history.pushState or a fragment, load no document and stay with the page. */
+typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = 5, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = 6, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION = 7 } neoastra_view_setting_t;
 typedef enum neoastra_option_state : uint32_t { NEOASTRA_OPTION_DEFAULT = 0, NEOASTRA_OPTION_ENABLED = 1, NEOASTRA_OPTION_DISABLED = 2 } neoastra_option_state_t;
 typedef enum neoastra_script_injection_time : uint32_t { NEOASTRA_SCRIPT_DOCUMENT_START = 0, NEOASTRA_SCRIPT_DOCUMENT_END = 1 } neoastra_script_injection_time_t;
 /** OPEN_EXTERNAL answers a navigation or new-window request by leaving the view where it is and handing the requested address to the system, which opens it in the default browser. Only an absolute http or https address with a host and without credentials is handed over; NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED then tells what became of it. */
@@ -130,16 +130,28 @@ typedef uint64_t neoastra_data_kind_t;
    WebKitGTK report the user gesture a script runs in, so a navigation that a script starts from a click handler has it; WKWebView
    only tells that the user clicked a link or pressed Enter on it, and cannot tell the redirect of such a link from the link.
    LINK_ACTIVATED says that a link was activated, which a script does as well with click() on an anchor. It is meaningful when
-   LINK_ACTIVATION_REPORTED is set: WebView2 does not report it. */
+   LINK_ACTIVATION_REPORTED is set: WebView2 does not report it.
+   The bits of NEOASTRA_NAVIGATION_REQUEST_KIND_MASK hold the kind of a navigation request: NEW_DOCUMENT for an address that the
+   host, a link, a form or a script asks for, RELOAD for the document of the frame loaded again, BACK_FORWARD for an entry of the
+   history. UNKNOWN is a request whose kind the engine does not tell: WebView2 tells it from the runtime 115 on, and WKWebView and
+   WebKitGTK name the reload and the history navigation of a submitted form with one type that does not tell which it is. A
+   library from before these bits leaves them UNKNOWN too. */
 #define NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME (UINT64_C(1) << 0)
 #define NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED (UINT64_C(1) << 1)
 #define NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED (UINT64_C(1) << 0)
 #define NEOASTRA_REQUEST_LINK_ACTIVATED (UINT64_C(1) << 2)
 #define NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED (UINT64_C(1) << 3)
+#define NEOASTRA_NAVIGATION_REQUEST_KIND_MASK (UINT64_C(15) << 4)
+#define NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN (UINT64_C(0) << 4)
+#define NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT (UINT64_C(1) << 4)
+#define NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD (UINT64_C(2) << 4)
+#define NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD (UINT64_C(3) << 4)
 /* Bits of neoastra_runtime_info_t.build_features. EXTERNAL_OPEN_CHECK says that this library hands only a web address to the
    system for an OPEN_EXTERNAL decision and raises NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED; a library without it opens any address
-   and reports nothing. */
+   and reports nothing. HISTORY_NAVIGATION says that this library reports the kind of a navigation request and has
+   NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION; a library without it reports no kind and refuses that setting as an invalid argument. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
+#define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)
@@ -277,6 +289,7 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoa
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_stop(neoastra_view_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_reload(neoastra_view_t*, uint32_t);
+/* Go to the previous or the next entry of the history. NEOASTRA_ERROR_INVALID_STATE while NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION is off. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_go_back(neoastra_view_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_view_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t*, neoastra_string_view_t, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);

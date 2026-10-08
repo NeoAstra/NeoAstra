@@ -20,6 +20,9 @@ assuming that every browser engine supports every portable event.
 | Trusted message origins | Exact trusted-origin policy available | Exact trusted-origin policy available | Unavailable; sender-origin data is not trustworthy |
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
 | Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Available |
+| Kind of a navigation request (`NeoNavigationRequest.Kind`) | Reported from the WebView2 Runtime 115 on | Reported; unknown for a reload or a history navigation after a form submission | Reported; unknown for a reload or a history navigation after a form submission |
+| History navigation turned off (`NeoBrowserFeatures.HistoryNavigation`) | Available from the WebView2 Runtime 115 on | Available | Available |
+| Replacing the current entry of the history, or clearing the history, from the host | Not exposed by the engine | Not exposed by the engine | Not exposed by the engine |
 | Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
 | Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |
 | Content extended into the title bar | Available | Available | Available where GTK draws client-side decorations |
@@ -83,7 +86,29 @@ user-initiated most of the time; `NeoAutomation` evaluates scripts as well.
 
 WebView2 raises `NavigationStarting` for the top-level document, and NeoAstra does not listen to its
 event for frames: a link in an `<iframe>` that replaces the document of the frame raises no
-`NavigationRequested` on Windows, and the frame loads the address.
+`NavigationRequested` on Windows, and the frame loads the address. The one thing NeoAstra reads from
+the event of frames is a history navigation, which it refuses for a view whose history navigation is
+off.
+
+History navigation was observed on Windows 11 with the WebView2 Runtime 154, with the buttons of a
+mouse and the browser commands of a keyboard sent to the view as input. The back and forward buttons
+of a mouse, the browser-back and browser-forward commands, `history.back()`, `history.forward()`,
+`history.go(n)`, `GoBack()`, and `GoForward()` each raise one `NavigationRequested` of the kind
+`BackForward`, none of them user-initiated, also for an entry with the address of the document that
+is shown. `Reload()` and `location.reload()` are of the kind `Reload`, and a navigation of the host,
+of a link, or of a script is a `NewDocument`. A move to an entry that the page added with
+`history.pushState` raises nothing. With `NeoBrowserFeatures.HistoryNavigation` off, none of those
+history navigations loads a document or reaches `NavigationRequested`, in the top-level document or in
+a frame, a reload that follows at once still loads the document, and the back button of a mouse still
+walks the entries that the page added for itself. [History navigation](chromeless-windows.md#history-navigation)
+describes the switch. On macOS and Linux the kind is the navigation type that WKWebView and WebKitGTK
+report, where a reload and a history navigation of a document that came from a form submission share
+one type (`WKNavigationTypeFormResubmitted`, `WEBKIT_NAVIGATION_TYPE_FORM_RESUBMITTED`): its kind is
+`Unknown`, and a view without history navigation lets it through rather than refuse a reload.
+
+A host cannot replace the entry of the history that a view shows, or drop its history: no engine has
+an interface for it. A page replaces its own entry with `location.replace`, which leaves no entry
+behind on WebView2 and with WebKitGTK 2.52 (`CanGoBack` stays `false` and `history.length` stays 1).
 
 WebView2 starts the request of a navigation while its host answers `NavigationStarting`, and drops
 the response when the host refuses. NeoAstra answers the request of a navigation that the host has

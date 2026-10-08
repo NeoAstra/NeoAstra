@@ -1027,6 +1027,11 @@ public sealed class NeoAutomationPage
         try
         {
             var clock = Stopwatch.StartNew();
+            if (View.IsHistoryNavigationOff && options.Kind is NeoAutomationNavigationKind.Back or NeoAutomationNavigationKind.Forward)
+            {
+                return Failed(options, "history navigation is turned off for this view");
+            }
+
             try
             {
                 switch (options.Kind)

@@ -156,6 +156,15 @@ uint64_t link_activation(WKNavigationAction* action,uint64_t user_initiated) {
     const bool activated=action.navigationType==WKNavigationTypeLinkActivated;
     return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED|(activated?NEOASTRA_REQUEST_LINK_ACTIVATED:0)|(activated&&action.buttonNumber!=0?user_initiated:0);
 }
+// WKWebView names the reload and the history navigation of a submitted form with one type, which does not tell the kind.
+uint64_t navigation_kind(WKNavigationAction* action) {
+    switch(action.navigationType){
+        case WKNavigationTypeBackForward:return NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD;
+        case WKNavigationTypeReload:return NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD;
+        case WKNavigationTypeFormResubmitted:return NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN;
+        default:return NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
+    }
+}
 struct navigation_context { void (^handler)(WKNavigationActionPolicy); std::string uri; };
 void navigation_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {@autoreleasepool{std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer));const bool allowed=response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT;context->handler(allowed?WKNavigationActionPolicyAllow:WKNavigationActionPolicyCancel);}}
 struct permission_context { void (^handler)(WKPermissionDecision); };
@@ -176,7 +185,7 @@ void destroy_cocoa_download(neoastra_download_t* download) noexcept {auto* state
 struct download_destination_context { neoastra_download_t* download{}; NSURL* default_destination; void (^completion)(NSURL*); };
 void download_destination_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {@autoreleasepool{std::unique_ptr<download_destination_context> context(static_cast<download_destination_context*>(pointer));try{if(response->action==NEOASTRA_DECISION_DOWNLOAD){context->download->destination_path=neo_string(response->text);context->completion([NSURL fileURLWithPath:ns_string(context->download->destination_path)]);}else if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT){context->download->destination_path=utf8(context->default_destination.path);context->completion(context->default_destination);}else context->completion(nil);}catch(...){context->completion(nil);}}}
 // WebKit changes canGoBack and canGoForward together and notifies once for each, so the repeated pair is not reported twice.
-void report_history(neoastra_view_t* view,WKWebView* webview){auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;const uint64_t history=(webview.canGoBack?1u:0u)|(webview.canGoForward?2u:0u);if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
+void report_history(neoastra_view_t* view,WKWebView* webview){auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;const uint64_t history=neo_history_directions(view,webview.canGoBack,webview.canGoForward);if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
 void report_window_state(neoastra_window_t* value,neoastra_window_state_t state){auto* native=static_cast<cocoa_window*>(value->platform);if(!native||native->reported_state==state)return;native->reported_state=state;{std::lock_guard lock(value->state_mutex);value->state=state;}neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_STATE_CHANGED,value->id,nullptr,nullptr,state);}
 // Portable bounds pair the window's top-left corner with the size of its content area. The corner is measured downward
 // from the top of the primary display, as CoreGraphics display bounds are, while AppKit frames grow upward from its bottom.
@@ -297,10 +306,12 @@ void sync_bounds(neoastra_window_t* value,NSWindow* window){if(!window)return;co
     auto* view=self.nativeView;if(!view){handler(WKNavigationActionPolicyCancel);return;}
     // An action without a target frame asks for a new window: WebKit asks to create its view next, and that request decides.
     if(!action.targetFrame){handler(WKNavigationActionPolicyAllow);return;}
+    const uint64_t kind=navigation_kind(action);
+    if(neo_refuses_navigation(view,kind)){handler(WKNavigationActionPolicyCancel);return;}
     std::string uri=utf8(action.request.URL.absoluteString);
     auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_NAVIGATION,NEOASTRA_DECISION_ALLOW);
     decision->completion=navigation_decided;decision->completion_context=new navigation_context{[handler copy],uri};decision->external_uri=uri;
-    uint64_t flags=(action.targetFrame.isMainFrame?NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME:0)|link_activation(action,NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);
+    uint64_t flags=(action.targetFrame.isMainFrame?NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME:0)|link_activation(action,NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED)|kind;neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);
     neo_finish_decision_event(view,decision);decision->release();
 }
 - (void)webView:(WKWebView*)webView didStartProvisionalNavigation:(WKNavigation*)navigation { (void)navigation;auto* view=self.nativeView;if(!view)return;std::string uri=utf8(webView.URL.absoluteString);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_STARTED,0,nullptr,&uri,1); }
@@ -562,6 +573,9 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:state->webview.allowsMagnification=enabled;return NEOASTRA_OK;
         // WebKit reads the preference at each Tab key press, and the Option key reverses it for that press.
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:state->webview.configuration.preferences.tabFocusesLinks=enabled;return NEOASTRA_OK;
+        // The requests that walk the history are refused as they come. The swipe of WKWebView is off unless a host turns it on
+        // through the native view; it is turned off here so that it does not draw the page it would go to, and never on.
+        case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION:if(!enabled)state->webview.allowsBackForwardNavigationGestures=NO;report_history(view,state->webview);return NEOASTRA_OK;
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }}

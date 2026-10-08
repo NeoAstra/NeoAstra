@@ -99,6 +99,11 @@ The tools of Chrome DevTools MCP that depend on Chrome itself have no counterpar
 performance traces, Lighthouse audits, heap snapshots, CSS inspection, screencasts, extensions,
 installed web applications, WebMCP, and the DevTools window.
 
+`navigate_page` goes back and forward with `GoBack()` and `GoForward()` of the view. In a view whose
+`NeoBrowserFeatures.HistoryNavigation` is off,
+it answers that history navigation is turned off for the view and leaves the document as it is; a
+reload and a navigation to an address work as in any view.
+
 A host that calls the operations itself, such as a test, uses the typed interface instead. It returns
 objects rather than text:
 

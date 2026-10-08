@@ -423,6 +423,7 @@ internal static partial class Program
             }
 
             await RunAutomationScenariosAsync(environment);
+            await RunHistoryScenariosAsync(environment);
             await RunLifecycleScenariosAsync(environment, environmentOptions);
             _total.Stop();
             Console.WriteLine($"PASS browser conformance: {_passed} passed, {_skipped} skipped, {_total.Elapsed.TotalSeconds:F2} s");

@@ -88,6 +88,30 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   application or window menu on to GTK, which logs "Don't know how to handle this item" and leaves it
   out. The desktop smoke fixture sets such menus. To decide: whether the presenter refuses such an
   item, as it refuses a role item without a label, or puts it into a submenu.
+- **History navigation was run on Windows only, and four runtimes predate it.** The kind of a
+  navigation request (`NeoNavigationRequest.Kind`) and the switch of history navigation
+  (`NeoBrowserFeatures.HistoryNavigation`, `NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION`) were written for
+  the three backends on 2026-10-08 and run on Windows 11 with the WebView2 Runtime 154: the live tests
+  of `HistoryNavigationTests` and the conformance scenarios of `Program.History.cs`. The Cocoa backend
+  was not compiled; the GTK backend and its test were checked for syntax against the headers of
+  WebKitGTK 2.52 and not built or run. The `win-x64` and `win-arm64` runtimes in
+  `src/NeoAstra.Core/runtimes` were built on a development machine, the second one without being run,
+  and the macOS and Linux runtimes there are from before the change: with them every request has the
+  kind `Unknown`, a view keeps its history navigation, and the two conformance scenarios are skipped,
+  which is what a run in WSL with that Linux library showed. To
+  do: push, let the `native` workflow build the six libraries, run `conformance.yml` for macOS and
+  Linux, and commit the libraries. To look at on macOS and Linux then: that WebKit leaves the history
+  where it is after a refused history navigation (`native/tests/macos_history_tests.mm` asks for it on
+  macOS, nothing does on Linux), and the navigation type of a history navigation that WebKit serves
+  from its page cache.
+- **History navigation: what stays possible with the switch off.** A history navigation is refused
+  where the engine asks about it. It does not ask for a move within a document, so the entries that a
+  page adds with `history.pushState` or a fragment are still walked by the back button of a mouse; that
+  is meant, and an application that wants none of it has nothing to turn off. WebKit reports the reload
+  and the history navigation of a document that a form submission produced with one navigation type,
+  which is let through. A WebView2 Runtime before 115 does not tell the kind, so nothing is refused
+  there, and `neoastra_view_set_setting` still answers success: a host cannot tell that from
+  `NeoRuntimeInfo.ControlsHistoryNavigation`, which is about the native library.
 - **Linux: the history flags have no native test.** The GTK backend raises the history-changed event
   (`NEOASTRA_EVENT_HISTORY_CHANGED`) from the `changed` signal of the back/forward list of a view, and
   again as a document commits and before its load is reported as finished, with bit 0 from

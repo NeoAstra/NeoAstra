@@ -316,6 +316,15 @@ uint64_t link_activation(WebKitNavigationAction* action,uint64_t user_initiated)
     const bool by_user=webkit_navigation_action_is_user_gesture(action)&&!webkit_navigation_action_is_redirect(action);
     return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED|(activated?NEOASTRA_REQUEST_LINK_ACTIVATED:0)|(by_user?user_initiated:0);
 }
+// WebKitGTK names the reload and the history navigation of a submitted form with one type, which does not tell the kind.
+uint64_t navigation_kind(WebKitNavigationAction* action) {
+    switch(webkit_navigation_action_get_navigation_type(action)){
+        case WEBKIT_NAVIGATION_TYPE_BACK_FORWARD:return NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD;
+        case WEBKIT_NAVIGATION_TYPE_RELOAD:return NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD;
+        case WEBKIT_NAVIGATION_TYPE_FORM_RESUBMITTED:return NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN;
+        default:return NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
+    }
+}
 struct navigation_context { WebKitPolicyDecision* policy{}; std::string uri; };
 void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept { std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer)); if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT)webkit_policy_decision_use(context->policy);else webkit_policy_decision_ignore(context->policy);g_object_unref(context->policy); }
 struct permission_context { WebKitPermissionRequest* request{}; };
@@ -330,12 +339,14 @@ gboolean decide_policy(WebKitWebView*, WebKitPolicyDecision* policy, WebKitPolic
     auto* view=static_cast<neoastra_view_t*>(data);
     auto* navigation=WEBKIT_NAVIGATION_POLICY_DECISION(policy);
     auto* action=webkit_navigation_policy_decision_get_navigation_action(navigation);
+    const uint64_t kind=navigation_kind(action);
+    if(neo_refuses_navigation(view,kind)){webkit_policy_decision_ignore(policy);return TRUE;}
     auto* request=webkit_navigation_action_get_request(action);
     std::string uri=webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";
     auto* decision=new neoastra_decision;
     neo_configure_decision(decision,view,NEOASTRA_DECISION_NAVIGATION,NEOASTRA_DECISION_ALLOW);
     auto* context=new navigation_context{WEBKIT_POLICY_DECISION(g_object_ref(policy)),uri};decision->completion=navigation_decided;decision->completion_context=context;decision->external_uri=uri;
-    const uint64_t flags=NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME|link_activation(action,NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED);
+    const uint64_t flags=NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME|link_activation(action,NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED)|kind;
     neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_REQUESTED,0,nullptr,&uri,flags,0,decision);
     neo_finish_decision_event(view,decision);
     decision->release();return TRUE;
@@ -369,7 +380,7 @@ void download_finished(WebKitDownload*,void* data){finish_gtk_download(static_ca
 void download_failed(WebKitDownload*,GError* error,void* data){finish_gtk_download(static_cast<neoastra_download_t*>(data),error&&g_error_matches(error,G_IO_ERROR,G_IO_ERROR_CANCELLED)?NEOASTRA_DOWNLOAD_CANCELED:NEOASTRA_DOWNLOAD_FAILED,error);}
 void download_started(WebKitNetworkSession*,WebKitDownload* native,void*) noexcept {auto* webview=webkit_download_get_web_view(native);auto* view=webview?static_cast<neoastra_view_t*>(g_object_get_data(G_OBJECT(webview),"neoastra.native-view")):nullptr;if(!view){webkit_download_cancel(native);return;}try{auto download=std::make_unique<neoastra_download>(view);auto state=std::make_unique<gtk_download>();download->platform=state.release();download->command=gtk_download_command;download->platform_destroy=destroy_gtk_download;auto* platform=static_cast<gtk_download*>(download->platform);platform->value=WEBKIT_DOWNLOAD(g_object_ref(native));auto* request=webkit_download_get_request(native);download->source_uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";platform->destination=g_signal_connect(native,"decide-destination",G_CALLBACK(download_decide_destination),download.get());platform->received=g_signal_connect(native,"received-data",G_CALLBACK(download_received),download.get());platform->finished=g_signal_connect(native,"finished",G_CALLBACK(download_finished),download.get());platform->failed=g_signal_connect(native,"failed",G_CALLBACK(download_failed),download.get());if(!platform->destination||!platform->received||!platform->finished||!platform->failed){download.reset();webkit_download_cancel(native);return;}download.release();}catch(...){webkit_download_cancel(native);}}
 // Reports which directions of the history have an entry to go to, one bit for each, when that has changed.
-void report_history(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return;auto* web=WEBKIT_WEB_VIEW(state->widget);const uint64_t history=(webkit_web_view_can_go_back(web)?1u:0u)|(webkit_web_view_can_go_forward(web)?2u:0u);if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
+void report_history(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return;auto* web=WEBKIT_WEB_VIEW(state->widget);const uint64_t history=neo_history_directions(view,webkit_web_view_can_go_back(web),webkit_web_view_can_go_forward(web));if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
 void history_changed(WebKitBackForwardList*,WebKitBackForwardListItem*,gpointer,void* data) {report_history(static_cast<neoastra_view_t*>(data));}
 // The history is also read as a document commits and before its load is reported as finished, so that a handler of the completed navigation sees the directions it can go in.
 void load_changed(WebKitWebView* webview, WebKitLoadEvent event, void* data) { auto* view=static_cast<neoastra_view_t*>(data);const char* raw=webkit_web_view_get_uri(webview);std::string uri=raw?raw:"";if(event==WEBKIT_LOAD_STARTED)neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_STARTED,0,nullptr,&uri,1);else if(event==WEBKIT_LOAD_COMMITTED)report_history(view);else if(event==WEBKIT_LOAD_FINISHED){report_history(view);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_COMPLETED,0,nullptr,&uri);} }
@@ -600,6 +611,9 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         // Script dialogs go to the host unless WebKitGTK is asked to show its own.
         case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:state->default_script_dialogs=enabled;return NEOASTRA_OK;
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:webkit_settings_set_enable_tabs_to_links(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),enabled);return NEOASTRA_OK;
+        // The requests that walk the history are refused as they come. The swipe of WebKitGTK is off unless a host turns it on
+        // through the native view; it is turned off here so that it does not draw the page it would go to, and never on.
+        case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION:if(!enabled)webkit_settings_set_enable_back_forward_navigation_gestures(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),FALSE);report_history(view);return NEOASTRA_OK;
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }

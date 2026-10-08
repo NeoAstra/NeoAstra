@@ -191,6 +191,38 @@ public sealed class NeoWindowStateChangedEventArgs(NeoWindowState oldState, NeoW
     public NeoWindowState NewState { get; } = newState;
 }
 
+/// <summary>Identifies what a navigation request asks a frame to load.</summary>
+/// <remarks>
+/// <para>
+/// The browser engine tells the kind. WebView2 tells it from the WebView2 Runtime 115 on. WKWebView and WebKitGTK name
+/// the reload and the history navigation of a document that a form submission produced with one type, which is
+/// reported as <see cref="Unknown"/>. A native library from before the kind was reported leaves every request
+/// <see cref="Unknown"/>; <see cref="NeoRuntimeInfo.ControlsHistoryNavigation"/> tells which library is loaded.
+/// </para>
+/// <para>
+/// An engine asks about a navigation that loads a document. A move within a document, to a fragment or to an entry that
+/// the page added with <c>history.pushState</c>, raises no request, whether a link, a script, or the history starts it.
+/// </para>
+/// </remarks>
+public enum NeoNavigationKind
+{
+    /// <summary>The engine, or the native library, does not tell the kind of the request.</summary>
+    Unknown = 0,
+
+    /// <summary>An address that the host, a link, a form, or a script asks for. It becomes a new entry of the history, or replaces the current one.</summary>
+    NewDocument = 1,
+
+    /// <summary>The document of the frame is loaded again, by <see cref="NeoAstra.Reload()"/>, a key, a menu, or <c>location.reload()</c>.</summary>
+    Reload = 2,
+
+    /// <summary>
+    /// An entry of the history is loaded: <see cref="NeoAstra.GoBack"/> and <see cref="NeoAstra.GoForward"/>, the back and
+    /// forward buttons of a mouse or a keyboard, a swipe, a menu, and <c>history.back()</c>, <c>history.forward()</c>, or
+    /// <c>history.go(n)</c> of a page.
+    /// </summary>
+    BackForward = 3,
+}
+
 /// <summary>Describes a navigation policy request.</summary>
 /// <param name="Uri">The target URI.</param>
 /// <param name="IsMainFrame">Whether the request targets the main frame.</param>
@@ -230,6 +262,17 @@ public sealed record NeoNavigationRequest(Uri Uri, bool IsMainFrame = true, bool
     /// <see cref="IsUserInitiated"/> for that.
     /// </remarks>
     public bool? IsLinkActivation { get; init; }
+
+    /// <summary>
+    /// Gets whether the request asks for a new document, a reload, or an entry of the history, or
+    /// <see cref="NeoNavigationKind.Unknown"/> when the engine does not tell.
+    /// </summary>
+    /// <remarks>
+    /// The address does not tell the kind: an entry of the history can have the address of the document that is shown,
+    /// and then looks like a reload. A view whose <see cref="NeoBrowserFeatures.HistoryNavigation"/> is
+    /// <see langword="false"/> refuses a <see cref="NeoNavigationKind.BackForward"/> request itself and does not raise it.
+    /// </remarks>
+    public NeoNavigationKind Kind { get; init; }
 }
 
 /// <summary>Describes the action to take for a navigation request.</summary>

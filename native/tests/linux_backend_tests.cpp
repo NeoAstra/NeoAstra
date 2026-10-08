@@ -198,6 +198,29 @@ void test_tab_key_setting_reaches_the_view(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+// The swipe of WebKitGTK that walks the history is off while history navigation is off for a view, which then refuses the
+// commands of the history. Turning history navigation on again does not turn the swipe on: a host does that itself.
+void test_history_navigation_setting_reaches_the_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* settings = webkit_web_view_get_settings(web_view(view));
+    webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 1) == NEOASTRA_OK);
+    assert(webkit_settings_get_enable_back_forward_navigation_gestures(settings));
+    assert(neoastra_view_go_back(view) == NEOASTRA_OK);
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_OK);
+    assert(!webkit_settings_get_enable_back_forward_navigation_gestures(settings));
+    assert(neoastra_view_go_back(view) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(neoastra_view_go_forward(view) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 1) == NEOASTRA_OK);
+    assert(!webkit_settings_get_enable_back_forward_navigation_gestures(settings));
+    assert(neoastra_view_go_forward(view) == NEOASTRA_OK);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The views of a window are stacked in the order they were created in, the newest on top, and each of them goes away
 // without taking another one with it. A second view used to take the place of the first, whose widget was destroyed.
 void test_views_share_their_window(neoastra_app_t* app) {
@@ -434,6 +457,7 @@ int main() {
     test_views_share_their_window(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
+    test_history_navigation_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 
     assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);

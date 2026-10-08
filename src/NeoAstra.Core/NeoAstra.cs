@@ -27,6 +27,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private bool _isLoading;
     private bool _canGoBack;
     private bool _canGoForward;
+    private bool _historyNavigationOff;
     private int _disposed;
 
     internal NeoAstra(NeoEnvironment environment, SafeViewHandle handle, NeoAstraHost host, NeoAstraOptions options)
@@ -61,10 +62,12 @@ public sealed class NeoAstra : IAsyncDisposable
     public bool IsLoading => _isLoading;
 
     /// <summary>Gets whether backward history navigation is available.</summary>
-    public bool CanGoBack => _canGoBack;
+    /// <remarks>It is <see langword="false"/> while <see cref="NeoBrowserFeatures.HistoryNavigation"/> is off for the view.</remarks>
+    public bool CanGoBack => _canGoBack && !_historyNavigationOff;
 
     /// <summary>Gets whether forward history navigation is available.</summary>
-    public bool CanGoForward => _canGoForward;
+    /// <remarks>It is <see langword="false"/> while <see cref="NeoBrowserFeatures.HistoryNavigation"/> is off for the view.</remarks>
+    public bool CanGoForward => _canGoForward && !_historyNavigationOff;
 
     /// <summary>Gets or sets the page zoom factor, where <c>1.0</c> is 100 percent.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The assigned value is outside the portable range from 0.25 through 5.0.</exception>
@@ -354,17 +357,31 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     /// <summary>Navigates backward in history.</summary>
+    /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="NeoBrowserFeatures.HistoryNavigation"/> is off for the view.</exception>
     public void GoBack()
     {
         ThrowIfDisposed();
+        ThrowIfHistoryNavigationOff();
         NativeError.ThrowIfFailed(NativeMethods.neoastra_view_go_back(NativeHandle), default, "go back");
     }
 
     /// <summary>Navigates forward in history.</summary>
+    /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
+    /// <exception cref="InvalidOperationException"><see cref="NeoBrowserFeatures.HistoryNavigation"/> is off for the view.</exception>
     public void GoForward()
     {
         ThrowIfDisposed();
+        ThrowIfHistoryNavigationOff();
         NativeError.ThrowIfFailed(NativeMethods.neoastra_view_go_forward(NativeHandle), default, "go forward");
+    }
+
+    // Whether the view refuses to load the documents of its history, as NeoBrowserFeatures.HistoryNavigation asked.
+    internal bool IsHistoryNavigationOff => _historyNavigationOff;
+
+    private void ThrowIfHistoryNavigationOff()
+    {
+        if (_historyNavigationOff) throw new InvalidOperationException("History navigation is turned off for this view (NeoBrowserFeatures.HistoryNavigation).");
     }
 
     /// <summary>Resets page zoom to 100 percent.</summary>
@@ -544,17 +561,24 @@ public sealed class NeoAstra : IAsyncDisposable
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS, features.ZoomControls);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, features.ScriptDialogs);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, features.TabFocusesLinks);
-
-        void Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)
+        // The view counts its history navigation as off only once the native library has taken the setting.
+        if (Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, features.HistoryNavigation))
         {
-            if (enabled is not { } value) return;
+            _historyNavigationOff = features.HistoryNavigation == false;
+        }
+
+        bool Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)
+        {
+            if (enabled is not { } value) return false;
             try
             {
                 NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_setting(NativeHandle, setting, value ? 1u : 0u), default, "set browser feature");
+                return true;
             }
             catch (Exception exception) when (exception is NotSupportedException or ArgumentException or EntryPointNotFoundException)
             {
                 // The engine has no such feature to switch, or the native library predates the setting.
+                return false;
             }
         }
     }
@@ -805,11 +829,25 @@ public sealed class NeoAstra : IAsyncDisposable
     internal static bool? DecodeLinkActivation(ulong value) =>
         (value & RequestLinkActivationReported) != 0 ? (value & RequestLinkActivated) != 0 : null;
 
+    // The kind of a navigation request is a number in four bits, zero where the backend or an older native library does not
+    // tell it. A number that this version does not know is a kind it cannot name.
+    private const int NavigationRequestKindShift = 4;
+    private const ulong NavigationRequestKindMask = 15UL << NavigationRequestKindShift;
+
+    internal static NeoNavigationKind DecodeNavigationKind(ulong value) =>
+        ((value & NavigationRequestKindMask) >> NavigationRequestKindShift) switch
+        {
+            1 => NeoNavigationKind.NewDocument,
+            2 => NeoNavigationKind.Reload,
+            3 => NeoNavigationKind.BackForward,
+            _ => NeoNavigationKind.Unknown,
+        };
+
     private void HandleNavigationDecision(NativeMethods.neoastra_event value, Uri? uri)
     {
         var handler = NavigationRequested;
         if (handler is null || value.decision.Handle == 0 || uri is null) return;
-        StartDecision(value.decision.Handle, () => handler(new NeoNavigationRequest(uri, (value.value & NavigationRequestMainFrame) != 0, (value.value & NavigationRequestUserInitiated) != 0) { IsLinkActivation = DecodeLinkActivation(value.value) }),
+        StartDecision(value.decision.Handle, () => handler(new NeoNavigationRequest(uri, (value.value & NavigationRequestMainFrame) != 0, (value.value & NavigationRequestUserInitiated) != 0) { IsLinkActivation = DecodeLinkActivation(value.value), Kind = DecodeNavigationKind(value.value) }),
             static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Default));
     }
 
