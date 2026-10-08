@@ -194,8 +194,37 @@ public sealed class NeoWindowStateChangedEventArgs(NeoWindowState oldState, NeoW
 /// <summary>Describes a navigation policy request.</summary>
 /// <param name="Uri">The target URI.</param>
 /// <param name="IsMainFrame">Whether the request targets the main frame.</param>
-/// <param name="IsUserInitiated">Whether a user gesture initiated the request.</param>
-public sealed record NeoNavigationRequest(Uri Uri, bool IsMainFrame = true, bool IsUserInitiated = false);
+/// <param name="IsUserInitiated">
+/// Whether the browser engine attributes the request to an action of the user. A redirect is not user-initiated where
+/// the engine tells it apart. What the engines tell differs, see the remarks.
+/// </param>
+/// <remarks>
+/// <para>
+/// WebView2 and WebKitGTK report the user gesture that a request was made in. A click or a key press on a link has it,
+/// and so has a navigation that a script starts while it handles a click, for example with <c>location.href</c> or
+/// <c>window.open</c>. A script that runs on its own, from a timer for example, does not have it, even when it calls
+/// <c>click()</c> on a link. The redirect of a request is never user-initiated.
+/// </para>
+/// <para>
+/// WKWebView has no public user-gesture flag. On macOS the value is <see langword="true"/> only when the user clicked a
+/// link or pressed Enter on it: a navigation that a script starts is never user-initiated, not even from a click
+/// handler, and neither is a link that a script clicks. WKWebView does not tell the redirect of a clicked link apart,
+/// so such a redirect is reported like the link.
+/// </para>
+/// </remarks>
+public sealed record NeoNavigationRequest(Uri Uri, bool IsMainFrame = true, bool IsUserInitiated = false)
+{
+    /// <summary>
+    /// Gets whether the request comes from the activation of a link, or <see langword="null"/> when the engine does
+    /// not tell.
+    /// </summary>
+    /// <remarks>
+    /// WKWebView and WebKitGTK report it, WebView2 does not. A link is activated by the user and also by a script that
+    /// calls <c>click()</c> on it, so this value alone does not say that the user acted: use
+    /// <see cref="IsUserInitiated"/> for that.
+    /// </remarks>
+    public bool? IsLinkActivation { get; init; }
+}
 
 /// <summary>Describes the action to take for a navigation request.</summary>
 /// <param name="Action">The requested action.</param>
@@ -272,7 +301,7 @@ public sealed class NeoNewWindowRequest
     private readonly SafeDecisionHandle _nativeDecision;
     private int _creationStarted;
 
-    internal NeoNewWindowRequest(NeoAstra opener, nint nativeDecision, Uri? targetUri, string? frameName, bool isUserInitiated, NeoRect? requestedBounds)
+    internal NeoNewWindowRequest(NeoAstra opener, nint nativeDecision, Uri? targetUri, string? frameName, bool isUserInitiated, bool? isLinkActivation, NeoRect? requestedBounds)
     {
         _opener = opener;
         NativeMethods.neoastra_decision_retain(new(nativeDecision));
@@ -280,6 +309,7 @@ public sealed class NeoNewWindowRequest
         TargetUri = targetUri;
         FrameName = frameName;
         IsUserInitiated = isUserInitiated;
+        IsLinkActivation = isLinkActivation;
         RequestedBounds = requestedBounds;
     }
 
@@ -287,8 +317,19 @@ public sealed class NeoNewWindowRequest
     public Uri? TargetUri { get; }
     /// <summary>Gets the requested frame name.</summary>
     public string? FrameName { get; }
-    /// <summary>Gets whether a user gesture initiated the request.</summary>
+    /// <summary>Gets whether the browser engine attributes the request to an action of the user.</summary>
+    /// <remarks>
+    /// The engines tell the same as for <see cref="NeoNavigationRequest.IsUserInitiated"/>: WebView2 and WebKitGTK report
+    /// the user gesture, which <c>window.open</c> has in a click handler, and on macOS the value is
+    /// <see langword="true"/> only for a link that the user clicked or activated with the Enter key.
+    /// </remarks>
     public bool IsUserInitiated { get; }
+    /// <summary>
+    /// Gets whether the request comes from the activation of a link, such as one with <c>target="_blank"</c>, or
+    /// <see langword="null"/> when the engine does not tell.
+    /// </summary>
+    /// <remarks>WKWebView and WebKitGTK report it, also for a link that a script clicks; WebView2 does not.</remarks>
+    public bool? IsLinkActivation { get; }
     /// <summary>Gets the requested logical bounds, when supplied.</summary>
     public NeoRect? RequestedBounds { get; }
 

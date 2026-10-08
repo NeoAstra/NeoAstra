@@ -773,11 +773,22 @@ public sealed class NeoAstra : IAsyncDisposable
             string.IsNullOrEmpty(description) ? null : description);
     }
 
+    // The bits of the value of a navigation or new-window request, as native/include/neoastra.h defines them.
+    private const ulong NavigationRequestMainFrame = 1UL << 0;
+    private const ulong NavigationRequestUserInitiated = 1UL << 1;
+    private const ulong NewWindowRequestUserInitiated = 1UL << 0;
+    private const ulong RequestLinkActivated = 1UL << 2;
+    private const ulong RequestLinkActivationReported = 1UL << 3;
+
+    // A backend, or a native library from before the bit existed, that does not report link activation leaves it unknown.
+    internal static bool? DecodeLinkActivation(ulong value) =>
+        (value & RequestLinkActivationReported) != 0 ? (value & RequestLinkActivated) != 0 : null;
+
     private void HandleNavigationDecision(NativeMethods.neoastra_event value, Uri? uri)
     {
         var handler = NavigationRequested;
         if (handler is null || value.decision.Handle == 0 || uri is null) return;
-        StartDecision(value.decision.Handle, () => handler(new NeoNavigationRequest(uri, (value.value & 1) != 0, (value.value & 2) != 0)),
+        StartDecision(value.decision.Handle, () => handler(new NeoNavigationRequest(uri, (value.value & NavigationRequestMainFrame) != 0, (value.value & NavigationRequestUserInitiated) != 0) { IsLinkActivation = DecodeLinkActivation(value.value) }),
             static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Default));
     }
 
@@ -831,7 +842,7 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         StartDecision(value.decision.Handle,
-            () => handler(new NeoNewWindowRequest(this, value.decision.Handle, uri, NullIfEmpty(Utf8String.Decode(value.text)), (value.value & 1) != 0, null)),
+            () => handler(new NeoNewWindowRequest(this, value.decision.Handle, uri, NullIfEmpty(Utf8String.Decode(value.text)), (value.value & NewWindowRequestUserInitiated) != 0, DecodeLinkActivation(value.value), null)),
             static decision => new DecisionResponse(decision.Action, TargetView: decision.TargetView),
             new DecisionResponse(NeoDecisionAction.Cancel));
     }

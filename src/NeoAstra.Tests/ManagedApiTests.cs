@@ -476,6 +476,22 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void LinkActivation_IsUnknownUnlessTheBackendReportsIt()
+    {
+        // The values of a navigation request: main frame, user-initiated, link activated, link activation reported.
+        Assert.IsNull(NeoAstra.DecodeLinkActivation(0));
+        Assert.IsNull(NeoAstra.DecodeLinkActivation(1 | 2));
+        Assert.IsNull(NeoAstra.DecodeLinkActivation(1 | 2 | 4));
+        Assert.AreEqual(false, NeoAstra.DecodeLinkActivation(1 | 2 | 8));
+        Assert.AreEqual(true, NeoAstra.DecodeLinkActivation(1 | 4 | 8));
+        Assert.AreEqual(true, NeoAstra.DecodeLinkActivation(4 | 8));
+
+        var request = new NeoNavigationRequest(new Uri("https://example.com/"));
+        Assert.IsTrue(request is { IsMainFrame: true, IsUserInitiated: false, IsLinkActivation: null });
+        Assert.AreEqual(true, (request with { IsLinkActivation = true }).IsLinkActivation);
+    }
+
+    [TestMethod]
     public void ProcessFailure_DecodesPortableKindFlagsAndRecovery()
     {
         var failure = NeoAstra.DecodeProcessFailure(

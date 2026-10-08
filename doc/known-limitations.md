@@ -28,6 +28,9 @@ assuming that every browser engine supports every portable event.
 | Built-in browser shortcuts (find, print, reload, zoom) | Can be turned off | Not present in the engine | Not present in the engine |
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
 | Tab key stopping on links (`NeoBrowserFeatures.TabFocusesLinks`) | Always on | Off unless turned on | On unless turned off |
+| User gesture of a navigation or new-window request (`IsUserInitiated`) | Reported by the engine | Only a link that the user clicked or activated with Enter | Reported by the engine |
+| Link activation of a request (`IsLinkActivation`) | Not exposed | Available | Available |
+| Redirect told apart from a user-initiated navigation | Available | Not exposed | Available |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
@@ -50,6 +53,19 @@ document: a handler assigned after a document has loaded gets the dialogs of the
 observed on Windows 11 with the WebView2 Runtime 154. A dialog that stays open until its decision
 arrives was also run on macOS 15 and with WebKitGTK 2.52, in windows that are not shown, by the dialog
 scenario of the conformance harness.
+
+`IsUserInitiated` on a navigation or new-window request is narrower on macOS than on Windows and
+Linux; [links that open outside the web view](capabilities-and-security.md#links-that-open-outside-the-web-view)
+has the table. WKWebView tells its host the navigation type of a request and the mouse button of the
+click that made it, and nothing about the user gesture a script runs in. These were observed on
+macOS 26: a link that the user clicks, and one activated with the Enter key, arrive as a link
+activation with a button; `click()` on a link from a script arrives as a link activation without one,
+whether or not the script handles a click; `location.href` and `window.open` arrive as neither; and
+the redirect of a clicked link arrives exactly like the link. WebKit does know the user gesture and
+the redirect, and has them on `WKNavigationAction` as `_isUserInitiated` and `_isRedirect`. Those
+are private, NeoAstra does not use them: an application that calls private API is refused by the Mac
+App Store, and the native library is part of every application. On Windows and Linux the values are
+the ones WebView2 and WebKitGTK document.
 
 `NavigationCompleted` relays the browser engine's own completion notification, which does not say how
 far the page's scripts have got. WKWebView can raise it while `document.readyState` is still

@@ -611,7 +611,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             decision->completion = navigation_decided;
             decision->completion_context = context.release();
             neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri,
-                          1u | (user_initiated && !redirected ? 2u : 0u), 0, decision);
+                          NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME | (user_initiated && !redirected ? NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED : 0), 0, decision);
             const auto decision_state = decision->state.load(std::memory_order_acquire);
             // NavigationStarting has no WebView2 deferral API. A managed handler may
             // defer the portable decision, but WebView2 requires the final Cancel
@@ -861,7 +861,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                 neo_configure_decision(decision, view, NEOASTRA_DECISION_NEW_WINDOW, NEOASTRA_DECISION_CANCEL);
                 decision->completion = new_window_decided;
                 decision->completion_context = context.release();
-                neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, user_initiated ? 1 : 0, 0, decision);
+                neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, user_initiated ? NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED : 0, 0, decision);
                 neo_finish_decision_event(view, decision);
                 decision->release();
                 return S_OK;

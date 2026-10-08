@@ -120,6 +120,17 @@ typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_PROCESS_FAILURE_CRASHED (UINT64_C(1) << 32)
 #define NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW (UINT64_C(1) << 33)
 #define NEOASTRA_PROCESS_FAILURE_RESTART_APPLICATION (UINT64_C(1) << 34)
+/* Bits of the value of NEOASTRA_EVENT_NAVIGATION_REQUESTED and NEOASTRA_EVENT_NEW_WINDOW_REQUESTED.
+   USER_INITIATED says that the engine attributes the request to an action of the user and that it is not a redirect: WebView2 and
+   WebKitGTK report the user gesture a script runs in, so a navigation that a script starts from a click handler has it; WKWebView
+   only tells that the user clicked a link or pressed Enter on it, and cannot tell the redirect of such a link from the link.
+   LINK_ACTIVATED says that a link was activated, which a script does as well with click() on an anchor. It is meaningful when
+   LINK_ACTIVATION_REPORTED is set: WebView2 does not report it. */
+#define NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME (UINT64_C(1) << 0)
+#define NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED (UINT64_C(1) << 1)
+#define NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED (UINT64_C(1) << 0)
+#define NEOASTRA_REQUEST_LINK_ACTIVATED (UINT64_C(1) << 2)
+#define NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED (UINT64_C(1) << 3)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)
