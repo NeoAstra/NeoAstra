@@ -58,6 +58,9 @@ struct windows_view {
     ComPtr<ICoreWebView2> core;
     HWND drop_window{};
     EventRegistrationToken navigation_starting{};
+    // The main-frame navigation that the host refused last, without its fragment, and when it did.
+    std::string refused_navigation;
+    ULONGLONG refused_navigation_time{};
     EventRegistrationToken navigation_completed{};
     EventRegistrationToken source_changed{};
     EventRegistrationToken title_changed{};
@@ -482,8 +485,35 @@ void download_decided(void* pointer,const neoastra_decision_response_t* response
 
 struct navigation_decision_context {
     ComPtr<ICoreWebView2NavigationStartingEventArgs> args;
-    std::wstring uri;
+    neoastra_view_t* view{};
+    std::string uri;
 };
+
+// WebView2 starts the request of a navigation while it asks its host about the navigation, and drops the response when the
+// host refuses: the address is requested by a view that does not show it, and a script of the host waits for that response.
+// WebView2 asks about the request right after the navigation, so the request of a navigation that was just refused is
+// answered by the host instead of being sent. Nothing but that request follows a refusal so closely.
+constexpr ULONGLONG refused_navigation_lifetime = 10000;
+
+std::string_view without_fragment(std::string_view uri) noexcept { return uri.substr(0, uri.find('#')); }
+
+void remember_navigation(neoastra_view_t* view, const std::string& uri, bool refused) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state) return;
+    state->refused_navigation.clear();
+    if (!refused) return;
+    try { state->refused_navigation = without_fragment(uri); } catch (...) { }
+    state->refused_navigation_time = GetTickCount64();
+}
+
+// Whether a document is requested for the navigation that the host refused last. That navigation has one request.
+bool take_refused_navigation(neoastra_view_t* view, std::string_view uri) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || state->refused_navigation.empty()) return false;
+    const bool refused = GetTickCount64() - state->refused_navigation_time <= refused_navigation_lifetime && state->refused_navigation == without_fragment(uri);
+    if (refused) state->refused_navigation.clear();
+    return refused;
+}
 
 struct script_dialog_context { ComPtr<ICoreWebView2ScriptDialogOpeningEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; };
 void script_dialog_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {
@@ -567,6 +597,8 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
     const bool cancel = response->action != NEOASTRA_DECISION_ALLOW && response->action != NEOASTRA_DECISION_DEFAULT;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
+    // Here and not after the decision: opening the address outside the view comes next, and lets the thread take the request.
+    remember_navigation(context->view, context->uri, cancel);
 }
 
 uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
@@ -600,7 +632,8 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
 
             auto context = std::make_unique<navigation_decision_context>();
             context->args = args;
-            context->uri = widen(uri);
+            context->view = view;
+            context->uri = uri;
             auto* decision = new neoastra_decision;
             neo_configure_decision(decision, view, NEOASTRA_DECISION_NAVIGATION, NEOASTRA_DECISION_ALLOW);
             decision->completion = navigation_decided;
@@ -698,6 +731,9 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
         result = state->core->AddWebResourceRequestedFilter(filter.c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
         if (FAILED(result)) return result;
     }
+    // Every document, for the request of a navigation that the host refuses.
+    result = state->core->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT);
+    if (FAILED(result)) return result;
     result = state->core->add_WebResourceRequested(
         Callback<ICoreWebView2WebResourceRequestedEventHandler>([view](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
             ComPtr<ICoreWebView2WebResourceRequest> native_request;
@@ -713,6 +749,16 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                 raw_uri = nullptr;
                 const auto method = take_string(raw_method);
                 raw_method = nullptr;
+                if (native_kind == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT && take_refused_navigation(view, uri)) {
+                    // WebView2 has dropped the navigation, or drops it with this response: no content, and nothing to show.
+                    neoastra_resource_response_t refused{};
+                    refused.size = sizeof(refused);
+                    refused.version = 1;
+                    refused.status_code = 204;
+                    ComPtr<ICoreWebView2WebResourceResponse> native_response;
+                    if (SUCCEEDED(create_resource_response(view, refused, &native_response)) && native_response) args->put_Response(native_response.Get());
+                    return S_OK;
+                }
                 const auto* scheme = find_scheme(view->environment, uri);
                 if (!scheme || !scheme->provider) return S_OK;
                 const auto headers = request_headers(native_request.Get());
