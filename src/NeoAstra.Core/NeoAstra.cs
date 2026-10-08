@@ -147,7 +147,8 @@ public sealed class NeoAstra : IAsyncDisposable
     /// that a link could not be opened: <see cref="NeoExternalOpenStatus.Refused"/> when the address is not a web
     /// address, which the native library does not hand to the system whatever the handler decided, and
     /// <see cref="NeoExternalOpenStatus.Failed"/> when the system did not open it. A native library from before this
-    /// event existed opens the address and raises nothing.
+    /// event existed opens the address and raises nothing; <see cref="NeoRuntimeInfo.ChecksExternalOpen"/> tells
+    /// which one is loaded.
     /// </remarks>
     public event EventHandler<NeoExternalOpenCompletedEventArgs>? ExternalOpenCompleted;
 

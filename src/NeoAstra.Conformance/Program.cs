@@ -229,43 +229,52 @@ internal static partial class Program
                     Require(result.RootElement.GetString() == "stored", "Local storage did not round trip the fixture value.");
                 });
 
-                await RunCaseAsync("an address that is not a web address is not sent outside the view", async () =>
+                const string externalOpen = "an address that is not a web address is not sent outside the view";
+                if (environment.RuntimeInfo.ChecksExternalOpen)
                 {
-                    // The link leads to no web address, so the system is asked to open nothing whatever the engine does.
-                    var request = new TaskCompletionSource<NeoNavigationRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    var outcome = new TaskCompletionSource<NeoExternalOpenCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-                    void OnOutcome(object? _, NeoExternalOpenCompletedEventArgs result) => outcome.TrySetResult(result);
-                    var previous = view.NavigationRequested;
-                    view.ExternalOpenCompleted += OnOutcome;
-                    view.NavigationRequested = navigation =>
+                    await RunCaseAsync(externalOpen, async () =>
                     {
-                        if (navigation.Uri.Scheme != "mailto") return ValueTask.FromResult(NeoNavigationDecision.Allow);
-                        request.TrySetResult(navigation);
-                        return ValueTask.FromResult(NeoNavigationDecision.OpenExternal);
-                    };
-                    try
-                    {
-                        using var clicked = await EvaluateJsonAsync(view,
-                            "(() => { const link = document.createElement('a'); link.href = 'mailto:nobody@example.invalid'; " +
-                            "document.body.appendChild(link); link.click(); link.remove(); return true; })()");
-                        var navigation = await request.Task.WaitAsync(options.Timeout);
-                        Require(navigation.IsMainFrame, "The link was not reported for the main frame.");
-                        // WebView2 does not tell that a request comes from a link.
-                        Require(navigation.IsLinkActivation == (OperatingSystem.IsWindows() ? null : true), $"The link activation was reported as '{navigation.IsLinkActivation}'.");
-                        // WKWebView tells that no user clicked. The other engines give a script that the host runs the gesture of a user.
-                        if (OperatingSystem.IsMacOS()) Require(!navigation.IsUserInitiated, "A link that a script clicked was reported as user-initiated.");
-                        var result = await outcome.Task.WaitAsync(options.Timeout);
-                        Require(result.Status == NeoExternalOpenStatus.Refused, $"The address was reported as '{result.Status}'.");
-                        Require(result.Uri is { Scheme: "mailto" }, "The outcome does not carry the address.");
-                        using var location = await EvaluateJsonAsync(view, "location.href");
-                        Require(SameLocation(new Uri(location.RootElement.GetString()!), IndexUri), "The view left its page.");
-                    }
-                    finally
-                    {
-                        view.ExternalOpenCompleted -= OnOutcome;
-                        view.NavigationRequested = previous;
-                    }
-                });
+                        // The link leads to no web address, so the system is asked to open nothing whatever the engine does.
+                        var request = new TaskCompletionSource<NeoNavigationRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var outcome = new TaskCompletionSource<NeoExternalOpenCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        void OnOutcome(object? _, NeoExternalOpenCompletedEventArgs result) => outcome.TrySetResult(result);
+                        var previous = view.NavigationRequested;
+                        view.ExternalOpenCompleted += OnOutcome;
+                        view.NavigationRequested = navigation =>
+                        {
+                            if (navigation.Uri.Scheme != "mailto") return ValueTask.FromResult(NeoNavigationDecision.Allow);
+                            request.TrySetResult(navigation);
+                            return ValueTask.FromResult(NeoNavigationDecision.OpenExternal);
+                        };
+                        try
+                        {
+                            using var clicked = await EvaluateJsonAsync(view,
+                                "(() => { const link = document.createElement('a'); link.href = 'mailto:nobody@example.invalid'; " +
+                                "document.body.appendChild(link); link.click(); link.remove(); return true; })()");
+                            var navigation = await request.Task.WaitAsync(options.Timeout);
+                            Require(navigation.IsMainFrame, "The link was not reported for the main frame.");
+                            // WebView2 does not tell that a request comes from a link.
+                            Require(navigation.IsLinkActivation == (OperatingSystem.IsWindows() ? null : true), $"The link activation was reported as '{navigation.IsLinkActivation}'.");
+                            // WKWebView tells that no user clicked. The other engines give a script that the host runs the gesture of a user.
+                            if (OperatingSystem.IsMacOS()) Require(!navigation.IsUserInitiated, "A link that a script clicked was reported as user-initiated.");
+                            var result = await outcome.Task.WaitAsync(options.Timeout);
+                            Require(result.Status == NeoExternalOpenStatus.Refused, $"The address was reported as '{result.Status}'.");
+                            Require(result.Uri is { Scheme: "mailto" }, "The outcome does not carry the address.");
+                            using var location = await EvaluateJsonAsync(view, "location.href");
+                            Require(SameLocation(new Uri(location.RootElement.GetString()!), IndexUri), "The view left its page.");
+                        }
+                        finally
+                        {
+                            view.ExternalOpenCompleted -= OnOutcome;
+                            view.NavigationRequested = previous;
+                        }
+                    });
+                }
+                else
+                {
+                    // Such a library would hand the address of the scenario to the system, which would start a mail program.
+                    Skip(externalOpen, "The native library predates the check of an address that a decision sends outside the view.");
+                }
 
                 await RunPromiseCaseAsync("IndexedDB", async () =>
                 {

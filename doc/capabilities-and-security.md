@@ -135,6 +135,8 @@ view.ExternalOpenCompleted += (_, outcome) =>
 
 A `NeoApp` application registers the same callback with `NeoAppBuilder.OnExternalLinkOpenCompleted`.
 
+The check and the event are the work of the native library. `NeoEnvironment.RuntimeInfo.ChecksExternalOpen` is `false` for a library from before them, which hands any address to the system and reports nothing: a handler that may run with one validates the address itself, with `NeoUrlScope.AnyWebAddress.TryAuthorize` for example, before it answers `OpenExternal`.
+
 ## Abuse controls and diagnostics
 
 `NeoRpcOptions` bounds payload, parse depth, request-ID retention, global/session/command concurrency, token-bucket request rate/burst, abuse closure threshold, resources, resource bytes, channels, channel buffers, and default/permission timeouts. Counters are synchronized; reservations are released in `finally`; cancellation/disposal races yield one terminal response and reclaim resources. Policy exhaustion returns stable retryable errors and repeated abuse closes the session.

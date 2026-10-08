@@ -226,9 +226,14 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   `python eng/build_native.py --rid <rid> --clean`, then run the conformance harness, whose scenario
   "an address that is not a web address is not sent outside the view" answers `OpenExternal` for a
   `mailto:` link that a script clicks and expects `Refused`. That scenario assumes that WebView2
-  raises `NavigationStarting` for such a link, which was not checked. Nothing checks an address that
-  does open on those two platforms: on macOS the native test takes the place of `NSWorkspace`, and a
-  real browser was opened by no test on any platform.
+  raises `NavigationStarting` for such a link, which was not checked. The scenario is skipped with a
+  native library from before the check (`NeoRuntimeInfo.ChecksExternalOpen`), which would start a
+  mail program. Nothing checks an address that does open on those two platforms: on macOS the native
+  test takes the place of `NSWorkspace`, and a real browser was opened by no test on any platform.
+  Also to see on Windows: whether `ShellExecute` takes an address of several thousand characters,
+  which the native check lets through up to 32,768 bytes and `NeoUrlScope.AnyWebAddress` up to 4096
+  characters; a refusal would be reported as `Failed`. And whether WebView2 writes the host of an
+  internationalized address in ASCII: the native check accepts either form.
 - **`IsUserInitiated` was observed on macOS only.** The table in
   [links that open outside the web view](capabilities-and-security.md#links-that-open-outside-the-web-view)
   has its macOS column from a native test and its Windows and Linux columns from what WebView2
@@ -251,7 +256,9 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   and `linux-arm64` are still the libraries of the native workflow run for `ac1099b`. The managed
   code runs with them: `TabFocusesLinks` is ignored, `IsLinkActivation` is `null`, `IsUserInitiated`
   means what it meant before, and `OpenExternal` opens any address and raises no
-  `ExternalOpenCompleted`. To do: run the native workflow and check in its six libraries, as
+  `ExternalOpenCompleted`, which `NeoRuntimeInfo.ChecksExternalOpen` says with `false`. The
+  conformance harness passed on macOS with the previous `osx-arm64` library as well, with the
+  scenario of the check skipped. To do: run the native workflow and check in its six libraries, as
   `1d457ff` did. An `osx-x64` library was built outside the repository and passed the native tests under
   Rosetta on macOS 26; it was not run on an Intel Mac or on macOS 15, and it was not checked in.
 - **A navigation request carries no modifier keys or mouse button, and the context menu is all or

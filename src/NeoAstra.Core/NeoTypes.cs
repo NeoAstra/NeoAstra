@@ -454,7 +454,21 @@ public readonly record struct NeoTimeRange(DateTimeOffset? Start, DateTimeOffset
 /// <param name="Architecture">The process architecture.</param>
 /// <param name="BuildFeatures">Backend-defined build feature flags.</param>
 /// <param name="IsDebugBuild">Whether the native library is a debug build.</param>
-public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, string BrowserVersion, string OperatingSystem, string Architecture, ulong BuildFeatures, bool IsDebugBuild);
+public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, string BrowserVersion, string OperatingSystem, string Architecture, ulong BuildFeatures, bool IsDebugBuild)
+{
+    // NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK of native/include/neoastra.h.
+    private const ulong ExternalOpenCheck = 1UL << 0;
+
+    /// <summary>
+    /// Gets whether the native library checks the address of a <see cref="NeoDecisionAction.OpenExternal"/> decision
+    /// and reports what became of it through <see cref="NeoAstra.ExternalOpenCompleted"/>.
+    /// </summary>
+    /// <remarks>
+    /// A native library from before that check hands any address to the system and raises no event, so a handler that
+    /// runs with one must validate the address itself before it answers <see cref="NeoDecisionAction.OpenExternal"/>.
+    /// </remarks>
+    public bool ChecksExternalOpen => (BuildFeatures & ExternalOpenCheck) != 0;
+}
 
 /// <summary>Contains support information for one portable capability.</summary>
 /// <param name="SupportLevel">The support level.</param>

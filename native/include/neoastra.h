@@ -136,6 +136,10 @@ typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED (UINT64_C(1) << 0)
 #define NEOASTRA_REQUEST_LINK_ACTIVATED (UINT64_C(1) << 2)
 #define NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED (UINT64_C(1) << 3)
+/* Bits of neoastra_runtime_info_t.build_features. EXTERNAL_OPEN_CHECK says that this library hands only a web address to the
+   system for an OPEN_EXTERNAL decision and raises NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED; a library without it opens any address
+   and reports nothing. */
+#define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)

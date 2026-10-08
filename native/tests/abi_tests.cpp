@@ -93,6 +93,7 @@ static_assert(std::is_same_v<std::underlying_type_t<neoastra_external_open_statu
 static_assert(NEOASTRA_EXTERNAL_OPEN_OPENED == 0 && NEOASTRA_EXTERNAL_OPEN_REFUSED == 1 && NEOASTRA_EXTERNAL_OPEN_FAILED == 2);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME == 1 && NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED == 2 && NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED == 1);
 static_assert(NEOASTRA_REQUEST_LINK_ACTIVATED == 4 && NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED == 8);
+static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
@@ -165,6 +166,7 @@ int main() {
     neoastra_error_t* error = nullptr;
     assert(neoastra_get_runtime_info(&info, &error) == NEOASTRA_OK);
     assert(error == nullptr && info.backend_name.length != 0);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK) != 0);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);

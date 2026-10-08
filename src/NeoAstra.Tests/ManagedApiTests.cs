@@ -504,6 +504,10 @@ public sealed class ManagedApiTests
         var failed = NeoAstra.DecodeExternalOpen(address, 2, 31);
         Assert.AreEqual(NeoExternalOpenStatus.Failed, failed.Status);
         Assert.AreEqual(31, failed.NativeCode);
+        Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 1, false).ChecksExternalOpen);
+        Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 3, false).ChecksExternalOpen);
+        Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 0, false).ChecksExternalOpen);
+        Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 2, false).ChecksExternalOpen);
         // A status from a later native library is not one that opened the address.
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, 3, 0).Status);
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, ulong.MaxValue, 0).Status);
