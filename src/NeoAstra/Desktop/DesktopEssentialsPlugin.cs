@@ -53,8 +53,27 @@ public sealed class NeoDesktopServices : IAsyncDisposable
     /// <returns>An owned desktop service graph.</returns>
     public static NeoDesktopServices CreateSystem(string applicationId, string applicationName, string applicationVersion,
         string privateDataDirectory, IEnumerable<string> allowedUrlOrigins, IEnumerable<string> openFileRoots,
+        IEnumerable<string> revealFileRoots, IEnumerable<NeoOpenFileIntent> openFileIntents, NeoDispatcher? dispatcher = null) =>
+        CreateSystem(applicationId, applicationName, applicationVersion, privateDataDirectory, new Opener.NeoUrlScope(allowedUrlOrigins),
+            openFileRoots, revealFileRoots, openFileIntents, dispatcher);
+
+    /// <summary>Creates the statically selected system adapters with explicit application identity, a URL scope, and opener/file policy.</summary>
+    /// <param name="applicationId">Stable application/plugin namespace.</param>
+    /// <param name="applicationName">Localized application display name.</param>
+    /// <param name="applicationVersion">Application version displayed by system metadata.</param>
+    /// <param name="privateDataDirectory">Absolute private directory for encrypted records.</param>
+    /// <param name="urlScope">The URLs accepted by the opener, such as <see cref="Opener.NeoUrlScope.AnyWebAddress"/>.</param>
+    /// <param name="openFileRoots">Canonical roots from which existing non-executable files may be opened or used in outbound drags.</param>
+    /// <param name="revealFileRoots">Canonical roots whose files/folders may be revealed.</param>
+    /// <param name="openFileIntents">Explicit non-executable content intents accepted by the opener.</param>
+    /// <param name="dispatcher">Optional UI dispatcher used for coalesced metadata/menu delivery.</param>
+    /// <returns>An owned desktop service graph.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="urlScope"/> is <see langword="null"/>.</exception>
+    public static NeoDesktopServices CreateSystem(string applicationId, string applicationName, string applicationVersion,
+        string privateDataDirectory, Opener.NeoUrlScope urlScope, IEnumerable<string> openFileRoots,
         IEnumerable<string> revealFileRoots, IEnumerable<NeoOpenFileIntent> openFileIntents, NeoDispatcher? dispatcher = null)
     {
+        ArgumentNullException.ThrowIfNull(urlScope);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationVersion);
@@ -71,7 +90,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
             NeoNotifications.CreateSystem(applicationId, applicationName, dispatcher),
             NeoGlobalShortcutService.CreateSystem(dispatcher),
             new NeoSystemInfoService(applicationId, applicationName, applicationVersion, dispatcher),
-            new NeoExternalOpener(new Opener.NeoUrlScope(allowedUrlOrigins), openFiles, revealFiles, new NeoOpenFilePolicy(openFileIntents)),
+            new NeoExternalOpener(urlScope, openFiles, revealFiles, new NeoOpenFilePolicy(openFileIntents)),
             new NeoDragDropBroker(openFiles, new NativeOutboundDragPresenter()),
             NeoSafeStorage.CreateSystem(applicationId, privateDataDirectory));
     }

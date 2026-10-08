@@ -116,6 +116,38 @@ public sealed class NeoAppBuilder
         return this;
     }
 
+    /// <summary>Allows user-initiated links to any web address to open in the system browser.</summary>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// For an application whose content links anywhere, such as a chat or a document viewer. It is
+    /// <see cref="OpenExternalLinksInSystemBrowser(NeoExternalUrlScope)"/> with
+    /// <see cref="NeoExternalUrlScope.AnyWebAddress"/>: an absolute HTTP or HTTPS address with a host, without
+    /// credentials, control or white-space characters, and of at most 4096 characters.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">External-link policy was already configured.</exception>
+    public NeoAppBuilder OpenAnyWebLinkInSystemBrowser() => OpenExternalLinksInSystemBrowser(NeoExternalUrlScope.AnyWebAddress);
+
+    /// <summary>Allows user-initiated HTTP(S) links that a URL scope accepts to open in the system browser.</summary>
+    /// <param name="scope">
+    /// The scope that decides which addresses open, such as <see cref="NeoExternalUrlScope.AnyWebAddress"/> for an
+    /// application whose content links anywhere.
+    /// </param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// External links are blocked unless one of the overloads of this method is called. Redirects and other
+    /// non-user-initiated navigation remain blocked, and so do the addresses of the scope that are not HTTP(S),
+    /// such as <c>mailto:</c>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="scope"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">External-link policy was already configured.</exception>
+    public NeoAppBuilder OpenExternalLinksInSystemBrowser(NeoExternalUrlScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (_externalLinkScope is not null) throw new InvalidOperationException("External-link policy can be configured only once.");
+        _externalLinkScope = scope;
+        return this;
+    }
+
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
     /// <param name="contractHash">The deterministic generated contract hash.</param>
     /// <param name="permissions">Generated application permission declarations.</param>
@@ -306,8 +338,9 @@ public sealed class NeoAppBuilder
         };
     }
 
+    // The native opener is for web addresses: a scope that also lists mailto: does not send those to it.
     private bool IsAllowedExternalLink(Uri target, bool isUserInitiated) =>
-        isUserInitiated && _externalLinkScope?.TryAuthorize(target, out _) == true;
+        isUserInitiated && target.IsAbsoluteUri && target.Scheme is ("http" or "https") && _externalLinkScope?.TryAuthorize(target, out _) == true;
 
     private static bool HasSameOrigin(Uri target, Uri trustedOrigin) =>
         target.IsAbsoluteUri && string.IsNullOrEmpty(target.UserInfo) &&

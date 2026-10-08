@@ -57,13 +57,31 @@ public sealed class NeoOpenFilePolicy
     }
 }
 
-/// <summary>Restricts external URLs by exact scheme, IDN host, and effective port.</summary>
+/// <summary>Restricts external URLs by exact scheme, IDN host, and effective port, or to any web address.</summary>
 public sealed class NeoUrlScope
 {
-    private readonly HashSet<string> _origins;
+    private const int MaximumUrlLength = 4096;
+    // Null for the scope of any web address.
+    private readonly HashSet<string>? _origins;
+
+    private NeoUrlScope() { }
+
+    /// <summary>Gets the scope of any web address: an absolute HTTP or HTTPS URL with a host and without credentials.</summary>
+    /// <remarks>
+    /// Use it for content that links anywhere, such as a chat or a document viewer, where a list of origins cannot be
+    /// written. <see cref="TryAuthorize"/> then accepts no other scheme, not even <c>mailto:</c>, and refuses a URL
+    /// with user information, with a control or white-space character, or longer than 4096 characters. Which address
+    /// a user is sent to is for the application to decide: this scope only says that the address is a web address.
+    /// </remarks>
+    public static NeoUrlScope AnyWebAddress { get; } = new();
+
+    /// <summary>Gets whether this scope accepts any web address instead of a list of origins.</summary>
+    public bool AllowsAnyWebAddress => _origins is null;
 
     /// <summary>Initializes an allowlist from absolute origins such as <c>https://example.com</c>.</summary>
     /// <param name="origins">Exact allowed origins.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="origins"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The list is empty, has more than 128 origins or a duplicate, or contains a value that is not an exact origin.</exception>
     public NeoUrlScope(IEnumerable<string> origins)
     {
         ArgumentNullException.ThrowIfNull(origins);
@@ -75,15 +93,20 @@ public sealed class NeoUrlScope
     /// <summary>Validates an absolute URL without credentials or controls.</summary>
     /// <param name="url">The candidate URL.</param>
     /// <param name="authorized">Receives the normalized URL when allowed.</param>
-    /// <returns><see langword="true"/> when the exact origin is allowed.</returns>
+    /// <returns><see langword="true"/> when the exact origin is allowed, or when the URL is a web address and the scope is <see cref="AnyWebAddress"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="url"/> is <see langword="null"/>.</exception>
     public bool TryAuthorize(Uri url, out Uri? authorized)
     {
         ArgumentNullException.ThrowIfNull(url);
         authorized = null;
-        if (!url.IsAbsoluteUri || url.IsFile || url.OriginalString.Length > 4096 || url.OriginalString.Any(char.IsControl) || url.UserInfo.Length != 0 || url.Scheme is not ("http" or "https" or "mailto")) return false;
+        if (!url.IsAbsoluteUri || url.IsFile || url.OriginalString.Length > MaximumUrlLength || url.OriginalString.Any(char.IsControl) || url.UserInfo.Length != 0 || url.Scheme is not ("http" or "https" or "mailto")) return false;
         try
         {
-            if (!_origins.Contains(CanonicalOrigin(url.GetLeftPart(UriPartial.Authority)))) return false;
+            if (_origins is null)
+            {
+                if (url.Scheme == "mailto" || url.OriginalString.Any(char.IsWhiteSpace) || string.IsNullOrEmpty(url.IdnHost)) return false;
+            }
+            else if (!_origins.Contains(CanonicalOrigin(url.GetLeftPart(UriPartial.Authority)))) return false;
             authorized = new Uri(url.GetComponents(UriComponents.AbsoluteUri, UriFormat.UriEscaped), UriKind.Absolute);
             return true;
         }
@@ -121,7 +144,7 @@ public sealed class NeoExternalOpener
     {
         ArgumentNullException.ThrowIfNull(urls); ArgumentNullException.ThrowIfNull(openFiles); ArgumentNullException.ThrowIfNull(revealFiles); ArgumentNullException.ThrowIfNull(openPolicy);
         _urls = urls; _openFiles = openFiles; _revealFiles = revealFiles; _openPolicy = openPolicy;
-        Support = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() ? new(NeoSupportLevel.Native, 1, 1, "Uses only exact URL origins, fixed open/reveal intents, and a typed non-executable content policy; no command, executable content type, shell interpolation, or caller-supplied verb is accepted.") : new(NeoSupportLevel.None, 1, 1, "No supported desktop opener.");
+        Support = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() ? new(NeoSupportLevel.Native, 1, 1, "Uses only the URL scope of the application (exact origins, or any credential-free web address), fixed open/reveal intents, and a typed non-executable content policy; no command, executable content type, shell interpolation, or caller-supplied verb is accepted.") : new(NeoSupportLevel.None, 1, 1, "No supported desktop opener.");
     }
 
     /// <summary>Gets platform support details.</summary>

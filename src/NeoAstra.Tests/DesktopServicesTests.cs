@@ -543,6 +543,62 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void AnyWebAddressScopeAcceptsOnlyCredentialFreeHttpAddresses()
+    {
+        var scope = global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress;
+        Assert.IsTrue(scope.AllowsAnyWebAddress);
+        Assert.AreSame(scope, global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress);
+        Assert.IsFalse(new global::NeoAstra.Desktop.Opener.NeoUrlScope(["https://example.com"]).AllowsAnyWebAddress);
+
+        foreach (var (address, expected) in new[]
+        {
+            ("https://example.com/a?b=c#d", "https://example.com/a?b=c#d"),
+            ("http://127.0.0.1:8080/x", "http://127.0.0.1:8080/x"),
+            ("HTTPS://Example.COM", "https://example.com/"),
+            ("http://[::1]:5173/", "http://[::1]:5173/"),
+        })
+        {
+            Assert.IsTrue(scope.TryAuthorize(new Uri(address), out var authorized), address);
+            Assert.AreEqual(expected, authorized!.AbsoluteUri, address);
+        }
+
+        Assert.IsTrue(scope.TryAuthorize(new Uri("https://b\u00fccher.example/"), out var international));
+        Assert.AreEqual("xn--bcher-kva.example", international!.IdnHost);
+
+        foreach (var address in new[]
+        {
+            "https://user@example.com/", "https://user:secret@example.com/", "mailto:someone@example.com", "file:///etc/passwd",
+            "ftp://example.com/file", "javascript:alert(1)", "data:text/html,x", "ms-settings:privacy", "app://neoastra/index.html",
+            "https://example.com/a b", " https://example.com/", "https://example.com/\u0001", "https://example.com/\ta",
+            "https://example.com/\u00a0", "https://example.com/" + new string('a', 4096),
+        })
+        {
+            Assert.IsTrue(Uri.TryCreate(address, UriKind.Absolute, out var url), address);
+            Assert.IsFalse(scope.TryAuthorize(url!, out var authorized), address);
+            Assert.IsNull(authorized, address);
+        }
+
+        Assert.IsFalse(scope.TryAuthorize(new Uri("/relative", UriKind.Relative), out _));
+        Assert.ThrowsExactly<ArgumentNullException>(() => scope.TryAuthorize(null!, out _));
+    }
+
+    [TestMethod]
+    public async Task OpenerWithAnyWebAddressStillRejectsOtherTargetsBeforeLaunch()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var opener = new NeoExternalOpener(global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress, new NeoFileScope([root]), new NeoFileScope([root]), new NeoOpenFilePolicy([NeoOpenFileIntent.TextDocument]));
+            Assert.AreEqual(NeoDesktopStatus.Denied, await opener.OpenUrlAsync(new Uri("file:///secret")));
+            Assert.AreEqual(NeoDesktopStatus.Denied, await opener.OpenUrlAsync(new Uri("mailto:someone@example.com")));
+            Assert.AreEqual(NeoDesktopStatus.Denied, await opener.OpenUrlAsync(new Uri("https://user:secret@example.com/")));
+            Assert.AreEqual(NeoDesktopStatus.Denied, await opener.OpenUrlAsync(new Uri("vscode://file/etc/passwd")));
+            Assert.ThrowsExactly<ArgumentNullException>(() => NeoDesktopServices.CreateSystem("test.scope", "Scope Test", "1.0", root, (global::NeoAstra.Desktop.Opener.NeoUrlScope)null!, [root], [root], [NeoOpenFileIntent.TextDocument]));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
     public async Task OpenerRejectsTargetsOutsideExactScopesBeforeLaunch()
     {
         var root = CreateTemporaryDirectory();

@@ -6,7 +6,7 @@ The `NeoAstra.Desktop` namespaces are the statically composed desktop-service la
 
 Adding a plugin, service object, permission catalog, or renderer command declaration grants no authority. `AddNeoAstraDesktopPermissions` only adds declarations to capability tooling. Applications must separately register RPC handlers and grant the exact permissions/scopes needed by each trusted view. The official declarations use `desktop.*` command names and sensitive/high risk for clipboard reads, opener operations, native UI mutation, shortcuts, outbound drag, and safe storage. File, URL, clipboard, dialog, and notification operations requiring argument policy declare their scope family.
 
-Service inputs and retained resources are bounded. File paths are canonicalized beneath explicit roots, URL origins are exact scheme/IDN-host/effective-port allowlists, opener APIs expose fixed intents rather than arbitrary executables or verbs, command arguments use `ProcessStartInfo.ArgumentList`, and helper processes have deadlines, bounded output, and process-tree termination. Clipboard and secret bytes are copied; safe-storage enumeration is intentionally absent. Drag file paths become document-session-scoped opaque tokens. Trusted C# outbound calls consume explicit short-lived one-shot tokens; renderer outbound calls expose no token and instead consume a current native pointer gesture bound by the host to the source view and active document session.
+Service inputs and retained resources are bounded. File paths are canonicalized beneath explicit roots, URL origins are exact scheme/IDN-host/effective-port allowlists, or the one scope `NeoUrlScope.AnyWebAddress` for an application whose content links anywhere (any absolute HTTP(S) address with a host and without credentials, control or white-space characters, of at most 4096 characters; no `mailto:` and no other scheme), opener APIs expose fixed intents rather than arbitrary executables or verbs, command arguments use `ProcessStartInfo.ArgumentList`, and helper processes have deadlines, bounded output, and process-tree termination. Clipboard and secret bytes are copied; safe-storage enumeration is intentionally absent. Drag file paths become document-session-scoped opaque tokens. Trusted C# outbound calls consume explicit short-lived one-shot tokens; renderer outbound calls expose no token and instead consume a current native pointer gesture bound by the host to the source view and active document session.
 
 Canonical path checks prevent lexical traversal and resolve existing links before authorization, but a pathname handed to an external OS application cannot be held open atomically across handler launch. Applications must therefore use roots that an untrusted renderer cannot rename or replace; this is an OS pathname TOCTOU boundary, not a substitute for handle-based file I/O. Creatable save paths authorize the resolved parent and leaf separately and must be revalidated by any later privileged consumer.
 
@@ -41,6 +41,17 @@ Support is reported per service through `NeoCapabilityInfo`; callers must not in
 | External opener | OS default handler with exact URL/file/reveal policy | `/usr/bin/open` with fixed argument intents | trusted absolute `xdg-open` with fixed argument intents |
 | Safe storage | Per-user DPAPI and atomic encrypted files | Binary-safe Keychain generic-password APIs with exact service/account lookup | Secret Service via trusted absolute `secret-tool` when available; no fallback (`Limited` because the keyring/helper may be unavailable or locked) |
 | Drag/drop | OLE inbound file/text/URL capture installed across the complete WebView2 child-window tree and Shell OLE outbound file/text/URL drags with source-window pointer correlation | WKWebView/AppKit inbound file/text/URL capture and AppKit outbound typed dragging sessions bound to the current source-view event | WebKitGTK native inbound file/text/URL capture and GTK4 content-provider outbound drags bound to a recent source-widget gesture; compositor support varies |
+
+`NeoExternalOpener.OpenUrlAsync` opens a URL that the `NeoUrlScope` of the service accepts and reports `Denied` for any other, before anything is launched. A scope is a list of exact origins, or `NeoUrlScope.AnyWebAddress` when the content of the application links anywhere, as a chat or a document viewer does:
+
+```csharp
+var desktop = NeoDesktopServices.CreateSystem(
+    "com.example.app", "Example", "1.0", privateDataDirectory,
+    NeoUrlScope.AnyWebAddress, openFileRoots, revealFileRoots, openFileIntents);
+var status = await desktop.Opener.OpenUrlAsync(new Uri("https://example.org/page"));
+```
+
+`AnyWebAddress` checks the form of an address and not where it leads: the application still decides which links it offers, and should show the user the address that a link opens.
 
 Windows executables that use the dialog service must activate Common Controls v6 in their application manifest because `TaskDialogIndirect` is a v6 API. The advanced sample's `app.manifest` provides this dependency for both normal and NativeAOT builds.
 

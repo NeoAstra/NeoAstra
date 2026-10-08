@@ -117,6 +117,46 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public void ConventionalAppOpensAnyUserInitiatedWebAddressWhenItsScopeSaysSo()
+    {
+        var builder = CreateBuilder(ApplicationPermission())
+            .OpenExternalLinksInSystemBrowser(global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress);
+        var origin = new Uri("app://neoastra");
+
+        Assert.AreEqual(NeoDecisionAction.Allow, builder.DecideNavigation(new Uri("app://neoastra/settings"), true, false, origin));
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, builder.DecideNavigation(new Uri("https://anywhere.example/page?q=1#part"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, builder.DecideNewWindow(new Uri("http://other.example:8080/help"), true));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://anywhere.example/page"), true, false, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://anywhere.example/page"), false, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("https://anywhere.example/page"), false));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://user:secret@anywhere.example/"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("mailto:someone@example.com"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("file:///tmp/document"), true));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(new Uri("ms-settings:privacy"), true));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNewWindow(null, true));
+
+        var named = CreateBuilder(ApplicationPermission()).OpenAnyWebLinkInSystemBrowser();
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, named.DecideNavigation(new Uri("https://anywhere.example/page"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, named.DecideNavigation(new Uri("mailto:someone@example.com"), true, true, origin));
+        Assert.Throws<InvalidOperationException>(() => named.OpenAnyWebLinkInSystemBrowser());
+        Assert.Throws<InvalidOperationException>(() => named.OpenExternalLinksInSystemBrowser("https://example.com"));
+    }
+
+    [TestMethod]
+    public void ConventionalAppSendsOnlyWebAddressesOfAScopeToTheSystemBrowser()
+    {
+        var builder = CreateBuilder(ApplicationPermission())
+            .OpenExternalLinksInSystemBrowser(new global::NeoAstra.Desktop.Opener.NeoUrlScope(["https://example.com", "mailto:"]));
+        var origin = new Uri("app://neoastra");
+
+        Assert.AreEqual(NeoDecisionAction.OpenExternal, builder.DecideNavigation(new Uri("https://example.com/guide"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("https://other.example/guide"), true, true, origin));
+        Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("mailto:someone@example.com"), true, true, origin));
+        Assert.Throws<InvalidOperationException>(() => builder.OpenExternalLinksInSystemBrowser(global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress));
+        Assert.Throws<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).OpenExternalLinksInSystemBrowser((global::NeoAstra.Desktop.Opener.NeoUrlScope)null!));
+    }
+
+    [TestMethod]
     public void ConventionalAppExternalLinkConfigurationIsExplicitAndBounded()
     {
         var builder = CreateBuilder(ApplicationPermission());
