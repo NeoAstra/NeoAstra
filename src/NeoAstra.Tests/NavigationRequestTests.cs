@@ -79,6 +79,64 @@ public sealed class NavigationRequestTests
         });
     }
 
+    [TestMethod]
+    public async Task AScriptThatActsOnItsOwnIsNotUserInitiated()
+    {
+        const string page = """
+            <!doctype html><title>Timer</title>
+            <script>
+            const kind = new URLSearchParams(location.search).get('kind');
+            setTimeout(() => {
+              if (kind === 'location') location.href = 'https://example.invalid/location';
+              else if (kind === 'open') window.open('https://example.invalid/open', 'opened');
+              else { const link = document.createElement('a'); link.href = 'https://example.invalid/' + kind; if (kind === 'blank') link.target = '_blank'; document.body.appendChild(link); link.click(); }
+            }, 50);
+            </script>
+            """;
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["timer.html"] = page }, async session =>
+        {
+            var view = session.View;
+            var navigations = new ConcurrentQueue<NeoNavigationRequest>();
+            var windows = new ConcurrentQueue<NeoNewWindowRequest>();
+            view.NavigationRequested = request =>
+            {
+                if (request.Uri.Scheme == "app") return ValueTask.FromResult(NeoNavigationDecision.Allow);
+                navigations.Enqueue(request);
+                return ValueTask.FromResult(NeoNavigationDecision.Cancel);
+            };
+            view.NewWindowRequested = request =>
+            {
+                windows.Enqueue(request);
+                return ValueTask.FromResult(NeoNewWindowDecision.Cancel);
+            };
+
+            // The view has had no input, and the host runs no script in it, which would count as an action of the user for
+            // WebView2: the page navigates and opens windows by itself.
+            foreach (var kind in new[] { "location", "link" })
+            {
+                session.Stage = $"a navigation from a timer ({kind})";
+                await view.NavigateAsync(LiveBrowserSession.Page($"timer.html?kind={kind}"), session.CancellationToken);
+                var request = await WaitForRequestAsync(navigations, session.CancellationToken);
+                Assert.AreEqual(new Uri($"https://example.invalid/{kind}"), request.Uri);
+                Assert.IsTrue(request.IsMainFrame);
+                Assert.IsFalse(request.IsUserInitiated);
+                // WebView2 does not tell that a request comes from a link.
+                Assert.IsNull(request.IsLinkActivation);
+            }
+
+            foreach (var kind in new[] { "open", "blank" })
+            {
+                session.Stage = $"a new window from a timer ({kind})";
+                await view.NavigateAsync(LiveBrowserSession.Page($"timer.html?kind={kind}"), session.CancellationToken);
+                NeoNewWindowRequest? request;
+                while (!windows.TryDequeue(out request)) await Task.Delay(20, session.CancellationToken);
+                Assert.AreEqual(new Uri($"https://example.invalid/{kind}"), request.TargetUri);
+                Assert.IsFalse(request.IsUserInitiated);
+                Assert.IsNull(request.IsLinkActivation);
+            }
+        });
+    }
+
     private static async Task<NeoNavigationRequest> WaitForRequestAsync(ConcurrentQueue<NeoNavigationRequest> requests, CancellationToken cancellationToken)
     {
         NeoNavigationRequest? request;
