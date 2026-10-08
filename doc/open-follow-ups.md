@@ -211,56 +211,64 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   workflow builds `osx-x64` on macOS 15 and `osx-arm64` on macOS 26, and the libraries record those as
   the oldest systems they load on: 15.0 for `osx-x64` and 26.0 for `osx-arm64`. To decide: the minimum
   supported macOS version, which the build then has to be given as its deployment target.
-- **Links that open outside the view: the Windows and Linux backends were written on a Mac.** On
-  2026-10-08 four changes went in: the view setting `NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS`, the
-  bits of a navigation or new-window request (`NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED`,
+- **Links that open outside the view: no test opens an address that does open.** On 2026-10-08 four
+  changes went in: the view setting `NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS`, the bits of a
+  navigation or new-window request (`NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED`,
   `NEOASTRA_REQUEST_LINK_ACTIVATED`), the common path of an `OpenExternal` decision (`open_external`
   and `neoastra_decision_complete` in `native/src/common/neoastra.cpp`, `neo_external_uri_allowed` in
-  `native_internal.hpp`), and `NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED`. The common code, the Cocoa
-  backend, and the managed code were built and run on macOS 26 arm64: `ctest`, with the new
-  `neoastra_macos_link_tests`, the unit tests, and the conformance harness. Not compiled at all:
-  `native/src/windows/windows_backend.cpp` (`neo_platform_open_external`, the setting,
-  `decision->external_uri`), `native/src/linux/gtk_backend.cpp` (`link_activation`,
-  `neo_platform_open_external`, the setting), and `test_tab_key_setting_reaches_the_view` in
-  `native/tests/linux_backend_tests.cpp`. To do on Windows and on Linux: build with
-  `python eng/build_native.py --rid <rid> --clean`, then run the conformance harness, whose scenario
-  "an address that is not a web address is not sent outside the view" answers `OpenExternal` for a
-  `mailto:` link that a script clicks and expects `Refused`. That scenario assumes that WebView2
-  raises `NavigationStarting` for such a link, which was not checked. The scenario is skipped with a
-  native library from before the check (`NeoRuntimeInfo.ChecksExternalOpen`), which would start a
-  mail program. Nothing checks an address that does open on those two platforms: on macOS the native
-  test takes the place of `NSWorkspace`, and a real browser was opened by no test on any platform.
-  Also to see on Windows: whether `ShellExecute` takes an address of several thousand characters,
-  which the native check lets through up to 32,768 bytes and `NeoUrlScope.AnyWebAddress` up to 4096
-  characters; a refusal would be reported as `Failed`. And whether WebView2 writes the host of an
-  internationalized address in ASCII: the native check accepts either form.
-- **`IsUserInitiated` was observed on macOS only.** The table in
+  `native_internal.hpp`), and `NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED`. They were built and run on
+  macOS 26 arm64 (`ctest` with `neoastra_macos_link_tests`, the unit tests, the conformance harness)
+  and on Windows 11 with the WebView2 Runtime 154 (`ctest`, the unit tests with
+  `NavigationRequestTests`, the conformance harness, and a program outside the repository that sent
+  clicks and key presses to a view through the DevTools protocol and counted the requests of a server
+  on the loopback interface).
+  The Linux backend was compiled and run the same day: by the native workflow, where
+  `neoastra_linux_backend_tests` passes with `test_tab_key_setting_reaches_the_view`, and by the
+  conformance harness with WebKitGTK 2.52 in WSL, where the scenario "an address that is not a web
+  address is not sent outside the view" passes. The native workflow also ran
+  `neoastra_macos_link_tests` on an Intel Mac with macOS 15.
+  On Windows that program saw `Refused` for `mailto:`, `tel:`, an unregistered scheme, and an address
+  with credentials, from a link and from a link with `target="_blank"`, and `Opened` with one request
+  of the default browser for a link, for a link with `target="_blank"`, and for addresses of 2000 to
+  32,000 characters. Still open: the repository has no test that opens an address which does open,
+  because that starts the browser of the machine. On macOS the native test takes the place of
+  `NSWorkspace`, on Windows it was seen by hand as said, and on Linux it was not seen. `Failed` was
+  seen on no platform. To decide: whether the native library gets a way to replace the system opener
+  in a test, as the macOS test does for itself.
+- **`IsUserInitiated` was not observed on Linux.** The table in
   [links that open outside the web view](capabilities-and-security.md#links-that-open-outside-the-web-view)
-  has its macOS column from a native test and its Windows and Linux columns from what WebView2
-  (`IsUserInitiated`) and WebKitGTK (`webkit_navigation_action_is_user_gesture`) document. To check
-  on both: a link that the user clicks; `location.href`, `window.open`, and `click()` on a link from
-  a click handler; the same from a timer; and the redirect of a clicked link. A script that the host
-  runs with `EvaluateScriptAsync` had the user gesture in WKWebView (its private `_isUserInitiated`
-  was 1, and 0 in a timer that ran three seconds later), so on Linux, and perhaps on
-  Windows, a navigation such a script starts may be user-initiated: the tests have to let the page
-  act by itself. Linux reported a navigation as user-initiated by its navigation type before; it
-  now uses the user gesture, which a link clicked by a script running on its own does not have.
+  has its macOS column from a native test, its Windows column from the run above, and its Linux
+  column from what WebKitGTK (`webkit_navigation_action_is_user_gesture`) documents. To check on
+  Linux: a link that the user clicks; `location.href`, `window.open`, and `click()` on a link from a
+  click handler; the same from a timer; and the redirect of a clicked link. A script that the host
+  runs with `EvaluateScriptAsync` has the user gesture in WebView2, and had it in WKWebView (its
+  private `_isUserInitiated` was 1, and 0 in a timer that ran three seconds later), so on Linux a
+  navigation such a script starts may be user-initiated: the tests have to let the page act by
+  itself, as `AScriptThatActsOnItsOwnIsNotUserInitiated` in `NavigationRequestTests` does on Windows.
+  Linux reported a navigation as user-initiated by its navigation type before; it now uses the user
+  gesture, which a link clicked by a script running on its own does not have.
+- **Windows: a script of the host counts as an action of the user.** WebView2 runs the script of
+  `ExecuteScript` with a user gesture: for about five seconds after `EvaluateScriptAsync`, whatever
+  the script does, a navigation or a new window that the page asks for by itself is user-initiated
+  (seen one second and four seconds after `EvaluateScriptAsync("1 + 1")`, not seven seconds after,
+  and not after `PostMessageAsync`). The policy of `NeoApp` for external links requires a user
+  action, so an application that evaluates scripts in its view lets its page open the system browser
+  without a click on Windows; `NeoAutomation` evaluates scripts as well. A candidate, not tried: the
+  DevTools protocol method `Runtime.evaluate` with `userGesture: false`, reached through
+  `CallDevToolsProtocolMethod`, which the entry on Promise results above names too.
+- **Windows: the navigation of a subframe is not reported.** The WebView2 backend listens to
+  `NavigationStarting` of the top-level document and has no handler for the event of frames
+  (`FrameNavigationStarting`): a click on a link in an `<iframe>` loaded the address in the frame and
+  raised no `NavigationRequested`, so the policy of `NeoApp`, which cancels the navigation of a
+  subframe that leaves the origin of the application on macOS, does not on Windows. To do: raise the
+  request without `NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME` for frames, honor the decision, and answer
+  the request of a refused one as `take_refused_navigation` does for the top-level document.
 - **macOS: the redirect of a clicked link is reported like the link.** WKWebView asks about the
   redirect with the same navigation type and mouse button, so `IsUserInitiated` is `true` for it.
   WebKit has `_isRedirect` and `_isUserInitiated` on `WKNavigationAction`, which are private and were
   left alone. A way that stays public, not tried: let a click or a key press that the view receives
   (`mouseDown:`, `keyDown:` of `NeoAstraWebView`) allow one user-initiated request, so that the
   redirect that follows without new input is not one.
-- **The runtimes of five platforms are older than the source.** Only `osx-arm64` was rebuilt, on a
-  development machine, after the four changes above; `osx-x64`, `win-x64`, `win-arm64`, `linux-x64`,
-  and `linux-arm64` are still the libraries of the native workflow run for `ac1099b`. The managed
-  code runs with them: `TabFocusesLinks` is ignored, `IsLinkActivation` is `null`, `IsUserInitiated`
-  means what it meant before, and `OpenExternal` opens any address and raises no
-  `ExternalOpenCompleted`, which `NeoRuntimeInfo.ChecksExternalOpen` says with `false`. The
-  conformance harness passed on macOS with the previous `osx-arm64` library as well, with the
-  scenario of the check skipped. To do: run the native workflow and check in its six libraries, as
-  `1d457ff` did. An `osx-x64` library was built outside the repository and passed the native tests under
-  Rosetta on macOS 26; it was not run on an Intel Mac or on macOS 15, and it was not checked in.
 - **A navigation request carries no modifier keys or mouse button, and the context menu is all or
   nothing.** Both were asked for with the changes above and left out. WKWebView (`modifierFlags`,
   `buttonNumber`) and WebKitGTK (`webkit_navigation_action_get_modifiers`,

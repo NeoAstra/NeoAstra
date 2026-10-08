@@ -206,6 +206,12 @@ public sealed class NeoWindowStateChangedEventArgs(NeoWindowState oldState, NeoW
 /// <c>click()</c> on a link. The redirect of a request is never user-initiated.
 /// </para>
 /// <para>
+/// WebView2 keeps the user gesture for about five seconds, also for a timer that a click handler starts, and counts a
+/// script that the host runs with <see cref="NeoAstra.EvaluateScriptAsync"/> as an action of the user: a navigation
+/// that the page starts by itself within that time is user-initiated. A navigation that the host starts is
+/// user-initiated as well.
+/// </para>
+/// <para>
 /// WKWebView has no public user-gesture flag. On macOS the value is <see langword="true"/> only when the user clicked a
 /// link or pressed Enter on it: a navigation that a script starts is never user-initiated, not even from a click
 /// handler, and neither is a link that a script clicks. WKWebView does not tell the redirect of a clicked link apart,

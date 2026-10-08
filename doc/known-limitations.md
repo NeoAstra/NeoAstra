@@ -28,9 +28,10 @@ assuming that every browser engine supports every portable event.
 | Built-in browser shortcuts (find, print, reload, zoom) | Can be turned off | Not present in the engine | Not present in the engine |
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
 | Tab key stopping on links (`NeoBrowserFeatures.TabFocusesLinks`) | Always on | Off unless turned on | On unless turned off |
-| User gesture of a navigation or new-window request (`IsUserInitiated`) | Reported by the engine | Only a link that the user clicked or activated with Enter | Reported by the engine |
+| User gesture of a navigation or new-window request (`IsUserInitiated`) | Reported by the engine; a script of the host counts as one | Only a link that the user clicked or activated with Enter | Reported by the engine |
 | Link activation of a request (`IsLinkActivation`) | Not exposed | Available | Available |
 | Redirect told apart from a user-initiated navigation | Available | Not exposed | Available |
+| Navigation request for a link in a subframe | Not raised | Available | Raised as one of the main frame |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
@@ -64,8 +65,35 @@ whether or not the script handles a click; `location.href` and `window.open` arr
 the redirect of a clicked link arrives exactly like the link. WebKit does know the user gesture and
 the redirect, and has them on `WKNavigationAction` as `_isUserInitiated` and `_isRedirect`. Those
 are private, NeoAstra does not use them: an application that calls private API is refused by the Mac
-App Store, and the native library is part of every application. On Windows and Linux the values are
-the ones WebView2 and WebKitGTK document.
+App Store, and the native library is part of every application. On Linux the values are the ones
+WebKitGTK documents.
+
+On Windows `IsUserInitiated` is the user gesture of WebView2, which is wider than a click. These were
+observed on Windows 11 with the WebView2 Runtime 154, with clicks and key presses sent to the view as
+input: a link that the user clicks or activates with the Enter key, and `location.href`,
+`window.open`, `click()` on a link, and `submit()` on a form from a click handler, are user-initiated;
+so is a timer that such a handler starts when it runs one second later, and not when it runs seven
+seconds later; a page that does the same from a timer without any input is not; and the redirect of a
+clicked link is not. A script that the host runs with `EvaluateScriptAsync` counts as an action of the
+user for WebView2, whatever it does: a navigation that the page started by itself one second and four
+seconds after `EvaluateScriptAsync("1 + 1")` was user-initiated, and seven seconds after it was not.
+`PostMessageAsync` does not do that, and a navigation that the host starts with `NavigateAsync` is
+user-initiated. A view that the host scripts therefore reports the navigations of its page as
+user-initiated most of the time; `NeoAutomation` evaluates scripts as well.
+
+WebView2 raises `NavigationStarting` for the top-level document, and NeoAstra does not listen to its
+event for frames: a link in an `<iframe>` that replaces the document of the frame raises no
+`NavigationRequested` on Windows, and the frame loads the address.
+
+WebView2 starts the request of a navigation while its host answers `NavigationStarting`, and drops
+the response when the host refuses. NeoAstra answers the request of a navigation that the host has
+just refused with an empty response, so the view does not request an address that it does not show:
+before, a refused link, or one sent to the system browser, was requested by the view first, and
+`EvaluateScriptAsync` waited for the response, two minutes with a server that did not answer. This
+relies on WebView2 asking about the request after it asked about the navigation, which it did in every
+run and which its documentation does not promise; a request that came first would go out as before.
+Until the next navigation, and for ten seconds at most, the first request of a document at the refused
+address is taken for that request, also when a frame makes it.
 
 `OpenExternal` on a navigation or new-window request opens web addresses only. A handler that used
 it for a `mailto:` link or for the scheme of another application now gets
@@ -73,7 +101,9 @@ it for a `mailto:` link or for the scheme of another application now gets
 `NeoExternalOpener` or with the application's own code. `Opened` means that the system took the
 address: `ShellExecute` on Windows, `NSWorkspace` on macOS, and the default application of GIO on
 Linux, which hands the address to the desktop portal in a sandbox. None of them tells whether a
-browser then showed the page.
+browser then showed the page. On Windows this was run with a server on the loopback interface: the
+default browser requested the address of a link and of a link with `target="_blank"`, and an address
+of 32,000 characters in full. `Failed` was not seen on any platform.
 
 `NavigationCompleted` relays the browser engine's own completion notification, which does not say how
 far the page's scripts have got. WKWebView can raise it while `document.readyState` is still

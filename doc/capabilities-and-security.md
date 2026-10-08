@@ -103,18 +103,26 @@ A view asks its host about a link in one of two requests: `NavigationRequested` 
 | What happened | Windows / WebView2 | macOS / WKWebView | Linux / WebKitGTK 6.0 |
 | --- | --- | --- | --- |
 | The user clicks a link, or presses Enter on it | User-initiated | User-initiated; link activation | User-initiated; link activation |
-| A script navigates or opens a window while it handles a click or a key press (`location.href`, `window.open`, `click()` on a link) | User-initiated | Not user-initiated; link activation for `click()` on a link | User-initiated; link activation for `click()` on a link |
+| A script navigates or opens a window while it handles a click or a key press (`location.href`, `window.open`, `click()` on a link, `submit()` on a form) | User-initiated, also from a timer for about five seconds after the click | Not user-initiated; link activation for `click()` on a link | User-initiated; link activation for `click()` on a link |
 | A script does the same on its own, from a timer or while the page loads | Not user-initiated | Not user-initiated; link activation for `click()` on a link | Not user-initiated; link activation for `click()` on a link |
+| A script that the host runs with `EvaluateScriptAsync` does the same, or the page does after such a script | User-initiated, for about five seconds after the script | Not user-initiated; link activation for `click()` on a link | Not run |
 | The server redirects a navigation that was user-initiated | Not user-initiated | Reported like the navigation it redirects | Not user-initiated |
 | `IsLinkActivation` | `null`: not reported | Reported | Reported |
 
-The macOS column was observed, on macOS 26. The Windows and Linux columns are what WebView2 and WebKitGTK document for the values NeoAstra passes on; they have not been run.
+The macOS column was observed on macOS 26, and the Windows column on Windows 11 with the WebView2 Runtime 154, where the clicks and the key presses were sent to the view as input. The Linux column is what WebKitGTK documents for the values NeoAstra passes on; it has not been run.
 
-- **Windows.** `IsUserInitiated` is the `IsUserInitiated` of WebView2 for a request that is not a redirect: the user gesture of the engine. WebView2 does not tell that a request comes from a link.
+- **Windows.** `IsUserInitiated` is the `IsUserInitiated` of WebView2 for a request that is not a redirect: the user gesture of the engine. WebView2 does not tell that a request comes from a link. Three things are wider than a click on a link there:
+  - The gesture outlives the click. A timer that a click handler starts navigates as the user one second later, and no longer seven seconds later.
+  - A script that the host runs with `EvaluateScriptAsync` counts as an action of the user, whatever the script does: for about five seconds a navigation or a new window that the page asks for by itself is user-initiated. `PostMessageAsync` does not count as one. An application that evaluates scripts in a view whose content it does not control cannot take `IsUserInitiated` for a click of its user on Windows.
+  - A navigation that the host starts with `NavigateAsync` is user-initiated.
+
+  WebView2 asks its host about the navigations of the top-level document only. A link in an `<iframe>` that replaces the document of that frame is not reported, so no handler and no policy of `NeoApp` sees it: keep frames to content that the application controls, with a `frame-src` directive in its content security policy.
 - **Linux.** `IsUserInitiated` is the user gesture that WebKitGTK reports (`webkit_navigation_action_is_user_gesture`) for a request that is not a redirect, and `IsLinkActivation` is its navigation type.
 - **macOS.** The public interface of WKWebView has no user-gesture flag. `IsUserInitiated` is `true` only when a link was activated with a trusted click or key press, which WKWebView tells by the mouse button of the request: a link that a script clicks comes without one. It is therefore the strictest of the three, and a page that opens its links with `window.open` or `location.href` from a click handler does not pass for user-initiated on macOS; use a link (`<a href>`) for an address that should open outside the view. WKWebView does not tell the redirect of a clicked link from the link either.
 
 An application that decides for itself and wants every activated link, whoever activated it, reads `IsLinkActivation` where it is not `null`. That is a weaker test: a script can click a link.
+
+A navigation that a handler refuses, with `Cancel` or with `OpenExternal`, is not requested by the view. WebView2 would request it: it starts the request of a navigation while it asks its host about the navigation, and drops the response when the host refuses, so a link that works once would be used up before the system browser asked for it, and the server would see the application before the browser. NeoAstra answers that request itself on Windows, with an empty response, and the address leaves the machine only when the system opens it. WebView2 may still connect to the server of a link while the pointer is pressed on it, without sending a request. A new-window request has no request of its own on any platform.
 
 `OpenExternal` leaves the view where it is and hands the requested address to the system, which opens it in the default browser. The native library checks the address a second time, behind the policy of the host: it hands over only an absolute `http` or `https` address with a host, without credentials, and without a control or white-space character. Anything else, such as `mailto:`, `file:`, or the scheme of another application, is not opened whatever the handler decided, because the system could start a program for it instead of showing a page. Use `NeoExternalOpener` for the other intents an application has.
 
@@ -125,6 +133,8 @@ The view then raises `ExternalOpenCompleted`, on the UI thread, with the address
 | `Opened` | The system took the address. It does not say that a page was shown. |
 | `Refused` | The address is not a web address, and the system was not asked. |
 | `Failed` | The system did not open the address, for example because no application handles web addresses. `NativeCode` is the error of `ShellExecute` on Windows and of GLib on Linux, and zero on macOS, where the system gives none. |
+
+On Windows the address is handed over as WebView2 wrote it: the host of an internationalized address in its ASCII form, and the other characters outside ASCII as percent escapes. `ShellExecute` took an address of 32,000 characters, and the default browser requested all of it.
 
 ```csharp
 view.ExternalOpenCompleted += (_, outcome) =>
