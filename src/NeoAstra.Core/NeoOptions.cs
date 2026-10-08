@@ -375,9 +375,17 @@ public sealed class NeoBrowserFeatures
     /// </remarks>
     public bool? ScriptDialogs { get; set; }
 
+    /// <summary>Gets or sets whether the Tab key stops on links, as it does on form controls.</summary>
+    /// <remarks>
+    /// The engine default differs: WKWebView skips links, and reaches them with Option+Tab, while WebView2 and WebKitGTK
+    /// stop on them. On macOS the Option key reverses this value for one key press. WebView2 always stops on links, so
+    /// <see langword="false"/> is ignored on Windows.
+    /// </remarks>
+    public bool? TabFocusesLinks { get; set; }
+
     /// <summary>
-    /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls.
-    /// DevTools keep the engine default.
+    /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls,
+    /// and a Tab key that stops on links on every platform. DevTools keep the engine default.
     /// </summary>
     /// <returns>A new feature selection.</returns>
     public static NeoBrowserFeatures ApplicationShell() => new()
@@ -386,6 +394,7 @@ public sealed class NeoBrowserFeatures
         ContextMenus = false,
         StatusBar = false,
         ZoomControls = false,
+        TabFocusesLinks = true,
     };
 }
 

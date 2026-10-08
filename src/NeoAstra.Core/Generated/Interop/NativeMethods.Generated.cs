@@ -164,7 +164,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off.
         /// </summary>
         public enum neoastra_view_setting : uint
         {
@@ -179,6 +179,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = unchecked((uint)4),
 
             NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = unchecked((uint)5),
+
+            NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = unchecked((uint)6),
         }
 
         public enum neoastra_option_state : uint
@@ -1337,7 +1339,7 @@ namespace NeoAstra.Interop.Generated
         }
 
         /// <summary>
-        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards.
+        /// Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off.
         /// </summary>
         public readonly partial record struct neoastra_view_setting_t(NativeMethods.neoastra_view_setting Value)
         {

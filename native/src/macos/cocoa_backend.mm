@@ -551,6 +551,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
             @try{[state->webview.configuration.preferences setValue:@(enabled) forKey:@"developerExtrasEnabled"];if([state->webview respondsToSelector:NSSelectorFromString(@"setInspectable:")])[state->webview setValue:@(enabled) forKey:@"inspectable"];}@catch(NSException*){return NEOASTRA_ERROR_NOT_SUPPORTED;}
             return NEOASTRA_OK;
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:state->webview.allowsMagnification=enabled;return NEOASTRA_OK;
+        // WebKit reads the preference at each Tab key press, and the Option key reverses it for that press.
+        case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:state->webview.configuration.preferences.tabFocusesLinks=enabled;return NEOASTRA_OK;
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }}

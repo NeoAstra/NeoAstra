@@ -145,10 +145,10 @@ var view = await environment.CreateWebViewAsync(
     });
 ```
 
-`ApplicationShell()` disables the accelerator keys, context menu, status bar, and zoom controls and
-leaves DevTools at the engine default. Each property can also be set on its own; `null` keeps the
-engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection to the main view of a
-`NeoApp` application.
+`ApplicationShell()` disables the accelerator keys, context menu, status bar, and zoom controls, makes
+the Tab key stop on links, and leaves DevTools at the engine default. Each property can also be set on
+its own; `null` keeps the engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection
+to the main view of a `NeoApp` application.
 
 | Property | Turns off | Windows / WebView2 | macOS / WKWebView | Linux / WebKitGTK 6.0 |
 | --- | --- | --- | --- | --- |
@@ -158,6 +158,12 @@ engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection to th
 | `ScriptDialogs` | The engine's own `alert`, `confirm`, `prompt`, and `beforeunload` dialogs | Switchable; on by default | Engine has none | Switchable; off by default |
 | `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
 | `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification; off by default | Engine has none |
+| `TabFocusesLinks` | The Tab key stopping on links | Always on; cannot be turned off | Switchable; off by default | Switchable; on by default |
+
+On macOS, WKWebView moves the focus with the Tab key between text fields only, and reaches links and
+the other controls with Option+Tab. `TabFocusesLinks` makes Tab stop on them, as it does on Windows
+and Linux, and the Option key then reverses it for one key press. An application whose content has
+links that a keyboard user must reach sets it to `true`, which `ApplicationShell()` does.
 
 Turning the accelerator keys off does not swallow the keys: the page still receives every `keydown`
 event and can give `Ctrl+F` or `Ctrl+P` its own meaning. Text editing and caret movement are never

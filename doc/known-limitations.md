@@ -27,6 +27,7 @@ assuming that every browser engine supports every portable event.
 | CSS drag regions | Native `app-region` | Emulated from the pointer press | Emulated from the pointer press |
 | Built-in browser shortcuts (find, print, reload, zoom) | Can be turned off | Not present in the engine | Not present in the engine |
 | Default context menu | Can be turned off | Can be turned off | Can be turned off |
+| Tab key stopping on links (`NeoBrowserFeatures.TabFocusesLinks`) | Always on | Off unless turned on | On unless turned off |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |

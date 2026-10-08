@@ -99,9 +99,9 @@ public sealed class ManagedApiTests
             new NeoAstraOptions { Transport = new NeoTransportOptions { HandshakeTimeout = TimeSpan.Zero } }.Validate(null!));
         Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAstraOptions { BrowserFeatures = null! }.Validate(null!));
         var defaultFeatures = new NeoAstraOptions().BrowserFeatures;
-        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null });
+        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null });
         var shellFeatures = NeoBrowserFeatures.ApplicationShell();
-        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false });
+        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true });
         Assert.AreNotSame(shellFeatures, NeoBrowserFeatures.ApplicationShell());
 
         var provider = new NullResourceProvider();
@@ -898,7 +898,7 @@ public sealed class ManagedApiTests
                             Profile = profile,
                             BridgePolicy = NeoBridgePolicy.TrustedOrigins,
                             BridgeOrigins = ["app://neoastra"],
-                            BrowserFeatures = new NeoBrowserFeatures { AcceleratorKeys = false, ContextMenus = false, DevTools = false, StatusBar = false, ZoomControls = false },
+                            BrowserFeatures = new NeoBrowserFeatures { AcceleratorKeys = false, ContextMenus = false, DevTools = false, StatusBar = false, ZoomControls = false, TabFocusesLinks = true },
                         });
                     webView.ZoomFactor = 1.25;
                     Assert.AreEqual(1.25, webView.ZoomFactor, 0.001);

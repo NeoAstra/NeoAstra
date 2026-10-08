@@ -593,6 +593,7 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         case NEOASTRA_VIEW_SETTING_DEVTOOLS:webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),enabled);return NEOASTRA_OK;
         // Script dialogs go to the host unless WebKitGTK is asked to show its own.
         case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:state->default_script_dialogs=enabled;return NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:webkit_settings_set_enable_tabs_to_links(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),enabled);return NEOASTRA_OK;
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }

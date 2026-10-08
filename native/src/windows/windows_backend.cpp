@@ -2122,6 +2122,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
     ComPtr<ICoreWebView2Settings> settings;if(FAILED(state->core->get_Settings(&settings)))return NEOASTRA_ERROR_NATIVE_FAILURE;
     const BOOL value=enabled?TRUE:FALSE;HRESULT result=E_NOINTERFACE;
     switch(setting){
+        // WebView2 always stops on links with the Tab key and has no setting for it.
+        case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:return enabled?NEOASTRA_OK:NEOASTRA_ERROR_NOT_SUPPORTED;
         case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:{ComPtr<ICoreWebView2Settings3> settings3;if(SUCCEEDED(settings.As(&settings3)))result=settings3->put_AreBrowserAcceleratorKeysEnabled(value);break;}
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:result=settings->put_AreDefaultContextMenusEnabled(value);break;
         case NEOASTRA_VIEW_SETTING_DEVTOOLS:result=settings->put_AreDevToolsEnabled(value);break;

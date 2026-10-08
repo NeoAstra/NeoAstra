@@ -177,6 +177,11 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_macos_history_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa")
     add_test(NAME neoastra_macos_history_tests COMMAND neoastra_macos_history_tests)
+    add_executable(neoastra_macos_link_tests native/tests/macos_link_tests.mm)
+    target_compile_options(neoastra_macos_link_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_link_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_link_tests COMMAND neoastra_macos_link_tests)
   elseif(UNIX)
     add_executable(neoastra_linux_backend_tests native/tests/linux_backend_tests.cpp)
     target_link_libraries(neoastra_linux_backend_tests PRIVATE

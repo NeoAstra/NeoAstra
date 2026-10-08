@@ -529,6 +529,7 @@ public sealed class NeoAstra : IAsyncDisposable
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_STATUS_BAR, features.StatusBar);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS, features.ZoomControls);
         Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, features.ScriptDialogs);
+        Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, features.TabFocusesLinks);
 
         void Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)
         {

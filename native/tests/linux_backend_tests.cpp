@@ -182,6 +182,22 @@ void test_view_leaves_its_window(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+// WebKitGTK stops on links with the Tab key unless it is told otherwise, and the setting of a view reaches its settings.
+void test_tab_key_setting_reaches_the_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* settings = webkit_web_view_get_settings(web_view(view));
+    assert(webkit_settings_get_enable_tabs_to_links(settings));
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 0) == NEOASTRA_OK);
+    assert(!webkit_settings_get_enable_tabs_to_links(settings));
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 1) == NEOASTRA_OK);
+    assert(webkit_settings_get_enable_tabs_to_links(settings));
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The views of a window are stacked in the order they were created in, the newest on top, and each of them goes away
 // without taking another one with it. A second view used to take the place of the first, whose widget was destroyed.
 void test_views_share_their_window(neoastra_app_t* app) {
@@ -417,6 +433,7 @@ int main() {
     test_view_leaves_its_window(app);
     test_views_share_their_window(app);
     test_views_follow_the_menu_host(app);
+    test_tab_key_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 
     assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
