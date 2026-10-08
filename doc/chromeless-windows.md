@@ -146,10 +146,10 @@ var view = await environment.CreateWebViewAsync(
     });
 ```
 
-`ApplicationShell()` disables the accelerator keys, context menu, status bar, and zoom controls, makes
-the Tab key stop on links, and leaves DevTools at the engine default. Each property can also be set on
-its own; `null` keeps the engine default. `NeoAppBuilder.BrowserFeatures` applies the same selection
-to the main view of a `NeoApp` application.
+`ApplicationShell()` disables the accelerator keys, context menu, status bar, zoom controls, and
+[history navigation](#history-navigation), makes the Tab key stop on links, and leaves DevTools at the
+engine default. Each property can also be set on its own; `null` keeps the engine default.
+`NeoAppBuilder.BrowserFeatures` applies the same selection to the main view of a `NeoApp` application.
 
 | Property | Turns off | Windows / WebView2 | macOS / WKWebView | Linux / WebKitGTK 6.0 |
 | --- | --- | --- | --- | --- |
@@ -186,7 +186,8 @@ of a keyboard, `Alt+Left` while the accelerator keys are on, a swipe on a touch 
 document in the same view has both in that history, so "back" returns to the start-up screen, which
 nothing leaves again.
 
-`NeoBrowserFeatures.HistoryNavigation = false` turns that off for a view:
+`NeoBrowserFeatures.HistoryNavigation = false` turns that off for a view, and `ApplicationShell()`
+does it:
 
 - No history navigation loads a document, in any frame, whatever asks for it. The view refuses the
   request itself and does not raise `NavigationRequested`; the document that is shown stays as it is,
@@ -202,12 +203,14 @@ nothing leaves again.
   document, so no engine asks about them. They stay with the page: a single-page application keeps
   its own routes, and the back button of a mouse walks them until the next entry is another document.
 
-`ApplicationShell()` keeps history navigation, so an application shell turns it off on the selection
-that it gets:
+`ApplicationShell()` turns history navigation off since the version that has the property. Before
+it, an application shell kept it, by the mouse buttons and by `history.back()`. An application that
+moves between its own documents with `GoBack()`, `history.back()`, or the back button of a mouse
+turns it back on:
 
 ```csharp
 var features = NeoBrowserFeatures.ApplicationShell();
-features.HistoryNavigation = false;
+features.HistoryNavigation = true;
 ```
 
 An application that wants history navigation for some documents only leaves it on and decides each

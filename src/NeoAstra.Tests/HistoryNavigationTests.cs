@@ -114,10 +114,8 @@ public sealed class HistoryNavigationTests
     [TestMethod]
     public async Task AViewWithoutHistoryNavigationStaysOnItsDocument()
     {
-        // The features of an application shell without history navigation: an application that shows a start-up screen first.
-        var features = NeoBrowserFeatures.ApplicationShell();
-        features.HistoryNavigation = false;
-        var options = new NeoAstraOptions { ViewLabel = "main", BrowserFeatures = features };
+        // The features of an application shell: the configuration of an application that shows a start-up screen first.
+        var options = new NeoAstraOptions { ViewLabel = "main", BrowserFeatures = NeoBrowserFeatures.ApplicationShell() };
         await LiveBrowser.RunAsync(Pages, async session =>
         {
             var view = session.View;

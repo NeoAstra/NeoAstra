@@ -412,9 +412,14 @@ public sealed class NeoBrowserFeatures
     public bool? HistoryNavigation { get; set; }
 
     /// <summary>
-    /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, or zoom controls,
-    /// and a Tab key that stops on links on every platform. DevTools keep the engine default.
+    /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, zoom controls, or
+    /// history navigation, and a Tab key that stops on links on every platform. DevTools keep the engine default.
     /// </summary>
+    /// <remarks>
+    /// An application that moves between its own documents with <see cref="NeoAstra.GoBack"/>, <c>history.back()</c>, or
+    /// the back button of a mouse sets <see cref="HistoryNavigation"/> back to <see langword="true"/> or
+    /// <see langword="null"/> on the returned selection.
+    /// </remarks>
     /// <returns>A new feature selection.</returns>
     public static NeoBrowserFeatures ApplicationShell() => new()
     {
@@ -423,6 +428,7 @@ public sealed class NeoBrowserFeatures
         StatusBar = false,
         ZoomControls = false,
         TabFocusesLinks = true,
+        HistoryNavigation = false,
     };
 }
 

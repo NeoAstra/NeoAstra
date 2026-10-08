@@ -100,7 +100,7 @@ performance traces, Lighthouse audits, heap snapshots, CSS inspection, screencas
 installed web applications, WebMCP, and the DevTools window.
 
 `navigate_page` goes back and forward with `GoBack()` and `GoForward()` of the view. In a view whose
-`NeoBrowserFeatures.HistoryNavigation` is off,
+`NeoBrowserFeatures.HistoryNavigation` is off, which `NeoBrowserFeatures.ApplicationShell()` selects,
 it answers that history navigation is turned off for the view and leaves the document as it is; a
 reload and a navigation to an address work as in any view.
 

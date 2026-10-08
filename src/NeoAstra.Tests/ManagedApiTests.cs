@@ -101,7 +101,7 @@ public sealed class ManagedApiTests
         var defaultFeatures = new NeoAstraOptions().BrowserFeatures;
         Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null, HistoryNavigation: null });
         var shellFeatures = NeoBrowserFeatures.ApplicationShell();
-        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true, HistoryNavigation: null });
+        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true, HistoryNavigation: false });
         Assert.AreNotSame(shellFeatures, NeoBrowserFeatures.ApplicationShell());
 
         var provider = new NullResourceProvider();

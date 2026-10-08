@@ -56,8 +56,8 @@ build, prepare that directory separately, pass `NeoAstraPrebuiltAssets=true`, an
   to page-drawn controls or back to the standard title bar. The application manifest declares Windows 10
   support so the native caption buttons blend with the page. Both views also use
   `NeoBrowserFeatures.ApplicationShell()`: the browser's find, print, reload, and zoom shortcuts, context
-  menu, and status bar are off, the Tab key stops on links on every platform, copy/paste keep working,
-  and `F12` still opens DevTools.
+  menu, status bar, and history navigation are off, the Tab key stops on links on every platform,
+  copy/paste keep working, and `F12` still opens DevTools.
 - **Lifecycle:** enable the recovery tray, close the main window to hide its still-live browser session,
   and left-click the tray item to restore and focus it. Use the tray's **Quit NeoAstra…** role or the
   renderer-facing negotiated-quit button to test asynchronous confirmation and cancellation. Mark work as
