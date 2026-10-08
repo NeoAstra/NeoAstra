@@ -69,7 +69,8 @@ const std::string page =
     "</body>";
 constexpr int link_x = 60, link_y = 65, blank_y = 165;
 
-constexpr uint64_t main_frame = NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME;
+// A link, a script, and the host ask for a new document, which every navigation request of this test is.
+constexpr uint64_t main_frame = NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME | NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
 constexpr uint64_t reported = NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED;
 constexpr uint64_t activated = NEOASTRA_REQUEST_LINK_ACTIVATED;
 
