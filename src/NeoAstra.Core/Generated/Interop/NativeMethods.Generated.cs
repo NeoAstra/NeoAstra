@@ -199,6 +199,9 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_SCRIPT_DOCUMENT_END = unchecked((uint)1),
         }
 
+        /// <summary>
+        /// OPEN_EXTERNAL answers a navigation or new-window request by leaving the view where it is and handing the requested address to the system, which opens it in the default browser. Only an absolute http or https address with a host and without credentials is handed over; NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED then tells what became of it.
+        /// </summary>
         public enum neoastra_decision_action : uint
         {
             NEOASTRA_DECISION_DEFAULT = unchecked((uint)0),
@@ -261,6 +264,18 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_WINDOW_CLOSE_SYSTEM = unchecked((uint)4),
 
             NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC = unchecked((uint)5),
+        }
+
+        /// <summary>
+        /// What became of an address that a decision sent outside the view: handed to the system, refused because it is not a web address, or not opened by the system.
+        /// </summary>
+        public enum neoastra_external_open_status : uint
+        {
+            NEOASTRA_EXTERNAL_OPEN_OPENED = unchecked((uint)0),
+
+            NEOASTRA_EXTERNAL_OPEN_REFUSED = unchecked((uint)1),
+
+            NEOASTRA_EXTERNAL_OPEN_FAILED = unchecked((uint)2),
         }
 
         public enum neoastra_script_dialog_kind : uint
@@ -404,6 +419,11 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_EVENT_APPLICATION_OPEN_URL = unchecked((uint)36),
 
             NEOASTRA_EVENT_APPLICATION_SESSION_END = unchecked((uint)37),
+
+            /// <summary>
+            /// A view event that follows an OPEN_EXTERNAL decision: the address is the uri, the value a neoastra_external_open_status_t, and the native code what the system reported when it could not open the address.
+            /// </summary>
+            NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED = unchecked((uint)38),
         }
 
         public enum neoastra_capability : uint
@@ -1229,6 +1249,9 @@ namespace NeoAstra.Interop.Generated
             public uint reserved;
         }
 
+        /// <summary>
+        /// OPEN_EXTERNAL answers a navigation or new-window request by leaving the view where it is and handing the requested address to the system, which opens it in the default browser. Only an absolute http or https address with a host and without credentials is handed over; NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED then tells what became of it.
+        /// </summary>
         public readonly partial record struct neoastra_decision_action_t(NativeMethods.neoastra_decision_action Value)
         {
             public static implicit operator NativeMethods.neoastra_decision_action (neoastra_decision_action_t from) => from.Value;
@@ -1370,6 +1393,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator NativeMethods.neoastra_window_close_reason (neoastra_window_close_reason_t from) => from.Value;
 
             public static implicit operator neoastra_window_close_reason_t (NativeMethods.neoastra_window_close_reason from) => new (from);
+        }
+
+        /// <summary>
+        /// What became of an address that a decision sent outside the view: handed to the system, refused because it is not a web address, or not opened by the system.
+        /// </summary>
+        public readonly partial record struct neoastra_external_open_status_t(NativeMethods.neoastra_external_open_status Value)
+        {
+            public static implicit operator NativeMethods.neoastra_external_open_status (neoastra_external_open_status_t from) => from.Value;
+
+            public static implicit operator neoastra_external_open_status_t (NativeMethods.neoastra_external_open_status from) => new (from);
         }
 
         public readonly partial record struct neoastra_script_dialog_kind_t(NativeMethods.neoastra_script_dialog_kind Value)

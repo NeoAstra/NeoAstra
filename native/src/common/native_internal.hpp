@@ -228,6 +228,8 @@ struct neoastra_decision final : neo_ref_counted {
     neoastra_decision_t* owner_next{};
     void* popup_context{};
     void (*popup_context_release)(void*) noexcept{};
+    // The address of a navigation or new-window request, which an OPEN_EXTERNAL response sends outside the view.
+    std::string external_uri;
 
     void detach_owner() noexcept;
     void attach_app(neoastra_app_t* app) noexcept;
@@ -520,6 +522,31 @@ inline void neo_configure_decision(neoastra_decision_t* decision, const neoastra
     }
 }
 
+// The second check behind the one of the host: what the system is asked to open is a web address, which is an absolute http
+// or https address with a host, without credentials, and without a control or white-space character. Anything else, such as
+// a file, a script, or the scheme of another application, could start a program instead of showing a page.
+inline bool neo_external_uri_allowed(std::string_view uri) noexcept {
+    constexpr size_t maximum_length = 32768;
+    if (uri.empty() || uri.size() > maximum_length) return false;
+    for (const unsigned char character : uri) if (character <= 0x20 || character == 0x7f) return false;
+    const auto has_prefix = [&uri](std::string_view prefix) noexcept {
+        if (uri.size() < prefix.size()) return false;
+        for (size_t index = 0; index < prefix.size(); ++index) {
+            const auto character = uri[index];
+            if ((character >= 'A' && character <= 'Z' ? static_cast<char>(character + ('a' - 'A')) : character) != prefix[index]) return false;
+        }
+        return true;
+    };
+    const size_t scheme_length = has_prefix("https://") ? 8 : has_prefix("http://") ? 7 : 0;
+    if (scheme_length == 0) return false;
+    const auto authority = uri.substr(scheme_length, uri.find_first_of("/?#", scheme_length) - scheme_length);
+    if (authority.empty()) return false;
+    // A backslash ends the host for a browser and not for every other parser, so the two could disagree on where the address leads.
+    if (authority.find_first_of("@\\") != std::string_view::npos) return false;
+    const auto host = authority.front() == '[' ? authority.substr(0, authority.find(']') + 1) : authority.substr(0, authority.find(':'));
+    return !host.empty() && host != "[]" && (host.front() != '[' || host.back() == ']');
+}
+
 inline void neoastra_decision::detach_owner() noexcept {
     auto* view = owner;
     if (!view) return;
@@ -809,6 +836,8 @@ neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view, doubl
 // Enabling a feature the engine does not have reports NEOASTRA_ERROR_NOT_SUPPORTED; disabling one succeeds.
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept;
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept;
+// Asks the system to open a web address in its default browser. Returns whether the system took it, and what it reported when it did not.
+bool neo_platform_open_external(const std::string& uri, int64_t* native_code) noexcept;
 // The options are already validated. A region without area means the whole viewport, and it is ignored for a full-page capture.
 neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastra_capture_options_t& options, neoastra_buffer_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept;

@@ -166,6 +166,10 @@ public sealed class NeoAppTests
 
         builder.OpenExternalLinksInSystemBrowser("https://example.com");
         Assert.Throws<InvalidOperationException>(() => builder.OpenExternalLinksInSystemBrowser("https://other.example"));
+
+        Assert.Throws<ArgumentNullException>(() => builder.OnExternalLinkOpenCompleted(null!));
+        Assert.AreSame(builder, builder.OnExternalLinkOpenCompleted(static _ => { }));
+        Assert.Throws<InvalidOperationException>(() => builder.OnExternalLinkOpenCompleted(static _ => { }));
     }
 
     [TestMethod]

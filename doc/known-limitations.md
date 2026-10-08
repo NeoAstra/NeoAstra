@@ -67,6 +67,14 @@ are private, NeoAstra does not use them: an application that calls private API i
 App Store, and the native library is part of every application. On Windows and Linux the values are
 the ones WebView2 and WebKitGTK document.
 
+`OpenExternal` on a navigation or new-window request opens web addresses only. A handler that used
+it for a `mailto:` link or for the scheme of another application now gets
+`NeoExternalOpenStatus.Refused` from `ExternalOpenCompleted`, and nothing opens; open those with
+`NeoExternalOpener` or with the application's own code. `Opened` means that the system took the
+address: `ShellExecute` on Windows, `NSWorkspace` on macOS, and the default application of GIO on
+Linux, which hands the address to the desktop portal in a sandbox. None of them tells whether a
+browser then showed the page.
+
 `NavigationCompleted` relays the browser engine's own completion notification, which does not say how
 far the page's scripts have got. WKWebView can raise it while `document.readyState` is still
 `interactive`, before a `<script type="module">` in the document has run and before `DOMContentLoaded`

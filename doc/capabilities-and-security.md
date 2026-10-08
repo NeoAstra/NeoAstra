@@ -114,6 +114,25 @@ A view asks its host about a link in one of two requests: `NavigationRequested` 
 
 An application that decides for itself and wants every activated link, whoever activated it, reads `IsLinkActivation` where it is not `null`. That is a weaker test: a script can click a link.
 
+`OpenExternal` leaves the view where it is and hands the requested address to the system, which opens it in the default browser. The native library checks the address a second time, behind the policy of the host: it hands over only an absolute `http` or `https` address with a host, without credentials, and without a control or white-space character. Anything else, such as `mailto:`, `file:`, or the scheme of another application, is not opened whatever the handler decided, because the system could start a program for it instead of showing a page. Use `NeoExternalOpener` for the other intents an application has.
+
+The view then raises `ExternalOpenCompleted`, on the UI thread, with the address and what became of it:
+
+| `NeoExternalOpenStatus` | Meaning |
+| --- | --- |
+| `Opened` | The system took the address. It does not say that a page was shown. |
+| `Refused` | The address is not a web address, and the system was not asked. |
+| `Failed` | The system did not open the address, for example because no application handles web addresses. `NativeCode` is the error of `ShellExecute` on Windows and of GLib on Linux, and zero on macOS, where the system gives none. |
+
+```csharp
+view.ExternalOpenCompleted += (_, outcome) =>
+{
+    if (outcome.Status != NeoExternalOpenStatus.Opened) ShowLinkCouldNotBeOpened(outcome.Uri);
+};
+```
+
+A `NeoApp` application registers the same callback with `NeoAppBuilder.OnExternalLinkOpenCompleted`.
+
 ## Abuse controls and diagnostics
 
 `NeoRpcOptions` bounds payload, parse depth, request-ID retention, global/session/command concurrency, token-bucket request rate/burst, abuse closure threshold, resources, resource bytes, channels, channel buffers, and default/permission timeouts. Counters are synchronized; reservations are released in `finally`; cancellation/disposal races yield one terminal response and reclaim resources. Policy exhaustion returns stable retryable errors and repeated abuse closes the session.

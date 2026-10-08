@@ -236,7 +236,11 @@ public readonly record struct NeoNavigationDecision(NeoDecisionAction Action)
     public static NeoNavigationDecision Allow => new(NeoDecisionAction.Allow);
     /// <summary>Cancel the navigation.</summary>
     public static NeoNavigationDecision Cancel => new(NeoDecisionAction.Cancel);
-    /// <summary>Open the target using an external application.</summary>
+    /// <summary>Leave the view where it is and open the target in the default browser of the system.</summary>
+    /// <remarks>
+    /// Only a web address is handed to the system: an absolute HTTP or HTTPS address with a host and without
+    /// credentials. <see cref="NeoAstra.ExternalOpenCompleted"/> tells what became of it.
+    /// </remarks>
     public static NeoNavigationDecision OpenExternal => new(NeoDecisionAction.OpenExternal);
 }
 
@@ -367,7 +371,11 @@ public readonly record struct NeoNewWindowDecision(NeoDecisionAction Action, Neo
 {
     /// <summary>Cancels the request. This is the safe default.</summary>
     public static NeoNewWindowDecision Cancel => new(NeoDecisionAction.Cancel);
-    /// <summary>Opens the requested URI externally.</summary>
+    /// <summary>Opens the requested URI in the default browser of the system instead of a window of the application.</summary>
+    /// <remarks>
+    /// Only a web address is handed to the system: an absolute HTTP or HTTPS address with a host and without
+    /// credentials. <see cref="NeoAstra.ExternalOpenCompleted"/> tells what became of it.
+    /// </remarks>
     public static NeoNewWindowDecision OpenExternal => new(NeoDecisionAction.OpenExternal);
     /// <summary>Navigates the current view.</summary>
     public static NeoNewWindowDecision NavigateCurrent => new(NeoDecisionAction.Allow);
@@ -493,6 +501,31 @@ public enum NeoDownloadState
     Failed,
 }
 
+/// <summary>Says what became of an address that a decision sent outside its view.</summary>
+public enum NeoExternalOpenStatus
+{
+    /// <summary>The system took the address and opens it in its default browser.</summary>
+    Opened,
+    /// <summary>The address is not a web address, so the system was not asked to open it.</summary>
+    Refused,
+    /// <summary>The system could not open the address, for example because no application handles it.</summary>
+    Failed,
+}
+
+/// <summary>Provides the outcome of a navigation or new-window decision that sent its address outside the view.</summary>
+/// <param name="uri">The address, or <see langword="null"/> when it is not a valid URI.</param>
+/// <param name="status">What became of the address.</param>
+/// <param name="nativeCode">What the system reported when it could not open the address, or zero.</param>
+public sealed class NeoExternalOpenCompletedEventArgs(Uri? uri, NeoExternalOpenStatus status, long nativeCode) : EventArgs
+{
+    /// <summary>Gets the address, or <see langword="null"/> when it is not a valid URI.</summary>
+    public Uri? Uri { get; } = uri;
+    /// <summary>Gets what became of the address.</summary>
+    public NeoExternalOpenStatus Status { get; } = status;
+    /// <summary>Gets what the system reported when it could not open the address, or zero.</summary>
+    public long NativeCode { get; } = nativeCode;
+}
+
 /// <summary>Identifies a response to a browser decision request.</summary>
 public enum NeoDecisionAction
 {
@@ -504,7 +537,7 @@ public enum NeoDecisionAction
     Deny,
     /// <summary>Cancel the request.</summary>
     Cancel,
-    /// <summary>Open the target externally.</summary>
+    /// <summary>Open the target of a navigation or new-window request in the default browser of the system.</summary>
     OpenExternal,
     /// <summary>Accept a download.</summary>
     Download,

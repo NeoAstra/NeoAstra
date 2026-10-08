@@ -138,6 +138,19 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Occurs after a navigation succeeds or fails.</summary>
     public event EventHandler<NeoNavigationCompletedEventArgs>? NavigationCompleted;
 
+    /// <summary>
+    /// Occurs after a navigation or new-window decision answered <see cref="NeoDecisionAction.OpenExternal"/>, and tells
+    /// what became of the address.
+    /// </summary>
+    /// <remarks>
+    /// The event is raised on the UI thread, once for each such decision. An application uses it to tell its user
+    /// that a link could not be opened: <see cref="NeoExternalOpenStatus.Refused"/> when the address is not a web
+    /// address, which the native library does not hand to the system whatever the handler decided, and
+    /// <see cref="NeoExternalOpenStatus.Failed"/> when the system did not open it. A native library from before this
+    /// event existed opens the address and raises nothing.
+    /// </remarks>
+    public event EventHandler<NeoExternalOpenCompletedEventArgs>? ExternalOpenCompleted;
+
     /// <summary>Occurs when web content sends a bridge message.</summary>
     public event EventHandler<NeoWebMessageReceivedEventArgs>? MessageReceived;
 
@@ -698,6 +711,9 @@ public sealed class NeoAstra : IAsyncDisposable
                 }
                 else DispatchWebMessage(Utf8String.Decode(value.text), uri, (value.value & 1) != 0);
                 break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED:
+                try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
+                break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
                 _transport?.Close("renderer_lost");
                 try { ProcessFailed?.Invoke(this, DecodeProcessFailure(value.value, value.native_code, Utf8String.Decode(value.text))); } catch { }
@@ -752,6 +768,10 @@ public sealed class NeoAstra : IAsyncDisposable
     {
         try { TransportDiagnostic?.Invoke(this, value); } catch { }
     }
+
+    // A status this version does not know is one that did not open the address.
+    internal static NeoExternalOpenCompletedEventArgs DecodeExternalOpen(Uri? uri, ulong value, long nativeCode) =>
+        new(uri, value <= (ulong)NeoExternalOpenStatus.Failed ? (NeoExternalOpenStatus)(int)value : NeoExternalOpenStatus.Failed, nativeCode);
 
     internal static NeoProcessFailedEventArgs DecodeProcessFailure(ulong value, long nativeCode, string? description)
     {

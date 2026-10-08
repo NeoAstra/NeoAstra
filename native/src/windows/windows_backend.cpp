@@ -548,8 +548,6 @@ void new_window_decided(void* pointer, const neoastra_decision_response_t* respo
         if(target&&target->core)context->args->put_NewWindow(target->core.Get());
     } else if (response->action == NEOASTRA_DECISION_ALLOW) {
         context->core->Navigate(context->uri.c_str());
-    } else if (response->action == NEOASTRA_DECISION_OPEN_EXTERNAL) {
-        ShellExecuteW(nullptr, L"open", context->uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
     context->deferral->Complete();
 }
@@ -569,9 +567,6 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
     std::unique_ptr<navigation_decision_context> context(static_cast<navigation_decision_context*>(pointer));
     const bool cancel = response->action != NEOASTRA_DECISION_ALLOW && response->action != NEOASTRA_DECISION_DEFAULT;
     context->args->put_Cancel(cancel ? TRUE : FALSE);
-    if (response->action == NEOASTRA_DECISION_OPEN_EXTERNAL) {
-        ShellExecuteW(nullptr, L"open", context->uri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    }
 }
 
 uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
@@ -610,6 +605,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             neo_configure_decision(decision, view, NEOASTRA_DECISION_NAVIGATION, NEOASTRA_DECISION_ALLOW);
             decision->completion = navigation_decided;
             decision->completion_context = context.release();
+            decision->external_uri = uri;
             neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri,
                           NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME | (user_initiated && !redirected ? NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED : 0), 0, decision);
             const auto decision_state = decision->state.load(std::memory_order_acquire);
@@ -861,6 +857,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                 neo_configure_decision(decision, view, NEOASTRA_DECISION_NEW_WINDOW, NEOASTRA_DECISION_CANCEL);
                 decision->completion = new_window_decided;
                 decision->completion_context = context.release();
+                decision->external_uri = uri;
                 neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, user_initiated ? NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED : 0, 0, decision);
                 neo_finish_decision_event(view, decision);
                 decision->release();
@@ -2137,6 +2134,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
     }
     return SUCCEEDED(result)?NEOASTRA_OK:result==E_NOINTERFACE?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_ERROR_NATIVE_FAILURE;
 }
+// ShellExecute reports success with a value above 32, and its error with a smaller one.
+bool neo_platform_open_external(const std::string& uri,int64_t* native_code) noexcept {try{const auto result=reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr,L"open",widen(uri).c_str(),nullptr,nullptr,SW_SHOWNORMAL));if(result>32)return true;*native_code=static_cast<int64_t>(result);return false;}catch(...){return false;}}
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->core->OpenDevToolsWindow())?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 
 namespace {

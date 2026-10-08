@@ -809,6 +809,24 @@ void test_custom_scheme_provider_release_once_and_exception_containment() {
     assert(releases.load() == 4);
 }
 
+// What a decision may send to the system: an absolute http or https address with a host and nothing that hides where it leads.
+void test_external_web_addresses() {
+    for (const char* allowed : {"https://example.com", "https://example.com/", "http://example.com/path?query=1#fragment", "HTTPS://EXAMPLE.COM/",
+            "HtTp://example.com:8080/a", "https://xn--bcher-kva.example/", "http://127.0.0.1:5173/", "http://[::1]:5173/", "https://[2001:db8::1]/",
+            "https://example.com/a%20b?next=https://other.example/@user", "https://example.com/caf\xc3\xa9"})
+        assert(neo_external_uri_allowed(allowed));
+    for (const char* refused : {"", "https://", "http:///path", "https://:443/", "https://?query", "https://#fragment", "https:/example.com", "https:example.com",
+            "//example.com/", "example.com", "/path", "file:///etc/passwd", "mailto:someone@example.com", "javascript:alert(1)", "data:text/html,x",
+            "ftp://example.com/", "ms-settings:privacy", "vscode://file/etc/passwd", "app://neoastra/index.html", "about:blank", "httpx://example.com/",
+            "https://user@example.com/", "https://user:secret@example.com/", "https://example.com@evil.example/", "https://example.com\\@evil.example/",
+            "https://example.com\\evil.example/", "https://[::1/", "https://[]/", "https://exa mple.com/", "https://example.com/a b", " https://example.com/",
+            "https://example.com/\t", "https://example.com/\r\nHost: evil", "https://example.com/\x7f", "https://example.com/\x01"})
+        assert(!neo_external_uri_allowed(refused));
+    assert(!neo_external_uri_allowed(std::string_view("https://example.com/\0", 21)));
+    const std::string longest = "https://example.com/" + std::string(32768 - 20, 'a');
+    assert(neo_external_uri_allowed(longest) && !neo_external_uri_allowed(longest + "a"));
+}
+
 void test_bridge_origin_trust() {
     std::vector<neo_custom_scheme_registration> custom_schemes;
     neo_custom_scheme_registration application_scheme;
@@ -867,6 +885,7 @@ int main() {
     test_native_parent_structure();
     test_custom_scheme_validation_and_trailing_bytes();
     test_custom_scheme_provider_release_once_and_exception_containment();
+    test_external_web_addresses();
     test_bridge_origin_trust();
     return 0;
 }

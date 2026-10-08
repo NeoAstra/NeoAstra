@@ -48,6 +48,7 @@ public sealed class NeoAppBuilder
     private Action<NeoApplication, NeoWindow>? _configureMainWindow;
     private string? _contractHash;
     private NeoExternalUrlScope? _externalLinkScope;
+    private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
     private Session? _session;
 
     /// <summary>Gets or sets the main window title.</summary>
@@ -148,6 +149,24 @@ public sealed class NeoAppBuilder
         return this;
     }
 
+    /// <summary>Registers a callback that is told what became of each link sent to the system browser.</summary>
+    /// <param name="handler">The callback, which runs on the native UI thread.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// An application uses it to tell its user that a link could not be opened: the status is
+    /// <see cref="NeoExternalOpenStatus.Failed"/> when the system did not open the address, and
+    /// <see cref="NeoExternalOpenStatus.Refused"/> when the native library did not take it for a web address.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A callback was already registered.</exception>
+    public NeoAppBuilder OnExternalLinkOpenCompleted(Action<NeoExternalOpenCompletedEventArgs> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_externalLinkCompleted is not null) throw new InvalidOperationException("The external-link callback can be registered only once.");
+        _externalLinkCompleted = handler;
+        return this;
+    }
+
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
     /// <param name="contractHash">The deterministic generated contract hash.</param>
     /// <param name="permissions">Generated application permission declarations.</param>
@@ -238,6 +257,7 @@ public sealed class NeoAppBuilder
             var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
             view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
             view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
+            if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
             binding = NeoRpcViewBinding.Bind(rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             _session = new Session(rpc, environment, view, binding);

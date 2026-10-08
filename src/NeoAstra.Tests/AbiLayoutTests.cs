@@ -62,10 +62,11 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_decision_action>(0, 6);
         AssertEnum<uint, NativeMethods.neoastra_decision_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_script_dialog_kind>(0, 3);
+        AssertEnum<uint, NativeMethods.neoastra_external_open_status>(0, 2);
         AssertEnum<uint, NativeMethods.neoastra_download_state>(0, 4);
         AssertEnum<uint, NativeMethods.neoastra_permission_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_process_failure_kind>(0, 3);
-        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 37);
+        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 38);
         AssertEnum<uint, NativeMethods.neoastra_capability>(0, 32);
         AssertEnum<uint, NativeMethods.neoastra_log_level>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_resource_kind>(0, 12);
@@ -88,6 +89,7 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoBridgePolicy, NativeMethods.neoastra_bridge_policy>();
         AssertEquivalent<NeoDecisionAction, NativeMethods.neoastra_decision_action>();
         AssertEquivalent<NeoScriptDialogKind, NativeMethods.neoastra_script_dialog_kind>();
+        AssertEquivalent<NeoExternalOpenStatus, NativeMethods.neoastra_external_open_status>();
         AssertEquivalent<NeoDownloadState, NativeMethods.neoastra_download_state>();
         AssertEquivalent<NeoPermissionKind, NativeMethods.neoastra_permission_kind>();
         AssertEquivalent<NeoProcessFailureKind, NativeMethods.neoastra_process_failure_kind>();

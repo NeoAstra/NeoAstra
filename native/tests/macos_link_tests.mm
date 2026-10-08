@@ -2,6 +2,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -28,13 +29,30 @@ struct request {
     uint64_t value{};
 };
 
+// What became of an address that a decision sent outside the view.
+struct outcome {
+    std::string uri;
+    uint64_t status{};
+};
+
 // What the view has reported: whether it finished loading its page, whether a navigation failed or its web process
-// exited, and the requests to leave the page.
+// exited, the requests to leave the page, and what became of the addresses sent outside. `answer` is what the test
+// decides for the next request.
 struct view_events {
     bool loaded{};
     bool failed{};
+    neoastra_decision_action_t answer{NEOASTRA_DECISION_CANCEL};
     std::vector<request> requests;
+    std::vector<outcome> outcomes;
 };
+
+// The test takes the place of the system: no browser opens, and the test says whether the system takes an address.
+NSMutableArray<NSString*>* opened_addresses;
+BOOL system_opens = YES;
+BOOL record_open(id, SEL, NSURL* url) {
+    [opened_addresses addObject:url.absoluteString];
+    return system_opens;
+}
 
 // Where the links of the page lead. The name cannot be resolved, and the test lets no request for it through.
 const std::string elsewhere = "https://example.invalid/";
@@ -96,19 +114,20 @@ void NEOASTRA_CALL record_event(void* context, const neoastra_event_t* event) {
         events->loaded = true;
         break;
     case NEOASTRA_EVENT_NAVIGATION_REQUESTED:
-        // The page itself loads; a navigation that leaves it is recorded and canceled. A new window is canceled by default.
-        if (uri.compare(0, elsewhere.size(), elsewhere) != 0) break;
+    case NEOASTRA_EVENT_NEW_WINDOW_REQUESTED:
+        // The page itself loads; a request that leaves it is recorded and answered, so the view never leaves the page.
+        if (uri == "about:blank") break;
         events->requests.push_back({event->header.type, uri, event->value});
         {
             neoastra_decision_response_t response{};
             response.size = sizeof(response);
             response.version = 1;
-            response.action = NEOASTRA_DECISION_CANCEL;
+            response.action = events->answer;
             assert(neoastra_decision_complete(event->decision, &response, nullptr) == NEOASTRA_OK);
         }
         break;
-    case NEOASTRA_EVENT_NEW_WINDOW_REQUESTED:
-        events->requests.push_back({event->header.type, uri, event->value});
+    case NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED:
+        events->outcomes.push_back({uri, event->value});
         break;
     case NEOASTRA_EVENT_NAVIGATION_FAILED:
     case NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
@@ -180,6 +199,23 @@ void expect_request(view_events& events, neoastra_event_type_t type, const std::
     events.requests.clear();
 }
 
+// Checks what the request just answered with OPEN_EXTERNAL led to: whether the system was asked to open `uri`, and what
+// the view was told.
+void expect_outcome(view_events& events, const std::string& uri, neoastra_external_open_status_t status) {
+    const bool asked = status != NEOASTRA_EXTERNAL_OPEN_REFUSED;
+    const bool as_expected = events.outcomes.size() == 1 && events.outcomes.front().uri == uri && events.outcomes.front().status == status &&
+        opened_addresses.count == (asked ? 1u : 0u) && (!asked || std::string(opened_addresses[0].UTF8String) == uri);
+    if (!as_expected) {
+        std::fprintf(stderr, "Expected the status %u for '%s', but the view reported %zu outcomes, the first with the status %llu for '%s', and the system was asked %lu times\n",
+            static_cast<unsigned>(status), uri.c_str(), events.outcomes.size(),
+            events.outcomes.empty() ? 0ull : static_cast<unsigned long long>(events.outcomes.front().status),
+            events.outcomes.empty() ? "" : events.outcomes.front().uri.c_str(), static_cast<unsigned long>(opened_addresses.count));
+        assert(false);
+    }
+    events.outcomes.clear();
+    [opened_addresses removeAllObjects];
+}
+
 // Presses Tab with the first text field focused and waits until the focus has left it for `expected`.
 void expect_tab_reaches(neoastra_view_t* view, const std::string& expected) {
     assert(evaluate(view, "document.getElementById('first').focus();document.activeElement.id") == "\"first\"");
@@ -201,6 +237,9 @@ void expect_tab_reaches(neoastra_view_t* view, const std::string& expected) {
 
 int main() {
     @autoreleasepool {
+        opened_addresses = [NSMutableArray array];
+        method_setImplementation(class_getInstanceMethod([NSWorkspace class], @selector(openURL:)), reinterpret_cast<IMP>(record_open));
+
         neoastra_app_options_t app_options{};
         app_options.size = sizeof(app_options);
         app_options.version = 1;
@@ -277,6 +316,32 @@ int main() {
         expect_request(events, new_window, elsewhere + "blank", reported | activated);
         evaluate(view, "window.open('https://example.invalid/open');0");
         expect_request(events, new_window, elsewhere + "open", reported);
+        assert(events.outcomes.empty() && opened_addresses.count == 0);
+
+        // An address sent outside the view goes to the system, and the view is told whether the system took it.
+        events.answer = NEOASTRA_DECISION_OPEN_EXTERNAL;
+        click(web_view(view), link_x, link_y);
+        expect_request(events, navigation, elsewhere + "link", main_frame | reported | activated | NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED);
+        expect_outcome(events, elsewhere + "link", NEOASTRA_EXTERNAL_OPEN_OPENED);
+        click(web_view(view), link_x, blank_y);
+        expect_request(events, new_window, elsewhere + "blank", reported | activated | NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED);
+        expect_outcome(events, elsewhere + "blank", NEOASTRA_EXTERNAL_OPEN_OPENED);
+        system_opens = NO;
+        click(web_view(view), link_x, link_y);
+        expect_request(events, navigation, elsewhere + "link", main_frame | reported | activated | NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED);
+        expect_outcome(events, elsewhere + "link", NEOASTRA_EXTERNAL_OPEN_FAILED);
+        system_opens = YES;
+
+        // What is not a web address stays inside, whatever the host decided, and the system is not asked.
+        for (const std::string address : {"mailto:someone@example.invalid", "neoastra-test://host/path", "https://user:secret@example.invalid/"}) {
+            evaluate(view, "location.href='" + address + "';0");
+            expect_request(events, navigation, address, main_frame | reported);
+            expect_outcome(events, address, NEOASTRA_EXTERNAL_OPEN_REFUSED);
+        }
+        evaluate(view, "window.open('mailto:someone@example.invalid');0");
+        expect_request(events, new_window, "mailto:someone@example.invalid", reported);
+        expect_outcome(events, "mailto:someone@example.invalid", NEOASTRA_EXTERNAL_OPEN_REFUSED);
+        assert(evaluate(view, "document.getElementById('link').id") == "\"link\"");
 
         neoastra_view_release(view);
         neoastra_environment_release(environment);

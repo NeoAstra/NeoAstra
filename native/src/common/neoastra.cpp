@@ -501,6 +501,17 @@ void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, u
     view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
 }
 
+// Sends the address of a decision outside the view when it is a web address, and tells the view what became of it.
+static void open_external(neoastra_view_t* view, const std::string& uri) noexcept {
+    int64_t native_code = 0;
+    auto status = NEOASTRA_EXTERNAL_OPEN_REFUSED;
+    if (neo_external_uri_allowed(uri)) status = neo_platform_open_external(uri, &native_code) ? NEOASTRA_EXTERNAL_OPEN_OPENED : NEOASTRA_EXTERNAL_OPEN_FAILED;
+    if (!view) return;
+    if (status == NEOASTRA_EXTERNAL_OPEN_REFUSED) neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "navigation", "An address that is not a web address was not opened outside the view");
+    else if (status == NEOASTRA_EXTERNAL_OPEN_FAILED) neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "navigation", "The system could not open a web address outside the view", native_code);
+    neo_emit_view(view, NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED, 0, nullptr, &uri, status, native_code);
+}
+
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept {
     if (!download || !download->view || !download->event_published) return;
     neo_event_details details{};
@@ -771,7 +782,14 @@ neoastra_result_t NEOASTRA_CALL neoastra_decision_complete(neoastra_decision_t* 
     while(current==neo_decision_state::pending || current==neo_decision_state::deferred) {
         if(value->state.compare_exchange_weak(current,neo_decision_state::completed,std::memory_order_acq_rel,std::memory_order_acquire)) {
             const auto was_deferred=current==neo_decision_state::deferred;
+            // Only a host sends an address outside the view, so it is done here and not where a decision falls back to its default.
+            // Resolving detaches the decision from the view that asked, which is told what became of the address.
+            const bool external=response->action==NEOASTRA_DECISION_OPEN_EXTERNAL&&(value->kind==NEOASTRA_DECISION_NAVIGATION||value->kind==NEOASTRA_DECISION_NEW_WINDOW);
+            auto* view=external?value->owner:nullptr;
+            if(view&&!view->retain())view=nullptr;
             value->resolve(*response);
+            if(external)open_external(view,value->external_uri);
+            if(view)view->release();
             if(was_deferred)value->release();
             return NEOASTRA_OK;
         }

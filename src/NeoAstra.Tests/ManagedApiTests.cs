@@ -492,6 +492,24 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void ExternalOpen_DecodesWhatBecameOfTheAddress()
+    {
+        var address = new Uri("https://example.com/page");
+        var opened = NeoAstra.DecodeExternalOpen(address, 0, 0);
+        Assert.AreSame(address, opened.Uri);
+        Assert.AreEqual(NeoExternalOpenStatus.Opened, opened.Status);
+        Assert.AreEqual(0, opened.NativeCode);
+        Assert.AreEqual(NeoExternalOpenStatus.Refused, NeoAstra.DecodeExternalOpen(null, 1, 0).Status);
+        Assert.IsNull(NeoAstra.DecodeExternalOpen(null, 1, 0).Uri);
+        var failed = NeoAstra.DecodeExternalOpen(address, 2, 31);
+        Assert.AreEqual(NeoExternalOpenStatus.Failed, failed.Status);
+        Assert.AreEqual(31, failed.NativeCode);
+        // A status from a later native library is not one that opened the address.
+        Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, 3, 0).Status);
+        Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, ulong.MaxValue, 0).Status);
+    }
+
+    [TestMethod]
     public void ProcessFailure_DecodesPortableKindFlagsAndRecovery()
     {
         var failure = NeoAstra.DecodeProcessFailure(
