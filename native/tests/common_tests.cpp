@@ -813,14 +813,25 @@ void test_custom_scheme_provider_release_once_and_exception_containment() {
 void test_external_web_addresses() {
     for (const char* allowed : {"https://example.com", "https://example.com/", "http://example.com/path?query=1#fragment", "HTTPS://EXAMPLE.COM/",
             "HtTp://example.com:8080/a", "https://xn--bcher-kva.example/", "http://127.0.0.1:5173/", "http://[::1]:5173/", "https://[2001:db8::1]/",
-            "https://example.com/a%20b?next=https://other.example/@user", "https://example.com/caf\xc3\xa9"})
+            "https://example.com/a%20b?next=https://other.example/@user", "https://example.com/caf\xc3\xa9", "https://b\xc3\xbc" "cher.example/",
+            "https://example.com:/", "https://example.com:443", "https://sub-domain.example_host.com./?q=[1]&r={2}|3",
+            // Punctuation beyond ASCII is no control: U+2013, U+2026.
+            "https://example.com/a\xe2\x80\x93" "b\xe2\x80\xa6"})
         assert(neo_external_uri_allowed(allowed));
     for (const char* refused : {"", "https://", "http:///path", "https://:443/", "https://?query", "https://#fragment", "https:/example.com", "https:example.com",
             "//example.com/", "example.com", "/path", "file:///etc/passwd", "mailto:someone@example.com", "javascript:alert(1)", "data:text/html,x",
             "ftp://example.com/", "ms-settings:privacy", "vscode://file/etc/passwd", "app://neoastra/index.html", "about:blank", "httpx://example.com/",
             "https://user@example.com/", "https://user:secret@example.com/", "https://example.com@evil.example/", "https://example.com\\@evil.example/",
             "https://example.com\\evil.example/", "https://[::1/", "https://[]/", "https://exa mple.com/", "https://example.com/a b", " https://example.com/",
-            "https://example.com/\t", "https://example.com/\r\nHost: evil", "https://example.com/\x7f", "https://example.com/\x01"})
+            "https://example.com/\t", "https://example.com/\r\nHost: evil", "https://example.com/\x7f", "https://example.com/\x01",
+            // A host or a port that no browser engine writes.
+            "https://[::1]evil.example/", "https://[zz]/", "https://]/", "https://a[b]/", "https://[::1", "https://[]:80/", "https://example.com:notaport/",
+            "https://a:b:c/", "https://example.com:80:80/", "https://<x>/", "https://ex\"ample.com/", "https://example.com%2f.evil.example/",
+            "https://exa{mple}.com/", "https://exa|mple.com/", "https://exa^mple.com/", "https://exa`mple.com/",
+            // Controls, spaces, and direction marks beyond ASCII: U+0085, U+00A0, U+1680, U+2028, U+202E, U+205F, U+2066, U+3000.
+            "https://example.com/\xc2\x85", "https://example.com/\xc2\xa0", "https://example.com/\xe1\x9a\x80", "https://example.com/\xe2\x80\xa8",
+            "https://example.com/\xe2\x80\xae", "https://example.com/\xe2\x81\x9f", "https://example.com/\xe2\x81\xa6", "https://example.com/\xe3\x80\x80",
+            "https://exa\xe2\x80\x8bmple.com/"})
         assert(!neo_external_uri_allowed(refused));
     assert(!neo_external_uri_allowed(std::string_view("https://example.com/\0", 21)));
     const std::string longest = "https://example.com/" + std::string(32768 - 20, 'a');

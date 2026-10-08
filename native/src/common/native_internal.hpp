@@ -524,11 +524,21 @@ inline void neo_configure_decision(neoastra_decision_t* decision, const neoastra
 
 // The second check behind the one of the host: what the system is asked to open is a web address, which is an absolute http
 // or https address with a host, without credentials, and without a control or white-space character. Anything else, such as
-// a file, a script, or the scheme of another application, could start a program instead of showing a page.
+// a file, a script, or the scheme of another application, could start a program instead of showing a page. The address is the
+// one a browser engine wrote, so a host or a port that no engine writes is refused rather than interpreted.
 inline bool neo_external_uri_allowed(std::string_view uri) noexcept {
     constexpr size_t maximum_length = 32768;
     if (uri.empty() || uri.size() > maximum_length) return false;
-    for (const unsigned char character : uri) if (character <= 0x20 || character == 0x7f) return false;
+    const auto byte = [&uri](size_t index) noexcept { return index < uri.size() ? static_cast<unsigned char>(uri[index]) : 0u; };
+    for (size_t index = 0; index < uri.size(); ++index) {
+        const auto first = byte(index), second = byte(index + 1), third = byte(index + 2);
+        if (first <= 0x20 || first == 0x7f) return false;
+        // The controls, spaces, and invisible marks of Unicode, in UTF-8: U+0080 to U+00A0, U+1680, U+2000 to U+200F,
+        // U+2028 to U+202F, U+205F to U+206F, and U+3000.
+        if ((first == 0xc2 && second <= 0xa0) || (first == 0xe1 && second == 0x9a && third == 0x80) ||
+            (first == 0xe2 && second == 0x80 && (third <= 0x8f || (third >= 0xa8 && third <= 0xaf))) ||
+            (first == 0xe2 && second == 0x81 && third >= 0x9f && third <= 0xaf) || (first == 0xe3 && second == 0x80 && third == 0x80)) return false;
+    }
     const auto has_prefix = [&uri](std::string_view prefix) noexcept {
         if (uri.size() < prefix.size()) return false;
         for (size_t index = 0; index < prefix.size(); ++index) {
@@ -541,10 +551,21 @@ inline bool neo_external_uri_allowed(std::string_view uri) noexcept {
     if (scheme_length == 0) return false;
     const auto authority = uri.substr(scheme_length, uri.find_first_of("/?#", scheme_length) - scheme_length);
     if (authority.empty()) return false;
-    // A backslash ends the host for a browser and not for every other parser, so the two could disagree on where the address leads.
-    if (authority.find_first_of("@\\") != std::string_view::npos) return false;
-    const auto host = authority.front() == '[' ? authority.substr(0, authority.find(']') + 1) : authority.substr(0, authority.find(':'));
-    return !host.empty() && host != "[]" && (host.front() != '[' || host.back() == ']');
+    // An address in brackets is an IPv6 address; any other host has none of the characters that end or escape a host.
+    // A backslash ends the host for a browser and not for every other parser, and an at sign ends the credentials.
+    size_t host_length = 0;
+    if (authority.front() == '[') {
+        host_length = authority.find(']');
+        if (host_length == std::string_view::npos || host_length < 3) return false;
+        if (authority.substr(1, host_length - 1).find_first_not_of("0123456789abcdefABCDEF:.") != std::string_view::npos) return false;
+        ++host_length;
+    } else {
+        const auto colon = authority.find(':');
+        host_length = colon == std::string_view::npos ? authority.size() : colon;
+        if (host_length == 0 || authority.substr(0, host_length).find_first_of("@\\[]<>\"^`{|}%") != std::string_view::npos) return false;
+    }
+    const auto port = authority.substr(host_length);
+    return port.empty() || (port.front() == ':' && port.find_first_not_of("0123456789", 1) == std::string_view::npos);
 }
 
 inline void neoastra_decision::detach_owner() noexcept {
