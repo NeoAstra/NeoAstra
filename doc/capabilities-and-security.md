@@ -108,6 +108,8 @@ A view asks its host about a link in one of two requests: `NavigationRequested` 
 | The server redirects a navigation that was user-initiated | Not user-initiated | Reported like the navigation it redirects | Not user-initiated |
 | `IsLinkActivation` | `null`: not reported | Reported | Reported |
 
+The macOS column was observed, on macOS 26. The Windows and Linux columns are what WebView2 and WebKitGTK document for the values NeoAstra passes on; they have not been run.
+
 - **Windows.** `IsUserInitiated` is the `IsUserInitiated` of WebView2 for a request that is not a redirect: the user gesture of the engine. WebView2 does not tell that a request comes from a link.
 - **Linux.** `IsUserInitiated` is the user gesture that WebKitGTK reports (`webkit_navigation_action_is_user_gesture`) for a request that is not a redirect, and `IsLinkActivation` is its navigation type.
 - **macOS.** The public interface of WKWebView has no user-gesture flag. `IsUserInitiated` is `true` only when a link was activated with a trusted click or key press, which WKWebView tells by the mouse button of the request: a link that a script clicks comes without one. It is therefore the strictest of the three, and a page that opens its links with `window.open` or `location.href` from a click handler does not pass for user-initiated on macOS; use a link (`<a href>`) for an address that should open outside the view. WKWebView does not tell the redirect of a clicked link from the link either.
