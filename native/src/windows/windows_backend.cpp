@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <dwmapi.h>
 #include <objbase.h>
 #include <shellapi.h>
 #include <shlwapi.h>
@@ -1791,6 +1792,25 @@ neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* w) noexce
     const auto changed=SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
     layout_title_bar(w);
     return changed?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+// The frame of a window that can be resized has borders that are not drawn on its left, right, and bottom sides. The desktop
+// window manager tells what is drawn, in the pixels of the display, also for a window that is hidden.
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* w,neoastra_rect_t* value) noexcept {
+    auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    RECT outer{};
+    if(!GetWindowRect(state->hwnd,&outer))return NEOASTRA_ERROR_NATIVE_FAILURE;
+    *value={outer.left,outer.top,outer.right-outer.left,outer.bottom-outer.top};
+    // A thread that is not aware of the scale of its display is told of its windows in other units than those pixels.
+    RECT pixels=outer,shown{};
+    if(const auto previous=SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)){if(!GetWindowRect(state->hwnd,&pixels))pixels=outer;SetThreadDpiAwarenessContext(previous);}
+    if(FAILED(DwmGetWindowAttribute(state->hwnd,DWMWA_EXTENDED_FRAME_BOUNDS,&shown,sizeof(shown))))return NEOASTRA_OK;
+    const auto width=pixels.right-pixels.left,height=pixels.bottom-pixels.top;
+    if(width<=0||height<=0||value->width<=0||value->height<=0||shown.left<pixels.left||shown.top<pixels.top||shown.right>pixels.right||shown.bottom>pixels.bottom||shown.right<=shown.left||shown.bottom<=shown.top)return NEOASTRA_OK;
+    const auto across=value->width/static_cast<double>(width),down=value->height/static_cast<double>(height);
+    const auto left=std::lround((shown.left-pixels.left)*across),right=std::lround((pixels.right-shown.right)*across);
+    const auto top=std::lround((shown.top-pixels.top)*down),bottom=std::lround((pixels.bottom-shown.bottom)*down);
+    *value={outer.left+left,outer.top+top,value->width-left-right,value->height-top-bottom};
+    return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* w,neoastra_title_bar_t* value) noexcept {
     auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;

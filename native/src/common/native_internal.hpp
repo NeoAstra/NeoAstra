@@ -833,6 +833,8 @@ neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noe
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* window) noexcept;
+// Replaces the bounds, which the value holds, with the rectangle that the window shows on screen.
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* window, neoastra_rect_t* value) noexcept;
 neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexcept;
 neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window, neoastra_window_attribute_t attribute, bool enabled) noexcept;
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept;

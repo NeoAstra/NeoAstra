@@ -247,6 +247,12 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_ap
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t*, neoastra_rect_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_bounds(neoastra_window_t*, neoastra_rect_t);
+/* The rectangle that the window shows on screen, in the units of its bounds: its frame with its title bar, without the borders
+   of the frame that are not drawn. The bounds pair the corner of the frame with the size of the client area, so the two differ:
+   on Windows the frame of a window that can be resized has borders that are not drawn on its left, right, and bottom sides, and
+   on Windows and macOS a standard title bar is above the client area. With GTK the bounds are that rectangle. Must be called on
+   the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_frame(neoastra_window_t*, neoastra_rect_t*);
 /* Display pixels per logical unit of the display the window is on: 1.5 at 150 percent, 2 on a Retina display.
    NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED reports a change, with the scale in thousandths as its value. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_scale_factor(const neoastra_window_t*, double*);

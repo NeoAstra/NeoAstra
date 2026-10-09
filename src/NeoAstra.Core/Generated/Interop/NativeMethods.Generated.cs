@@ -1962,6 +1962,17 @@ namespace NeoAstra.Interop.Generated
         public static partial NativeMethods.neoastra_result_t neoastra_window_set_bounds(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_rect_t arg1);
 
         /// <summary>
+        /// The rectangle that the window shows on screen, in the units of its bounds: its frame with its title bar, without the borders
+        /// of the frame that are not drawn. The bounds pair the corner of the frame with the size of the client area, so the two differ:
+        /// on Windows the frame of a window that can be resized has borders that are not drawn on its left, right, and bottom sides, and
+        /// on Windows and macOS a standard title bar is above the client area. With GTK the bounds are that rectangle. Must be called on
+        /// the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_frame")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_frame(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_rect_t* arg1);
+
+        /// <summary>
         /// Display pixels per logical unit of the display the window is on: 1.5 at 150 percent, 2 on a Retina display.
         /// NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED reports a change, with the scale in thousandths as its value.
         /// </summary>

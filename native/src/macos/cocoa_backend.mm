@@ -417,6 +417,8 @@ neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t*,neoastra_w
 neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;apply_title_bar(window,state);
     // Extending the content keeps the frame and resizes the content area without a resize notification.
     sync_bounds(window,state->window);return NEOASTRA_OK;}}
+// The frame of an AppKit window is what it shows: its content with the title bar above it, measured as the bounds are.
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* window,neoastra_rect_t* value) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;const NSRect frame=state->window.frame;*value={(int32_t)lround(NSMinX(frame)),(int32_t)lround(primary_display_height()-NSMaxY(frame)),(int32_t)lround(NSWidth(frame)),(int32_t)lround(NSHeight(frame))};return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* window,neoastra_title_bar_t* value) noexcept {@autoreleasepool{
     auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;
     if(window->title_bar.style==NEOASTRA_TITLE_BAR_DEFAULT){value->height=0;return NEOASTRA_OK;}

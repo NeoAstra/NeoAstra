@@ -534,6 +534,8 @@ neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t* window,neo
     gdk_toplevel_begin_resize(toplevel,edges[edge],device,GDK_BUTTON_PRIMARY,x,y,GDK_CURRENT_TIME);return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;apply_title_bar(window,state);return NEOASTRA_OK;}
+// The size of a GTK window includes the title bar that it draws, and nothing is known to be around it: the frame is the bounds.
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* window,neoastra_rect_t*) noexcept {auto* state=static_cast<gtk_window*>(window->platform);return state&&state->widget?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* window,neoastra_title_bar_t* value) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;value->height=window->title_bar.style==NEOASTRA_TITLE_BAR_DEFAULT?0:window->title_bar.height>0?window->title_bar.height:32;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_GTK_WINDOW&&kind!=NEOASTRA_NATIVE_HANDLE_GTK_WIDGET)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;handle->kind=kind;handle->value=state->widget;return NEOASTRA_OK;}
 

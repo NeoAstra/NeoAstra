@@ -117,6 +117,43 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
+    /// <summary>Gets the rectangle that the window shows on screen, in the units of <see cref="ClientSize"/>: its frame with its title bar, without the borders of the frame that are not drawn.</summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Position"/> and <see cref="ClientSize"/> pair the corner of the frame of the window with the size of its
+    /// client area, which is another rectangle than the one the window shows. On Windows the frame of a window that can be
+    /// resized has borders that are not drawn on its left, right, and bottom sides, so a window whose visible edge is at the
+    /// left edge of a display has a position to the left of it, and on Windows and macOS a standard title bar is above the
+    /// client area. The value is known for a window that is hidden as well.
+    /// </para>
+    /// <para>
+    /// With GTK, and with a native library from before this member, the value is the rectangle of <see cref="Position"/> and
+    /// <see cref="ClientSize"/>.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The member was read on another thread than the one of the window.</exception>
+    public unsafe NeoRect FrameBounds
+    {
+        get
+        {
+            var bounds = GetBounds();
+            var native = new NativeMethods.neoastra_rect_t(default);
+            try
+            {
+                NativeError.ThrowIfFailed(NativeMethods.neoastra_window_get_frame(NativeHandle, &native), default, "get window frame");
+            }
+            catch (EntryPointNotFoundException)
+            {
+                // An older native library does not tell what a window shows of its frame.
+                return bounds;
+            }
+
+            var value = native.Value;
+            return value.width > 0 && value.height > 0 ? new NeoRect(value.x, value.y, value.width, value.height) : bounds;
+        }
+    }
+
     /// <summary>Gets or sets the native minimum client-size constraint, in the units of <see cref="ClientSize"/>.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A dimension is negative.</exception>
     /// <exception cref="ArgumentException">The minimum exceeds the configured maximum.</exception>

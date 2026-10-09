@@ -210,6 +210,15 @@ int main() {
     assert(neoastra_window_get_scale_factor(window, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_window_get_scale_factor(window, &scale_factor) == NEOASTRA_OK);
     assert(scale_factor >= 1.0 && scale_factor <= 16.0);
+    // What a window shows holds its client area and begins at the top of its frame. It is the bounds with GTK, has a title bar
+    // above the client area on Windows and macOS, and begins inside the frame on Windows, whose side borders are not drawn.
+    neoastra_rect_t frame{};
+    assert(neoastra_window_get_frame(nullptr, &frame) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_frame(window, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
+    assert(neoastra_window_get_frame(window, &frame) == NEOASTRA_OK);
+    assert(frame.y == bounds.y && frame.x >= bounds.x && frame.x - bounds.x < 64);
+    assert(frame.width >= bounds.width && frame.width - bounds.width < 64 && frame.height >= bounds.height && frame.height - bounds.height < 256);
     assert(neoastra_window_set_maximum_size(window, {1200, 900}) == NEOASTRA_OK);
     assert(neoastra_window_set_minimum_size(window, {320, 200}) == NEOASTRA_OK);
     neoastra_size_t size{};

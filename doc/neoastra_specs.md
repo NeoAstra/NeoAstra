@@ -2358,6 +2358,7 @@ public sealed class NeoWindow : IAsyncDisposable
     public string Title { get; set; }
     public NeoPoint Position { get; set; }
     public NeoSize ClientSize { get; set; }
+    public NeoRect FrameBounds { get; }
     public NeoSize MinimumClientSize { get; set; }
     public NeoSize MaximumClientSize { get; set; }
     public bool IsVisible { get; }
