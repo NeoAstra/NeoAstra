@@ -888,6 +888,96 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void WindowStateKeepsAWindowOverSeveralDisplaysWhereItWas()
+    {
+        // Bounds and taskbar in logical units, as a display snapshot has them.
+        static NeoDisplaySnapshot Display(string id, NeoRect bounds, double scale = 1, bool primary = false, int taskbar = 0) => new(id, bounds, new NeoRect(bounds.X, bounds.Y, bounds.Width, bounds.Height - taskbar), scale, primary, null, null);
+        static NeoWindowPlacement Saved(NeoRect bounds, double scale = 1, NeoWindowState state = NeoWindowState.Normal) => new(bounds, state, null, scale, true);
+        static NeoWindowPlacement Pixels(NeoWindowPlacement saved, params NeoDisplaySnapshot[] displays) => NeoWindowStateRestore.Clamp(saved, displays, restoreMinimized: false, countsInDisplayPixels: true);
+        static NeoWindowPlacement Logical(NeoWindowPlacement saved, params NeoDisplaySnapshot[] displays) => NeoWindowStateRestore.Clamp(saved, displays, restoreMinimized: false, countsInDisplayPixels: false);
+
+        // Two displays of 3840 by 2160 pixels side by side at 200 percent, and a window over the right third of the left
+        // one and all of the right one. It used to come back on the right one alone: at 3840, with a width of 3840.
+        var left = Display("left", new NeoRect(0, 0, 1920, 1080), 2, primary: true, taskbar: 48);
+        var right = Display("right", new NeoRect(1920, 0, 1920, 1080), 2, taskbar: 48);
+        var over = new NeoRect(2688, 0, 4992, 2064);
+        var restored = Pixels(Saved(over, 2, NeoWindowState.Minimized), left, right);
+        Assert.AreEqual(over, restored.NormalBounds);
+        Assert.AreEqual(NeoWindowState.Normal, restored.State);
+        // The display that the window is mostly on is the one it is said to be on.
+        Assert.AreEqual("right", restored.DisplayId);
+        Assert.AreEqual(2d, restored.DisplayScaleFactor);
+        Assert.AreEqual(new NeoRect(1344, 0, 2496, 1032), Logical(Saved(new NeoRect(1344, 0, 2496, 1032), 2), left, right).NormalBounds);
+
+        // One of the two is gone: the window comes back whole on the other.
+        Assert.AreEqual(new NeoRect(3840, 0, 3840, 2064), Pixels(Saved(over, 2), right).NormalBounds);
+        Assert.AreEqual(new NeoRect(0, 0, 3840, 2064), Pixels(Saved(over, 2), left).NormalBounds);
+        Assert.AreEqual(new NeoRect(3840 - 1600, 100, 1600, 1200), Pixels(Saved(new NeoRect(4000, 100, 1600, 1200), 2), left).NormalBounds);
+
+        // A window larger than the displays it is over is shrunk to them, and one that leaves them is moved back.
+        Assert.AreEqual(new NeoRect(0, 0, 7680, 2064), Pixels(Saved(new NeoRect(-500, -300, 9000, 3000), 2), left, right).NormalBounds);
+        Assert.AreEqual(new NeoRect(7680 - 5000, 500, 5000, 1000), Pixels(Saved(new NeoRect(3000, 500, 5000, 1000), 2), left, right).NormalBounds);
+        // A window that is past the left display is on the right one alone, as before.
+        Assert.AreEqual(new NeoRect(3840, 500, 3840, 1000), Pixels(Saved(new NeoRect(5000, 500, 4000, 1000), 2), left, right).NormalBounds);
+
+        // Three displays in a row, and two displays one above the other, where the title bar is not on the display that
+        // the window is mostly on.
+        var first = Display("first", new NeoRect(0, 0, 1000, 1000), primary: true);
+        var across = new NeoRect(900, 100, 1200, 500);
+        Assert.AreEqual(across, Logical(Saved(across), first, Display("second", new NeoRect(1000, 0, 1000, 1000)), Display("third", new NeoRect(2000, 0, 1000, 1000))).NormalBounds);
+        var below = Display("below", new NeoRect(0, 1000, 1000, 1000));
+        var tall = Logical(Saved(new NeoRect(100, 800, 600, 900)), first, below);
+        Assert.AreEqual(new NeoRect(100, 800, 600, 900), tall.NormalBounds);
+        Assert.AreEqual("below", tall.DisplayId);
+
+        // Displays that are not aligned: the rectangle around them has parts that no display shows. A window stays over
+        // both while a stretch of its title bar is on one of them, whichever.
+        var low = Display("low", new NeoRect(1000, 500, 1000, 1000));
+        var level = new NeoRect(500, 600, 1000, 300);
+        Assert.AreEqual(level, Logical(Saved(level), first, low).NormalBounds);
+        var stepped = Logical(Saved(new NeoRect(700, 100, 1000, 800)), first, low);
+        Assert.AreEqual(new NeoRect(700, 100, 1000, 800), stepped.NormalBounds);
+        Assert.AreEqual("low", stepped.DisplayId);
+        Assert.AreEqual(new NeoRect(0, 0, 2000, 1500), Logical(Saved(new NeoRect(-200, -200, 3000, 3000)), first, low).NormalBounds);
+        // Here the title bar is above the display that the window is mostly on, with 10 units of it on the other one: the
+        // window comes back whole on the display it is mostly on.
+        var unreachable = Logical(Saved(new NeoRect(990, 0, 800, 800)), first, low);
+        Assert.AreEqual(new NeoRect(1000, 500, 800, 800), unreachable.NormalBounds);
+        Assert.AreEqual("low", unreachable.DisplayId);
+
+        // A window that is only a few pixels on another display stays where it is. On Windows that is a window whose
+        // visible edge is at the edge of its display: its position is that of a frame with a border that is not drawn,
+        // 9 pixels wide at 150 percent. It used to be moved by those 9 pixels.
+        var one = Display("one", new NeoRect(0, 0, 2560, 1440), 1.5, primary: true, taskbar: 48);
+        var two = Display("two", new NeoRect(2560, 0, 2560, 1440), 1.5, taskbar: 48);
+        var snapped = Pixels(Saved(new NeoRect(3831, 0, 1357, 2086), 1.5), one, two);
+        Assert.AreEqual(new NeoRect(3831, 0, 1357, 2086), snapped.NormalBounds);
+        Assert.AreEqual("two", snapped.DisplayId);
+        var touching = Pixels(Saved(new NeoRect(2000, 300, 1845, 900), 1.5), one, two);
+        Assert.AreEqual(new NeoRect(2000, 300, 1845, 900), touching.NormalBounds);
+        Assert.AreEqual("one", touching.DisplayId);
+
+        // Displays with different scales, on Windows: 3840 by 2160 pixels at 150 percent, then 1920 by 1080 pixels at
+        // 100 percent from pixel 3840 on. The window has the scale of the display it is mostly on.
+        var scaled = Display("scaled", new NeoRect(0, 0, 2560, 1440), 1.5, primary: true);
+        var plain = Display("plain", new NeoRect(3840, 0, 1920, 1080));
+        var onScaled = Pixels(Saved(new NeoRect(2000, 100, 2400, 800), 1.5), scaled, plain);
+        Assert.AreEqual(new NeoRect(2000, 100, 2400, 800), onScaled.NormalBounds);
+        Assert.AreEqual(1.5, onScaled.DisplayScaleFactor);
+        var onPlain = Pixels(Saved(new NeoRect(3000, 100, 2400, 800)), scaled, plain);
+        Assert.AreEqual(new NeoRect(3000, 100, 2400, 800), onPlain.NormalBounds);
+        Assert.AreEqual(1d, onPlain.DisplayScaleFactor);
+        // The part of it that is below the smaller display is in the rectangle around both.
+        var deep = new NeoRect(2500, 100, 2400, 1800);
+        Assert.AreEqual(deep, Pixels(Saved(deep, 1.5), scaled, plain).NormalBounds);
+        // A window that was saved with another scale than the one of the display it comes back on keeps the size its
+        // content had, from where it was.
+        var rescaled = Pixels(Saved(new NeoRect(3000, 100, 2400, 800), 1.5), scaled, plain);
+        Assert.AreEqual(new NeoRect(3000, 100, 1600, 533), rescaled.NormalBounds);
+        Assert.AreEqual("plain", rescaled.DisplayId);
+    }
+
+    [TestMethod]
     [Timeout(60000)]
     public async Task WindowStateRestoresAWindowWhereItWasOnAScaledDisplay()
     {
@@ -931,6 +1021,65 @@ public sealed class DesktopServicesTests
                             Assert.IsNotNull(await controller.RestoreAsync(displays));
                             Assert.AreEqual(size, window.ClientSize, $"launch {launch}, aware {aware}");
                             Assert.AreEqual(position, window.Position, $"launch {launch}, aware {aware}");
+                        }
+
+                        application.Shutdown(0);
+                    });
+                });
+            }
+        }
+        catch (NeoAstraNativeLibraryException) { }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowStateRestoresAWindowOverTwoDisplays()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            foreach (var aware in new[] { true, false })
+            {
+                await RunStaAsync(() =>
+                {
+                    if (aware) SetThreadDpiAwarenessContext(-4);
+                    return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window state test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                    {
+                        var displays = NeoSystemInfoPlatform.ReadInitialDisplays();
+                        // The work area of a display in the units of a window, and two displays that are side by side at one
+                        // scale. A machine that has none runs nothing here.
+                        static (int Left, int Top, int Right, int Bottom) Area(NeoDisplaySnapshot display)
+                            => ((int)Math.Round(display.WorkArea.X * display.ScaleFactor), (int)Math.Round(display.WorkArea.Y * display.ScaleFactor), (int)Math.Round((display.WorkArea.X + display.WorkArea.Width) * display.ScaleFactor), (int)Math.Round((display.WorkArea.Y + display.WorkArea.Height) * display.ScaleFactor));
+                        var pair = (from left in displays from right in displays
+                                    let a = Area(left) let b = Area(right)
+                                    where left.ScaleFactor == right.ScaleFactor && a.Right == b.Left && Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top) >= 600
+                                    select (Left: a, Right: b, left.ScaleFactor)).FirstOrDefault();
+                        if (pair.Left == pair.Right) { application.Shutdown(0); return; }
+
+                        // The right third of the left display and most of the right one.
+                        var top = Math.Max(pair.Left.Top, pair.Right.Top) + 40;
+                        var x = pair.Left.Right - (pair.Left.Right - pair.Left.Left) * 3 / 10;
+                        var bounds = new NeoRect(x, top, pair.Right.Right - (pair.Right.Right - pair.Right.Left) / 10 - x, 500);
+                        var store = new NeoJsonWindowStateStore(Path.Combine(root, aware ? "aware" : "unaware"));
+                        await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Manual, X = bounds.X, Y = bounds.Y, Width = bounds.Width, Height = bounds.Height }))
+                        {
+                            await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                        }
+
+                        var saved = await store.LoadAsync("main");
+                        Assert.IsNotNull(saved);
+                        Assert.AreEqual(bounds, saved.NormalBounds);
+                        Assert.AreEqual(pair.ScaleFactor, saved.DisplayScaleFactor);
+
+                        // What the next launch does: a window of some default size takes the placement back.
+                        for (var launch = 0; launch < 2; launch++)
+                        {
+                            await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 });
+                            await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                            Assert.IsNotNull(await controller.RestoreAsync(displays));
+                            Assert.AreEqual(bounds, new NeoRect(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height), $"launch {launch}, aware {aware}");
                         }
 
                         application.Shutdown(0);

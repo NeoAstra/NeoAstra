@@ -213,6 +213,12 @@ awareness gets logical units and a `ScaleFactor` of 1, and the system scales wha
 `ScaleFactor` is known from the moment a window exists, and `ScaleFactorChanged` reports a change;
 with GTK it is a whole number. Display snapshots are in logical units, and
 `NeoWindowStateRestore.Clamp` compares a window with them in the units of the window.
+On Windows the frame that `Position` is the corner of has a border that is not drawn on its left,
+right, and bottom sides, 9 pixels wide at 150 percent, so a window whose visible edge is at the left
+edge of a display has a position that many pixels to the left of it. `Clamp` does not know the frame
+of a window and takes its position and its client size for the window: a window that was at the left
+edge of the leftmost display comes back moved to the right by that border. At an edge that two
+displays share the window is on both of them, and stays where it was.
 On Windows a minimized window reports a position of -32000 by -32000 and a client size of 0 by 0, as
 Win32 does. `NeoWindowStateController` saves the bounds that such a window goes back to.
 

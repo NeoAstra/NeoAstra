@@ -88,11 +88,28 @@ public static class NeoWindowStateRestore
     /// <param name="restoreMinimized">Whether a window that was saved minimized comes back minimized.</param>
     /// <returns>The placement to give the window, in the units of <paramref name="saved"/>.</returns>
     /// <remarks>
+    /// <para>
     /// The window keeps the size its content had. Where a window is counted in logical units, on macOS and with GTK, that
     /// is the saved size on every display. Where it is counted in the pixels of its display, on Windows, the size follows
     /// the scale of the display that the window comes back on, and the work areas, which a display snapshot carries in
     /// logical units, are compared with the window in those pixels.
+    /// </para>
+    /// <para>
+    /// The display that the window comes back on is the one named by the saved placement, or else the one whose work
+    /// area the saved bounds cover most, the primary one if they cover none. Its identifier and its scale are those of
+    /// the returned placement. A window that is on that display alone is shrunk to its work area and moved into it.
+    /// </para>
+    /// <para>
+    /// A window that is over several displays stays over them: it is shrunk to the rectangle around the work areas of
+    /// the displays it is on, and moved into that rectangle, which leaves a window that is within it where it was. That
+    /// rectangle has parts that no display shows where the displays are not aligned, so such a placement is returned
+    /// only while a stretch of the title bar of the window is on the work area of one display: of its top 32 logical
+    /// units, half the width of the window or 100 logical units, whichever is less. A window that has less than that
+    /// comes back whole on the display it is mostly on, as does a window that was on a display that is gone.
+    /// </para>
     /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="saved"/> or <paramref name="displays"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="saved"/> or one of <paramref name="displays"/> is malformed.</exception>
     public static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreMinimized = false)
         => Clamp(saved, displays, restoreMinimized, OperatingSystem.IsWindows());
 
@@ -105,12 +122,51 @@ public static class NeoWindowStateRestore
         var work = WorkArea(display, countsInDisplayPixels);
         // A logical unit is the same on every display; a pixel is worth what the scale of its display says.
         var ratio = countsInDisplayPixels ? display.ScaleFactor / saved.DisplayScaleFactor : 1d;
-        var width = (int)Math.Clamp(Math.Round(saved.NormalBounds.Width * ratio), Math.Min(100, work.Width), work.Width);
-        var height = (int)Math.Clamp(Math.Round(saved.NormalBounds.Height * ratio), Math.Min(100, work.Height), work.Height);
-        var x = (int)Math.Clamp((long)saved.NormalBounds.X, work.X, (long)work.X + work.Width - width);
-        var y = (int)Math.Clamp((long)saved.NormalBounds.Y, work.Y, (long)work.Y + work.Height - height);
+        var wanted = new Area(saved.NormalBounds.X, saved.NormalBounds.Y, (long)Math.Round(saved.NormalBounds.Width * ratio), (long)Math.Round(saved.NormalBounds.Height * ratio));
+        var home = new Area(work.X, work.Y, work.Width, work.Height);
+        var bounds = Fit(wanted, home);
+        // The rectangle around the displays that the window is on has parts that no display shows where they are not aligned.
+        var around = home;
+        foreach (var other in displays)
+        {
+            var area = WorkArea(other, countsInDisplayPixels);
+            if (IntersectionArea(wanted, area) > 0) around = around.Around(new(area.X, area.Y, area.Width, area.Height));
+        }
+        if (around != home && Fit(wanted, around) is var over && displays.Any(value => HasTitleBarOn(over, value, countsInDisplayPixels))) bounds = over;
         var state = saved.State == NeoWindowState.Minimized && !restoreMinimized ? NeoWindowState.Normal : saved.State;
-        return new(new(x, y, width, height), state, display.Id, display.ScaleFactor, saved.WasVisible);
+        return new(new((int)bounds.X, (int)bounds.Y, (int)bounds.Width, (int)bounds.Height), state, display.Id, display.ScaleFactor, saved.WasVisible);
+    }
+
+    // The height of a title bar and the least stretch of it that a user takes a window by, in logical units.
+    private const int TitleBarHeight = 32, TitleBarStretch = 100;
+
+    // A rectangle in the units of a window. The one around several displays can be wider than a display may be.
+    private readonly record struct Area(long X, long Y, long Width, long Height)
+    {
+        internal Area Around(Area other)
+        {
+            long left = Math.Min(X, other.X), top = Math.Min(Y, other.Y);
+            return new(left, top, Math.Max(X + Width, other.X + other.Width) - left, Math.Max(Y + Height, other.Y + other.Height) - top);
+        }
+    }
+
+    // Shrinks a window to an area, to no less than 100 units where the area has them, and moves it into the area.
+    private static Area Fit(Area window, Area area)
+    {
+        long wide = Math.Min(area.Width, int.MaxValue), high = Math.Min(area.Height, int.MaxValue);
+        var width = Math.Clamp(window.Width, Math.Min(100, wide), wide);
+        var height = Math.Clamp(window.Height, Math.Min(100, high), high);
+        return new(Math.Clamp(window.X, area.X, area.X + area.Width - width), Math.Clamp(window.Y, area.Y, area.Y + area.Height - height), width, height);
+    }
+
+    // Whether enough of the top of a window is on the work area of a display for a user to take the window by it.
+    private static bool HasTitleBarOn(Area window, SystemInfo.NeoDisplaySnapshot display, bool countsInDisplayPixels)
+    {
+        var work = WorkArea(display, countsInDisplayPixels);
+        var unit = countsInDisplayPixels ? display.ScaleFactor : 1d;
+        if (window.Y < work.Y || window.Y + (long)Math.Ceiling(TitleBarHeight * unit) > (long)work.Y + work.Height) return false;
+        var stretch = Math.Min(window.X + window.Width, (long)work.X + work.Width) - Math.Max(window.X, work.X);
+        return stretch >= Math.Min((window.Width + 1) / 2, (long)Math.Ceiling(TitleBarStretch * unit));
     }
 
     // The work area of a display in the units that its windows are counted in.
@@ -125,10 +181,12 @@ public static class NeoWindowStateRestore
         static int Pixels(double value) => (int)Math.Clamp(Math.Round(value), int.MinValue / 2, int.MaxValue / 2);
     }
 
-    private static long IntersectionArea(NeoRect left, NeoRect right)
+    private static long IntersectionArea(NeoRect left, NeoRect right) => IntersectionArea(new Area(left.X, left.Y, left.Width, left.Height), right);
+
+    private static long IntersectionArea(Area left, NeoRect right)
     {
-        var width = Math.Max(0L, Math.Min((long)left.X + left.Width, (long)right.X + right.Width) - Math.Max(left.X, right.X));
-        var height = Math.Max(0L, Math.Min((long)left.Y + left.Height, (long)right.Y + right.Height) - Math.Max(left.Y, right.Y));
+        var width = Math.Max(0L, Math.Min(left.X + left.Width, (long)right.X + right.Width) - Math.Max(left.X, right.X));
+        var height = Math.Max(0L, Math.Min(left.Y + left.Height, (long)right.Y + right.Height) - Math.Max(left.Y, right.Y));
         return width * height;
     }
 }

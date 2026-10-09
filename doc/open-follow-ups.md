@@ -39,6 +39,36 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   GTK 4.14 in a WSL 2 desktop session and under Xvfb on the runners, where no window manager maximizes
   a window, and a user who drags an edge is stood in for by a size given through GTK
   (`test_window_reports_the_size_it_has` in `native/tests/linux_backend_tests.cpp`).
+- **A window over several displays was restored on two displays of one scale.**
+  `NeoWindowStateRestore.Clamp` leaves a window over the displays it is on; see
+  [persistence and secrets](desktop-services.md#persistence-and-secrets) for the rule. It was run on
+  Windows 11 with two displays of 3840 by 2160 pixels side by side, both at 150 percent
+  (`WindowStateRestoresAWindowOverTwoDisplays`, which runs nothing on a machine without two such
+  displays). The rest is the unit test `WindowStateKeepsAWindowOverSeveralDisplaysWhereItWas`, with
+  made-up displays. Not run: displays with different scales on Windows, where a restore sets the
+  position and then the size of a window, and the window may change its scale between the two
+  (`WM_DPICHANGED` resizes it to what the system suggests); `Clamp` also chooses the display from the
+  saved bounds and scales the size afterwards, so a window that was saved with another scale than
+  the one of that display can end up mostly on another display than the one whose scale it was
+  given. Not run either: macOS, where a window over two displays is shown on one of them when
+  displays have separate Spaces, and which one that is for a window that is placed by its
+  application is not known; and GTK.
+- **Windows: `Clamp` takes the position and the client size of a window for its frame.** `Position`
+  is the corner of the frame that `GetWindowRect` reports (`sync_bounds` in
+  `native/src/windows/windows_backend.cpp`), which has a border that is not drawn. Seen on
+  Windows 11 at 150 percent with `DWMWA_EXTENDED_FRAME_BOUNDS` and a throwaway test, on 2026-10-09:
+  what a window shows is 9 pixels inside that frame on its left, right, and bottom sides, and not
+  inside it at the top, with a standard title bar and with an extended one. A window with its
+  visible edge at the left edge of the primary display had a position of -9, `Clamp` gave it 0, and
+  it was shown from pixel 9 on. A window that `Clamp` shrank to the height of the work area, 2088
+  pixels, was shown down to pixel 2135 with a standard title bar, whose height the client size
+  leaves out, and to 2090 with an extended one. At an edge that two displays share the window is on
+  both and stays where it was. To do: let the backends report the frame that a window shows around
+  its position and its client size, which needs the native library of every platform, and let
+  `Clamp` take it. To decide: whether it is saved with the
+  placement, since the window that is restored is hidden and may be on another display then;
+  `NeoWindowPlacement` is a positional record that the JSON store reads with unknown members
+  refused.
 - **Window state was run on Windows only.** `NeoWindowStateController` saves the bounds that a window
   has in its normal state, and reads the window once it was left alone for its delay. That is what
   keeps the normal bounds of a window that the user maximizes: Windows tells a window of its new
