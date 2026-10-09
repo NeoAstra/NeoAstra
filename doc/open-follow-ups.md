@@ -53,7 +53,7 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   given. Not run either: macOS, where a window over two displays is shown on one of them when
   displays have separate Spaces, and which one that is for a window that is placed by its
   application is not known; and GTK.
-- **What a window shows of its frame was run on Windows only, and four runtimes predate it.**
+- **Visible-frame placement restoration was run on Windows only.**
   `neoastra_window_get_frame`, `NeoWindow.FrameBounds`, and the `NormalFrame` of a placement were
   written for the three backends on 2026-10-09. On Windows 11 at 150 percent, in a thread that is
   aware of the scale of its display and in one that is not, the live test
@@ -61,13 +61,12 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   of the work area and gets it back there: the position is 9 pixels to the left of the display in
   the first thread and 7 units in the second, with a standard title bar and with an extended one. The
   Windows backend takes what is drawn from `DWMWA_EXTENDED_FRAME_BOUNDS`, which it also gets for a
-  hidden window. The Cocoa backend was not compiled; the GTK backend, the common code, and the ABI
-  test were checked for syntax in WSL and not built or run. The `win-x64` and `win-arm64` runtimes in
-  `src/NeoAstra.Core/runtimes` were built on a development machine, the second one without being
-  run, and the macOS and Linux runtimes there are from before the change: with them `FrameBounds` is
-  the rectangle of `Position` and `ClientSize`, which is what it is with GTK anyway, and on macOS a
-  window that is shrunk to a work area still reaches below it by its title bar. To do: push, let
-  the `native` workflow build the six libraries, and commit them. To look at then: on macOS that the
+  hidden window. The `native` workflow built all six runtimes on 2026-10-09, and the binaries and
+  matching identity manifests in `src/NeoAstra.Core/runtimes` come from that successful run
+  ([37984789998](https://github.com/NeoAstra/NeoAstra/actions/runs/37984789998)). Native tests passed
+  on Windows x64, macOS x64/ARM64, and Linux x64/ARM64; Windows ARM64 was cross-compiled without
+  running its tests. Linux hardening and macOS sanitizer jobs also passed. The live placement
+  scenarios above still ran only on Windows. To look at: on macOS that the
   frame of a window with a standard title bar is taller than its client area by that title bar and
   that a window shrunk to the work area ends at it; with GTK whether a window shows anything around
   the size it reports, such as the shadow of a window that draws its own decorations. Not run: a
