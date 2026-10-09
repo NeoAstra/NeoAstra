@@ -48,27 +48,33 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   made-up displays. Not run: displays with different scales on Windows, where a restore sets the
   position and then the size of a window, and the window may change its scale between the two
   (`WM_DPICHANGED` resizes it to what the system suggests); `Clamp` also chooses the display from the
-  saved bounds and scales the size afterwards, so a window that was saved with another scale than
+  saved placement and scales the size afterwards, so a window that was saved with another scale than
   the one of that display can end up mostly on another display than the one whose scale it was
   given. Not run either: macOS, where a window over two displays is shown on one of them when
   displays have separate Spaces, and which one that is for a window that is placed by its
   application is not known; and GTK.
-- **Windows: `Clamp` takes the position and the client size of a window for its frame.** `Position`
-  is the corner of the frame that `GetWindowRect` reports (`sync_bounds` in
-  `native/src/windows/windows_backend.cpp`), which has a border that is not drawn. Seen on
-  Windows 11 at 150 percent with `DWMWA_EXTENDED_FRAME_BOUNDS` and a throwaway test, on 2026-10-09:
-  what a window shows is 9 pixels inside that frame on its left, right, and bottom sides, and not
-  inside it at the top, with a standard title bar and with an extended one. A window with its
-  visible edge at the left edge of the primary display had a position of -9, `Clamp` gave it 0, and
-  it was shown from pixel 9 on. A window that `Clamp` shrank to the height of the work area, 2088
-  pixels, was shown down to pixel 2135 with a standard title bar, whose height the client size
-  leaves out, and to 2090 with an extended one. At an edge that two displays share the window is on
-  both and stays where it was. To do: let the backends report the frame that a window shows around
-  its position and its client size, which needs the native library of every platform, and let
-  `Clamp` take it. To decide: whether it is saved with the
-  placement, since the window that is restored is hidden and may be on another display then;
-  `NeoWindowPlacement` is a positional record that the JSON store reads with unknown members
-  refused.
+- **What a window shows of its frame was run on Windows only, and four runtimes predate it.**
+  `neoastra_window_get_frame`, `NeoWindow.FrameBounds`, and the `NormalFrame` of a placement were
+  written for the three backends on 2026-10-09. On Windows 11 at 150 percent, in a thread that is
+  aware of the scale of its display and in one that is not, the live test
+  `WindowStateRestoresAWindowAtTheEdgeOfItsDisplay` puts the visible corner of a window at the corner
+  of the work area and gets it back there: the position is 9 pixels to the left of the display in
+  the first thread and 7 units in the second, with a standard title bar and with an extended one. The
+  Windows backend takes what is drawn from `DWMWA_EXTENDED_FRAME_BOUNDS`, which it also gets for a
+  hidden window. The Cocoa backend was not compiled; the GTK backend, the common code, and the ABI
+  test were checked for syntax in WSL and not built or run. The `win-x64` and `win-arm64` runtimes in
+  `src/NeoAstra.Core/runtimes` were built on a development machine, the second one without being
+  run, and the macOS and Linux runtimes there are from before the change: with them `FrameBounds` is
+  the rectangle of `Position` and `ClientSize`, which is what it is with GTK anyway, and on macOS a
+  window that is shrunk to a work area still reaches below it by its title bar. To do: push, let
+  the `native` workflow build the six libraries, and commit them. To look at then: on macOS that the
+  frame of a window with a standard title bar is taller than its client area by that title bar and
+  that a window shrunk to the work area ends at it; with GTK whether a window shows anything around
+  the size it reports, such as the shadow of a window that draws its own decorations. Not run: a
+  restore onto a display with another scale, where the frame is scaled as the size is, which is
+  about what the window then shows, until the window is seen in its normal state again. A file that
+  holds a frame is refused by NeoAstra 1.2 and earlier, whose JSON store allows no member it does not
+  know: the placement is lost once for an application that goes back to such a version.
 - **Window state was run on Windows only.** `NeoWindowStateController` saves the bounds that a window
   has in its normal state, and reads the window once it was left alone for its delay. That is what
   keeps the normal bounds of a window that the user maximizes: Windows tells a window of its new

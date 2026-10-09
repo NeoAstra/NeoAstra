@@ -215,10 +215,15 @@ with GTK it is a whole number. Display snapshots are in logical units, and
 `NeoWindowStateRestore.Clamp` compares a window with them in the units of the window.
 On Windows the frame that `Position` is the corner of has a border that is not drawn on its left,
 right, and bottom sides, 9 pixels wide at 150 percent, so a window whose visible edge is at the left
-edge of a display has a position that many pixels to the left of it. `Clamp` does not know the frame
-of a window and takes its position and its client size for the window: a window that was at the left
-edge of the leftmost display comes back moved to the right by that border. At an edge that two
-displays share the window is on both of them, and stays where it was.
+edge of a display has a position that many pixels to the left of it. `NeoWindow.FrameBounds` is the
+rectangle that the window shows, in the same units: its frame with its title bar and without those
+borders. On macOS it is the frame of the window, which has a standard title bar above the client
+area, and with GTK it is the rectangle of `Position` and `ClientSize`. It is known for a hidden
+window, and it is read on the thread of the window. `NeoWindowStateController` saves it with a
+placement, and `Clamp` compares it with the displays; see
+[persistence and secrets](desktop-services.md#persistence-and-secrets). With a native library from
+before `neoastra_window_get_frame` the value is the rectangle of `Position` and `ClientSize` on every
+platform.
 On Windows a minimized window reports a position of -32000 by -32000 and a client size of 0 by 0, as
 Win32 does. `NeoWindowStateController` saves the bounds that such a window goes back to.
 

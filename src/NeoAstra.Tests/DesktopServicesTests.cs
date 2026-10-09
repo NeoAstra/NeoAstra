@@ -1033,6 +1033,165 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public async Task WindowStateFitsWhatAWindowShowsOfItsFrame()
+    {
+        static NeoDisplaySnapshot Display(string id, NeoRect bounds, double scale = 1, bool primary = false, int taskbar = 0) => new(id, bounds, new NeoRect(bounds.X, bounds.Y, bounds.Width, bounds.Height - taskbar), scale, primary, null, null);
+        static NeoWindowPlacement Saved(NeoRect bounds, NeoRect? frame, double scale = 1) => new(bounds, NeoWindowState.Normal, null, scale, true) { NormalFrame = frame };
+        static NeoWindowPlacement Pixels(NeoWindowPlacement saved, params NeoDisplaySnapshot[] displays) => NeoWindowStateRestore.Clamp(saved, displays, restoreMinimized: false, countsInDisplayPixels: true);
+        static NeoWindowPlacement Logical(NeoWindowPlacement saved, params NeoDisplaySnapshot[] displays) => NeoWindowStateRestore.Clamp(saved, displays, restoreMinimized: false, countsInDisplayPixels: false);
+        // A window on Windows at 150 percent: its position is the corner of a frame whose left, right, and bottom borders of
+        // 9 pixels are not drawn, and its client size leaves out those borders and a title bar of 47 pixels.
+        static NeoRect Shown(NeoRect bounds) => new(bounds.X + 9, bounds.Y, bounds.Width + 4, bounds.Height + 47);
+
+        // A display of 3840 by 2160 pixels at 150 percent with a work area of 3840 by 2088 pixels.
+        var one = Display("one", new NeoRect(0, 0, 2560, 1440), 1.5, primary: true, taskbar: 48);
+        // A window whose visible edge is at the left edge of the display has a position to the left of it. It used to be
+        // moved to the right by the border, as a placement that tells no frame still is.
+        var flush = new NeoRect(-9, 100, 900, 600);
+        var kept = Pixels(Saved(flush, Shown(flush), 1.5), one);
+        Assert.AreEqual(flush, kept.NormalBounds);
+        Assert.AreEqual(Shown(flush), kept.NormalFrame);
+        var unknown = Pixels(Saved(flush, null, 1.5), one);
+        Assert.AreEqual(new NeoRect(0, 100, 900, 600), unknown.NormalBounds);
+        Assert.IsNull(unknown.NormalFrame);
+
+        // What the window shows ends at the right edge of the display: the frame is 13 pixels beyond its client area there.
+        var right = new NeoRect(3840 - 913, 100, 900, 600);
+        Assert.AreEqual(right, Pixels(Saved(right, Shown(right), 1.5), one).NormalBounds);
+        Assert.AreEqual(right, Pixels(Saved(right with { X = 3000 }, Shown(right with { X = 3000 }), 1.5), one).NormalBounds);
+        // Without a frame the client area is what ends there.
+        Assert.AreEqual(new NeoRect(3840 - 900, 100, 900, 600), Pixels(Saved(right with { X = 3000 }, null, 1.5), one).NormalBounds);
+
+        // A window that is shrunk to the work area is shrunk with its title bar, which used to reach below it.
+        var tall = new NeoRect(100, 0, 900, 5000);
+        var shrunk = Pixels(Saved(tall, Shown(tall), 1.5), one);
+        Assert.AreEqual(new NeoRect(100, 0, 900, 2088 - 47), shrunk.NormalBounds);
+        Assert.AreEqual(new NeoRect(109, 0, 904, 2088), shrunk.NormalFrame);
+
+        // A window that is snapped to the left half of a second display shows nothing on the first one, where its frame
+        // begins: it is on the second display, and stays where it is.
+        var two = Display("two", new NeoRect(2560, 0, 2560, 1440), 1.5, taskbar: 48);
+        var snapped = new NeoRect(3831, 0, 1916, 2041);
+        Assert.AreEqual(new NeoRect(3840, 0, 1920, 2088), Shown(snapped));
+        var half = Pixels(Saved(snapped, Shown(snapped), 1.5), one, two);
+        Assert.AreEqual(snapped, half.NormalBounds);
+        Assert.AreEqual("two", half.DisplayId);
+        // A window over both displays is compared by what it shows as well.
+        var over = new NeoRect(-9, 0, 7676, 2041);
+        Assert.AreEqual(over, Pixels(Saved(over, Shown(over), 1.5), one, two).NormalBounds);
+
+        // On a display with another scale the frame follows the scale as the size does: 6 pixels for 9, and 3 and 31 for 4 and 47.
+        var plain = Display("plain", new NeoRect(0, 0, 1920, 1080), primary: true);
+        var rescaled = Pixels(Saved(new NeoRect(-9, 100, 1200, 900), Shown(new NeoRect(-9, 100, 1200, 900)), 1.5), plain);
+        Assert.AreEqual(new NeoRect(-6, 100, 800, 600), rescaled.NormalBounds);
+        Assert.AreEqual(new NeoRect(0, 100, 803, 631), rescaled.NormalFrame);
+        // A change of scale that takes the frame further from the bounds than a store accepts leaves the frame out.
+        var huge = Pixels(Saved(flush, Shown(flush), 0.25), Display("huge", new NeoRect(0, 0, 4000, 4000), 16, primary: true));
+        Assert.AreEqual(new NeoSize(900 * 64, 600 * 64), huge.NormalBounds.Size);
+        Assert.IsNull(huge.NormalFrame);
+
+        // A window counted in logical units with a title bar of 28 units above its client area, as on macOS.
+        var desk = Display("desk", new NeoRect(0, 0, 1440, 900), 2, primary: true);
+        var titled = new NeoRect(100, 0, 800, 2000);
+        var fitted = Logical(Saved(titled, titled with { Height = 2028 }, 2), desk);
+        Assert.AreEqual(new NeoRect(100, 0, 800, 900 - 28), fitted.NormalBounds);
+        Assert.AreEqual(new NeoRect(100, 0, 800, 900), fitted.NormalFrame);
+
+        // A frame that is nowhere near the bounds is not one, for Clamp and for a store.
+        var far = Saved(flush, flush with { X = 5000 }, 1.5);
+        Assert.Throws<ArgumentException>(() => NeoWindowStateRestore.Clamp(far, [one]));
+        Assert.Throws<ArgumentException>(() => NeoJsonWindowStateStore.ValidatePlacement(far));
+        Assert.Throws<ArgumentException>(() => NeoJsonWindowStateStore.ValidatePlacement(Saved(flush, flush with { Width = 0 }, 1.5)));
+
+        // The frame is kept with the placement. A placement without one is written as before, and one that was written
+        // before is read without one.
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var store = new NeoJsonWindowStateStore(root);
+            await store.SaveAsync("framed", Saved(flush, Shown(flush), 1.5));
+            Assert.AreEqual(Saved(flush, Shown(flush), 1.5), await store.LoadAsync("framed"));
+            StringAssert.Contains(await File.ReadAllTextAsync(Path.Combine(root, "framed.json")), "\"normalFrame\"");
+            await store.SaveAsync("plain", Saved(flush, null, 1.5));
+            Assert.IsFalse((await File.ReadAllTextAsync(Path.Combine(root, "plain.json"))).Contains("normalFrame", StringComparison.Ordinal));
+            Assert.AreEqual(Saved(flush, null, 1.5), await store.LoadAsync("plain"));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowStateRestoresAWindowAtTheEdgeOfItsDisplay()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            foreach (var aware in new[] { true, false })
+            {
+                await RunStaAsync(() =>
+                {
+                    if (aware) SetThreadDpiAwarenessContext(-4);
+                    return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window state test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                    {
+                        var displays = NeoSystemInfoPlatform.ReadInitialDisplays();
+                        var primary = displays.First(static display => display.IsPrimary);
+                        // The work area of the primary display in the units of a window.
+                        int left = (int)Math.Round(primary.WorkArea.X * primary.ScaleFactor), top = (int)Math.Round(primary.WorkArea.Y * primary.ScaleFactor);
+                        var bottom = (int)Math.Round((primary.WorkArea.Y + primary.WorkArea.Height) * primary.ScaleFactor);
+                        var store = new NeoJsonWindowStateStore(Path.Combine(root, aware ? "aware" : "unaware"));
+                        foreach (var style in new[] { NeoWindowTitleBarStyle.Default, NeoWindowTitleBarStyle.Overlay })
+                        {
+                            NeoRect bounds, frame;
+                            await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Manual, X = left + 200, Y = top + 100, Width = 640, Height = 420, TitleBar = new NeoWindowTitleBar(style) }))
+                            {
+                                // What the window shows holds its client area, begins at the top of its frame, and is known while it is hidden.
+                                bounds = new NeoRect(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height);
+                                frame = window.FrameBounds;
+                                Assert.IsTrue(frame.X >= bounds.X && frame.Y == bounds.Y && frame.Width >= bounds.Width && frame.Height >= bounds.Height, $"{frame} around {bounds}, {style}, aware {aware}");
+                                // The user puts the visible corner of the window at the corner of the work area: where the frame
+                                // has a border that is not drawn, the position is to the left of the display.
+                                window.Position = new NeoPoint(left - (frame.X - bounds.X), top);
+                                Assert.AreEqual(new NeoPoint(left, top), window.FrameBounds.Position, $"{style}, aware {aware}");
+                                bounds = bounds with { X = window.Position.X, Y = window.Position.Y };
+                                frame = window.FrameBounds;
+                                await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                            }
+
+                            var saved = await store.LoadAsync("main");
+                            Assert.IsNotNull(saved);
+                            Assert.AreEqual(bounds, saved.NormalBounds);
+                            Assert.AreEqual(frame, saved.NormalFrame);
+
+                            // What the next launch does: the window comes back where it was, not moved by the border.
+                            await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300, TitleBar = new NeoWindowTitleBar(style) }))
+                            {
+                                await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                                var restored = await controller.RestoreAsync(displays);
+                                Assert.IsNotNull(restored);
+                                Assert.AreEqual(bounds, new NeoRect(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height), $"{style}, aware {aware}");
+                                Assert.AreEqual(frame, window.FrameBounds, $"{style}, aware {aware}");
+                                Assert.AreEqual(frame, restored.NormalFrame);
+
+                                // A window that was taller than the work area is shrunk to it with its title bar.
+                                var tall = NeoWindowStateRestore.Clamp(saved with { NormalBounds = bounds with { Height = 9000 }, NormalFrame = frame with { Height = frame.Height + 9000 - bounds.Height } }, [primary]);
+                                window.Position = tall.NormalBounds.Position;
+                                window.ClientSize = tall.NormalBounds.Size;
+                                Assert.AreEqual(tall.NormalFrame, window.FrameBounds, $"{style}, aware {aware}");
+                                Assert.AreEqual(bottom, window.FrameBounds.Y + window.FrameBounds.Height, $"{style}, aware {aware}");
+                            }
+                        }
+
+                        application.Shutdown(0);
+                    });
+                });
+            }
+        }
+        catch (NeoAstraNativeLibraryException) { }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     [Timeout(60000)]
     public async Task WindowStateRestoresAWindowOverTwoDisplays()
     {
@@ -1105,6 +1264,10 @@ public sealed class DesktopServicesTests
                 var store = new RecordingWindowStateStore(new NeoJsonWindowStateStore(root));
                 var delay = TimeSpan.FromMilliseconds(50);
                 var normal = new NeoRect(120, 90, 640, 420);
+                // What the window shows at its normal bounds, which a placement keeps with them and around them.
+                var shown = normal;
+                NeoWindowPlacement Placement(NeoRect bounds, NeoWindowState state, double scale)
+                    => new(bounds, state, null, scale, true) { NormalFrame = new NeoRect(bounds.X + shown.X - normal.X, bounds.Y + shown.Y - normal.Y, bounds.Width + shown.Width - normal.Width, bounds.Height + shown.Height - normal.Height) };
 
                 // What the store holds once a change had the time to be written.
                 async Task<NeoWindowPlacement> SavedAsync()
@@ -1124,19 +1287,20 @@ public sealed class DesktopServicesTests
                 await using (var window = application.CreateWindow(new NeoWindowOptions { StartupLocation = NeoWindowStartupLocation.Manual, X = normal.X, Y = normal.Y, Width = normal.Width, Height = normal.Height }))
                 {
                     window.Show();
+                    shown = window.FrameBounds;
                     await using var controller = new NeoWindowStateController(window, store, "main", delay);
                     Command(window, maximize);
                     Assert.AreEqual(NeoWindowState.Maximized, window.State);
                     // The bounds of a maximized window used to be saved as the ones it goes back to.
-                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, window.ScaleFactor, true), await SavedAsync(), "maximized");
+                    Assert.AreEqual(Placement(normal, NeoWindowState.Maximized, window.ScaleFactor), await SavedAsync(), "maximized");
 
                     // A minimized window has no size, which a store refuses: it goes back to the state it had, at its normal bounds.
                     Command(window, minimize);
                     Assert.AreEqual(NeoWindowState.Minimized, window.State);
-                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, window.ScaleFactor, true), await SavedAsync(), "minimized");
+                    Assert.AreEqual(Placement(normal, NeoWindowState.Maximized, window.ScaleFactor), await SavedAsync(), "minimized");
                 }
 
-                Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, 1, true), await store.LoadAsync("main"), "closed");
+                Assert.AreEqual(Placement(normal, NeoWindowState.Maximized, 1), await store.LoadAsync("main"), "closed");
 
                 // Second launch: the window comes back maximized and stays so.
                 await using (var window = application.CreateWindow(new NeoWindowOptions { Width = 400, Height = 300 }))
@@ -1148,7 +1312,7 @@ public sealed class DesktopServicesTests
                     Assert.AreEqual(normal, (await SavedAsync()).NormalBounds, "restored");
                 }
 
-                Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Maximized, null, 1, true), await store.LoadAsync("main"), "closed maximized");
+                Assert.AreEqual(Placement(normal, NeoWindowState.Maximized, 1), await store.LoadAsync("main"), "closed maximized");
 
                 // Third launch: the user leaves the maximized state, and the window has its normal bounds back.
                 await using (var window = application.CreateWindow(new NeoWindowOptions { Width = 400, Height = 300 }))
@@ -1159,7 +1323,7 @@ public sealed class DesktopServicesTests
                     Command(window, restore);
                     Assert.AreEqual(NeoWindowState.Normal, window.State);
                     Assert.AreEqual(normal, new NeoRect(window.Position.X, window.Position.Y, window.ClientSize.Width, window.ClientSize.Height));
-                    Assert.AreEqual(new NeoWindowPlacement(normal, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "no longer maximized");
+                    Assert.AreEqual(Placement(normal, NeoWindowState.Normal, 1), await SavedAsync(), "no longer maximized");
 
                     // The normal bounds follow the window while it is in its normal state.
                     window.ClientSize = new NeoSize(700, 500);
@@ -1167,12 +1331,12 @@ public sealed class DesktopServicesTests
                     Assert.AreEqual(resized, (await SavedAsync()).NormalBounds, "resized");
 
                     window.State = NeoWindowState.Fullscreen;
-                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Fullscreen, null, 1, true), await SavedAsync(), "fullscreen");
+                    Assert.AreEqual(Placement(resized, NeoWindowState.Fullscreen, 1), await SavedAsync(), "fullscreen");
                     window.State = NeoWindowState.Normal;
-                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "no longer fullscreen");
+                    Assert.AreEqual(Placement(resized, NeoWindowState.Normal, 1), await SavedAsync(), "no longer fullscreen");
 
                     Command(window, minimize);
-                    Assert.AreEqual(new NeoWindowPlacement(resized, NeoWindowState.Normal, null, 1, true), await SavedAsync(), "minimized from normal");
+                    Assert.AreEqual(Placement(resized, NeoWindowState.Normal, 1), await SavedAsync(), "minimized from normal");
                 }
 
                 // The store was never handed a placement that it refuses.
