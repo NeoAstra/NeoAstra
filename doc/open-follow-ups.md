@@ -158,7 +158,8 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   macOS, which needs a host where pages load.
 - **Automation: the size of a page was checked on one display scale.** `resize_page` takes a CSS pixel
   of a page for as many units of its window as the zoom of the view says on macOS and Linux: the
-  `magnification` of a WKWebView, the zoom level of a WebKitGTK view. The conformance scenario
+  `pageZoom` of a WKWebView (its `magnification` until 2026-10-12, see the entry on the zoom of a
+  view below), the zoom level of a WebKitGTK view. The conformance scenario
   "screenshots, coordinates, and resizing in a shown window" checks it with a page of 400 by 300 CSS
   pixels in a view zoomed to 200 percent. With that scenario, the one for an element with an
   EditContext, and the one for the scale and the size of a window, the harness run with
@@ -166,17 +167,35 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   skipped), on Ubuntu 24.04 x64 with WebKitGTK 2.52 in a WSL 2 desktop session (31 passed, 19 skipped;
   the EditContext scenario is one of the skipped, because WebKit has no EditContext), and on the three
   runners of the conformance workflow, where macOS ran it for the first time on 2026-10-07, on
-  `macos-15-intel` with WKWebView (31 passed, 20 skipped). That `innerWidth` of a magnified WKWebView
-  shrinks by the magnification follows from the WebKit source, where
-  `LocalFrameView::mapFromLayoutToCSSUnits` divides the size of the view by the page zoom and by the
-  scale of the frame; the scenario passes there, which does not tell whether the first try gave the
-  size or a later one. On Windows the harness is not aware of the scale of its display, so
+  `macos-15-intel` with WKWebView (31 passed, 20 skipped), which magnified the view then. That
+  `innerWidth` of a WKWebView shrinks by its page zoom and by its magnification follows from the WebKit
+  source, where `LocalFrameView::mapFromLayoutToCSSUnits` divides the size of the view by the page zoom
+  and by the scale of the frame, and was measured on macOS 26: a view of 800 units reports 400 at a page
+  zoom of 2 and 533 at a magnification of 1.5. The scenario passes on both systems, which does not tell
+  whether the first try gave the size or a later one. On Windows the harness is not aware of the scale
+  of its display, so
   the unit test `ResizePageGivesThePageItsSizeWhereAWindowIsCountedInThePixelsOfItsDisplay` is what
   runs a window counted in pixels. It ran on a display at 150 percent. The scales of 100, 125, 175,
   200, and 250 percent were forced on WebView2 with `--force-device-scale-factor` in a throwaway host,
   and each page size from 300 to 420 CSS pixels asked for: all of them were shown, but for the sizes
   of 4n + 1 CSS pixels at 125 percent, which no window size gave. To do: run the unit test on a
   display at another scale.
+- **macOS: the zoom of a view was fixed and run on macOS 26 arm64 only.** Since 2026-10-12
+  `neo_platform_view_get_zoom_factor` and `neo_platform_view_set_zoom_factor` in
+  `native/src/macos/cocoa_backend.mm` read and write `WKWebView.pageZoom` instead of `magnification`,
+  and `neo_platform_view_capture` scales a region by the page zoom times the magnification. Run on
+  macOS 26 arm64: `ctest` with the new `neoastra_macos_zoom_tests`, the unit tests, and the conformance
+  harness with the new scenario "the zoom of a view lays its page out again and stays with the view"
+  and a screenshot and a click in a view zoomed to 200 percent (36 passed, 21 skipped). The `osx-arm64`
+  runtime under `src/NeoAstra.Core/runtimes` was rebuilt on that machine. To do: rebuild the `osx-x64`
+  runtime with the native workflow, which still magnifies until then, and run the conformance workflow.
+  The two conformance checks are new on Windows and Linux too and were not run there: with WebView2
+  and WebKitGTK the page of a zoomed view is expected to be laid out in the size at 100 percent divided
+  by the zoom, within 2 CSS pixels, with `visualViewport.scale` at 1, and the screenshot of an element
+  of 80 by 40 CSS pixels at 200 percent to have that size times twice the scale of the display, or one
+  CSS pixel more. Not run anywhere: a region captured after a pinch, which no test can make; a
+  throwaway program that set `magnification` to 1.5 beside a page zoom of 2 got the element with the
+  product of both, and a part of it with the page zoom alone.
 - **macOS: `NavigationCompleted` can arrive before the module scripts of a page have run.** The Cocoa
   backend relays WKWebView's own notification; see the paragraph on `NavigationCompleted` under
   [backend capability differences](known-limitations.md#backend-capability-differences). To decide: whether the backend

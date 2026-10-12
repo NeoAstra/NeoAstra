@@ -597,6 +597,90 @@ internal static partial class Program
                 }
             });
 
+            if (IsSupported(environment, NeoCapability.Zoom))
+            {
+                await RunCaseAsync("the zoom of a view lays its page out again and stays with the view", async () =>
+                {
+                    var window = application.CreateWindow(new NeoWindowOptions { Title = "NeoAstra zoom conformance", Width = 480, Height = 360, IsVisible = false, ShowInTaskbar = false });
+                    try
+                    {
+                        await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window));
+                        window.Show();
+                        await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
+
+                        async ValueTask<(int Width, int Height, double VisualScale)> PageAsync()
+                        {
+                            using var page = await EvaluateJsonAsync(view, "[innerWidth, innerHeight, visualViewport.scale]");
+                            return (page.RootElement[0].GetInt32(), page.RootElement[1].GetInt32(), page.RootElement[2].GetDouble());
+                        }
+
+                        // The size of the page at 100 percent, once it is as wide as its window.
+                        var full = await PageAsync();
+                        var settled = Stopwatch.StartNew();
+                        while (settled.Elapsed < TimeSpan.FromSeconds(5) && Math.Abs(window.ClientSize.Width / (OperatingSystem.IsWindows() ? window.ScaleFactor : 1) - full.Width) > 1)
+                        {
+                            await Task.Delay(50);
+                            full = await PageAsync();
+                        }
+
+                        Require(full is { Width: > 0, Height: > 0 } && Math.Abs(full.VisualScale - 1) < 0.001, $"A page at 100 percent is {full.Width} by {full.Height} with a visual viewport scaled by {full.VisualScale}.");
+
+                        // A zoom changes the size that the page is laid out in, and the page still fills its view: the picture of
+                        // a page that kept its layout, drawn smaller or larger, would have a visual viewport with another scale.
+                        async ValueTask RequireZoomedAsync(double zoom, string when)
+                        {
+                            Require(Math.Abs(view.ZoomFactor - zoom) < 0.001, $"A view {when} reports a zoom of {view.ZoomFactor}.");
+                            var deadline = Stopwatch.StartNew();
+                            while (true)
+                            {
+                                var page = await PageAsync();
+                                if (Math.Abs(page.Width - full.Width / zoom) <= 2 && Math.Abs(page.Height - full.Height / zoom) <= 2 && Math.Abs(page.VisualScale - 1) < 0.001) return;
+                                if (deadline.Elapsed > TimeSpan.FromSeconds(5))
+                                {
+                                    throw new InvalidOperationException($"A page of {full.Width} by {full.Height} at 100 percent is {page.Width} by {page.Height} with a visual viewport scaled by {page.VisualScale} {when}.");
+                                }
+
+                                await Task.Delay(50);
+                            }
+                        }
+
+                        view.ZoomFactor = 0.5;
+                        await RequireZoomedAsync(0.5, "zoomed to 50 percent");
+                        view.ZoomFactor = 2;
+                        await RequireZoomedAsync(2, "zoomed to 200 percent");
+
+                        // The zoom is the one of the view: a new document and a reload keep it.
+                        await NavigateAndWaitAsync(view, SecondUri, options.Timeout);
+                        await RequireZoomedAsync(2, "zoomed to 200 percent, in a new document");
+                        var reloaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        void OnReloaded(object? sender, NeoNavigationCompletedEventArgs args) => reloaded.TrySetResult();
+                        view.NavigationCompleted += OnReloaded;
+                        try
+                        {
+                            view.Reload();
+                            await reloaded.Task.WaitAsync(options.Timeout);
+                        }
+                        finally
+                        {
+                            view.NavigationCompleted -= OnReloaded;
+                        }
+
+                        await RequireZoomedAsync(2, "zoomed to 200 percent, after a reload");
+
+                        view.ResetZoom();
+                        await RequireZoomedAsync(1, "whose zoom was reset");
+                    }
+                    finally
+                    {
+                        await window.DisposeAsync();
+                    }
+                });
+            }
+            else
+            {
+                Skip("the zoom of a view lays its page out again and stays with the view", CapabilityReason(environment, NeoCapability.Zoom));
+            }
+
             await RunCaseAsync("rapid navigation cancellation and recovery", async () =>
             {
                 var window = CreateHiddenWindow("NeoAstra navigation cancellation conformance");

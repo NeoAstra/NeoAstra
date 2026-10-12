@@ -158,7 +158,7 @@ engine default. Each property can also be set on its own; `null` keeps the engin
 | `DevTools` | User access to DevTools | Switchable; on by default | Switchable; off by default | Switchable; off by default |
 | `ScriptDialogs` | The engine's own `alert`, `confirm`, `prompt`, and `beforeunload` dialogs | Switchable; on by default | Engine has none | Switchable; off by default |
 | `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
-| `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification; off by default | Engine has none |
+| `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification, which is not part of `ZoomFactor`; on by default | Engine has none |
 | `TabFocusesLinks` | The Tab key stopping on links | Always on; cannot be turned off | Switchable; off by default | Switchable; on by default |
 | `HistoryNavigation` | Loading a document of the history again: back and forward, whatever asks for it | Switchable; on by default. WebView2 Runtime 115 or later | Switchable; on by default | Switchable; on by default |
 

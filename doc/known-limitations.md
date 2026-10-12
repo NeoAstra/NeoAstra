@@ -169,10 +169,22 @@ captures through its DevTools protocol, which draws a frame only for a visible v
 hidden window fails with `InvalidOperationException` there; pass a cancellation token that bounds the
 wait on the other backends. WKWebView has no call for the part of a document outside the viewport, so
 `FullPage` reports `NotSupportedException` on macOS; query `NeoCapability.CaptureFullPage`. On macOS a
-region is scaled by the magnification only, which is exact while the view is not panned. The capture of
-the viewport and of a region was run on Windows 11, on macOS 15, and with WebKitGTK 2.52, and the
+region is scaled by the zoom of the view and by the magnification of a pinch, which is exact while the
+user has not panned a page that they magnified. The capture of the viewport and of a region was run on Windows 11, on macOS 15, and with WebKitGTK 2.52, and the
 capture of a whole document on Windows 11 and with WebKitGTK 2.52, by the screenshot scenario of the
-conformance harness.
+conformance harness. That scenario also captures an element in a view zoomed to 200 percent, which was
+run on macOS 26 only.
+
+`NeoAstra.ZoomFactor` is the page zoom of the engine on every backend: the `ZoomFactor` of WebView2,
+the `pageZoom` of WKWebView, and the zoom level of WebKitGTK. The page is laid out again in a viewport
+of the size of the view divided by the zoom, so a view of 1280 by 860 logical units at 90 percent shows
+a page of 1422 by 955 CSS pixels that fills it, and `visualViewport.scale` stays 1. The zoom belongs to
+the view: it can be set before the first document, and a new document, a reload, and on macOS a web
+content process that was started again keep it. On macOS the pinch of a trackpad is something else: it
+magnifies the picture of a page that keeps its layout, as it does in Safari, it is not part of
+`ZoomFactor`, and `NeoBrowserFeatures.ZoomControls` turns it off. Up to NeoAstra 1.3.0 the macOS
+backend set that magnification for `ZoomFactor`, so a zoom below 100 percent left a part of the view
+empty, and a new document or a reload set it back to 100 percent.
 
 `NeoAutomation` works inside the page with standard DOM APIs, because the three engines share no
 debugging protocol. Its input is dispatched as untrusted DOM events, its console and network lists hold

@@ -467,6 +467,25 @@ internal static partial class Program
                             try
                             {
                                 await ResizeAsync(400, 300, "in a view zoomed to 200 percent");
+
+                                // Coordinates and regions stay in the CSS pixels of the page, each of which takes twice as
+                                // much of the view now, and an image has twice as many pixels for each of them.
+                                var zoomedScale = 2 * scale;
+                                var zoomed = await driver.CallToolAsync("take_screenshot", $$"""{"uid":"{{driver.Uid("image \"Blue swatch\"")}}"}""");
+                                Require(zoomed.Images.Count == 1, $"The screenshot of an element in a zoomed view has no image: {zoomed.Text}");
+                                pixels = TestPng.Decode(zoomed.Images[0].Data.Span);
+                                // The region of an element is the whole CSS pixels that it touches, and a zoomed page may
+                                // place an element at a part of a CSS pixel: the image may show one more of them in each direction.
+                                Require(pixels.Width - 80 * zoomedScale >= -2 && pixels.Width - 80 * zoomedScale <= zoomedScale + 2 && pixels.Height - 40 * zoomedScale >= -2 && pixels.Height - 40 * zoomedScale <= zoomedScale + 2,
+                                    $"The screenshot of an 80 by 40 element is {pixels.Width} by {pixels.Height} at scale {zoomedScale} in a view zoomed to 200 percent.");
+                                var inset = (int)Math.Ceiling(zoomedScale) + 2;
+                                RequireColor(pixels.GetPixel(pixels.Width / 2, pixels.Height / 2), white: false, "the middle of the blue element in a zoomed view");
+                                RequireColor(pixels.GetPixel(inset, inset), white: false, "the corner of the blue element in a zoomed view");
+                                RequireColor(pixels.GetPixel(pixels.Width - 1 - inset, pixels.Height - 1 - inset), white: false, "the opposite corner of the blue element in a zoomed view");
+
+                                using var zoomedCenter = JsonDocument.Parse(await driver.EvaluateAsync("() => { const box = document.getElementById('counter'); box.scrollIntoView(); const rect = box.getBoundingClientRect(); return [Math.round(rect.left + rect.width / 2), Math.round(rect.top + rect.height / 2)]; }"));
+                                await driver.CallAsync("click_at", $$"""{"x":{{zoomedCenter.RootElement[0].GetInt32()}},"y":{{zoomedCenter.RootElement[1].GetInt32()}}}""");
+                                Require(await driver.EvaluateAsync("() => document.getElementById('counter').textContent") == "\"Clicked 2 times\"", "A click at coordinates in a zoomed view did not reach the element that is there.");
                             }
                             finally
                             {

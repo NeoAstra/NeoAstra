@@ -70,6 +70,12 @@ public sealed class NeoAstra : IAsyncDisposable
     public bool CanGoForward => _canGoForward && !_historyNavigationOff;
 
     /// <summary>Gets or sets the page zoom factor, where <c>1.0</c> is 100 percent.</summary>
+    /// <remarks>
+    /// The zoom lays the page out again, as the zoom of a browser does: the page gets a viewport of the size of the view
+    /// divided by the zoom, and fills the view. The zoom belongs to the view: it can be set before the first document,
+    /// and a new document or a reload keeps it. On macOS a pinch of the user magnifies the picture of a page that keeps
+    /// its layout, and is not part of this value; <see cref="NeoBrowserFeatures.ZoomControls"/> turns the pinch off.
+    /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">The assigned value is outside the portable range from 0.25 through 5.0.</exception>
     public unsafe double ZoomFactor
     {
