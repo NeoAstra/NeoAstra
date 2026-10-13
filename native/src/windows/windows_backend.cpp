@@ -2381,8 +2381,6 @@ neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastr
                     double x{}, y{}, width{}, height{};
                     if (state->options.full_page) {
                         if (!protocol_number(json, L"cssContentSize", L"width", width) || !protocol_number(json, L"cssContentSize", L"height", height)) { state->complete(NEOASTRA_ERROR_NATIVE_FAILURE, nullptr, "WebView2 returned no document size", E_UNEXPECTED); return S_OK; }
-                        width = std::min(width, maximum_capture_dimension);
-                        height = std::min(height, maximum_capture_dimension);
                     } else {
                         double page_x{}, page_y{}, client_width{}, client_height{};
                         if (!protocol_number(json, L"cssVisualViewport", L"pageX", page_x) || !protocol_number(json, L"cssVisualViewport", L"pageY", page_y) ||
@@ -2393,6 +2391,15 @@ neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastr
                         x = page_x + left; y = page_y + top; width = right - left; height = bottom - top;
                     }
                     if (!(width >= 1.0) || !(height >= 1.0)) { state->complete(NEOASTRA_ERROR_INVALID_ARGUMENT, nullptr, "The capture region is outside the visible viewport", E_INVALIDARG); return S_OK; }
+                    // The protocol counts a clip in the units of the view at a zoom of 100 percent, of which a CSS pixel of a
+                    // zoomed page takes as many as the zoom says: a clip in CSS pixels shows another part of such a page.
+                    double zoom{};
+                    if (!protocol_number(json, L"cssVisualViewport", L"zoom", zoom) || !(zoom > 0.0)) zoom = 1.0;
+                    x *= zoom; y *= zoom; width *= zoom; height *= zoom;
+                    if (state->options.full_page) {
+                        width = std::min(width, maximum_capture_dimension);
+                        height = std::min(height, maximum_capture_dimension);
+                    }
                     std::wstring clip = L",\"clip\":{\"x\":";
                     append_protocol_number(clip, x);
                     clip += L",\"y\":";

@@ -126,6 +126,64 @@ public sealed class CaptureTests
         });
     }
 
+    // WebView2 counts the clip of a capture in the units of the view at a zoom of 100 percent. A region in CSS pixels used
+    // to go to it as it was: in a view zoomed to 200 percent the image showed a part of the page that was half as large,
+    // and elsewhere, and a capture of the whole document its top-left quarter. The second run is the view of an application
+    // that is aware of the scale of its display, where a CSS pixel also takes as many pixels as that scale says.
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RegionAndFullPageCapturesOfAZoomedViewShowThePage(bool perMonitorDpiAware)
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["capture.html"] = CapturePage }, async session =>
+        {
+            var view = session.View;
+            await session.NavigateAsync("capture.html");
+            var displayScale = double.Parse((await view.EvaluateScriptAsync("devicePixelRatio", session.CancellationToken))!, System.Globalization.CultureInfo.InvariantCulture);
+            var documentHeight = int.Parse((await view.EvaluateScriptAsync("document.documentElement.scrollHeight", session.CancellationToken))!);
+            try
+            {
+                foreach (var zoom in new[] { 2d, 1.5d, 0.5d })
+                {
+                    session.Stage = $"zoom to {zoom * 100:F0} percent";
+                    view.ZoomFactor = zoom;
+                    // An image has as many pixels for a CSS pixel as the zoom times the scale of the display says.
+                    var scale = zoom * displayScale;
+                    await session.WaitUntilAsync(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Math.abs(devicePixelRatio - {scale}) < 0.01"));
+
+                    session.Stage = $"region capture at {zoom * 100:F0} percent";
+                    var region = await view.CaptureAsync(new NeoCaptureOptions { Region = new NeoRect(20, 30, 100, 50) }, session.CancellationToken);
+                    var pixels = TestPng.Decode(region.Data.Span);
+                    Assert.AreEqual(100 * scale, pixels.Width, 1);
+                    Assert.AreEqual(50 * scale, pixels.Height, 1);
+                    AssertColor((255, 0, 0), pixels.GetPixel(1, 1), $"top-left of the region at {zoom * 100:F0} percent");
+                    AssertColor((255, 0, 0), pixels.GetPixel(pixels.Width - 2, pixels.Height - 2), $"bottom-right of the region at {zoom * 100:F0} percent");
+
+                    var around = await view.CaptureAsync(new NeoCaptureOptions { Region = new NeoRect(0, 0, 140, 100) }, session.CancellationToken);
+                    pixels = TestPng.Decode(around.Data.Span);
+                    Assert.AreEqual(140 * scale, pixels.Width, 1);
+                    Assert.AreEqual(100 * scale, pixels.Height, 1);
+                    AssertColor((255, 0, 0), pixels.GetPixel((int)(70 * scale), (int)(55 * scale)), $"inside the red box at {zoom * 100:F0} percent");
+                    AssertColor((255, 255, 255), pixels.GetPixel((int)(10 * scale), (int)(10 * scale)), $"left of the red box at {zoom * 100:F0} percent");
+                    AssertColor((255, 255, 255), pixels.GetPixel((int)(130 * scale), (int)(90 * scale)), $"right of the red box at {zoom * 100:F0} percent");
+
+                    session.Stage = $"full-page capture at {zoom * 100:F0} percent";
+                    var fullPage = await view.CaptureAsync(new NeoCaptureOptions { FullPage = true }, session.CancellationToken);
+                    pixels = TestPng.Decode(fullPage.Data.Span);
+                    // The document is as high as its last element, or as the viewport where that is higher.
+                    var viewportHeight = int.Parse((await view.EvaluateScriptAsync("innerHeight", session.CancellationToken))!);
+                    Assert.AreEqual(Math.Max(documentHeight, viewportHeight) * scale, pixels.Height, 2 * Math.Max(1, scale));
+                    AssertColor((255, 0, 0), pixels.GetPixel((int)(70 * scale), (int)(55 * scale)), $"the red box of the full page at {zoom * 100:F0} percent");
+                    AssertColor((0, 0, 255), pixels.GetPixel((int)(100 * scale), (int)(1550 * scale)), $"the blue box below the first screen at {zoom * 100:F0} percent");
+                }
+            }
+            finally
+            {
+                view.ZoomFactor = 1;
+            }
+        }, perMonitorDpiAware: perMonitorDpiAware);
+    }
+
     private static void AssertColor((byte Red, byte Green, byte Blue) expected, (byte Red, byte Green, byte Blue) actual, string where)
     {
         // Color management and JPEG-free PNG output keep flat colors exact; a small tolerance covers display profiles.
