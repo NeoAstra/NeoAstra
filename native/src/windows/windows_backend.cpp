@@ -895,8 +895,12 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                 neo_configure_decision(decision, view, NEOASTRA_DECISION_PERMISSION, NEOASTRA_DECISION_DENY);
                 decision->completion = permission_decided;
                 decision->completion_context = context.release();
+                // An answer is kept in the profile through the third interface of the request, which an older runtime lacks.
+                ComPtr<ICoreWebView2PermissionRequestedEventArgs3> args3;
+                int64_t flags = user_initiated ? NEOASTRA_PERMISSION_REQUEST_USER_INITIATED : 0;
+                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args3)))) flags |= NEOASTRA_PERMISSION_REQUEST_CAN_PERSIST;
                 neo_emit_view(view, NEOASTRA_EVENT_PERMISSION_REQUESTED, 0, nullptr, &uri,
-                              portable_permission(kind), user_initiated ? 1 : 0, decision);
+                              portable_permission(kind), flags, decision);
                 neo_finish_decision_event(view, decision);
                 decision->release();
                 return S_OK;

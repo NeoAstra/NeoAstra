@@ -146,6 +146,12 @@ typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT (UINT64_C(1) << 4)
 #define NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD (UINT64_C(2) << 4)
 #define NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD (UINT64_C(3) << 4)
+/* Bits of the native_code of NEOASTRA_EVENT_PERMISSION_REQUESTED, whose value is the neoastra_permission_kind_t and whose uri is
+   the origin that asks, when the backend tells it. USER_INITIATED says that an action of the user started the request, and
+   CAN_PERSIST that the backend keeps an answer given with persist for the next requests of that origin. A backend that cannot
+   tell either leaves the bit clear: WebView2 reports both, WKWebView and WebKitGTK neither. */
+#define NEOASTRA_PERMISSION_REQUEST_USER_INITIATED (INT64_C(1) << 0)
+#define NEOASTRA_PERMISSION_REQUEST_CAN_PERSIST (INT64_C(1) << 1)
 /* Bits of neoastra_runtime_info_t.build_features. EXTERNAL_OPEN_CHECK says that this library hands only a web address to the
    system for an OPEN_EXTERNAL decision and raises NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED; a library without it opens any address
    and reports nothing. HISTORY_NAVIGATION says that this library reports the kind of a navigation request and has
