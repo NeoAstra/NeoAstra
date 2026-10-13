@@ -13,10 +13,12 @@ internal static partial class Program
             const string secure = "a page of an application scheme is a secure context with audio worklets";
             const string available = "a page of an application scheme can ask for a microphone";
             const string asked = "a microphone request reaches the host with its origin";
+            const string each = "a page that asks for a microphone and a camera asks the host about each";
             if (!IsSupported(environment, NeoCapability.Permissions))
             {
                 Skip(secure, CapabilityReason(environment, NeoCapability.Permissions));
                 Skip(available, CapabilityReason(environment, NeoCapability.Permissions));
+                Skip(each, CapabilityReason(environment, NeoCapability.Permissions));
                 Skip(asked, CapabilityReason(environment, NeoCapability.Permissions));
                 return;
             }
@@ -27,10 +29,12 @@ internal static partial class Program
                 await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions()).AsTask().WaitAsync(options.Timeout);
                 window.Show();
                 var requests = new ConcurrentQueue<NeoPermissionRequest>();
+                var allowsCamera = false;
                 view.PermissionRequested = request =>
                 {
                     requests.Enqueue(request);
-                    return ValueTask.FromResult(request.Kind == NeoPermissionKind.Microphone ? NeoPermissionDecision.AllowOnce : NeoPermissionDecision.DenyOnce);
+                    var allowed = request.Kind == NeoPermissionKind.Microphone || (request.Kind == NeoPermissionKind.Camera && Volatile.Read(ref allowsCamera));
+                    return ValueTask.FromResult(allowed ? NeoPermissionDecision.AllowOnce : NeoPermissionDecision.DenyOnce);
                 };
                 await NavigateAndWaitAsync(view, IndexUri, options.Timeout);
                 await WaitForDocumentLoadAsync(view, options.Timeout);
@@ -55,6 +59,7 @@ internal static partial class Program
                     const string noBundle = "WKWebView gives a page no navigator.mediaDevices in a process whose bundle has no NSMicrophoneUsageDescription.";
                     Skip(available, noBundle);
                     Skip(asked, noBundle);
+                    Skip(each, noBundle);
                     return;
                 }
 
@@ -95,6 +100,37 @@ internal static partial class Program
                             $"The request came from '{microphone.Origin?.ToString() ?? "no origin"}' instead of '{origin}'.");
                         // What follows the answer of the host depends on the machine: a capture, or an error of its device.
                         Require(state != "NotAllowedError", $"The page was refused although the host allowed it: {capture.RootElement.GetRawText()}.");
+                        return ValueTask.CompletedTask;
+                    });
+                }
+
+                // A browser answers the later requests of a page from the answers it got, so the page is loaded anew. WebKit makes
+                // one request of the two devices and takes one answer: the host is asked about each, as WebView2 asks.
+                requests.Clear();
+                Volatile.Write(ref allowsCamera, true);
+                await NavigateAndWaitAsync(view, SecondUri, options.Timeout);
+                await WaitForDocumentLoadAsync(view, options.Timeout);
+                await WaitUntilScriptAsync(view, "document.visibilityState === 'visible'", "The page of a shown window is not visible.", options.Timeout);
+                _ = await view.EvaluateScriptAsync(
+                    "globalThis.__neoCapture = { state: 'pending' }; navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(" +
+                    "stream => { const tracks = stream.getTracks(); tracks.forEach(track => track.stop()); globalThis.__neoCapture = { state: 'captured', tracks: tracks.length }; }, " +
+                    "error => { globalThis.__neoCapture = { state: String(error.name), message: String(error.message) }; }); true");
+                await WaitUntilScriptAsync(view, "globalThis.__neoCapture.state !== 'pending'", "The page got no answer to its request for a microphone and a camera.", options.Timeout);
+                using var both = await EvaluateJsonAsync(view, "globalThis.__neoCapture");
+                var bothState = both.RootElement.GetProperty("state").GetString();
+                var kinds = requests.Select(static request => request.Kind).Order().ToArray();
+                Console.WriteLine($"NOTE microphone and camera capture: {both.RootElement.GetRawText()}, requests to the host: {string.Join(", ", requests.Select(static request => $"{request.Kind} from {request.Origin?.ToString() ?? "no origin"}"))}");
+                if (kinds.Length == 0)
+                {
+                    Require(bothState != "captured", "The page captured devices that the host was not asked about.");
+                    Skip(each, $"The browser refused the page before it asked the host ({bothState}): no microphone or no camera, or no access of this process to them.");
+                }
+                else
+                {
+                    await RunCaseAsync(each, () =>
+                    {
+                        Require(kinds.SequenceEqual([NeoPermissionKind.Camera, NeoPermissionKind.Microphone]), $"The host was asked about {string.Join(", ", kinds)} instead of once about each device.");
+                        Require(bothState != "NotAllowedError", $"The page was refused although the host allowed both devices: {both.RootElement.GetRawText()}.");
                         return ValueTask.CompletedTask;
                     });
                 }
