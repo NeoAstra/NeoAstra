@@ -41,7 +41,7 @@ assuming that every browser engine supports every portable event.
 | Permission answer kept for the origin (`NeoPermissionRequest.CanPersist`) | Available | Not exposed; every document is asked | Not exposed; every document is asked |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
-| Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
+| Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels at a zoom of 100 percent, and to as many divided by the zoom in a zoomed view | Not exposed | Available |
 | Reload that leaves the cache out (`Reload(true)`) | Available through the DevTools protocol | Available | Available |
 | Browser automation (`NeoAutomation`) | Available | Available | Available |
 | Messages of a page that wait for the host | No limit met with 100,000 | The page ends at 50,000 | No limit met with 100,000 |
@@ -177,7 +177,11 @@ region is scaled by the zoom of the view and by the magnification of a pinch, wh
 user has not panned a page that they magnified. The capture of the viewport and of a region was run on Windows 11, on macOS 15, and with WebKitGTK 2.52, and the
 capture of a whole document on Windows 11 and with WebKitGTK 2.52, by the screenshot scenario of the
 conformance harness. That scenario also captures an element in a view zoomed to 200 percent, which was
-run on macOS 26 only.
+run on Windows 11, on macOS 15 and 26, and with WebKitGTK 2.52. Up to NeoAstra 1.4.0 the Windows
+backend gave WebView2 a region in CSS pixels, where its DevTools protocol counts in the units of the
+view at a zoom of 100 percent: in a zoomed view the image of a region showed another part of the page,
+and the image of a whole document a part of it. The unit tests capture a region and a whole document
+at 50, 150, and 200 percent, also in a window counted in the pixels of a display at 150 percent.
 
 `NeoAstra.ZoomFactor` is the page zoom of the engine on every backend: the `ZoomFactor` of WebView2,
 the `pageZoom` of WKWebView, and the zoom level of WebKitGTK. The page is laid out again in a viewport

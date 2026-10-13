@@ -187,13 +187,15 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   macOS 26 arm64: `ctest` with the new `neoastra_macos_zoom_tests`, the unit tests, and the conformance
   harness with the new scenario "the zoom of a view lays its page out again and stays with the view"
   and a screenshot and a click in a view zoomed to 200 percent (36 passed, 21 skipped). The `osx-arm64`
-  runtime under `src/NeoAstra.Core/runtimes` was rebuilt on that machine. To do: rebuild the `osx-x64`
-  runtime with the native workflow, which still magnifies until then, and run the conformance workflow.
-  The two conformance checks are new on Windows and Linux too and were not run there: with WebView2
-  and WebKitGTK the page of a zoomed view is expected to be laid out in the size at 100 percent divided
-  by the zoom, within 2 CSS pixels, with `visualViewport.scale` at 1, and the screenshot of an element
-  of 80 by 40 CSS pixels at 200 percent to have that size times twice the scale of the display, or one
-  CSS pixel more. Not run anywhere: a region captured after a pinch, which no test can make; a
+  runtime under `src/NeoAstra.Core/runtimes` was rebuilt on that machine, and the `osx-x64` runtime by
+  the native workflow for NeoAstra 1.4.0. The two conformance checks ran on 2026-10-13 on the three
+  runners of the conformance workflow and in a WSL 2 desktop session: the page of a zoomed view is laid
+  out in the size at 100 percent divided by the zoom, with `visualViewport.scale` at 1, on every
+  backend, and the screenshot of an element of 80 by 40 CSS pixels at 200 percent has that size times
+  twice the scale of the display on macOS 15 and with WebKitGTK 2.52. On Windows that screenshot was 80
+  by 41 pixels and showed another part of the page: the backend gave WebView2 a clip in CSS pixels,
+  which is fixed, see the paragraph on `CaptureAsync` under
+  [backend capability differences](known-limitations.md#backend-capability-differences). Not run anywhere: a region captured after a pinch, which no test can make; a
   throwaway program that set `magnification` to 1.5 beside a page zoom of 2 got the element with the
   product of both, and a part of it with the page zoom alone.
 - **macOS: `NavigationCompleted` can arrive before the module scripts of a page have run.** The Cocoa

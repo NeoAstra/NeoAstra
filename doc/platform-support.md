@@ -64,8 +64,9 @@ Every platform needs:
   live browser run on Windows only.
 - **The conformance harness** drives a real browser view through navigation, scripts, storage,
   messaging, the request of a page for a microphone, and [browser automation](browser-automation.md). It passes on Windows 11 x64, on macOS 15
-  x64, and on Ubuntu 24.04 x64. A workflow runs it on request for Windows and macOS; on the Linux
-  runner of that workflow a page does not load yet, so the Linux run was made in a desktop session.
+  x64, and on Ubuntu 24.04 x64, where a workflow runs it on request. Its runners have no camera, and
+  only the macOS one has a microphone, so the capture of both was run on a Windows machine and that of
+  a microphone also in a Linux desktop session.
 
 [Building and verification](building.md) has the commands to run these checks on your own machine,
 and [open follow-ups](open-follow-ups.md) lists what is still to check.
