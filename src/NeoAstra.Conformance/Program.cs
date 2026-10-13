@@ -424,6 +424,7 @@ internal static partial class Program
 
             await RunAutomationScenariosAsync(environment);
             await RunHistoryScenariosAsync(environment);
+            await RunCaptureScenariosAsync(environment);
             await RunLifecycleScenariosAsync(environment, environmentOptions);
             _total.Stop();
             Console.WriteLine($"PASS browser conformance: {_passed} passed, {_skipped} skipped, {_total.Elapsed.TotalSeconds:F2} s");
@@ -861,7 +862,7 @@ internal static partial class Program
 
         private void ReportBrowserScenarioSkips(NeoEnvironment environment)
         {
-            Skip("permissions",
+            Skip("permissions other than a microphone",
                 IsSupported(environment, NeoCapability.Permissions)
                     ? "Permission prompts require a trusted user activation or device access; the noninteractive fixture cannot safely synthesize either."
                     : CapabilityReason(environment, NeoCapability.Permissions));
