@@ -556,6 +556,9 @@ int main() {
     // Keeps what the default session stores inside the directory that the test removes.
     g_setenv("XDG_DATA_HOME", (base / "xdg-data").c_str(), TRUE);
     g_setenv("XDG_CACHE_HOME", (base / "xdg-cache").c_str(), TRUE);
+    // The pages of these tests are their own text. WebKitGTK cannot start the sandbox of its web process where a system
+    // keeps unprivileged user namespaces from it, as a runner of GitHub Actions does, and a page then does not load.
+    g_setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", TRUE);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);

@@ -14,10 +14,12 @@
 #include <vector>
 
 // The settings that the tests of WebKit itself use: devices that need no hardware, which a page is given whatever the
-// bundle of the process says. They are not part of the public interface of WKWebView, and only this test names them.
+// bundle of the process says, and a request that does not wait for its page to be visible. They are not part of the
+// public interface of WKWebView, and only this test names them.
 @interface WKPreferences (NeoAstraCaptureTests)
 - (void)_setMockCaptureDevicesEnabled:(BOOL)enabled;
 - (void)_setMediaDevicesEnabled:(BOOL)enabled;
+- (void)_setGetUserMediaRequiresFocus:(BOOL)required;
 @end
 
 namespace {
@@ -146,7 +148,6 @@ void expect_capture(neoastra_view_t* view, view_events& events, const std::strin
         assert(!events.failed && deadline.timeIntervalSinceNow > 0);
         pump();
     }
-    wait_for_script(view, "document.visibilityState", ^bool(const std::string& value) { return value == "\"visible\""; });
     evaluate(view, "globalThis.outcome='pending';navigator.mediaDevices.getUserMedia(" + constraints + ").then("
         "stream=>{globalThis.outcome=String(stream.getTracks().length);stream.getTracks().forEach(track=>track.stop());},"
         "error=>{globalThis.outcome=error.name;});0");
@@ -165,9 +166,11 @@ void expect_capture(neoastra_view_t* view, view_events& events, const std::strin
 } // namespace
 
 // A page that asks for a microphone and a camera together makes one request, which WKWebView answers once. The host is
-// asked about the microphone and about the camera, and the page captures when the host allows both. The window is shown:
-// WebKit keeps the request of a page for the time when the page is visible.
+// asked about the microphone and about the camera, and the page captures when the host allows both. WebKit keeps the
+// request of a page for the time when the page is visible, which the page of a test is not on every machine, so the
+// test turns that rule off. A WebKit without these settings ends the test as skipped.
 int main() {
+    bool testable = false;
     @autoreleasepool {
         neoastra_app_options_t app_options{};
         app_options.size = sizeof(app_options);
@@ -207,11 +210,14 @@ int main() {
         auto* view = static_cast<neoastra_view_t*>(view_state.value);
 
         WKPreferences* preferences = web_view(view).configuration.preferences;
-        if (![preferences respondsToSelector:@selector(_setMockCaptureDevicesEnabled:)] || ![preferences respondsToSelector:@selector(_setMediaDevicesEnabled:)]) {
+        testable = [preferences respondsToSelector:@selector(_setMockCaptureDevicesEnabled:)] &&
+            [preferences respondsToSelector:@selector(_setMediaDevicesEnabled:)] && [preferences respondsToSelector:@selector(_setGetUserMediaRequiresFocus:)];
+        if (!testable) {
             std::fprintf(stderr, "This WebKit has no devices for tests: the capture requests were not run\n");
         } else {
             [preferences _setMediaDevicesEnabled:YES];
             [preferences _setMockCaptureDevicesEnabled:YES];
+            [preferences _setGetUserMediaRequiresFocus:NO];
             view_events events;
             assert(neoastra_view_set_event_callback(view, record_event, &events) == NEOASTRA_OK);
             assert(neoastra_window_show(window) == NEOASTRA_OK);
@@ -234,5 +240,5 @@ int main() {
         assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
         neoastra_app_release(app);
     }
-    return 0;
+    return testable ? 0 : 77;
 }

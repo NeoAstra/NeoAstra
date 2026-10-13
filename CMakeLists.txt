@@ -187,6 +187,7 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_macos_capture_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
     add_test(NAME neoastra_macos_capture_tests COMMAND neoastra_macos_capture_tests)
+    set_tests_properties(neoastra_macos_capture_tests PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(neoastra_macos_zoom_tests native/tests/macos_zoom_tests.mm)
     target_compile_options(neoastra_macos_zoom_tests PRIVATE -fobjc-arc)
     target_link_libraries(neoastra_macos_zoom_tests PRIVATE
