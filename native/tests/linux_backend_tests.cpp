@@ -198,6 +198,17 @@ void test_tab_key_setting_reaches_the_view(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+// WebKitGTK before 2.46 gives a page no microphone or camera to ask for unless the setting is on, which it is for every view.
+void test_media_capture_is_available_to_the_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    assert(webkit_settings_get_enable_media_stream(webkit_web_view_get_settings(web_view(view))));
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The swipe of WebKitGTK that walks the history is off while history navigation is off for a view, which then refuses the
 // commands of the history. Turning history navigation on again does not turn the swipe on: a host does that itself.
 void test_history_navigation_setting_reaches_the_view(neoastra_app_t* app) {
@@ -457,6 +468,7 @@ int main() {
     test_views_share_their_window(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
+    test_media_capture_is_available_to_the_view(app);
     test_history_navigation_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 
