@@ -857,6 +857,10 @@ public sealed class NeoAstra : IAsyncDisposable
             static decision => new DecisionResponse(decision.Action), new DecisionResponse(NeoDecisionAction.Default));
     }
 
+    // The bits of the native code of a permission request, as the native header names them.
+    private const long PermissionRequestUserInitiated = 1L << 0;
+    private const long PermissionRequestCanPersist = 1L << 1;
+
     private void HandlePermissionDecision(NativeMethods.neoastra_event value, Uri? uri)
     {
         var handler = PermissionRequested;
@@ -868,7 +872,7 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         StartDecision(value.decision.Handle,
-            () => handler(new NeoPermissionRequest((NeoPermissionKind)(int)value.value, uri)),
+            () => handler(new NeoPermissionRequest((NeoPermissionKind)(int)value.value, uri, (value.native_code & PermissionRequestUserInitiated) != 0, (value.native_code & PermissionRequestCanPersist) != 0)),
             static decision => new DecisionResponse(decision.Action, null, decision.Persist),
             new DecisionResponse(NeoDecisionAction.Deny));
     }

@@ -19,13 +19,15 @@ internal static class LiveBrowser
     /// Whether the window is one of an application that is aware of the scale of its display, which counts the window in
     /// the pixels of the display. The test host is not such an application by itself.
     /// </param>
+    /// <param name="browserArguments">Arguments for the browser process of the test, which then gets a data folder of its own.</param>
     /// <remarks>The test is inconclusive off Windows and where the native runtime is not staged.</remarks>
     internal static async Task RunAsync(
         IReadOnlyDictionary<string, string> pages,
         Func<LiveBrowserSession, Task> body,
         NeoAstraOptions? viewOptions = null,
         TimeSpan? timeout = null,
-        bool perMonitorDpiAware = false)
+        bool perMonitorDpiAware = false,
+        string? browserArguments = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -54,8 +56,12 @@ internal static class LiveBrowser
                         {
                             CustomSchemes = [NeoCustomScheme.Application("app", new PageProvider(pages))],
                             // WebView2 runs the views of one data folder in one browser process, which takes the windows
-                            // of one kind of awareness only: the others would be refused while that process lives.
-                            UserDataRoot = perMonitorDpiAware ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "per-monitor-dpi-aware") : null,
+                            // of one kind of awareness only: the others would be refused while that process lives. The same
+                            // holds for the arguments of that process.
+                            UserDataRoot = perMonitorDpiAware ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "per-monitor-dpi-aware")
+                                : browserArguments is not null ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "browser-arguments-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(browserArguments)))[..12])
+                                : null,
+                            BrowserArguments = browserArguments,
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions ?? new NeoAstraOptions { ViewLabel = "main" });
                         session = new LiveBrowserSession(application, environment, window, view, cancellation.Token);

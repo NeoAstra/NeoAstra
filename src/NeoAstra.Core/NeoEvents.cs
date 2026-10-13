@@ -295,9 +295,23 @@ public readonly record struct NeoNavigationDecision(NeoDecisionAction Action)
 
 /// <summary>Describes a permission request.</summary>
 /// <param name="Kind">The portable permission kind.</param>
-/// <param name="Origin">The requesting origin, when available.</param>
-/// <param name="IsUserInitiated">Whether a user gesture initiated the request.</param>
-/// <param name="CanPersist">Whether the backend can persist the response.</param>
+/// <param name="Origin">
+/// The origin that asks, or <see langword="null"/> where the backend does not tell it. WebView2 gives the origin of the
+/// document that asks. WKWebView and WebKitGTK give the origin of the top document of the view for a microphone or a camera,
+/// also when a frame of another origin asks; WebKitGTK gives no origin for the other kinds.
+/// </param>
+/// <param name="IsUserInitiated">
+/// Whether an action of the user started the request. Only WebView2 tells it: the value is <see langword="false"/> on
+/// WKWebView and WebKitGTK whatever started the request.
+/// </param>
+/// <param name="CanPersist">
+/// Whether the backend keeps an answer given with <see cref="NeoPermissionDecision.Persist"/> for the next requests of the
+/// origin. Only WebView2 does: on WKWebView and WebKitGTK the value is <see langword="false"/> and every request is asked.
+/// </param>
+/// <remarks>
+/// A request is refused when a view has no <see cref="NeoAstra.PermissionRequested"/> handler. A page can ask for a microphone
+/// or a camera in every backend, where it is a secure context, which a page of an application scheme is.
+/// </remarks>
 public sealed record NeoPermissionRequest(NeoPermissionKind Kind, Uri? Origin, bool IsUserInitiated = false, bool CanPersist = false);
 
 /// <summary>Describes the action to take for a permission request.</summary>
