@@ -1661,8 +1661,8 @@ Unsupported persistence MUST be reported, not silently assumed.
 | --- | --- | --- | --- |
 | `Origin` | The document that asks | The top document of the view | The page of the view for a microphone or a camera; `null` for the other kinds |
 | `IsUserInitiated` | Reported | `false` | `false` |
-| `CanPersist` | `true`; a persisted answer is kept in the profile | `false`; every request is asked | `false`; every request is asked |
-| A microphone and a camera asked together | One request for each | `Unknown` | `Camera` |
+| `CanPersist` | `true`; a persisted answer is kept in the profile | `false`; every document is asked | `false`; every document is asked |
+| A microphone and a camera asked together | One request for each | One request for each; the page gets both when both are allowed | One request for each; the page gets both when both are allowed |
 
 The backend-native kind string and the main-frame status of section 22.1 are not reported.
 

@@ -306,11 +306,13 @@ public readonly record struct NeoNavigationDecision(NeoDecisionAction Action)
 /// </param>
 /// <param name="CanPersist">
 /// Whether the backend keeps an answer given with <see cref="NeoPermissionDecision.Persist"/> for the next requests of the
-/// origin. Only WebView2 does: on WKWebView and WebKitGTK the value is <see langword="false"/> and every request is asked.
+/// origin. Only WebView2 does: on WKWebView and WebKitGTK the value is <see langword="false"/> and every document is asked.
 /// </param>
 /// <remarks>
 /// A request is refused when a view has no <see cref="NeoAstra.PermissionRequested"/> handler. A page can ask for a microphone
-/// or a camera in every backend, where it is a secure context, which a page of an application scheme is.
+/// or a camera in every backend, where it is a secure context, which a page of an application scheme is. A page that asks
+/// for both at once makes a request of the kind <see cref="NeoPermissionKind.Microphone"/> and one of the kind
+/// <see cref="NeoPermissionKind.Camera"/>, and gets the two devices when both requests are allowed.
 /// </remarks>
 public sealed record NeoPermissionRequest(NeoPermissionKind Kind, Uri? Origin, bool IsUserInitiated = false, bool CanPersist = false);
 

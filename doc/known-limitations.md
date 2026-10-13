@@ -38,7 +38,7 @@ assuming that every browser engine supports every portable event.
 | Microphone or camera of a page (`getUserMedia`) | Available | Available from macOS 12, in an application whose bundle says why it wants the device | Available |
 | Origin of a permission request (`NeoPermissionRequest.Origin`) | The document that asks | The top document of the view | The page of the view for a microphone or a camera; none for the other kinds |
 | User action of a permission request (`NeoPermissionRequest.IsUserInitiated`) | Reported by the engine | Not exposed; always `false` | Not exposed; always `false` |
-| Permission answer kept for the origin (`NeoPermissionRequest.CanPersist`) | Available | Not exposed; every request is asked | Not exposed; every request is asked |
+| Permission answer kept for the origin (`NeoPermissionRequest.CanPersist`) | Available | Not exposed; every document is asked | Not exposed; every document is asked |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
@@ -277,8 +277,7 @@ What a request tells differs:
   of a real microphone by the conformance harness.
 - **macOS.** WKWebView asks from macOS 12 on, and gives the origin of the top document of the view,
   also when a frame of another origin asks. It does not tell whether the user acted and keeps no
-  answer: `IsUserInitiated` and `CanPersist` are `false`, and `AllowAndPersist` allows once. A request
-  for a microphone and a camera together is reported as `NeoPermissionKind.Unknown`. WebKit gives a
+  answer: `IsUserInitiated` and `CanPersist` are `false`, and `AllowAndPersist` allows once. WebKit gives a
   page its `navigator.mediaDevices` only in an application that could capture: one whose bundle has
   `NSMicrophoneUsageDescription` or `NSCameraUsageDescription` in its `Info.plist`, or that has the
   access of the system already. An application that is not started from such a bundle, `dotnet run`
@@ -292,14 +291,27 @@ What a request tells differs:
 - **Linux.** WebKitGTK does not tell which origin asks. For a microphone or a camera NeoAstra gives the
   origin of the page of the view, which is the top document that asks: WebKit drops the request of a
   page that the view has left. The other kinds of request have no origin. `IsUserInitiated` and
-  `CanPersist` are `false`, and a request for a microphone and a camera together is reported as
-  `NeoPermissionKind.Camera`. WebKitGTK has capture on by default since 2.46 and off before; NeoAstra
+  `CanPersist` are `false`. WebKitGTK has capture on by default since 2.46 and off before; NeoAstra
   turns it on for every view. The capture of a microphone into an `AudioWorklet` was run with
   WebKitGTK 2.52 by the conformance harness, in a desktop session; a machine without a microphone
   refuses the page with an `OverconstrainedError` before the host is asked.
 
+A page that asks for a microphone and a camera together, with
+`getUserMedia({ audio: true, video: true })`, asks the host about each device on every backend: the
+handler gets a request of the kind `Microphone` and one of the kind `Camera`, both before either is
+answered. WebView2 makes these two requests itself. WebKit makes one request of the two devices and
+takes one answer, so on macOS and Linux NeoAstra asks the host twice and gives WebKit the two answers
+as one: the page gets both devices when the host allows both, and neither when the host refuses one,
+as in WebView2. Where the host refuses neither and answers `Default` for one, WKWebView shows its own
+prompt, and WebKitGTK, which has none, refuses. A page that asks for one device and for both, with a
+host that allows both or refuses one, is run by the native tests on macOS 15 and 26 and with WebKitGTK 2.52,
+with the devices that WebKit makes up for its tests, and on Windows by the unit tests with the fake
+devices of WebView2; the conformance harness asks for both where a machine has both.
+
 On macOS and Linux a page that is not visible gets no answer: WebKit keeps its request until the page
-is shown.
+is shown. WebKit also keeps the answer of the host for the document: it answers a later request of the
+same document for the same devices by itself, and a new document is asked again. That is read from
+the source of WebKit.
 
 ## Browser data and user-data roots
 
