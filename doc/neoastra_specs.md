@@ -1652,6 +1652,29 @@ The managed response SHOULD support:
 
 Unsupported persistence MUST be reported, not silently assumed.
 
+## 22.2 What the managed request reports
+
+`NeoPermissionRequest` carries the portable kind, the origin, `IsUserInitiated` and `CanPersist`. A view without a
+`PermissionRequested` handler denies every request.
+
+| | WebView2 | WKWebView | WebKitGTK |
+| --- | --- | --- | --- |
+| `Origin` | The document that asks | The top document of the view | The page of the view for a microphone or a camera; `null` for the other kinds |
+| `IsUserInitiated` | Reported | `false` | `false` |
+| `CanPersist` | `true`; a persisted answer is kept in the profile | `false`; every request is asked | `false`; every request is asked |
+| A microphone and a camera asked together | One request for each | `Unknown` | `Camera` |
+
+The backend-native kind string and the main-frame status of section 22.1 are not reported.
+
+## 22.3 Capture of a microphone or a camera
+
+A page that is a secure context, a page of an application scheme included, MUST be able to ask for a microphone or a
+camera with `navigator.mediaDevices.getUserMedia` on every backend, and the request MUST reach the permission handler of
+its view. There is no option for it: the denial of a view without a handler is the default. WebKitGTK before 2.46 has
+capture off unless the backend turns it on, which it does. WKWebView gives a page no `navigator.mediaDevices` unless the
+bundle of the application has a usage description for the device; that part belongs to the application.
+[Known limitations](known-limitations.md#permission-requests-and-capture) has what was observed on each platform.
+
 ---
 
 # 23. Browser dialogs and host UX

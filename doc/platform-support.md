@@ -63,7 +63,7 @@ Every platform needs:
 - **Unit tests** run on Windows x64, macOS ARM64, and Linux x64 on every push. The tests that drive a
   live browser run on Windows only.
 - **The conformance harness** drives a real browser view through navigation, scripts, storage,
-  messaging, and [browser automation](browser-automation.md). It passes on Windows 11 x64, on macOS 15
+  messaging, the request of a page for a microphone, and [browser automation](browser-automation.md). It passes on Windows 11 x64, on macOS 15
   x64, and on Ubuntu 24.04 x64. A workflow runs it on request for Windows and macOS; on the Linux
   runner of that workflow a page does not load yet, so the Linux run was made in a desktop session.
 

@@ -35,6 +35,10 @@ assuming that every browser engine supports every portable event.
 | Link activation of a request (`IsLinkActivation`) | Not exposed | Available | Available |
 | Redirect told apart from a user-initiated navigation | Available | Not exposed | Available |
 | Navigation request for a link in a subframe | Not raised | Available | Raised as one of the main frame |
+| Microphone or camera of a page (`getUserMedia`) | Available | Available from macOS 12, in an application whose bundle says why it wants the device | Available |
+| Origin of a permission request (`NeoPermissionRequest.Origin`) | The document that asks | The top document of the view | The page of the view for a microphone or a camera; none for the other kinds |
+| User action of a permission request (`NeoPermissionRequest.IsUserInitiated`) | Reported by the engine | Not exposed; always `false` | Not exposed; always `false` |
+| Permission answer kept for the origin (`NeoPermissionRequest.CanPersist`) | Available | Not exposed; every request is asked | Not exposed; every request is asked |
 | DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels | Not exposed | Available |
@@ -243,6 +247,59 @@ With GTK the size of a window includes a title bar that the window draws itself.
 on screen takes a size when it is laid out next: `ClientSize` returns the assigned value until then
 and the size that the window has from then on, and `ClientSizeChanged` reports a size that the
 screen, a size limit, the state of the window, or the user gave it.
+
+## Permission requests and capture
+
+A page asks the browser for a microphone or a camera with `navigator.mediaDevices.getUserMedia`, and
+the browser asks the host through `NeoAstra.PermissionRequested`. A view without a handler refuses
+every request, so capture is off until the host allows it:
+
+```csharp
+view.PermissionRequested = request => ValueTask.FromResult(
+    request.Kind == NeoPermissionKind.Microphone && request.Origin is { Scheme: "app", Host: "myapp" }
+        ? NeoPermissionDecision.AllowOnce
+        : NeoPermissionDecision.DenyOnce);
+```
+
+The page must be a secure context, which a page of a scheme registered with
+`NeoCustomScheme.Application` is on every backend: it has `navigator.mediaDevices`, and an
+`AudioContext` loads the module of an `AudioWorklet` from the scheme. NeoAstra has no switch for
+capture: the handler is the switch.
+
+What a request tells differs:
+
+- **Windows.** WebView2 gives the origin of the document that asks, whether an action of the user
+  started the request, and keeps an answer given with `AllowAndPersist` or `DenyAndPersist` in the
+  profile, after which it no longer asks for that origin and kind. A page that asks for a microphone
+  and a camera together raises one request for each. A page that started by itself, captured a
+  microphone that needs no hardware (`--use-fake-device-for-media-stream`) and connected it to an
+  `AudioWorklet` was run on Windows 11 with the WebView2 Runtime 154 by the unit tests, and the capture
+  of a real microphone by the conformance harness.
+- **macOS.** WKWebView asks from macOS 12 on, and gives the origin of the top document of the view,
+  also when a frame of another origin asks. It does not tell whether the user acted and keeps no
+  answer: `IsUserInitiated` and `CanPersist` are `false`, and `AllowAndPersist` allows once. A request
+  for a microphone and a camera together is reported as `NeoPermissionKind.Unknown`. WebKit gives a
+  page its `navigator.mediaDevices` only in an application that could capture: one whose bundle has
+  `NSMicrophoneUsageDescription` or `NSCameraUsageDescription` in its `Info.plist`, or that has the
+  access of the system already. An application that is not started from such a bundle, `dotnet run`
+  included, has a page without `navigator.mediaDevices`. Before it asks the host, WebKit asks the
+  system, which shows its own prompt the first time. A signed application needs the entitlement
+  `com.apple.security.device.audio-input` for a microphone under the hardened runtime. The rules of
+  the bundle and of the entitlement are read from the source of WebKit and the documentation of Apple,
+  and were not observed. The capture of a microphone into an `AudioWorklet`, with a request that
+  carries the origin of the page, was run by the conformance harness on macOS 15, on a runner of
+  GitHub Actions whose processes have the access of the system without a bundle.
+- **Linux.** WebKitGTK does not tell which origin asks. For a microphone or a camera NeoAstra gives the
+  origin of the page of the view, which is the top document that asks: WebKit drops the request of a
+  page that the view has left. The other kinds of request have no origin. `IsUserInitiated` and
+  `CanPersist` are `false`, and a request for a microphone and a camera together is reported as
+  `NeoPermissionKind.Camera`. WebKitGTK has capture on by default since 2.46 and off before; NeoAstra
+  turns it on for every view. The capture of a microphone into an `AudioWorklet` was run with
+  WebKitGTK 2.52 by the conformance harness, in a desktop session; a machine without a microphone
+  refuses the page with an `OverconstrainedError` before the host is asked.
+
+On macOS and Linux a page that is not visible gets no answer: WebKit keeps its request until the page
+is shown.
 
 ## Browser data and user-data roots
 
