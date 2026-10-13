@@ -8,10 +8,13 @@
 #endif
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <system_error>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -204,6 +207,104 @@ void test_media_capture_is_available_to_the_view(neoastra_app_t* app) {
     auto* window = create_window(app);
     auto* view = create_view(environment, window);
     assert(webkit_settings_get_enable_media_stream(webkit_web_view_get_settings(web_view(view))));
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+// What a view asked its host about capture, as the kind and the origin of each request, and what the test answers for
+// each device.
+struct capture_events {
+    bool loaded{};
+    std::vector<std::pair<uint64_t, std::string>> requests;
+    neoastra_decision_action_t microphone{NEOASTRA_DECISION_ALLOW};
+    neoastra_decision_action_t camera{NEOASTRA_DECISION_ALLOW};
+};
+
+void NEOASTRA_CALL record_capture_event(void* context, const neoastra_event_t* event) {
+    auto* events = static_cast<capture_events*>(context);
+    if (event->header.type == NEOASTRA_EVENT_NAVIGATION_COMPLETED) events->loaded = true;
+    if (event->header.type != NEOASTRA_EVENT_PERMISSION_REQUESTED) return;
+    std::string origin;
+    if (event->uri.data) origin.assign(reinterpret_cast<const char*>(event->uri.data), static_cast<size_t>(event->uri.length));
+    events->requests.emplace_back(event->value, origin);
+    neoastra_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = event->value == NEOASTRA_PERMISSION_MICROPHONE ? events->microphone
+        : event->value == NEOASTRA_PERMISSION_CAMERA ? events->camera : NEOASTRA_DECISION_DENY;
+    assert(neoastra_decision_complete(event->decision, &response, nullptr) == NEOASTRA_OK);
+}
+
+void NEOASTRA_CALL script_evaluated(void* context, neoastra_result_t result, neoastra_string_view_t value, const neoastra_error_t*) {
+    auto* state = static_cast<completion*>(context);
+    if (value.data) state->text.assign(reinterpret_cast<const char*>(value.data), static_cast<size_t>(value.length));
+    complete(context, result, nullptr);
+}
+
+// Returns the JSON text of the value the script evaluates to.
+std::string evaluate(neoastra_view_t* view, const std::string& script) {
+    completion state;
+    assert(neoastra_view_evaluate_script_async(view, string_view(script), script_evaluated, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    return state.text;
+}
+
+const std::string capture_origin = "https://capture.invalid";
+
+// Loads the page anew, since WebKit answers the later requests of a page from the first answer it got, lets the page ask
+// for the devices of `constraints`, and checks what the host was asked and what the page got: the number of tracks it
+// captured, or the name of its error.
+void expect_capture(neoastra_view_t* view, capture_events& events, const std::string& constraints,
+                    const std::vector<uint64_t>& asked, const std::string& got) {
+    events.loaded = false;
+    events.requests.clear();
+    const std::string page = "<!doctype html><title>Capture</title><p>Capture</p>";
+    const std::string base = capture_origin + "/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return events.loaded; });
+    wait_until([&] { return evaluate(view, "document.visibilityState") == "\"visible\""; });
+    evaluate(view, "globalThis.outcome='pending';navigator.mediaDevices.getUserMedia(" + constraints + ").then("
+        "stream=>{globalThis.outcome=String(stream.getTracks().length);stream.getTracks().forEach(track=>track.stop());},"
+        "error=>{globalThis.outcome=error.name;});0");
+    std::string outcome;
+    wait_until([&] { outcome = evaluate(view, "globalThis.outcome"); return outcome != "\"pending\""; });
+    bool as_expected = outcome == "\"" + got + "\"" && events.requests.size() == asked.size();
+    for (size_t index = 0; as_expected && index < asked.size(); ++index)
+        as_expected = events.requests[index].first == asked[index] && events.requests[index].second == capture_origin;
+    if (!as_expected) {
+        std::fprintf(stderr, "A page that asked for %s got %s instead of \"%s\", and the host was asked %zu times:", constraints.c_str(), outcome.c_str(), got.c_str(), events.requests.size());
+        for (const auto& made : events.requests) std::fprintf(stderr, " kind %llu from '%s'", static_cast<unsigned long long>(made.first), made.second.c_str());
+        std::fprintf(stderr, "\n");
+        assert(false);
+    }
+}
+
+// A page that asks for a microphone and a camera together makes one request, which WebKitGTK answers once. The host is
+// asked about the microphone and about the camera, and the page captures when the host allows both. The devices are the
+// ones that WebKitGTK makes up for tests, which need no hardware. The window is shown: WebKit keeps the request of a
+// page for the time when the page is visible.
+void test_a_microphone_and_a_camera_are_asked_about_one_by_one(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    webkit_settings_set_enable_mock_capture_devices(webkit_web_view_get_settings(web_view(view)), TRUE);
+    capture_events events;
+    assert(neoastra_view_set_event_callback(view, record_capture_event, &events) == NEOASTRA_OK);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+
+    const uint64_t microphone = NEOASTRA_PERMISSION_MICROPHONE, camera = NEOASTRA_PERMISSION_CAMERA;
+    expect_capture(view, events, "{audio:true}", {microphone}, "1");
+    expect_capture(view, events, "{video:true}", {camera}, "1");
+    expect_capture(view, events, "{audio:true,video:true}", {microphone, camera}, "2");
+    events.camera = NEOASTRA_DECISION_DENY;
+    expect_capture(view, events, "{audio:true,video:true}", {microphone, camera}, "NotAllowedError");
+    events.camera = NEOASTRA_DECISION_ALLOW;
+    events.microphone = NEOASTRA_DECISION_DENY;
+    expect_capture(view, events, "{audio:true,video:true}", {microphone, camera}, "NotAllowedError");
+
+    assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
     neoastra_view_release(view);
     neoastra_window_release(window);
     neoastra_environment_release(environment);
@@ -469,6 +570,7 @@ int main() {
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);
+    test_a_microphone_and_a_camera_are_asked_about_one_by_one(app);
     test_history_navigation_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 

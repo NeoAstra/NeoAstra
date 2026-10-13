@@ -327,8 +327,16 @@ uint64_t navigation_kind(WebKitNavigationAction* action) {
 }
 struct navigation_context { WebKitPolicyDecision* policy{}; std::string uri; };
 void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept { std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer)); if(response->action==NEOASTRA_DECISION_ALLOW||response->action==NEOASTRA_DECISION_DEFAULT)webkit_policy_decision_use(context->policy);else webkit_policy_decision_ignore(context->policy);g_object_unref(context->policy); }
-struct permission_context { WebKitPermissionRequest* request{}; };
-void permission_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<permission_context> context(static_cast<permission_context*>(pointer));if(response->action==NEOASTRA_DECISION_ALLOW)webkit_permission_request_allow(context->request);else webkit_permission_request_deny(context->request);g_object_unref(context->request);}
+// A page that asks for a microphone and a camera together makes one request, which WebKitGTK answers once. The host is asked
+// about each device, as WebView2 asks, and the page gets both when the host allows both.
+struct permission_context { WebKitPermissionRequest* request{}; int pending{1}; bool allowed{true}; };
+void permission_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {
+    auto* context=static_cast<permission_context*>(pointer);
+    if(response->action!=NEOASTRA_DECISION_ALLOW)context->allowed=false;
+    if(--context->pending>0)return;
+    if(context->allowed)webkit_permission_request_allow(context->request);else webkit_permission_request_deny(context->request);
+    g_object_unref(context->request);delete context;
+}
 struct new_window_context { neoastra_view_t* view{}; std::string uri; };
 void new_window_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<new_window_context> context(static_cast<new_window_context*>(pointer));auto* state=static_cast<gtk_view*>(context->view->platform);if(response->action==NEOASTRA_DECISION_ALLOW&&!response->target_view&&state&&state->widget)webkit_web_view_load_uri(WEBKIT_WEB_VIEW(state->widget),context->uri.c_str());}
 void finish_synchronous_decision(neoastra_decision_t* decision);
@@ -346,7 +354,33 @@ std::string page_origin(WebKitWebView* web_view){
 // WebKitGTK does not tell which origin asks for a capture. It asks only while the view still shows the page of the top document
 // that wants it, so that the origin of that page is given, as WKWebView gives the origin of the top document. The other kinds of
 // request come without that guarantee, and without an origin. A request for the screen is told apart from one for a microphone.
-gboolean permission_requested(WebKitWebView* web_view,WebKitPermissionRequest* request,void* data){auto* view=static_cast<neoastra_view_t*>(data);neoastra_permission_kind_t kind=NEOASTRA_PERMISSION_UNKNOWN;std::string origin;if(WEBKIT_IS_GEOLOCATION_PERMISSION_REQUEST(request))kind=NEOASTRA_PERMISSION_GEOLOCATION;else if(WEBKIT_IS_NOTIFICATION_PERMISSION_REQUEST(request))kind=NEOASTRA_PERMISSION_NOTIFICATIONS;else if(WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)){auto* media=WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);kind=webkit_user_media_permission_is_for_display_device(media)?NEOASTRA_PERMISSION_SCREEN_CAPTURE:webkit_user_media_permission_is_for_video_device(media)?NEOASTRA_PERMISSION_CAMERA:NEOASTRA_PERMISSION_MICROPHONE;origin=page_origin(web_view);}auto* decision=new(std::nothrow) neoastra_decision;auto* context=new(std::nothrow) permission_context{WEBKIT_PERMISSION_REQUEST(g_object_ref(request))};if(!decision||!context){delete decision;if(context){g_object_unref(context->request);delete context;}webkit_permission_request_deny(request);return TRUE;}neo_configure_decision(decision,view,NEOASTRA_DECISION_PERMISSION,NEOASTRA_DECISION_DENY);decision->completion=permission_decided;decision->completion_context=context;neo_emit_view(view,NEOASTRA_EVENT_PERMISSION_REQUESTED,0,nullptr,origin.empty()?nullptr:&origin,kind,0,decision);neo_finish_decision_event(view,decision);decision->release();return TRUE;}
+gboolean permission_requested(WebKitWebView* web_view,WebKitPermissionRequest* request,void* data){
+    auto* view=static_cast<neoastra_view_t*>(data);
+    neoastra_permission_kind_t kinds[2]={NEOASTRA_PERMISSION_UNKNOWN,NEOASTRA_PERMISSION_UNKNOWN};int count=1;std::string origin;
+    if(WEBKIT_IS_GEOLOCATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_GEOLOCATION;
+    else if(WEBKIT_IS_NOTIFICATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_NOTIFICATIONS;
+    else if(WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)){
+        auto* media=WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);
+        const bool video=webkit_user_media_permission_is_for_video_device(media);
+        if(webkit_user_media_permission_is_for_display_device(media))kinds[0]=NEOASTRA_PERMISSION_SCREEN_CAPTURE;
+        else if(video&&webkit_user_media_permission_is_for_audio_device(media)){kinds[0]=NEOASTRA_PERMISSION_MICROPHONE;kinds[1]=NEOASTRA_PERMISSION_CAMERA;count=2;}
+        else kinds[0]=video?NEOASTRA_PERMISSION_CAMERA:NEOASTRA_PERMISSION_MICROPHONE;
+        origin=page_origin(web_view);
+    }
+    neoastra_decision* decisions[2]={};
+    auto* context=new(std::nothrow) permission_context{WEBKIT_PERMISSION_REQUEST(g_object_ref(request)),count};
+    bool allocated=context!=nullptr;
+    for(int index=0;index<count;++index){decisions[index]=new(std::nothrow) neoastra_decision;allocated=allocated&&decisions[index];}
+    if(!allocated){for(auto* decision:decisions)delete decision;if(context){g_object_unref(context->request);delete context;}webkit_permission_request_deny(request);return TRUE;}
+    // Every decision is answered once, by the host or by its default, and the last answer settles the request.
+    for(int index=0;index<count;++index){
+        auto* decision=decisions[index];
+        neo_configure_decision(decision,view,NEOASTRA_DECISION_PERMISSION,NEOASTRA_DECISION_DENY);decision->completion=permission_decided;decision->completion_context=context;
+        neo_emit_view(view,NEOASTRA_EVENT_PERMISSION_REQUESTED,0,nullptr,origin.empty()?nullptr:&origin,kinds[index],0,decision);
+        neo_finish_decision_event(view,decision);decision->release();
+    }
+    return TRUE;
+}
 WebKitWebView* create_web_view(WebKitWebView*,WebKitNavigationAction* action,void* data){auto* view=static_cast<neoastra_view_t*>(data);auto* request=webkit_navigation_action_get_request(action);std::string uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";const char* raw_name=webkit_navigation_action_get_frame_name(action);std::string name=raw_name?raw_name:"";auto* decision=new(std::nothrow) neoastra_decision;auto* context=new(std::nothrow) new_window_context{view,uri};if(!decision||!context){delete decision;delete context;return nullptr;}neo_configure_decision(decision,view,NEOASTRA_DECISION_NEW_WINDOW,NEOASTRA_DECISION_CANCEL);decision->completion=new_window_decided;decision->completion_context=context;decision->external_uri=uri;neo_emit_view(view,NEOASTRA_EVENT_NEW_WINDOW_REQUESTED,0,&name,&uri,link_activation(action,NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED),0,decision);finish_synchronous_decision(decision);WebKitWebView* target{};if(decision->resolved_target){auto* target_state=static_cast<gtk_view*>(decision->resolved_target->platform);if(target_state&&target_state->widget)target=WEBKIT_WEB_VIEW(target_state->widget);}decision->release();return target;}
 gboolean decide_policy(WebKitWebView*, WebKitPolicyDecision* policy, WebKitPolicyDecisionType type, void* data) {
     if(type!=WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)return FALSE;
