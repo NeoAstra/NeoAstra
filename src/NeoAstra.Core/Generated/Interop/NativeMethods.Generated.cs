@@ -2048,6 +2048,13 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_set_title_bar(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_title_bar_t* arg1);
 
+        /// <summary>
+        /// The color a window shows before and behind its content, as the background of its browser views where the engine allows.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_set_background_color")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_set_background_color(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_color_t arg1);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_close")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_close(NativeMethods.neoastra_window_t arg0);

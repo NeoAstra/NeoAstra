@@ -279,6 +279,8 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_begin_drag(neoastra
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_begin_resize(neoastra_window_t*, neoastra_window_resize_edge_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_title_bar(neoastra_window_t*, neoastra_title_bar_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_title_bar(neoastra_window_t*, const neoastra_title_bar_t*);
+/* The color a window shows before and behind its content, as the background of its browser views where the engine allows. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_set_background_color(neoastra_window_t*, neoastra_color_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t*);
 /* Internal/backend teardown entry point. It bypasses close negotiation and is not exposed to renderers. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t*);

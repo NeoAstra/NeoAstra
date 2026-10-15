@@ -255,6 +255,9 @@ int main() {
     assert(title_bar.style == NEOASTRA_TITLE_BAR_OVERLAY && title_bar.height >= 0 && title_bar.left_inset >= 0 && title_bar.right_inset >= 0);
     title_bar.style = NEOASTRA_TITLE_BAR_DEFAULT;
     assert(neoastra_window_set_title_bar(window, &title_bar) == NEOASTRA_OK);
+    assert(neoastra_window_set_background_color(nullptr, neoastra_color_t{12, 34, 56, 255}) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_set_background_color(window, neoastra_color_t{12, 34, 56, 255}) == NEOASTRA_OK);
+    assert(neoastra_window_set_background_color(window, neoastra_color_t{255, 255, 255, 255}) == NEOASTRA_OK);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_open_devtools(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);

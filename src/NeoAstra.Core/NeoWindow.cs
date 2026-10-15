@@ -21,6 +21,7 @@ public sealed class NeoWindow : IAsyncDisposable
     private double _scaleFactor = 1d;
     private NeoWindowState _state;
     private NeoWindowTitleBar _titleBar;
+    private NeoColor _backgroundColor;
     private int _closed;
     private int _disposed;
 
@@ -40,6 +41,7 @@ public sealed class NeoWindow : IAsyncDisposable
         Id = NativeMethods.neoastra_window_get_id(NativeHandle);
         _scaleFactor = ReadScaleFactor(1d);
         _titleBar = options.TitleBar;
+        _backgroundColor = options.BackgroundColor;
         // The creation flags carry only the style; the remaining title-bar settings need the full native call.
         if (_titleBar != new NeoWindowTitleBar(_titleBar.Style))
         {
@@ -265,6 +267,37 @@ public sealed class NeoWindow : IAsyncDisposable
     {
         get => GetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALWAYS_ON_TOP);
         set => SetAttribute(NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALWAYS_ON_TOP, value);
+    }
+
+    /// <summary>Gets or sets the color the window shows before and behind its content, such as while a page loads or the window resizes.</summary>
+    /// <remarks>
+    /// The browser views in the window take it as their background until their page paints, so a dark application does not flash
+    /// white. On Windows the window erases with it and WebView2 takes it as its default background color, opaque, or clear when
+    /// <see cref="NeoColor.Alpha"/> is 0. On macOS it is the window background color, and with WebKitGTK the background of the
+    /// views. The initial value is <see cref="NeoWindowOptions.BackgroundColor"/>.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">The loaded native library cannot change the background color.</exception>
+    public NeoColor BackgroundColor
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _backgroundColor;
+        }
+        set
+        {
+            ThrowIfDisposed();
+            var native = new NativeMethods.neoastra_color { red = value.Red, green = value.Green, blue = value.Blue, alpha = value.Alpha };
+            try
+            {
+                NativeError.ThrowIfFailed(NativeMethods.neoastra_window_set_background_color(NativeHandle, native), default, "set window background color");
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                throw new NotSupportedException("The loaded native library cannot change the window background color.", exception);
+            }
+            _backgroundColor = value;
+        }
     }
 
     /// <summary>Gets or sets whether the window appears in the platform's per-window task switcher.</summary>

@@ -294,7 +294,8 @@ public sealed class NeoWindowOptions
     /// <remarks>macOS Dock membership is application-scoped, so the Cocoa backend ignores this per-window creation hint.</remarks>
     public bool ShowInTaskbar { get; set; } = true;
 
-    /// <summary>Gets or sets the initial background color.</summary>
+    /// <summary>Gets or sets the initial background color, shown before and behind the content of the window.</summary>
+    /// <remarks>See <see cref="NeoWindow.BackgroundColor"/>, which changes it later.</remarks>
     public NeoColor BackgroundColor { get; set; } = NeoColor.White;
 
     internal void Validate(NeoApplication application)

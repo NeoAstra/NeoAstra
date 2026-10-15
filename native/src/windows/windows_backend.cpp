@@ -97,6 +97,16 @@ struct windows_view {
 void register_view_drop_targets(neoastra_view_t* view, windows_view* state);
 void intercept_page_drags(neoastra_view_t* view, windows_view* state) noexcept;
 
+// The browser of a view in a window shows the window color until its page paints (WebView2 takes it opaque or clear).
+void apply_view_background(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    ComPtr<ICoreWebView2Controller2> controller2;
+    if (!view->window || !state || !state->controller || FAILED(state->controller.As(&controller2))) return;
+    const auto color = view->window->background_color;
+    const COREWEBVIEW2_COLOR value{static_cast<BYTE>(color.alpha ? 255 : 0), color.red, color.green, color.blue};
+    (void)controller2->put_DefaultBackgroundColor(value);
+}
+
 struct windows_download {
     ComPtr<ICoreWebView2DownloadOperation> operation;
     EventRegistrationToken bytes_changed{};
@@ -1510,6 +1520,17 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     auto* window = reinterpret_cast<neoastra_window_t*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (!window) return DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
+        case WM_ERASEBKGND: {
+            // The window shows its own color, not the white of its class, before and behind its content.
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            const auto color = window->background_color;
+            if (const auto brush = CreateSolidBrush(RGB(color.red, color.green, color.blue))) {
+                FillRect(reinterpret_cast<HDC>(wparam), &client, brush);
+                DeleteObject(brush);
+            }
+            return 1;
+        }
         case WM_CLOSE:
             if (window->force_closing) {
                 window->force_closing = false;
@@ -1888,6 +1909,12 @@ neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* w,neoastr
     const auto changed=SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
     layout_title_bar(w);
     return changed?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t* w) noexcept {
+    auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
+    InvalidateRect(state->hwnd,nullptr,TRUE);
+    for(auto* view:w->views)if(view)apply_view_background(view);
+    return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* w) noexcept {
     auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
@@ -2668,6 +2695,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             ComPtr<ICoreWebView2Controller4> controller4;
             if (SUCCEEDED(result)) result=state->controller.As(&controller4);
             if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);
+            if (SUCCEEDED(result)) apply_view_background(view);
             if (SUCCEEDED(result)) register_view_drop_targets(view, state);
             if (SUCCEEDED(result) && view->window) {
                 // Lets `app-region: drag` content move, maximize, and open the system menu of its host window like a native caption.

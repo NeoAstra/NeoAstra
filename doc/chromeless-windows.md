@@ -37,6 +37,13 @@ show the web content beneath them. `GetTitleBarLayout()` reports the height of t
 the width that native controls cover on each side, in logical units that match CSS pixels. The
 insets are zero while no native controls are shown, such as in fullscreen.
 
+The window itself has a background color, `NeoWindowOptions.BackgroundColor` (white by default),
+which `NeoWindow.BackgroundColor` changes at any time, for example when the application switches
+to a dark theme. It is what the window shows before and behind its content: while a page loads,
+while the window resizes, and behind a transparent page. On Windows the window erases with it and
+WebView2 takes it as the default background of its views (opaque, or clear with an alpha of 0); on
+macOS it is the background of the `NSWindow`; with WebKitGTK it is the background of the views.
+
 ## Frontend
 
 A view granted `window:management` attaches its document to the native layout with one call:
