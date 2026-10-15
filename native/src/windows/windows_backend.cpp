@@ -1612,6 +1612,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
         case WM_SETFOCUS:
             // Activation gives the keyboard to the window itself, which has nothing to type into: hand it to the
             // browser of its first visible view, which gives it back to the element of the page that had it.
+            if (!IsWindowVisible(hwnd)) break;
             for (auto* view : window->views) {
                 auto* state = view ? static_cast<windows_view*>(view->platform) : nullptr;
                 BOOL visible{};
@@ -2708,8 +2709,10 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             if (SUCCEEDED(result)) result = register_view_events(view, state);
             if (SUCCEEDED(result)) intercept_page_drags(view, state);
             if (SUCCEEDED(result)) result = register_devtools_shortcut(view, state);
-            // A window that holds the keyboard has nothing else to type into: its new browser takes it, as on activation.
-            if (SUCCEEDED(result) && view->window && GetFocus() == view_parent(view)) (void)controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+            // A shown window that holds the keyboard has nothing else to type into: its new browser takes it, as on
+            // activation. A hidden window keeps it, so that its page is not told it has the focus.
+            if (SUCCEEDED(result) && view->window && GetFocus() == view_parent(view) && IsWindowVisible(view_parent(view)))
+                (void)controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
             if (SUCCEEDED(result) && view->profile) {
                 auto* profile = static_cast<windows_profile*>(view->profile->platform);
                 ComPtr<ICoreWebView2_13> core13;
