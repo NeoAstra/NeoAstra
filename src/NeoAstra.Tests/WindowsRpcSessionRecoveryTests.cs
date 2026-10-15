@@ -40,8 +40,8 @@ public sealed class WindowsRpcSessionRecoveryTests
                         {
                             ViewLabel = "main", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = ["app://neoastra"],
                         });
-                        // One request per second and one tolerated denial: a second back-to-back call closes the
-                        // session on the host while its document keeps running.
+                        // One request per second and one tolerated denial: a second call within the same second closes
+                        // the session on the host while its document keeps running.
                         var builder = new NeoRpcBuilder(new NeoRpcOptions
                         {
                             RequestRatePerSecond = 1,
@@ -60,7 +60,11 @@ public sealed class WindowsRpcSessionRecoveryTests
                         var firstSession = await view.EvaluateScriptAsync("globalThis.session", timeout.Token);
 
                         stage = "host closes the session";
-                        _ = await view.EvaluateScriptAsync("globalThis.ping(); globalThis.ping(); true", timeout.Token);
+                        // Background commands answer from the thread pool, so two calls in flight may be answered in
+                        // either order; the first one is answered before the second is sent.
+                        _ = await view.EvaluateScriptAsync("globalThis.ping(); true", timeout.Token);
+                        await WaitAsync(view, "globalThis.results.length === 1", timeout.Token);
+                        _ = await view.EvaluateScriptAsync("globalThis.ping(); true", timeout.Token);
                         await WaitAsync(view, "globalThis.closes.length === 1", timeout.Token);
                         Assert.AreEqual("\"rpc_session_closed\"", await view.EvaluateScriptAsync("globalThis.closes[0]", timeout.Token));
                         Assert.AreEqual("[true,false]", await view.EvaluateScriptAsync("globalThis.results.map(frame => frame.ok)", timeout.Token));

@@ -1223,6 +1223,73 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task BackgroundCommandReceivedOnTheUiDispatcherRunsOffItsThreadAndContext()
+    {
+        using var dispatcher = new TestRpcDispatcher();
+        var observed = new ConcurrentQueue<(int ThreadId, SynchronizationContext? Context)>();
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("background.where", async (request, context, _) =>
+        {
+            observed.Enqueue((Environment.CurrentManagedThreadId, SynchronizationContext.Current));
+            await Task.Yield();
+            observed.Enqueue((Environment.CurrentManagedThreadId, SynchronizationContext.Current));
+            return new Response(request.Id, context.ViewLabel);
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        var session = host.OpenSession(new NeoRpcSessionIdentity("view", "document") { Dispatcher = dispatcher }, (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+
+        // A view binding receives every page frame on the application's UI dispatcher.
+        dispatcher.Invoke(() => _ = session.ReceiveAsync(Invoke("where", "background.where", "{\"id\":\"x\"}")).AsTask());
+
+        await WaitUntilAsync(() => frames.Count != 0);
+        Assert.IsTrue(Parse(frames.Single()).GetProperty("ok").GetBoolean());
+        Assert.HasCount(2, observed);
+        foreach (var (threadId, context) in observed)
+        {
+            Assert.AreNotEqual(dispatcher.ThreadId, threadId, "A background command must not run on the UI dispatcher thread.");
+            Assert.AreNotSame(dispatcher, context, "A background command must not run under the UI synchronization context.");
+        }
+    }
+
+    [TestMethod]
+    public async Task BackgroundCommandBlockingSynchronouslyDoesNotBlockUiDispatchedWork()
+    {
+        using var dispatcher = new TestRpcDispatcher();
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = new NeoRpcBuilder(TestOptions());
+        builder.AddCommand<Request, Response>("background.block", async (request, _, _) =>
+        {
+            // Synchronous disk, lock, or CPU work before the first await.
+            entered.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(10));
+            await Task.Yield();
+            return new Response(request.Id, "blocked");
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy);
+        builder.AddCommand<Request, Response>("ui.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, Environment.CurrentManagedThreadId == dispatcher.ThreadId ? "ui" : "other")),
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, new NeoRpcCommandOptions { Permission = "test:invoke", Dispatch = NeoRpcDispatchMode.UiThread });
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        var session = host.OpenSession(new NeoRpcSessionIdentity("view", "document") { Dispatcher = dispatcher }, (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+        try
+        {
+            dispatcher.Post(_ => _ = session.ReceiveAsync(Invoke("block", "background.block", "{\"id\":\"x\"}")).AsTask(), null);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            dispatcher.Post(_ => _ = session.ReceiveAsync(Invoke("echo", "ui.echo", "{\"id\":\"y\"}")).AsTask(), null);
+
+            for (var i = 0; i < 200 && frames.IsEmpty; i++) await Task.Delay(5);
+            var echo = frames.Select(Parse).SingleOrDefault(frame => frame.GetProperty("id").GetString() == "echo");
+            Assert.AreEqual(JsonValueKind.Object, echo.ValueKind, "A UI command must complete while a background command blocks before its first await.");
+            Assert.AreEqual("ui", echo.GetProperty("value").GetProperty("viewLabel").GetString());
+        }
+        finally { release.Set(); }
+
+        await WaitUntilAsync(() => frames.Count == 2);
+        AssertSingleTerminal(frames, "block", null);
+    }
+
+    [TestMethod]
     public async Task ViewBindingDiagnosesFramesDroppedForAClosedCurrentSession()
     {
         var service = new ChannelService();

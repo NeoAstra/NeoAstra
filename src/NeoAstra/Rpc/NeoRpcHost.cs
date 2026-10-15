@@ -635,7 +635,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 }
                 else
                 {
-                    applicationResult = await InvokeHandlerAsync(request).ConfigureAwait(false);
+                    // Frames may be received on the UI dispatcher (a view binding receives them there): leave it,
+                    // and its synchronization context, before any application code runs, so synchronous work
+                    // before the handler's first await cannot block the UI or the frames that follow.
+                    applicationResult = await Task.Run(() => InvokeHandlerAsync(request).AsTask()).ConfigureAwait(false);
                 }
             }
             catch (Exception exception)

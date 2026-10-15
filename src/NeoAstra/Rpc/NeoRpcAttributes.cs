@@ -219,9 +219,16 @@ public enum NeoRpcServiceLifetime
 /// <summary>Defines where application command code executes.</summary>
 public enum NeoRpcDispatchMode
 {
-    /// <summary>Dispatch without entering the NeoAstra UI dispatcher.</summary>
+    /// <summary>Invoke the handler on the thread pool, without a synchronization context.</summary>
+    /// <remarks>
+    /// The handler never runs on the NeoAstra UI dispatcher, even though a view binding receives frames there, and its
+    /// continuations do not return to it. Frames are still admitted in the order they are received and handlers are
+    /// queued in that order, but handlers run concurrently with each other and with UI work, within the command and
+    /// session concurrency limits: synchronous work before a handler's first await blocks neither the UI nor other
+    /// calls. Shared state must therefore be thread-safe; use <see cref="UiThread"/> for UI-affine commands.
+    /// </remarks>
     Background,
-    /// <summary>Dispatch through the originating view's UI dispatcher.</summary>
+    /// <summary>Invoke the handler through the originating view's UI dispatcher.</summary>
     UiThread,
 }
 
