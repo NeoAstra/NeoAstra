@@ -177,10 +177,11 @@ public sealed class NeoAutomationPage
     /// <returns>What the move led to.</returns>
     /// <exception cref="NeoAutomationException">The element is unknown, gone, or not visible, or a dialog is open.</exception>
     /// <remarks>
-    /// Where the engine takes pointer input from its host (WebView2 and WKWebView), the engine's own pointer moves over the
-    /// element without moving the system cursor: CSS <c>:hover</c> styles apply and the page gets trusted pointer and mouse
-    /// events. Elsewhere (WebKitGTK, an element in a frame or covered by another one), the events of the move are
-    /// dispatched to the page, which runs its handlers, but CSS <c>:hover</c> styles do not apply, and
+    /// Where the engine takes pointer input from its host (WebView2 and WKWebView) and the document has the focus, the
+    /// engine's own pointer moves over the element without moving the system cursor: CSS <c>:hover</c> styles apply and the
+    /// page gets trusted pointer and mouse events. That input would give the focus to a document without it, as a real
+    /// pointer does not, so such a document, WebKitGTK, and an element in a frame or covered by another one get the events
+    /// of the move dispatched instead: the page runs its handlers, but CSS <c>:hover</c> styles do not apply, and
     /// <see cref="NeoAutomationActionResult.Note"/> says so.
     /// </remarks>
     public ValueTask<NeoAutomationActionResult> HoverAsync(string uid, CancellationToken cancellationToken = default)

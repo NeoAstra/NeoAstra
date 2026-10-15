@@ -1458,10 +1458,11 @@
   }
 
   // Where a real pointer would hover the element, in CSS pixels of the main viewport: for an element of the top
-  // document that nothing covers there. Anything else is hovered with dispatched events.
+  // document that nothing covers there, in a document that has the focus, which the engine's pointer input would give
+  // it otherwise. Anything else is hovered with dispatched events.
   function hoverPoint(options) {
     const element = elementForUid(options.uid);
-    if (viewOf(element) !== window) return {};
+    if (viewOf(element) !== window || !document.hasFocus()) return {};
     scrollIntoViewIfNeeded(element);
     const point = clickPoint(element);
     const hit = elementAt(element.ownerDocument, point.x, point.y);
