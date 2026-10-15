@@ -32,8 +32,21 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     private static long _nextOwnerSubclassId;
     private NeoDispatcher? _dispatcher = dispatcher;
 
+    private const uint WmEnterIdle = 0x0121;
+    private const uint FosNoChangeDir = 0x00000008;
+    private const uint FosPickFolders = 0x00000020;
+    private const uint FosForceFileSystem = 0x00000040;
+    private const uint FosAllowMultiSelect = 0x00000200;
+    private const uint FosPathMustExist = 0x00000800;
+    private const uint SigdnFileSystemPath = 0x80058000;
+    private const uint ClsctxInprocServer = 0x1;
+    private const int HResultCancelled = unchecked((int)0x800704C7);
+    private static readonly Guid FileOpenDialogClass = new("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7");
+    private static readonly Guid FileOpenDialogInterface = new("D57C7288-D4AD-4768-BE02-9D969532D960");
+    private static readonly Guid ShellItemInterface = new("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0,
-        "Win32 common file/folder dialogs that are resizable by default, and TaskDialog with explicit HWND ownership, cancellation, native standard role labels, filters, and canonical scope checks. Folder multi-select is unavailable in the reviewed Win32 folder presenter.");
+        "Win32 common file dialogs that are resizable by default, the Explorer folder dialog (IFileOpenDialog, with folder multi-select; SHBrowseForFolder where it cannot be created), and TaskDialog with explicit HWND ownership, cancellation, native standard role labels, filters, and canonical scope checks.");
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application)
     {
@@ -51,8 +64,9 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     public ValueTask<NeoDesktopResult<IReadOnlyList<string>>> OpenFoldersAsync(NeoFileDialogOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options); options.Validate(false);
-        if (options.AllowMultiple) return ValueTask.FromResult(NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Unsupported, "folder_multi_select_unavailable"));
-        return Invoke(() => SelectFolder(options, cancellationToken), cancellationToken);
+        return Invoke(() => SelectFoldersWithFileDialog(options, cancellationToken) ?? (options.AllowMultiple
+            ? NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Unsupported, "folder_multi_select_unavailable")
+            : SelectFolder(options, cancellationToken)), cancellationToken);
     }
 
     public async ValueTask<NeoDesktopResult<string>> SaveFileAsync(NeoFileDialogOptions options, CancellationToken cancellationToken = default)
@@ -127,6 +141,82 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
             stateHandle.Free();
             Free(title); Free(initial); Free(filter); NativeMemory.Free(fileBuffer);
         }
+    }
+
+    // The Explorer dialog in folder mode: address bar, search, and a field a path can be typed or pasted into. Its COM
+    // interfaces are called through their tables, which stays free of runtime COM interop. Returns null when the dialog
+    // cannot be created, for the folder tree of SHBrowseForFolder to stand in.
+    private static unsafe NeoDesktopResult<IReadOnlyList<string>>? SelectFoldersWithFileDialog(NeoFileDialogOptions options, CancellationToken cancellationToken)
+    {
+        nint dialog = 0;
+        var dialogClass = FileOpenDialogClass;
+        var dialogInterface = FileOpenDialogInterface;
+        if (WindowsDialogNative.CoCreateInstance(&dialogClass, 0, ClsctxInprocServer, &dialogInterface, &dialog) < 0 || dialog == 0) return null;
+        nint folder = 0, results = 0;
+        var owner = Owner(options.Owner);
+        var state = new NativeDialogState(cancellationToken);
+        var stateHandle = GCHandle.Alloc(state);
+        try
+        {
+            state.AttachOwner(owner, GCHandle.ToIntPtr(stateHandle));
+            var methods = *(nint**)dialog;
+            uint flags;
+            if (((delegate* unmanaged[Stdcall]<nint, uint*, int>)methods[10])(dialog, &flags) < 0) return null; // GetOptions
+            flags |= FosPickFolders | FosForceFileSystem | FosNoChangeDir | FosPathMustExist | (options.AllowMultiple ? FosAllowMultiSelect : 0);
+            if (((delegate* unmanaged[Stdcall]<nint, uint, int>)methods[9])(dialog, flags) < 0) return null; // SetOptions
+            if (options.Title is { } title)
+                fixed (char* text = title) _ = ((delegate* unmanaged[Stdcall]<nint, char*, int>)methods[17])(dialog, text); // SetTitle
+            if (options.InitialDirectory is { } initial)
+            {
+                var itemInterface = ShellItemInterface;
+                fixed (char* path = initial)
+                    if (WindowsDialogNative.SHCreateItemFromParsingName(path, 0, &itemInterface, &folder) >= 0 && folder != 0)
+                        _ = ((delegate* unmanaged[Stdcall]<nint, nint, int>)methods[12])(dialog, folder); // SetFolder
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            var shown = ((delegate* unmanaged[Stdcall]<nint, nint, int>)methods[3])(dialog, owner); // IModalWindow::Show
+            if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException(cancellationToken);
+            if (shown == HResultCancelled) return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Canceled);
+            if (shown < 0) return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "folder_dialog_failed");
+            if (((delegate* unmanaged[Stdcall]<nint, nint*, int>)methods[27])(dialog, &results) < 0 || results == 0) // IFileOpenDialog::GetResults
+                return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "folder_path_failed");
+            var items = *(nint**)results;
+            uint count;
+            if (((delegate* unmanaged[Stdcall]<nint, uint*, int>)items[7])(results, &count) < 0 || count == 0 || count > 256) // GetCount
+                return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "folder_path_failed");
+            var output = new string[count];
+            for (uint index = 0; index < count; index++)
+            {
+                nint item = 0;
+                if (((delegate* unmanaged[Stdcall]<nint, uint, nint*, int>)items[8])(results, index, &item) < 0 || item == 0) // GetItemAt
+                    return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "folder_path_failed");
+                char* text = null;
+                try
+                {
+                    if (((delegate* unmanaged[Stdcall]<nint, uint, char**, int>)(*(nint**)item)[5])(item, SigdnFileSystemPath, &text) < 0 || text == null) // GetDisplayName
+                        return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "folder_path_failed");
+                    var path = new string(text);
+                    if (!options.Scope.TryAuthorize(path, requireExisting: true, out var canonical) || !Directory.Exists(canonical)) return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Denied, "path_scope");
+                    output[index] = canonical!;
+                }
+                finally
+                {
+                    if (text != null) WindowsDialogNative.CoTaskMemFree((nint)text);
+                    Release(item);
+                }
+            }
+            return NeoDesktopResult<IReadOnlyList<string>>.Success(Array.AsReadOnly(output));
+        }
+        finally
+        {
+            Release(results); Release(folder); Release(dialog);
+            state.Dispose(); stateHandle.Free();
+        }
+    }
+
+    private static unsafe void Release(nint unknown)
+    {
+        if (unknown != 0) _ = ((delegate* unmanaged[Stdcall]<nint, uint>)(*(nint**)unknown)[2])(unknown);
     }
 
     private static unsafe NeoDesktopResult<IReadOnlyList<string>> SelectFolder(NeoFileDialogOptions options, CancellationToken cancellationToken)
@@ -292,7 +382,12 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static nint OwnerSubclass(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
     {
-        try { if (message == WmNcDestroy) State((nint)data)?.OwnerDestroyed(); }
+        try
+        {
+            if (message == WmNcDestroy) State((nint)data)?.OwnerDestroyed();
+            // A modal dialog box tells its owner when its loop is idle, with its handle: the Explorer dialog is found so.
+            else if (message == WmEnterIdle && wParam == 0 && lParam != 0) State((nint)data)?.FoundHandle(lParam);
+        }
         catch { }
         return WindowsDialogNative.DefSubclassProc(window, message, wParam, lParam);
     }
@@ -342,6 +437,7 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
         internal NativeDialogState(CancellationToken token) { _token = token; _registration = token.Register(static value => ((NativeDialogState)value!).Cancel(), this); }
         internal nint InitialPath { get; init; }
         internal void SetHandle(nint handle) { Volatile.Write(ref _handle, handle); if (handle != 0 && _token.IsCancellationRequested) Cancel(); }
+        internal void FoundHandle(nint handle) { if (Volatile.Read(ref _handle) == 0) SetHandle(handle); }
         internal unsafe void AttachOwner(nint owner, nint data)
         {
             if (owner == 0) return;
@@ -396,6 +492,8 @@ internal sealed partial class WindowsDialogs(NeoDispatcher? dispatcher) : INeoDi
         [LibraryImport("shell32.dll", EntryPoint = "SHBrowseForFolderW")] internal static partial nint BrowseForFolder(BrowseInfo* value);
         [LibraryImport("shell32.dll", EntryPoint = "SHGetPathFromIDListW")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GetPathFromIdList(nint item, char* path);
         [LibraryImport("ole32.dll")] internal static partial void CoTaskMemFree(nint memory);
+        [LibraryImport("ole32.dll")] internal static partial int CoCreateInstance(Guid* classId, nint outer, uint context, Guid* interfaceId, nint* value);
+        [LibraryImport("shell32.dll")] internal static partial int SHCreateItemFromParsingName(char* path, nint bindContext, Guid* interfaceId, nint* item);
         [LibraryImport("comctl32.dll")] internal static partial int TaskDialogIndirect(TaskDialogConfig* config, out int button, int* radioButton, int* verification);
         [LibraryImport("user32.dll")] internal static partial nint GetParent(nint window);
         [LibraryImport("user32.dll", EntryPoint = "PostMessageW")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool PostMessage(nint window, uint message, nuint wParam, nint lParam);
