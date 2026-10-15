@@ -6,6 +6,7 @@
 #include <dwmapi.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 #include <wrl.h>
 #include <WebView2.h>
@@ -83,9 +84,18 @@ struct windows_view {
     EventRegistrationToken accelerator_key{};
     bool events_registered{};
     std::vector<windows_drop_registration> drop_registrations;
+    // A drag that started in the page: WebView2 reports it through the DevTools protocol instead of running its own
+    // drag loop, and NeoAstra runs it. The "data" member of Input.dragIntercepted (UTF-8), and the state of the loop.
+    ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> drag_intercepted;
+    EventRegistrationToken drag_intercepted_token{};
+    std::string page_drag_data;
+    UINT_PTR page_drag_timer{};
+    bool page_drag_active{};
+    bool page_drag_dropped{};
 };
 
 void register_view_drop_targets(neoastra_view_t* view, windows_view* state);
+void intercept_page_drags(neoastra_view_t* view, windows_view* state) noexcept;
 
 struct windows_download {
     ComPtr<ICoreWebView2DownloadOperation> operation;
@@ -114,9 +124,11 @@ std::string narrow(const wchar_t* value) {
 }
 
 void append_protocol_number(std::wstring& output, double value);
-bool drag_started_in_view_browser(const neoastra_view_t* view) noexcept;
+DWORD drag_started_in_view_browser(const neoastra_view_t* view) noexcept;
+const std::string* own_page_drag(const neoastra_view_t* view) noexcept;
+bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept;
 std::string page_drag_data(IDataObject* data, DWORD allowed) noexcept;
-bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data) noexcept;
+bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data, std::shared_ptr<bool> done = {}) noexcept;
 
 // The page, not NeoAstra, takes a drag it forwards: the effect shown is the first one its source allows.
 DWORD page_drop_effect(DWORD allowed) noexcept {
@@ -125,10 +137,10 @@ DWORD page_drop_effect(DWORD allowed) noexcept {
     return allowed & DROPEFFECT_LINK;
 }
 
-// Replaces WebView2's OLE drop targets, which live in its browser process and cannot be called from here. External
-// file, text, and URL drops go to the host. Drags that started in this view's own browser (in-page HTML5 drags) and
-// drags with none of those formats (custom MIME types) go to the page through the DevTools protocol, which dispatches
-// them as WebView2's own drop target would.
+// Replaces WebView2's OLE drop targets on the windows of a view. External file, text, and URL drops go to the host.
+// The page gets, through the DevTools protocol, the drags that started in it (which NeoAstra runs, see
+// begin_page_drag) and the external drags with none of those formats (custom MIME types): WebView2's own target,
+// which lives in its browser process, is withdrawn while external drops are not allowed, in-page drops included.
 class view_drop_target final : public IDropTarget {
 public:
     view_drop_target(neoastra_view_t* view, HWND window) : view_(view), window_(window) { }
@@ -153,7 +165,24 @@ public:
         FORMATETC url{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         valid_ = data && (SUCCEEDED(data->QueryGetData(&files)) || SUCCEEDED(data->QueryGetData(&text)) || SUCCEEDED(data->QueryGetData(&url)));
         page_ = false;
-        if (data && (!valid_ || drag_started_in_view_browser(view_))) {
+        own_ = false;
+        if (const auto* own = own_page_drag(view_)) {
+            // A drag of this page, run by NeoAstra: the page has its original data.
+            valid_ = false;
+            own_ = true;
+            page_data_ = *own;
+            page_ = forward_page_drag(view_, L"dragEnter", point, keys, page_data_);
+            last_point_ = point;
+            *effect = page_ ? page_drop_effect(*effect) : DROPEFFECT_NONE;
+            return S_OK;
+        }
+        if (drag_started_in_view_browser(view_)) {
+            // A drag of the page that WebView2 runs itself (interception unavailable): neither the host's nor deliverable.
+            valid_ = false;
+            *effect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+        if (data && !valid_) {
             page_data_ = page_drag_data(data, *effect);
             page_ = !page_data_.empty() && forward_page_drag(view_, L"dragEnter", point, keys, page_data_);
         }
@@ -179,8 +208,10 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragLeave() override {
-        if (page_) (void)forward_page_drag(view_, L"dragCancel", last_point_, 0, page_data_);
+        // A drag of this page goes on outside the view; its loop ends it in the page.
+        if (page_ && !own_) (void)forward_page_drag(view_, L"dragCancel", last_point_, 0, page_data_);
         page_ = false;
+        own_ = false;
         page_data_.clear();
         valid_ = false;
         return S_OK;
@@ -189,7 +220,8 @@ public:
         if (!data || !effect) return E_POINTER;
         if (page_) {
             page_ = false;
-            const auto forwarded = forward_page_drag(view_, L"drop", point, keys, page_data_);
+            const auto forwarded = own_ ? drop_page_drag(view_, point, keys) : forward_page_drag(view_, L"drop", point, keys, page_data_);
+            own_ = false;
             page_data_.clear();
             *effect = forwarded ? page_drop_effect(*effect) : DROPEFFECT_NONE;
             return S_OK;
@@ -273,6 +305,7 @@ private:
     HWND window_{};
     bool valid_{};
     bool page_{};
+    bool own_{};
     std::string page_data_;
     POINTL last_point_{};
 };
@@ -478,6 +511,7 @@ void remove_view_events(windows_view* state) noexcept {
     ComPtr<ICoreWebView2_10> core10;if(SUCCEEDED(state->core.As(&core10)))core10->remove_BasicAuthenticationRequested(state->basic_auth);
     ComPtr<ICoreWebView2_5> core5;if(SUCCEEDED(state->core.As(&core5)))core5->remove_ClientCertificateRequested(state->client_certificate);
     ComPtr<ICoreWebView2_14> core14;if(SUCCEEDED(state->core.As(&core14)))core14->remove_ServerCertificateErrorDetected(state->server_certificate_error);
+    if (state->drag_intercepted) { state->drag_intercepted->remove_DevToolsProtocolEventReceived(state->drag_intercepted_token); state->drag_intercepted.Reset(); }
     state->events_registered = false;
 }
 
@@ -774,7 +808,10 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
             args->get_IsSuccess(&success);
             args->get_WebErrorStatus(&status);
             args->get_NavigationId(&navigation_id);
-            if (success) register_view_drop_targets(view, static_cast<windows_view*>(view->platform));
+            if (success) {
+                register_view_drop_targets(view, static_cast<windows_view*>(view->platform));
+                intercept_page_drags(view, static_cast<windows_view*>(view->platform));
+            }
             neo_emit_view(view, success ? NEOASTRA_EVENT_NAVIGATION_COMPLETED : NEOASTRA_EVENT_NAVIGATION_FAILED,
                           0, nullptr, &view->source, success ? 0 : static_cast<uint64_t>(NEOASTRA_ERROR_NATIVE_FAILURE),
                           static_cast<int64_t>(status));
@@ -2109,10 +2146,10 @@ namespace {
 
 // OLE gives a drop target no source. While a drag runs, DoDragDrop holds the mouse capture of its source thread, so
 // a capture held by a thread of this view's browser process (not this process: its own outbound drags stay
-// external) means the drag started in that browser, as an in-page HTML5 drag does.
-bool drag_started_in_view_browser(const neoastra_view_t* view) noexcept {
+// external) means the drag started in that browser, as an in-page HTML5 drag does. Returns that thread, or 0.
+DWORD drag_started_in_view_browser(const neoastra_view_t* view) noexcept {
     const auto* state = view ? static_cast<const windows_view*>(view->platform) : nullptr;
-    if (!state) return false;
+    if (!state) return 0;
     const auto self = GetCurrentProcessId();
     for (const auto& registration : state->drop_registrations) {
         DWORD process{};
@@ -2120,9 +2157,9 @@ bool drag_started_in_view_browser(const neoastra_view_t* view) noexcept {
         if (!thread || process == self) continue;
         GUITHREADINFO info{};
         info.cbSize = sizeof(info);
-        if (GetGUIThreadInfo(thread, &info) && info.hwndCapture) return true;
+        if (GetGUIThreadInfo(thread, &info) && info.hwndCapture) return thread;
     }
-    return false;
+    return 0;
 }
 
 constexpr SIZE_T maximum_page_drag_format_bytes = 8u * 1024u * 1024u;
@@ -2214,15 +2251,23 @@ std::string page_drag_data(IDataObject* data, DWORD allowed) noexcept {
 }
 
 // Dispatches one drag event to the page at a screen point, in CSS pixels of its viewport.
-bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data) noexcept {
+bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data, std::shared_ptr<bool> done) noexcept {
     try {
         auto* state = view ? static_cast<windows_view*>(view->platform) : nullptr;
         if (!state || !state->core || !state->controller) return false;
         HWND parent{};
         RECT bounds{};
         if (FAILED(state->controller->get_ParentWindow(&parent)) || !parent || FAILED(state->controller->get_Bounds(&bounds))) return false;
+        // OLE hands the screen point of the drag loop in physical pixels, whatever the DPI awareness of this call (a COM
+        // call arrives through a window of its own): convert it in the coordinate space of the parent of the controller.
         POINT client{point.x, point.y};
-        if (!ScreenToClient(parent, &client)) return false;
+        (void)PhysicalToLogicalPointForPerMonitorDPI(parent, &client);
+        bool converted{};
+        if (const auto previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent))) {
+            converted = ScreenToClient(parent, &client);
+            SetThreadDpiAwarenessContext(previous);
+        } else converted = ScreenToClient(parent, &client);
+        if (!converted) return false;
         double scale = 1.0, zoom = 1.0;
         ComPtr<ICoreWebView2Controller3> controller3;
         if (SUCCEEDED(state->controller.As(&controller3)) && (FAILED(controller3->get_RasterizationScale(&scale)) || !(scale > 0.0))) scale = 1.0;
@@ -2241,11 +2286,275 @@ bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point,
         auto* app = view->environment->app;
         const bool report = wcscmp(type, L"dragOver") != 0;
         return SUCCEEDED(state->core->CallDevToolsProtocolMethod(L"Input.dispatchDragEvent", parameters.c_str(),
-            Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([app, report](HRESULT result, LPCWSTR) -> HRESULT {
+            Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([app, report, done](HRESULT result, LPCWSTR) -> HRESULT {
+                if (done) *done = true;
                 if (FAILED(result) && report) neo_log(app, NEOASTRA_LOG_WARNING, "drag-drop", "WebView2 did not dispatch a page drag event");
                 return S_OK;
             }).Get()));
     } catch (...) { return false; }
+}
+
+// Reads the JSON string whose opening quote is at `index` into UTF-16 and moves past it.
+bool read_json_string(const std::wstring& json, size_t& index, std::wstring& value) {
+    if (index >= json.size() || json[index] != L'"') return false;
+    value.clear();
+    for (++index; index < json.size(); ++index) {
+        const auto character = json[index];
+        if (character == L'"') { ++index; return true; }
+        if (character != L'\\') { value.push_back(character); continue; }
+        if (++index >= json.size()) return false;
+        switch (json[index]) {
+            case L'"': value.push_back(L'"'); break;
+            case L'\\': value.push_back(L'\\'); break;
+            case L'/': value.push_back(L'/'); break;
+            case L'b': value.push_back(L'\b'); break;
+            case L'f': value.push_back(L'\f'); break;
+            case L'n': value.push_back(L'\n'); break;
+            case L'r': value.push_back(L'\r'); break;
+            case L't': value.push_back(L'\t'); break;
+            case L'u': {
+                if (json.size() - index <= 4) return false;
+                unsigned code{};
+                for (size_t digit = 1; digit <= 4; ++digit) {
+                    const auto hex = json[index + digit];
+                    code <<= 4;
+                    if (hex >= L'0' && hex <= L'9') code |= static_cast<unsigned>(hex - L'0');
+                    else if (hex >= L'a' && hex <= L'f') code |= static_cast<unsigned>(hex - L'a' + 10);
+                    else if (hex >= L'A' && hex <= L'F') code |= static_cast<unsigned>(hex - L'A' + 10);
+                    else return false;
+                }
+                value.push_back(static_cast<wchar_t>(code));
+                index += 4;
+                break;
+            }
+            default: return false;
+        }
+    }
+    return false;
+}
+
+// The JSON text of the object value of the first member with this name.
+bool json_object_member(const std::wstring& json, const wchar_t* member, std::wstring& value) {
+    const auto key = std::wstring(L"\"") + member + L"\"";
+    const auto at = json.find(key);
+    const auto start = at == std::wstring::npos ? at : json.find(L'{', at + key.size());
+    if (start == std::wstring::npos) return false;
+    int depth{};
+    bool quoted{};
+    for (auto index = start; index < json.size(); ++index) {
+        const auto character = json[index];
+        if (quoted) { if (character == L'\\') ++index; else if (character == L'"') quoted = false; continue; }
+        if (character == L'"') quoted = true;
+        else if (character == L'{') ++depth;
+        else if (character == L'}' && --depth == 0) { value = json.substr(start, index - start + 1); return true; }
+    }
+    return false;
+}
+
+// The string value following a member name at or after `index`, or false.
+bool json_string_member(const std::wstring& json, const wchar_t* member, size_t& index, std::wstring& value) {
+    const auto key = std::wstring(L"\"") + member + L"\"";
+    const auto at = json.find(key, index);
+    if (at == std::wstring::npos) return false;
+    const auto colon = json.find(L':', at + key.size());
+    const auto quote = colon == std::wstring::npos ? colon : json.find(L'"', colon);
+    if (quote == std::wstring::npos) return false;
+    index = quote;
+    return read_json_string(json, index, value);
+}
+
+bool set_global_data(IDataObject* object, CLIPFORMAT format, const void* bytes, size_t size) noexcept {
+    const auto handle = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!handle) return false;
+    if (auto* target = GlobalLock(handle)) { std::memcpy(target, bytes, size); GlobalUnlock(handle); }
+    else { GlobalFree(handle); return false; }
+    FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = handle;
+    if (SUCCEEDED(object->SetData(&request, &medium, TRUE))) return true;
+    GlobalFree(handle);
+    return false;
+}
+
+// What other applications get from a drag of the page: its text, its URL, and its custom MIME types the way Chromium
+// writes them (see read_custom_drag_data).
+ComPtr<IDataObject> page_drag_object(const std::wstring& data) {
+    ComPtr<IDataObject> object;
+    if (FAILED(SHCreateDataObject(nullptr, 0, nullptr, nullptr, IID_PPV_ARGS(&object)))) return {};
+    std::vector<std::pair<std::wstring, std::wstring>> custom;
+    size_t index{};
+    std::wstring type, value;
+    while (json_string_member(data, L"mimeType", index, type) && json_string_member(data, L"data", index, value)) {
+        if (type == L"text/plain") (void)set_global_data(object.Get(), CF_UNICODETEXT, value.c_str(), (value.size() + 1) * sizeof(wchar_t));
+        else if (type == L"text/uri-list") {
+            const auto url = value.substr(0, value.find_first_of(L"\r\n"));
+            (void)set_global_data(object.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")), url.c_str(), (url.size() + 1) * sizeof(wchar_t));
+        } else if (type != L"text/html" && custom.size() < 256) custom.emplace_back(type, value);
+    }
+    if (!custom.empty()) {
+        std::vector<uint8_t> pickle(8);
+        auto append = [&pickle](const std::wstring& text) {
+            const auto length = static_cast<int32_t>(text.size());
+            const auto offset = pickle.size();
+            pickle.resize(offset + sizeof(length) + ((text.size() * sizeof(wchar_t) + 3u) & ~size_t{3}));
+            std::memcpy(pickle.data() + offset, &length, sizeof(length));
+            if (length) std::memcpy(pickle.data() + offset + sizeof(length), text.data(), text.size() * sizeof(wchar_t));
+        };
+        for (const auto& [name, content] : custom) { append(name); append(content); }
+        const auto payload = static_cast<uint32_t>(pickle.size() - 4), count = static_cast<uint32_t>(custom.size());
+        std::memcpy(pickle.data(), &payload, sizeof(payload));
+        std::memcpy(pickle.data() + 4, &count, sizeof(count));
+        (void)set_global_data(object.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Chromium Web Custom MIME Data Format")), pickle.data(), pickle.size());
+    }
+    return object;
+}
+
+class page_drop_source final : public IDropSource {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
+        if (!value) return E_POINTER;
+        *value = nullptr;
+        if (iid != IID_IUnknown && iid != IID_IDropSource) return E_NOINTERFACE;
+        *value = static_cast<IDropSource*>(this);
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&references_)); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const auto value = static_cast<ULONG>(InterlockedDecrement(&references_));
+        if (value == 0) delete this;
+        return value;
+    }
+    // The button was pressed while the browser had the mouse, so the key state of this thread, which OLE passes, never
+    // saw it go down: the drag goes on while the physical button is held.
+    HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD) override {
+        if (escape) return DRAGDROP_S_CANCEL;
+        return GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000 ? S_OK : DRAGDROP_S_DROP;
+    }
+    HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+private:
+    ~page_drop_source() = default;
+    volatile LONG references_{1};
+};
+
+std::vector<std::pair<UINT_PTR, neoastra_view_t*>> page_drags; // Views whose page drag starts on a timer (UI thread only).
+
+const std::string* own_page_drag(const neoastra_view_t* view) noexcept {
+    const auto* state = view ? static_cast<const windows_view*>(view->platform) : nullptr;
+    return state && state->page_drag_active ? &state->page_drag_data : nullptr;
+}
+
+// The loop of the page drag waits here for the page to have its drop: once it returns, the drag ends in the page.
+bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept {
+    auto* state = view ? static_cast<windows_view*>(view->platform) : nullptr;
+    if (!state || !state->page_drag_active) return false;
+    auto done = std::make_shared<bool>(false);
+    if (!forward_page_drag(view, L"drop", point, keys, state->page_drag_data, done)) return false;
+    state->page_drag_dropped = true;
+    const auto deadline = GetTickCount64() + 2000;
+    MSG message{};
+    while (!*done && GetTickCount64() < deadline) {
+        if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        else MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+    return true;
+}
+
+// Runs the drag the page started, outside of the DevTools event that reported it: an OLE drag loop of this process,
+// so that the drag can leave the window and NeoAstra's own target can give the page its drop before the drag ends.
+void run_page_drag(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || state->page_drag_data.empty()) return;
+    std::string data = std::move(state->page_drag_data);
+    state->page_drag_data.clear();
+    try {
+        const auto wide = widen(data);
+        DWORD allowed{};
+        if (const auto at = wide.find(L"\"dragOperationsMask\""); at != std::wstring::npos) {
+            const auto colon = wide.find(L':', at);
+            const auto mask = colon == std::wstring::npos ? 0 : std::wcstol(wide.c_str() + colon + 1, nullptr, 10);
+            if (mask & 1) allowed |= DROPEFFECT_COPY;
+            if (mask & 2) allowed |= DROPEFFECT_LINK;
+            if (mask & 16) allowed |= DROPEFFECT_MOVE;
+        }
+        const auto button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
+        auto object = page_drag_object(wide);
+        ComPtr<IDropSource> source;
+        source.Attach(new (std::nothrow) page_drop_source());
+        POINT cursor{};
+        if (allowed && object && source && (GetAsyncKeyState(button) & 0x8000) && view->retain()) {
+            state->page_drag_data = data;
+            state->page_drag_active = true;
+            state->page_drag_dropped = false;
+            DWORD effect{};
+            (void)DoDragDrop(object.Get(), source.Get(), allowed, &effect);
+            state = static_cast<windows_view*>(view->platform); // The view may have been closed during the loop.
+            const bool dropped = state && state->page_drag_dropped;
+            if (state) { state->page_drag_active = false; state->page_drag_data.clear(); }
+            if (state && !dropped && GetPhysicalCursorPos(&cursor)) (void)forward_page_drag(view, L"dragCancel", {cursor.x, cursor.y}, 0, data);
+            view->release();
+            return;
+        }
+        // No drag to run (the button is already up, or nothing to carry): the page still waits for its end.
+        if (GetPhysicalCursorPos(&cursor)) (void)forward_page_drag(view, L"dragCancel", {cursor.x, cursor.y}, 0, data);
+    } catch (...) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "drag-drop", "A drag of the page could not be run");
+    }
+}
+
+void CALLBACK page_drag_tick(HWND, UINT, UINT_PTR timer, DWORD) noexcept {
+    KillTimer(nullptr, timer);
+    const auto found = std::find_if(page_drags.begin(), page_drags.end(), [timer](const auto& value) { return value.first == timer; });
+    if (found == page_drags.end()) return;
+    auto* view = found->second;
+    page_drags.erase(found);
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || state->page_drag_timer != timer) return;
+    state->page_drag_timer = 0;
+    run_page_drag(view);
+}
+
+void begin_page_drag(neoastra_view_t* view, const std::wstring& event) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || state->page_drag_active || state->page_drag_timer) return;
+    try {
+        std::wstring data;
+        if (!json_object_member(event, L"data", data)) return;
+        state->page_drag_data = narrow(data.c_str());
+        page_drags.reserve(page_drags.size() + 1);
+        state->page_drag_timer = SetTimer(nullptr, 0, USER_TIMER_MINIMUM, page_drag_tick);
+        if (state->page_drag_timer) page_drags.emplace_back(state->page_drag_timer, view);
+    } catch (...) { }
+}
+
+void end_page_drag(windows_view* state) noexcept {
+    if (state->page_drag_timer) {
+        KillTimer(nullptr, state->page_drag_timer);
+        std::erase_if(page_drags, [timer = state->page_drag_timer](const auto& value) { return value.first == timer; });
+        state->page_drag_timer = 0;
+    }
+    state->page_drag_active = false;
+}
+
+// Drags that start in the page are reported to NeoAstra instead of starting WebView2's own drag loop, whose drop
+// could not reach the page (see view_drop_target).
+void intercept_page_drags(neoastra_view_t* view, windows_view* state) noexcept {
+    if (!state->core) return;
+    if (!state->drag_intercepted) {
+        ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+        if (SUCCEEDED(state->core->GetDevToolsProtocolEventReceiver(L"Input.dragIntercepted", &receiver)) &&
+            SUCCEEDED(receiver->add_DevToolsProtocolEventReceived(Callback<ICoreWebView2DevToolsProtocolEventReceivedEventHandler>(
+                [view](ICoreWebView2*, ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args) -> HRESULT {
+                    LPWSTR json{};
+                    if (FAILED(args->get_ParameterObjectAsJson(&json)) || !json) return S_OK;
+                    try { begin_page_drag(view, json); } catch (...) { }
+                    CoTaskMemFree(json);
+                    return S_OK;
+                }).Get(), &state->drag_intercepted_token))) state->drag_intercepted = receiver;
+    }
+    (void)state->core->CallDevToolsProtocolMethod(L"Input.setInterceptDrags", L"{\"enabled\":true}",
+        Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([](HRESULT, LPCWSTR) -> HRESULT { return S_OK; }).Get());
 }
 
 } // namespace
@@ -2369,6 +2678,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 layout_title_bar(view->window);
             }
             if (SUCCEEDED(result)) result = register_view_events(view, state);
+            if (SUCCEEDED(result)) intercept_page_drags(view, state);
             if (SUCCEEDED(result)) result = register_devtools_shortcut(view, state);
             // A window that holds the keyboard has nothing else to type into: its new browser takes it, as on activation.
             if (SUCCEEDED(result) && view->window && GetFocus() == view_parent(view)) (void)controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -2409,7 +2719,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     if (FAILED(result)) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 controller creation could not be started", result, "webview2"); return false; }
     return true;
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;remove_view_events(state);for(auto& registration:state->drop_registrations){if(GetPropW(registration.window,L"NeoAstra.DropTarget")==registration.target.Get())RemovePropW(registration.window,L"NeoAstra.DropTarget");(void)RevokeDragDrop(registration.window);}state->drop_registrations.clear();if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;end_page_drag(state);remove_view_events(state);for(auto& registration:state->drop_registrations){if(GetPropW(registration.window,L"NeoAstra.DropTarget")==registration.target.Get())RemovePropW(registration.window,L"NeoAstra.DropTarget");(void)RevokeDragDrop(registration.window);}state->drop_registrations.clear();if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_Bounds(view_bounds(view)))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(uri);const auto result=state->core->Navigate(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);auto* environment=static_cast<windows_environment*>(view->environment->platform);if(!state||!state->core||!environment||!environment->value)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(method.empty()||body_length>ULONG_MAX)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WebView2 request method or body length");ComPtr<IStream> content;if(body_length){HRESULT result=CreateStreamOnHGlobal(nullptr,TRUE,&content);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WebView2 request body",result,"webview2");ULONG written{};result=content->Write(body,static_cast<ULONG>(body_length),&written);LARGE_INTEGER start{};if(SUCCEEDED(result)&&written==body_length)result=content->Seek(start,STREAM_SEEK_SET,nullptr);if(FAILED(result)||written!=body_length)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not write WebView2 request body",FAILED(result)?result:E_FAIL,"webview2");}ComPtr<ICoreWebView2Environment2> environment2;ComPtr<ICoreWebView2_2> core2;auto result=environment->value.As(&environment2);if(SUCCEEDED(result))result=state->core.As(&core2);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"This WebView2 runtime does not support request navigation",result,"webview2");ComPtr<ICoreWebView2WebResourceRequest> request;result=environment2->CreateWebResourceRequest(widen(uri).c_str(),widen(method).c_str(),content.Get(),widen(headers).c_str(),&request);if(SUCCEEDED(result))result=core2->NavigateWithWebResourceRequest(request.Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 request navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
