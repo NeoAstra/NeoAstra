@@ -266,7 +266,7 @@ public sealed class NeoDirectoryResourceProvider : INeoResourceProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         _root = Path.GetFullPath(rootDirectory);
         if (!Directory.Exists(_root)) throw new DirectoryNotFoundException($"The asset root '{_root}' does not exist.");
-        if (!followSymbolicLinks && (File.GetAttributes(_root) & FileAttributes.ReparsePoint) != 0)
+        if (!followSymbolicLinks && NeoFileLinks.IsLink(_root))
         {
             throw new ArgumentException("The asset root cannot be a symbolic link or reparse point when symbolic-link following is disabled.", nameof(rootDirectory));
         }
@@ -331,7 +331,7 @@ public sealed class NeoDirectoryResourceProvider : INeoResourceProvider
         {
             current = Path.Combine(current, segment);
             if (!File.Exists(current) && !Directory.Exists(current)) break;
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            if (NeoFileLinks.IsLink(current)) return true;
         }
         return false;
     }

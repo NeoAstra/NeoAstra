@@ -246,16 +246,16 @@ public sealed class NeoManifestResourceProvider : INeoResourceProvider
         if (path.Contains('\\') || path.Contains('\0') || path.Contains(':') || path.Split('/').Any(static segment => segment is "." or ".." or "")) return path.Length == 0;
         return true;
     }
-    private bool ContainsReparse(string path) { var current = _root; foreach (var segment in Path.GetRelativePath(_root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) { current = Path.Combine(current, segment); if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true; } return false; }
+    private bool ContainsReparse(string path) { var current = _root; foreach (var segment in Path.GetRelativePath(_root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) { current = Path.Combine(current, segment); if (NeoFileLinks.IsLink(current)) return true; } return false; }
     private static void EnsureRootHasNoLinks(string path, string parameterName)
     {
         var root = Path.GetPathRoot(path); if (string.IsNullOrEmpty(root)) throw new ArgumentException("The packaged asset root is invalid.", parameterName);
         var current = root;
-        if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("The packaged asset root must not traverse a link or reparse point.", parameterName);
+        if (NeoFileLinks.IsLink(current)) throw new ArgumentException("The packaged asset root must not traverse a link or reparse point.", parameterName);
         foreach (var segment in path[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
             current = Path.Combine(current, segment);
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("The packaged asset root must not traverse a link or reparse point.", parameterName);
+            if (NeoFileLinks.IsLink(current)) throw new ArgumentException("The packaged asset root must not traverse a link or reparse point.", parameterName);
         }
     }
 }
