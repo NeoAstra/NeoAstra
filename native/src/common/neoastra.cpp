@@ -8,6 +8,10 @@
 #include <new>
 #include <stdexcept>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace {
 
 constexpr uint32_t known_custom_scheme_flags = NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY |
@@ -1317,6 +1321,23 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     static const std::string linux_message_origin="WebKitGTK 6.0 script messages do not expose trustworthy source-origin data";
 #endif
     info->support=NEOASTRA_SUPPORT_NONE;info->capability_version=1;info->flags=0;
+#if defined(__APPLE__) && TARGET_OS_IOS
+    // The iOS backend reports what it implements; the list for the other platforms promises more than it offers so far.
+    switch(capability){
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_END:
+        case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
+        case NEOASTRA_CAPABILITY_PROFILE_EPHEMERAL:
+        case NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT:
+        case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+        case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:
+            info->support=NEOASTRA_SUPPORT_LIMITED;break;
+        default:break;
+    }
+    info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
+    return NEOASTRA_OK;
+#endif
     switch(capability){
         case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
         case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
