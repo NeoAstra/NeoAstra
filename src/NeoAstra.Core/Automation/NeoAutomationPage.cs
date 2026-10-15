@@ -176,6 +176,11 @@ public sealed class NeoAutomationPage
     /// <param name="cancellationToken">Cancels the wait.</param>
     /// <returns>What the move led to.</returns>
     /// <exception cref="NeoAutomationException">The element is unknown, gone, or not visible, or a dialog is open.</exception>
+    /// <remarks>
+    /// The pointer and mouse events of the move (<c>pointerover</c>, <c>mouseenter</c>, <c>mousemove</c>, and the others) are
+    /// dispatched to the page, which runs its handlers; the engine's own hover state does not move, so CSS <c>:hover</c>
+    /// styles do not apply.
+    /// </remarks>
     public ValueTask<NeoAutomationActionResult> HoverAsync(string uid, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(uid);

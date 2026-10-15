@@ -19,6 +19,8 @@ internal static class AutomationFixture
               #spacer { height: 1400px; }
               .drop { width: 120px; height: 60px; border: 1px solid #888; }
               #swatch { width: 80px; height: 40px; background: #00f; }
+              #hover-target { color: rgb(0, 0, 0); }
+              #hover-target:hover { color: rgb(255, 0, 0); }
             </style>
             </head>
             <body>

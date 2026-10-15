@@ -132,7 +132,9 @@ not get in its way. What follows from this design:
 - **Input** is dispatched as DOM events, together with what an engine does for a real event and not
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
-  the list of a `<select>` do not open, and features that ask for a user activation refuse. `drag`
+  the list of a `<select>` do not open, and features that ask for a user activation refuse. `hover`
+  runs the page's pointer and mouse handlers but leaves the engine's hover state where it was, and its
+  answer says so: a style or menu that only CSS `:hover` shows stays hidden. `drag`
   dispatches the HTML drag-and-drop events (`dragstart` to `drop` and `dragend`) when its source is
   draggable, and otherwise a pointer gesture whose every move holds the primary button (`buttons` 1, with
   pressure) until the `pointerup`, as a real mouse does, so pointer-driven drags in the page follow it.
