@@ -373,6 +373,9 @@ public sealed class AutomationTests
             Assert.AreEqual("Successfully dragged an element", await driver.CallAsync("drag", $$"""{"from_uid":"{{driver.Uid("\"Drag me\"")}}","to_uid":"{{driver.Uid("\"Drop here\"")}}"}"""));
             Assert.AreEqual("""{"hover":"hovered","drop":"Dropped payload"}""",
                 await driver.EvaluateAsync("() => ({ hover: document.getElementById('hover-state').textContent, drop: document.getElementById('drop-target').textContent })"));
+            // An element that is not draggable is dragged with pointer events: the button stays held on every move until the release.
+            Assert.AreEqual("Successfully dragged an element", await driver.CallAsync("drag", $$"""{"from_uid":"{{driver.Uid("\"Slide me\"")}}","to_uid":"{{driver.Uid("\"Slide here\"")}}"}"""));
+            Assert.AreEqual("\"slid to slide-target\"", await driver.EvaluateAsync("() => document.getElementById('slide-state').textContent"));
 
             // The keyboard acts on the focused element: select all, type over it, and move on with Tab.
             await driver.CallAsync("click", $$"""{"uid":"{{name}}"}""");

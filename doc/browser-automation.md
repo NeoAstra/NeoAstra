@@ -132,7 +132,10 @@ not get in its way. What follows from this design:
 - **Input** is dispatched as DOM events, together with what an engine does for a real event and not
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
-  the list of a `<select>` do not open, and features that ask for a user activation refuse.
+  the list of a `<select>` do not open, and features that ask for a user activation refuse. `drag`
+  dispatches the HTML drag-and-drop events (`dragstart` to `drop` and `dragend`) when its source is
+  draggable, and otherwise a pointer gesture whose every move holds the primary button (`buttons` 1, with
+  pressure) until the `pointerup`, as a real mouse does, so pointer-driven drags in the page follow it.
 - **Focus in a window in the background** is told to the page by automation. A document without the
   system focus (`document.hasFocus()` is `false`, as in a window that is hidden or behind another one)
   gets no `focus`, `blur`, `focusin`, or `focusout` event from the engine when its active element

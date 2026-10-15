@@ -1237,34 +1237,36 @@
   }
 
   // Moves the pointer onto a target: out and leave events for what it left, over and enter events for what it entered.
-  function movePointer(target, point) {
+  // `buttons` are the buttons held during the move (1 while a drag holds the primary button), 0 when omitted.
+  function movePointer(target, point, buttons) {
+    const held = buttons || 0;
     if (hovered !== target) {
       const previous = hovered && hovered.isConnected ? hovered : null;
       const left = previous ? ancestorsOf(previous) : [];
       const entered = ancestorsOf(target);
       if (previous) {
-        const init = mouseInit(previous, point, { relatedTarget: target });
+        const init = mouseInit(previous, point, { relatedTarget: target, buttons: held });
         firePointer(previous, 'pointerout', init);
         fireMouse(previous, 'mouseout', init);
         left.forEach(function (element) {
           if (entered.indexOf(element) >= 0) return;
-          const leave = mouseInit(element, point, { relatedTarget: target, bubbles: false, cancelable: false, composed: false });
+          const leave = mouseInit(element, point, { relatedTarget: target, bubbles: false, cancelable: false, composed: false, buttons: held });
           firePointer(element, 'pointerleave', leave);
           fireMouse(element, 'mouseleave', leave);
         });
       }
-      const init = mouseInit(target, point, { relatedTarget: previous });
+      const init = mouseInit(target, point, { relatedTarget: previous, buttons: held });
       firePointer(target, 'pointerover', init);
       fireMouse(target, 'mouseover', init);
       entered.slice().reverse().forEach(function (element) {
         if (left.indexOf(element) >= 0) return;
-        const enter = mouseInit(element, point, { relatedTarget: previous, bubbles: false, cancelable: false, composed: false });
+        const enter = mouseInit(element, point, { relatedTarget: previous, bubbles: false, cancelable: false, composed: false, buttons: held });
         firePointer(element, 'pointerenter', enter);
         fireMouse(element, 'mouseenter', enter);
       });
       hovered = target;
     }
-    const move = mouseInit(target, point);
+    const move = mouseInit(target, point, { buttons: held });
     firePointer(target, 'pointermove', move);
     fireMouse(target, 'mousemove', move);
   }
@@ -2084,13 +2086,10 @@
     for (let step = 1; step <= steps; step++) {
       const point = { x: from.x + (to.x - from.x) * step / steps, y: from.y + (to.y - from.y) * step / steps };
       const over = step === steps ? target : (elementAt(source.ownerDocument, point.x, point.y) || origin);
-      if (native) {
-        fireDrag(draggable, 'drag', point, dataTransfer, true);
-      } else {
-        const move = mouseInit(over, point, { buttons: 1 });
-        firePointer(over, 'pointermove', move);
-        fireMouse(over, 'mousemove', move);
-      }
+      if (native) fireDrag(draggable, 'drag', point, dataTransfer, true);
+      // The primary button stays held, with pressure, on every move until the release: a move without it means a real
+      // mouse was released outside the window, and pointer-driven drags cancel on it.
+      else movePointer(over, point, 1);
     }
     let dropped = false;
     if (native) {
@@ -2101,7 +2100,7 @@
       else fireDrag(target, 'dragleave', to, dataTransfer, false);
       fireDrag(draggable, 'dragend', to, dataTransfer, false);
     } else {
-      movePointer(target, to);
+      movePointer(target, to, 1);
       const up = mouseInit(target, to, { detail: 1 });
       firePointer(target, 'pointerup', up);
       fireMouse(target, 'mouseup', up);

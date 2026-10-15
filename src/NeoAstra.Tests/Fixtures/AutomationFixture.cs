@@ -46,6 +46,7 @@ internal static class AutomationFixture
               <div id="hover-target">Hover me</div><span id="hover-state"></span>
               <div id="drag-source" draggable="true">Drag me</div>
               <div id="drop-target" class="drop">Drop here</div>
+              <div id="slide-source">Slide me</div><div id="slide-target">Slide here</div><span id="slide-state"></span>
               <div id="swatch" role="img" aria-label="Blue swatch"></div>
               <div aria-hidden="true">Hidden from the tree</div>
               <div style="display:none">Not rendered</div>
@@ -73,6 +74,11 @@ internal static class AutomationFixture
               $('drag-source').addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', 'payload'));
               $('drop-target').addEventListener('dragover', e => e.preventDefault());
               $('drop-target').addEventListener('drop', e => { e.preventDefault(); e.currentTarget.textContent = 'Dropped ' + e.dataTransfer.getData('text/plain'); });
+              // A pointer-driven drag, as drag libraries do: a move without the button held means it was released elsewhere.
+              let sliding = false;
+              $('slide-source').addEventListener('pointerdown', () => { sliding = true; $('slide-state').textContent = 'started'; });
+              document.addEventListener('pointermove', e => { if (sliding && (!(e.buttons & 1) || !(e.pressure > 0))) { sliding = false; $('slide-state').textContent = 'canceled'; } });
+              document.addEventListener('pointerup', e => { if (sliding) { sliding = false; $('slide-state').textContent = 'slid to ' + e.target.id; } });
               $('confirm').addEventListener('click', e => { e.currentTarget.textContent = confirm('Proceed?') ? 'Confirmed' : 'Declined'; });
               $('later').addEventListener('click', () => setTimeout(() => { const p = document.createElement('p'); p.textContent = 'Late arrival'; document.body.appendChild(p); }, 300));
               $('log').addEventListener('click', () => { console.log('clicked %s', 'log', { answer: 42 }); console.warn('careful'); console.error(new Error('boom')); });
