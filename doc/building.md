@@ -119,6 +119,18 @@ The presets build no tests, since an iOS library cannot run on the host, and `en
 
 `NeoAstra.Core` resolves its imports in the main program on iOS (`NativeLibrary.GetMainProgramHandle`). A project reference to `NeoAstra.Core` also copies the library of the host into an iOS application, which the linker rejects; leave it out of the publish items of the application.
 
+### Android native library (preview)
+
+The Android backend is a shared library for the `android-arm64` and `android-x64` RIDs, built with the Android NDK (r29 or later keeps the 16 KB page alignment that recent Android versions ask for). Point `ANDROID_NDK_HOME` at the NDK and use the presets:
+
+```sh
+export ANDROID_NDK_HOME="$HOME/Library/Android/sdk/ndk/29.0.14206865"
+cmake --preset android-arm64-release && cmake --build artifacts/native/android-arm64-release
+cmake --preset android-x64-release && cmake --build artifacts/native/android-x64-release
+```
+
+As on iOS, only the application level is implemented: an application attaches to the native looper of the calling thread, and windows, views, and profiles report `NEOASTRA_ERROR_NOT_SUPPORTED`. The presets build no tests, and `eng/build_native.py` does not stage the library yet. An application packages it for its ABI, for example with `<AndroidNativeLibrary Include="libneoastra_native.so" Abi="arm64-v8a" />`; `NeoAstra.Core` then finds it through the normal probing of the platform. .NET 11 supports no 32-bit x86 Android target.
+
 ## Frontend checks
 
 From the repository root, build and verify the frontend package, CSP/bootstrap fixtures, framework consumers, size budget, licenses, provenance, and publish contents with:

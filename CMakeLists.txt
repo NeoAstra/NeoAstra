@@ -133,6 +133,12 @@ elseif(APPLE)
   target_sources(neoastra_native PRIVATE native/src/macos/cocoa_backend.mm)
   target_compile_options(neoastra_native PRIVATE -fobjc-arc)
   target_link_libraries(neoastra_native PRIVATE "-framework Cocoa" "-framework CoreGraphics" "-framework Security" "-framework WebKit")
+elseif(ANDROID)
+  # CMake also defines UNIX for Android, so this branch has to come first.
+  target_sources(neoastra_native PRIVATE native/src/android/android_backend.cpp)
+  target_link_libraries(neoastra_native PRIVATE android log)
+  # An Android application loads the library by the plain file name of its package.
+  set_target_properties(neoastra_native PROPERTIES VERSION "" SOVERSION "")
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk4)
