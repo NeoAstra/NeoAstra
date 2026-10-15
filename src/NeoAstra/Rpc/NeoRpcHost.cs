@@ -57,7 +57,7 @@ public sealed class NeoRpcHost : IAsyncDisposable
     {
         var limits = new Dictionary<string, long>(StringComparer.Ordinal)
         {
-            ["frameBytes"] = _options.MaximumFrameBytes, ["jsonDepth"] = _options.MaximumJsonDepth,
+            ["frameBytes"] = _options.MaximumFrameBytes, ["resultBytes"] = _options.MaximumResultBytes, ["jsonDepth"] = _options.MaximumJsonDepth,
             ["applicationInvocations"] = _options.MaximumConcurrentInvocations, ["sessionInvocations"] = _options.MaximumConcurrentInvocationsPerSession,
             ["retainedRequestIdsPerSession"] = _options.MaximumRetainedRequestIds,
             ["completedRequestIdsPerSession"] = Math.Min(_options.MaximumCompletedRequestIds, _options.MaximumRetainedRequestIds),
@@ -676,7 +676,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
             else
             {
-                await state.TryCommitAsync(() => SendSuccessResultAsync(id, result)).ConfigureAwait(false);
+                await state.TryCommitAsync(() => SendSuccessResultAsync(id, result, correlationId)).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (state.Token.IsCancellationRequested)
@@ -989,13 +989,23 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _host.ExitInvocation(_identity.ViewLabel);
     }
 
-    private ValueTask SendSuccessResultAsync(string id, CommandResult result)
-        => SendRawAsync(BuildFrame(writer =>
+    private ValueTask SendSuccessResultAsync(string id, CommandResult result, string correlationId)
+    {
+        var frame = BuildFrame(writer =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", true); writer.WritePropertyName("value");
             if (result is ValueCommandResult value) writer.WriteRawValue(value.Json, true); else writer.WriteNullValue();
             writer.WriteEndObject();
-        }), CancellationToken.None, allowClosing: true);
+        });
+        var maximum = _host.Options.MaximumResultBytes;
+        if (maximum != int.MaxValue && Encoding.UTF8.GetByteCount(frame) > maximum)
+        {
+            // The call fails alone: its caller learns why, and the session keeps serving the others.
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC result exceeded the configured byte limit and was replaced by an error.", correlationId);
+            return SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.PayloadTooLarge, "The command result exceeds the configured size limit.", correlationId));
+        }
+        return SendRawAsync(frame, CancellationToken.None, allowClosing: true);
+    }
 
     private ValueTask SendChannelResultAsync(string id, string channelId)
         => SendRawAsync(BuildFrame(writer =>

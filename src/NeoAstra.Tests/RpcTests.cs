@@ -58,6 +58,32 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public async Task OversizedResultAnswersPayloadTooLargeForThatCallOnly()
+    {
+        var diagnostics = new RpcDiagnosticSink();
+        var (host, session, frames) = Create(builder =>
+            builder.AddCommand<Request, Response>("result.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "echo")),
+                RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, CommandPolicy),
+            new NeoRpcOptions { MaximumResultBytes = 512, DiagnosticSink = diagnostics });
+        await using (host) await using (session)
+        {
+            await session.ReceiveAsync(Invoke("big", "result.echo", "{\"id\":\"" + new string('x', 1024) + "\"}"));
+            await session.ReceiveAsync(Invoke("small", "result.echo", "{\"id\":\"ok\"}"));
+
+            AssertSingleTerminal(frames, "big", NeoRpcErrorCodes.PayloadTooLarge);
+            AssertSingleTerminal(frames, "small", null);
+            var big = frames.Select(Parse).Single(frame => frame.GetProperty("id").GetString() == "big");
+            Assert.IsFalse(big.GetProperty("error").GetProperty("retryable").GetBoolean());
+            var diagnostic = diagnostics.Values.Single(value => value.Code == NeoRpcErrorCodes.PayloadTooLarge);
+            Assert.AreEqual(NeoRpcDiagnosticLevel.Warning, diagnostic.Level);
+            Assert.IsNotNull(diagnostic.CorrelationId);
+            Assert.IsFalse(session.Closed.IsCancellationRequested, "An oversized result fails its call, not the session.");
+            Assert.AreEqual(0, session.ActiveInvocationCount);
+        }
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { MaximumResultBytes = 0 }));
+    }
+
+    [TestMethod]
     public async Task InvokeSupportsValueVoidUnknownMalformedAndDuplicate()
     {
         var invoked = 0;

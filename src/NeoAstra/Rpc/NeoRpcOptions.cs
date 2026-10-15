@@ -28,6 +28,13 @@ public sealed class NeoRpcOptions
     public int MaximumWireNameLength { get; set; } = 192;
     /// <summary>Gets or sets the maximum inbound JSON bytes accepted by the session API. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>
     public int MaximumFrameBytes { get; set; } = int.MaxValue;
+    /// <summary>Gets or sets the maximum UTF-8 bytes of the result frame of a successful invocation. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound what one call sends.</summary>
+    /// <remarks>
+    /// A result whose serialized frame is larger fails its call alone: the caller gets <see cref="NeoRpcErrorCodes.PayloadTooLarge"/>
+    /// with the correlation ID of the invocation, a warning is diagnosed, and the session keeps serving. Channel items and events
+    /// are streamed and are not bounded by this value; <see cref="MaximumQueuedEventBytesPerSubscription"/> bounds events.
+    /// </remarks>
+    public int MaximumResultBytes { get; set; } = int.MaxValue;
     /// <summary>Gets or sets the maximum JSON nesting depth.</summary>
     public int MaximumJsonDepth { get; set; } = 32;
     /// <summary>Gets or sets the maximum queued event count per subscription.</summary>
@@ -90,6 +97,7 @@ public sealed class NeoRpcOptions
         if (MaximumIdLength is < 16 or > 256) throw new ArgumentOutOfRangeException(nameof(MaximumIdLength));
         if (MaximumWireNameLength is < 16 or > 512) throw new ArgumentOutOfRangeException(nameof(MaximumWireNameLength));
         if (MaximumFrameBytes < 1) throw new ArgumentOutOfRangeException(nameof(MaximumFrameBytes));
+        if (MaximumResultBytes < 1) throw new ArgumentOutOfRangeException(nameof(MaximumResultBytes));
         if (MaximumJsonDepth is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(MaximumJsonDepth));
         if (MaximumQueuedEventsPerSubscription is < 1 or > 65_536) throw new ArgumentOutOfRangeException(nameof(MaximumQueuedEventsPerSubscription));
         if (MaximumQueuedEventBytesPerSubscription < 1) throw new ArgumentOutOfRangeException(nameof(MaximumQueuedEventBytesPerSubscription));
@@ -124,6 +132,7 @@ public sealed class NeoRpcOptions
             MaximumIdLength = MaximumIdLength,
             MaximumWireNameLength = MaximumWireNameLength,
             MaximumFrameBytes = MaximumFrameBytes,
+            MaximumResultBytes = MaximumResultBytes,
             MaximumJsonDepth = MaximumJsonDepth,
             MaximumQueuedEventsPerSubscription = MaximumQueuedEventsPerSubscription,
             MaximumQueuedEventBytesPerSubscription = MaximumQueuedEventBytesPerSubscription,
