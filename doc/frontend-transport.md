@@ -156,6 +156,11 @@ IDs, protocol mismatch, malformed input, close, and document replacement.
 | WebView2 | Persistent document-start script; WebView2 structured JSON messaging; native sender source metadata | `TrustedOrigins` or explicit whole-view trust |
 | WKWebView | One private `WKScriptMessageHandler`; document-start main-world adapter; `WKScriptMessage.frameInfo` origin/main-frame metadata; messages of frames refused | `TrustedOrigins` or explicit whole-view trust |
 | WebKitGTK 6.0 | One private `WebKitUserContentManager` handler in a script world of its own, reached through a relay of the top-level document; document-start adapter; sender origin remains unknown | Explicit `TrustEntireView`; controlled content only |
+| WKWebView on iOS | The same private `WKScriptMessageHandler` adapter as on macOS; the client reports `ios` with `wkwebview` | `TrustedOrigins` or explicit whole-view trust |
+| Android System WebView | Document-start script; one private AndroidX `WebMessageListener` object named `_neoastra_transport_v1` that exchanges JSON text; the client reports `android` with `android-webview` | `TrustedOrigins` or explicit whole-view trust |
+
+The bootstrap and the client accept the two mobile pairs ahead of the mobile backends: no backend ships
+for iOS or Android yet.
 
 The managed host generates `hostViewBinding` and injects it only into the private bootstrap closure. It
 admits envelopes to the configured view, but is **not** a secret from script already executing in that

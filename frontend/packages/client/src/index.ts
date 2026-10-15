@@ -24,8 +24,8 @@ export interface NeoAstraRuntimeInfo {
   readonly negotiatedFeatures: readonly string[];
   readonly viewLabel: string;
   readonly documentSessionId: string;
-  readonly platform: "windows" | "macos" | "linux";
-  readonly backend: "webview2" | "wkwebview" | "webkitgtk";
+  readonly platform: "windows" | "macos" | "linux" | "ios" | "android";
+  readonly backend: "webview2" | "wkwebview" | "webkitgtk" | "android-webview";
   readonly wholeViewTrust: boolean;
 }
 
@@ -366,7 +366,9 @@ function parseRuntimeInfo(minor: number, features: unknown[], value: Record<stri
   const backend = value.backend;
   if (!((platform === "windows" && backend === "webview2") ||
         (platform === "macos" && backend === "wkwebview") ||
-        (platform === "linux" && backend === "webkitgtk")) ||
+        (platform === "linux" && backend === "webkitgtk") ||
+        (platform === "ios" && backend === "wkwebview") ||
+        (platform === "android" && backend === "android-webview")) ||
       typeof value.viewLabel !== "string" || value.viewLabel.length === 0 || value.viewLabel.length > 128 ||
       typeof value.documentSessionId !== "string" || value.documentSessionId.length === 0 || value.documentSessionId.length > 128 ||
       !Number.isSafeInteger(minor) || minor < 0 || typeof value.wholeViewTrust !== "boolean") {

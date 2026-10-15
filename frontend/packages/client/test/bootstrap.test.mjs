@@ -50,16 +50,22 @@ function runBackend(backend, platform, maximumFrameBytes, relayed = false) {
       outbound.push(JSON.parse(event.detail));
       return true;
     } } };
+  } else if (backend === "android-webview") {
+    context._neoastra_transport_v1 = {
+      postMessage(value) { outbound.push(value); },
+      addEventListener(name, listener) { listeners.set(`android:${name}`, listener); },
+    };
   } else {
     context.webkit = { messageHandlers: { _neoastra_transport_v1: { postMessage(value) { outbound.push(value); } } } };
   }
+  context.JSON = JSON;
   vm.runInNewContext(scriptFor(backend, platform, maximumFrameBytes), context, { filename: `bootstrap-${backend}.js` });
   const transport = context[Symbol.for("@neoastra/client/transport/v1")];
   return { context, transport, outbound, listeners };
 }
 
-for (const [backend, platform] of [["webview2", "windows"], ["wkwebview", "macos"], ["webkitgtk", "linux"]]) {
-  test(`bootstrap adapts ${backend} without exposing its raw object`, () => {
+for (const [backend, platform] of [["webview2", "windows"], ["wkwebview", "macos"], ["webkitgtk", "linux"], ["wkwebview", "ios"]]) {
+  test(`bootstrap adapts ${backend} on ${platform} without exposing its raw object`, () => {
     const fixture = runBackend(backend, platform);
     assert.equal(fixture.transport.metadata.backend, backend);
     assert.equal(Object.isFrozen(fixture.transport), true);
@@ -90,6 +96,38 @@ test("bootstrap relays its envelopes as JSON text when WebKitGTK keeps the handl
 test("bootstrap leaves the transport out on WebKit without a handler or a relay", () => {
   const fixture = runBackend("wkwebview", "macos", 1048576, true);
   assert.equal(fixture.transport, undefined);
+});
+
+test("bootstrap adapts the Android web message listener with JSON text in both directions", () => {
+  const fixture = runBackend("android-webview", "android", 1048576);
+  const received = [];
+  fixture.transport.setReceiveHandler(value => received.push(value));
+  assert.equal(fixture.transport.metadata.platform, "android");
+  assert.equal(fixture.transport.metadata.backend, "android-webview");
+  assert.equal(Object.isFrozen(fixture.transport), true);
+  assert.equal(Object.getOwnPropertyDescriptor(fixture.context, Symbol.for("@neoastra/client/transport/v1")).enumerable, false);
+  assert.equal("_neoastra_transport_v1" in fixture.transport, false);
+  fixture.transport.send({ neoastra: 1, kind: "hello" });
+  assert.equal(fixture.outbound.length, 1);
+  assert.equal(typeof fixture.outbound[0], "string");
+  const envelope = JSON.parse(fixture.outbound[0]);
+  assert.equal(envelope.hostViewBinding, "host-binding");
+  assert.match(envelope.rendererDocumentId, /^[0-9a-f]{32}$/);
+  const deliver = data => fixture.listeners.get("android:message")({ data });
+  deliver(JSON.stringify({ ...envelope, frame: { neoastra: 1, kind: "hello_ack" } }));
+  deliver(JSON.stringify({ ...envelope, hostViewBinding: "wrong", frame: { neoastra: 1, kind: "close" } }));
+  deliver(JSON.stringify({ ...envelope, rendererDocumentId: "wrong", frame: { neoastra: 1, kind: "close" } }));
+  deliver("not json");
+  deliver({ ...envelope, frame: { neoastra: 1, kind: "close" } });
+  assert.deepEqual(received, [{ neoastra: 1, kind: "hello_ack" }]);
+});
+
+test("bootstrap stays unpublished when the Android listener object is missing", () => {
+  const context = { crypto: webcrypto, TextEncoder, Symbol, Object, Array, Error, TypeError, JSON, addEventListener() {} };
+  context.globalThis = context;
+  context.top = context;
+  vm.runInNewContext(scriptFor("android-webview", "android"), context, { filename: "bootstrap-android-missing.js" });
+  assert.equal(context[Symbol.for("@neoastra/client/transport/v1")], undefined);
 });
 
 test("bootstrap accepts only its host view binding and renderer document correlation", () => {

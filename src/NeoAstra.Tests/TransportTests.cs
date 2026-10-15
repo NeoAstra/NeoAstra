@@ -64,6 +64,18 @@ public sealed class TransportTests
     }
 
     [TestMethod]
+    public void PlatformMetadataNamesEverySupportedBackendAndRejectsAnythingElse()
+    {
+        Assert.AreEqual(("windows", "webview2"), NeoTransportCoordinator.GetPlatformMetadata(true, false, false, false, false, "x"));
+        Assert.AreEqual(("macos", "wkwebview"), NeoTransportCoordinator.GetPlatformMetadata(false, true, false, false, false, "x"));
+        Assert.AreEqual(("linux", "webkitgtk"), NeoTransportCoordinator.GetPlatformMetadata(false, false, true, false, false, "x"));
+        Assert.AreEqual(("ios", "wkwebview"), NeoTransportCoordinator.GetPlatformMetadata(false, false, false, true, false, "x"));
+        Assert.AreEqual(("android", "android-webview"), NeoTransportCoordinator.GetPlatformMetadata(false, false, false, false, true, "x"));
+        var exception = Assert.Throws<PlatformNotSupportedException>(() => NeoTransportCoordinator.GetPlatformMetadata(false, false, false, false, false, "unknown-backend"));
+        StringAssert.Contains(exception.Message, "unknown-backend");
+    }
+
+    [TestMethod]
     public void ProtocolMismatchMalformedAndPreHandshakeFramesAreRejected()
     {
         var sent = new List<string>();

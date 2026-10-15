@@ -685,12 +685,17 @@ internal sealed class NeoTransportCoordinator
 
     private static bool LooksLikeTransport(ReadOnlySpan<byte> utf8) => utf8.IndexOf("__neoastraTransport"u8) >= 0;
 
-    private static (string Platform, string Backend) GetPlatformMetadata(NeoRuntimeInfo runtimeInfo)
+    private static (string Platform, string Backend) GetPlatformMetadata(NeoRuntimeInfo runtimeInfo) =>
+        GetPlatformMetadata(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS(), OperatingSystem.IsLinux(), OperatingSystem.IsIOS(), OperatingSystem.IsAndroid(), runtimeInfo.BackendName);
+
+    internal static (string Platform, string Backend) GetPlatformMetadata(bool isWindows, bool isMacOS, bool isLinux, bool isIOS, bool isAndroid, string backendName)
     {
-        if (OperatingSystem.IsWindows()) return ("windows", "webview2");
-        if (OperatingSystem.IsMacOS()) return ("macos", "wkwebview");
-        if (OperatingSystem.IsLinux()) return ("linux", "webkitgtk");
-        throw new PlatformNotSupportedException($"Unsupported NeoAstra transport backend '{runtimeInfo.BackendName}'.");
+        if (isWindows) return ("windows", "webview2");
+        if (isMacOS) return ("macos", "wkwebview");
+        if (isLinux) return ("linux", "webkitgtk");
+        if (isIOS) return ("ios", "wkwebview");
+        if (isAndroid) return ("android", "android-webview");
+        throw new PlatformNotSupportedException($"Unsupported NeoAstra transport backend '{backendName}'.");
     }
 
     private readonly record struct PendingHello(string RendererDocumentId, long NavigationGeneration, int ProtocolMinor, string[] Features);

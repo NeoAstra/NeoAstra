@@ -54,6 +54,15 @@
     if (!adapter || typeof adapter.postMessage !== "function" || typeof adapter.addEventListener !== "function") return;
     adapter.addEventListener("message", event => receiveEnvelope(event.data));
     postEnvelope = (value, json) => adapter.postMessage(value);
+  } else if (metadata.backend === "android-webview") {
+    const adapter = globalThis._neoastra_transport_v1;
+    if (!adapter || typeof adapter.postMessage !== "function" || typeof adapter.addEventListener !== "function") return;
+    adapter.addEventListener("message", event => {
+      let envelope;
+      try { envelope = JSON.parse(event.data); } catch { return; }
+      receiveEnvelope(envelope);
+    });
+    postEnvelope = (value, json) => adapter.postMessage(JSON.stringify(value));
   } else {
     const adapter = globalThis.webkit?.messageHandlers?._neoastra_transport_v1;
     if (adapter && typeof adapter.postMessage === "function") {
