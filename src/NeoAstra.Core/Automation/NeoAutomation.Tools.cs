@@ -197,8 +197,6 @@ public sealed partial class NeoAutomation
 
     private static string Truncate(string text, int limit) => text.Length <= limit ? text : string.Concat(text.AsSpan(0, limit - 3), "...");
 
-    private const string HoverEventsOnly = "The pointer and mouse events of the hover were dispatched to the page; CSS :hover styles do not apply to them.";
-
     private static void AppendAction(NeoAutomationToolCall call, NeoAutomationActionResult result, string succeeded, string openedDialog)
     {
         if (result.Dialog is not null)
@@ -406,8 +404,6 @@ public sealed partial class NeoAutomation
                     var page = call.ResolvePage();
                     var result = await page.HoverAsync(call.RequiredString("uid"), call.CancellationToken);
                     AppendAction(call, result, "Successfully hovered over the element", "The element was hovered and it opened a dialog.");
-                    // The events are dispatched, not real input: the engine does not move its hover state.
-                    if (result.Dialog is null) call.Lines.Add(HoverEventsOnly);
                     if (call.OptionalBoolean("includeSnapshot") == true) await IncludeSnapshotAsync(call, page);
                 }),
 

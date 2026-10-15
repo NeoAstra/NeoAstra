@@ -2169,6 +2169,15 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_set_setting(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_view_setting_t arg1, uint arg2);
 
+        /// <summary>
+        /// Moves the pointer of the engine over a point of the view, in CSS pixels of its main viewport, without moving the system
+        /// cursor: hover state, :hover styles, and trusted pointer events follow. NEOASTRA_ERROR_NOT_SUPPORTED where the engine
+        /// takes no such input.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_move_pointer")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_move_pointer(NativeMethods.neoastra_view_t arg0, double arg1, double arg2);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_open_devtools")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_open_devtools(NativeMethods.neoastra_view_t arg0);

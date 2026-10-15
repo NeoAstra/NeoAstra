@@ -393,6 +393,16 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Resets page zoom to 100 percent.</summary>
     public void ResetZoom() => ZoomFactor = 1d;
 
+    /// <summary>Moves the engine's pointer over a point of the main viewport, in CSS pixels, without moving the system cursor.</summary>
+    /// <returns><see langword="false"/> where the engine takes no such input or the view cannot take it now.</returns>
+    internal bool TryMovePointer(double x, double y)
+    {
+        if (Volatile.Read(ref _disposed) != 0 || !double.IsFinite(x) || !double.IsFinite(y)) return false;
+        try { return NativeMethods.neoastra_view_move_pointer(NativeHandle, x, y).Value == NativeMethods.neoastra_result.NEOASTRA_OK; }
+        catch (EntryPointNotFoundException) { return false; }
+        catch (ObjectDisposedException) { return false; }
+    }
+
     /// <summary>Opens the engine's DevTools for this view.</summary>
     /// <exception cref="InvalidOperationException">DevTools are disabled for this view.</exception>
     /// <exception cref="NotSupportedException">The active engine offers no way to open DevTools programmatically.</exception>

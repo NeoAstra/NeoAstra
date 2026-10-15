@@ -260,6 +260,7 @@ int main() {
     assert(neoastra_window_set_background_color(window, neoastra_color_t{255, 255, 255, 255}) == NEOASTRA_OK);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_open_devtools(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_move_pointer(nullptr, 1, 2) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);

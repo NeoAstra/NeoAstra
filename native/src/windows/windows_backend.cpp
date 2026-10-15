@@ -2788,6 +2788,16 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
 }
 // ShellExecute reports success with a value above 32, and its error with a smaller one.
 bool neo_platform_open_external(const std::string& uri,int64_t* native_code) noexcept {try{const auto result=reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr,L"open",widen(uri).c_str(),nullptr,nullptr,SW_SHOWNORMAL));if(result>32)return true;*native_code=static_cast<int64_t>(result);return false;}catch(...){return false;}}
+// The DevTools protocol moves the pointer of the page itself: the system cursor stays where it is.
+neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double x,double y) noexcept {
+    try {
+        auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;
+        std::wstring parameters=L"{\"type\":\"mouseMoved\",\"x\":";append_protocol_number(parameters,x);
+        parameters+=L",\"y\":";append_protocol_number(parameters,y);parameters+=L",\"button\":\"none\",\"pointerType\":\"mouse\"}";
+        return SUCCEEDED(state->core->CallDevToolsProtocolMethod(L"Input.dispatchMouseEvent",parameters.c_str(),
+            Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([](HRESULT,LPCWSTR)->HRESULT{return S_OK;}).Get()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
+    } catch(...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+}
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->core->OpenDevToolsWindow())?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 
 namespace {

@@ -313,6 +313,10 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t*, double*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t*, double);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t*, neoastra_view_setting_t, uint32_t);
+/* Moves the pointer of the engine over a point of the view, in CSS pixels of its main viewport, without moving the system
+   cursor: hover state, :hover styles, and trusted pointer events follow. NEOASTRA_ERROR_NOT_SUPPORTED where the engine
+   takes no such input. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t*, double, double);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t*);
 /* Completes with the encoded image of what the view currently shows. Its pixel size is the captured size in CSS pixels times the zoom and device scale of the view.
    A view that is not being drawn, such as one in a hidden window, can fail or never complete: cancel the operation to stop waiting. */

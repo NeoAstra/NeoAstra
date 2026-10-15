@@ -369,11 +369,9 @@ public sealed class AutomationTests
             Assert.AreEqual("Successfully clicked on the element", await driver.CallAsync("click", $$"""{"uid":"{{driver.Uid("option \"Red\"")}}"}"""));
             Assert.AreEqual("\"r\"", await driver.EvaluateAsync("() => document.getElementById('color').value"));
 
-            // The hover runs the page's handlers, and says that CSS :hover, which only real input moves, does not apply.
-            var hovered = await driver.CallAsync("hover", $$"""{"uid":"{{driver.Uid("\"Hover me\"")}}"}""");
-            StringAssert.StartsWith(hovered, "Successfully hovered over the element");
-            StringAssert.Contains(hovered, "CSS :hover styles do not apply");
-            Assert.AreEqual("""{"matches":false,"color":"rgb(0, 0, 0)"}""",
+            // The hover moves the engine's own pointer, not the system cursor: CSS :hover applies and the page's handlers run.
+            Assert.AreEqual("Successfully hovered over the element", await driver.CallAsync("hover", $$"""{"uid":"{{driver.Uid("\"Hover me\"")}}"}"""));
+            Assert.AreEqual("""{"matches":true,"color":"rgb(255, 0, 0)"}""",
                 await driver.EvaluateAsync("() => { const target = document.getElementById('hover-target'); return { matches: target.matches(':hover'), color: getComputedStyle(target).color }; }"));
             Assert.AreEqual("Successfully dragged an element", await driver.CallAsync("drag", $$"""{"from_uid":"{{driver.Uid("\"Drag me\"")}}","to_uid":"{{driver.Uid("\"Drop here\"")}}"}"""));
             Assert.AreEqual("""{"hover":"hovered","drop":"Dropped payload"}""",

@@ -177,14 +177,43 @@ public sealed class NeoAutomationPage
     /// <returns>What the move led to.</returns>
     /// <exception cref="NeoAutomationException">The element is unknown, gone, or not visible, or a dialog is open.</exception>
     /// <remarks>
-    /// The pointer and mouse events of the move (<c>pointerover</c>, <c>mouseenter</c>, <c>mousemove</c>, and the others) are
-    /// dispatched to the page, which runs its handlers; the engine's own hover state does not move, so CSS <c>:hover</c>
-    /// styles do not apply.
+    /// Where the engine takes pointer input from its host (WebView2 and WKWebView), the engine's own pointer moves over the
+    /// element without moving the system cursor: CSS <c>:hover</c> styles apply and the page gets trusted pointer and mouse
+    /// events. Elsewhere (WebKitGTK, an element in a frame or covered by another one), the events of the move are
+    /// dispatched to the page, which runs its handlers, but CSS <c>:hover</c> styles do not apply, and
+    /// <see cref="NeoAutomationActionResult.Note"/> says so.
     /// </remarks>
     public ValueTask<NeoAutomationActionResult> HoverAsync(string uid, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(uid);
-        return ActAsync("hover", writer => writer.WriteString("uid", uid), uid, cancellationToken);
+        return _owner.InvokeAsync(() => ExclusiveAsync(() => HoverCoreAsync(uid, cancellationToken), cancellationToken), cancellationToken);
+    }
+
+    internal const string HoverEventsOnly = "The pointer and mouse events of the hover were dispatched to the page; CSS :hover styles do not apply to them.";
+
+    private async Task<NeoAutomationActionResult> HoverCoreAsync(string uid, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var point = await CallAgentAsync("hoverPoint", writer => writer.WriteString("uid", uid), cancellationToken);
+            if (!point.IsOk) throw ActionError(point, uid);
+            if (point.Value.ValueKind == JsonValueKind.Object && point.Value.TryGetProperty("x", out var x) && point.Value.TryGetProperty("y", out var y) &&
+                View.TryMovePointer(x.GetDouble(), y.GetDouble()))
+            {
+                // The engine moves its pointer on its own time: the hover is done once the element matches :hover.
+                for (var attempt = 0; attempt < 20; attempt++)
+                {
+                    var hovered = await CallAgentAsync("isHovered", writer => writer.WriteString("uid", uid), cancellationToken);
+                    if (hovered.IsOk && hovered.Value.ValueKind == JsonValueKind.Object && hovered.Value.TryGetProperty("hovered", out var value) && value.GetBoolean())
+                        return new NeoAutomationActionResult(null, null, null, false);
+                    await Task.Delay(25, cancellationToken);
+                }
+            }
+        }
+        catch (DialogInterruptedException interrupted) { return new NeoAutomationActionResult(null, interrupted.Dialog, null, false); }
+
+        var result = await ActCoreAsync("hover", ObjectJson(writer => writer.WriteString("uid", uid)), uid, cancellationToken);
+        return result.Dialog is not null ? result : new NeoAutomationActionResult(result.NavigatedTo, null, result.Note is null ? HoverEventsOnly : result.Note + " " + HoverEventsOnly, result.DialogHandled);
     }
 
     /// <summary>Types a text into an input or a text area, selects an option of a select element, or sets a checkbox, a radio button, or a switch.</summary>

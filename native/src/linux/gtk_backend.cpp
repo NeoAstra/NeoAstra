@@ -691,6 +691,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
     }
 }
 bool neo_platform_open_external(const std::string& uri,int64_t* native_code) noexcept {GError* error{};const bool opened=g_app_info_launch_default_for_uri(uri.c_str(),nullptr,&error);if(error){*native_code=error->code;g_error_free(error);}return opened;}
+// GTK 4 has no public way to hand a widget a synthesized pointer event.
+neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double,double) noexcept {auto* state=static_cast<gtk_view*>(view->platform);return !state||!state->widget?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {
     auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);

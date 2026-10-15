@@ -872,6 +872,7 @@ neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view, doubl
 // Enabling a feature the engine does not have reports NEOASTRA_ERROR_NOT_SUPPORTED; disabling one succeeds.
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept;
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept;
+neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view, double x, double y) noexcept;
 // Asks the system to open a web address in its default browser. Returns whether the system took it, and what it reported when it did not.
 bool neo_platform_open_external(const std::string& uri, int64_t* native_code) noexcept;
 // The options are already validated. A region without area means the whole viewport, and it is ignored for a full-page capture.

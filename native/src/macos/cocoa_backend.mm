@@ -615,6 +615,18 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
 }}
 bool neo_platform_open_external(const std::string& uri,int64_t*) noexcept {@autoreleasepool{@try{NSURL* url=[NSURL URLWithString:ns_string(uri)];return url&&[[NSWorkspace sharedWorkspace]openURL:url];}@catch(NSException*){return false;}}}
 // WebKit offers no public call to open the Web Inspector; it is reached from the context menu or Safari's Develop menu.
+// A mouse-moved event handed to the web view moves the pointer of the page itself: the system cursor stays where it is.
+neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double x,double y) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    WKWebView* web=state->webview;if(!web.window)return NEOASTRA_ERROR_INVALID_STATE;
+    const CGFloat zoom=(web.pageZoom>0?web.pageZoom:1)*(web.magnification>0?web.magnification:1);
+    const NSPoint local=NSMakePoint(x*zoom,web.isFlipped?y*zoom:web.bounds.size.height-y*zoom);
+    NSEvent* event=[NSEvent mouseEventWithType:NSEventTypeMouseMoved location:[web convertPoint:local toView:nil] modifierFlags:0
+        timestamp:[NSProcessInfo processInfo].systemUptime windowNumber:web.window.windowNumber context:nil eventNumber:0 clickCount:0 pressure:0];
+    if(!event)return NEOASTRA_ERROR_NATIVE_FAILURE;
+    [web mouseMoved:event];
+    return NEOASTRA_OK;
+}}
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);return !state||!state->webview?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
 // WKWebView snapshots what the view shows; it has no call for the part of a document outside the viewport.
 neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra_capture_options_t& options,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{

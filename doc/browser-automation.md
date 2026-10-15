@@ -133,8 +133,12 @@ not get in its way. What follows from this design:
   for a dispatched one: text insertion, focus, activation, option selection, and form submission. The
   events are not trusted (`isTrusted` is `false`), so CSS `:hover` does not apply, native popups such as
   the list of a `<select>` do not open, and features that ask for a user activation refuse. `hover`
-  runs the page's pointer and mouse handlers but leaves the engine's hover state where it was, and its
-  answer says so: a style or menu that only CSS `:hover` shows stays hidden. `drag`
+  is the exception where the engine takes pointer input from its host: on WebView2 (DevTools
+  `Input.dispatchMouseEvent`) and WKWebView (a mouse-moved event handed to the view), the engine's own
+  pointer moves over the element, without moving the system cursor, so CSS `:hover` applies and the
+  page gets trusted events. With WebKitGTK, for an element in a frame, or for one that another element
+  covers, `hover` dispatches the events instead, which run the page's handlers but leave CSS `:hover`
+  alone, and its answer says so. `drag`
   dispatches the HTML drag-and-drop events (`dragstart` to `drop` and `dragend`) when its source is
   draggable, and otherwise a pointer gesture whose every move holds the primary button (`buttons` 1, with
   pressure) until the `pointerup`, as a real mouse does, so pointer-driven drags in the page follow it.

@@ -1066,6 +1066,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neo
     if(result!=NEOASTRA_OK)v->history_navigation_disabled=previous;
     return result;
 }
+neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t* v,double x,double y){return !v||!std::isfinite(x)||!std::isfinite(y)?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_move_pointer(v,x,y);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_open_devtools(v);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t* v,const neoastra_capture_options_t* options,neoastra_buffer_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){
     if(outop)*outop=nullptr;

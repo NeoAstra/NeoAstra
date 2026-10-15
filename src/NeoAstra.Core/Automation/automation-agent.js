@@ -1457,6 +1457,22 @@
     return {};
   }
 
+  // Where a real pointer would hover the element, in CSS pixels of the main viewport: for an element of the top
+  // document that nothing covers there. Anything else is hovered with dispatched events.
+  function hoverPoint(options) {
+    const element = elementForUid(options.uid);
+    if (viewOf(element) !== window) return {};
+    scrollIntoViewIfNeeded(element);
+    const point = clickPoint(element);
+    const hit = elementAt(element.ownerDocument, point.x, point.y);
+    if (!hit || !composedContains(element, hit)) return {};
+    return { x: point.x, y: point.y };
+  }
+
+  function isHovered(options) {
+    return { hovered: elementForUid(options.uid).matches(':hover') };
+  }
+
   function hover(options) {
     const element = elementForUid(options.uid);
     scrollIntoViewIfNeeded(element);
@@ -2297,7 +2313,7 @@
   }
 
   const operations = {
-    info: info, snapshot: takeSnapshot, click: click, clickAt: clickAt, hover: hover, fill: fill, pressKey: pressKey, typeText: typeText,
+    info: info, snapshot: takeSnapshot, click: click, clickAt: clickAt, hover: hover, hoverPoint: hoverPoint, isHovered: isHovered, fill: fill, pressKey: pressKey, typeText: typeText,
     drag: drag, uploadChunk: uploadChunk, uploadCommit: uploadCommit, elementRect: elementRect, drain: drain,
     waitForText: waitForText, waitForStableDom: waitForStableDom, nextFrame: nextFrame,
   };
