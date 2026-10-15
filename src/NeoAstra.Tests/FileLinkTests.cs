@@ -40,6 +40,39 @@ public sealed class FileLinkTests
             Assert.IsTrue(NeoFileLinks.IsLink(directoryLink));
             Assert.IsTrue(NeoFileLinks.IsLink(danglingLink));
             Assert.IsFalse(NeoFileLinks.IsLink(Path.Combine(directoryLink, "..")), "A path that merely contains a segment is not itself a link.");
+
+            // A trailing separator names the same entry; File.GetAttributes ignores it, so the link must still be seen.
+            var separator = Path.DirectorySeparatorChar.ToString();
+            Assert.IsTrue(NeoFileLinks.IsLink(directoryLink + separator));
+            Assert.IsTrue(NeoFileLinks.IsLink(directoryLink + separator + separator));
+            Assert.IsFalse(NeoFileLinks.IsLink(directory + separator));
+            Assert.IsFalse(NeoFileLinks.IsLink(Path.GetPathRoot(root)!));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    public void DirectoryProvider_RejectsALinkedRootWhateverTheTrailingSeparator()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-link-root-" + Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        Directory.CreateDirectory(target);
+        try
+        {
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                Assert.Inconclusive($"Symbolic-link creation is unavailable: {exception.GetType().Name}.");
+            }
+
+            foreach (var candidate in new[] { link, link + Path.DirectorySeparatorChar })
+            {
+                Assert.Throws<ArgumentException>(() => new NeoDirectoryResourceProvider(candidate, followSymbolicLinks: false));
+                Assert.IsTrue(new NeoDirectoryResourceProvider(candidate, followSymbolicLinks: true).FollowSymbolicLinks);
+            }
+
+            Assert.IsFalse(new NeoDirectoryResourceProvider(target + Path.DirectorySeparatorChar, followSymbolicLinks: false).FollowSymbolicLinks);
         }
         finally { Directory.Delete(root, true); }
     }

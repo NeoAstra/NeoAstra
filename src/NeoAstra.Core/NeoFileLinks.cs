@@ -18,7 +18,10 @@ internal static class NeoFileLinks
         // File.GetAttributes also derives the read-only flag, which asks whether the process belongs to the group of the
         // entry. On iOS that check throws OverflowException for entries that the app does not own, such as "/" and "/var",
         // which a walk from the file-system root meets. A link is exactly what the platform reports as a link target.
-        if (new FileInfo(path).LinkTarget is not null) return true;
+        // File.GetAttributes normalizes the path first, so a trailing separator does not matter to it. readlink would take
+        // "link/" for the target of the link, not for the link.
+        var entry = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (new FileInfo(entry).LinkTarget is not null) return true;
         if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException("The path does not exist.", path);
         return false;
     }
