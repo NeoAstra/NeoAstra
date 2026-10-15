@@ -103,6 +103,22 @@ against portable COM/teardown stand-ins. It checks that a deferred decision keep
 through lifecycle teardown and COM cleanup without a client retain. This is not Windows backend
 compilation, WebView2 execution, or a real application-detach test.
 
+### iOS native library (preview)
+
+The iOS backend is a static library, because an iOS application cannot load a library of its own at run time. Only the application level is implemented so far: an application attaches to the run loop of UIKit, and windows, views, and profiles report `NEOASTRA_ERROR_NOT_SUPPORTED`. Build it on macOS with Xcode:
+
+```sh
+cmake --preset iossimulator-arm64-release && cmake --build artifacts/native/iossimulator-arm64-release
+cmake --preset ios-arm64-release && cmake --build artifacts/native/ios-arm64-release
+```
+
+The presets build no tests, since an iOS library cannot run on the host, and `eng/build_native.py` does not stage it yet. An application links the library and has to say which exports it uses, because the linker removes what no code references and strips the rest from a device build:
+
+- Add the library as `<NativeReference Include="libneoastra_native.a" Kind="Static" ForceLoad="true" SmartLink="false" />`.
+- Add one `<ReferenceNativeSymbol Include="neoastra_app_attach" SymbolType="Function" />` for every `neoastra_` export, without a leading underscore.
+
+`NeoAstra.Core` resolves its imports in the main program on iOS (`NativeLibrary.GetMainProgramHandle`). A project reference to `NeoAstra.Core` also copies the library of the host into an iOS application, which the linker rejects; leave it out of the publish items of the application.
+
 ## Frontend checks
 
 From the repository root, build and verify the frontend package, CSP/bootstrap fixtures, framework consumers, size budget, licenses, provenance, and publish contents with:

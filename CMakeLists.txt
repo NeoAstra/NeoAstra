@@ -122,6 +122,12 @@ if(WIN32)
   target_link_libraries(neoastra_native PRIVATE
     user32 gdi32 ole32 shell32 shcore shlwapi dwmapi
     "${webview2_sdk_SOURCE_DIR}/build/native/${_webview2_arch}/WebView2LoaderStatic.lib")
+elseif(IOS)
+  # CMake also defines APPLE for iOS, so this branch has to come first.
+  enable_language(OBJCXX)
+  target_sources(neoastra_native PRIVATE native/src/ios/uikit_backend.mm)
+  target_compile_options(neoastra_native PRIVATE -fobjc-arc)
+  target_link_libraries(neoastra_native PRIVATE "-framework Foundation" "-framework UIKit" "-framework WebKit")
 elseif(APPLE)
   enable_language(OBJCXX)
   target_sources(neoastra_native PRIVATE native/src/macos/cocoa_backend.mm)
