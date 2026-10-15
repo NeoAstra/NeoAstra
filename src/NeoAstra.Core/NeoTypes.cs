@@ -154,6 +154,8 @@ public enum NeoNativeHandleKind
     WkWebView = 8,
     /// <summary>A WebKitGTK web view.</summary>
     WebKitGtkWebView = 9,
+    /// <summary>A UIKit <c>UIView*</c>.</summary>
+    UIKitUIView = 10,
 }
 
 /// <summary>Describes the presentation state of a window.</summary>
@@ -526,6 +528,11 @@ public readonly record struct NeoNativeHandle(NeoNativeHandleKind Kind, nint Val
     /// <exception cref="PlatformNotSupportedException">The current operating system is not macOS.</exception>
     /// <exception cref="InvalidOperationException">This value does not contain a Cocoa <c>NSView*</c>.</exception>
     public nint GetCocoaNSView() => Get(NeoNativeHandleKind.CocoaNSView, OperatingSystem.IsMacOS(), "macOS");
+
+    /// <summary>Returns this value as a UIKit <c>UIView*</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">The current operating system is not iOS.</exception>
+    /// <exception cref="InvalidOperationException">This value does not contain a UIKit <c>UIView*</c>.</exception>
+    public nint GetUIKitUIView() => Get(NeoNativeHandleKind.UIKitUIView, OperatingSystem.IsIOS(), "iOS");
 
     /// <summary>Returns this value as a GTK widget.</summary>
     /// <exception cref="PlatformNotSupportedException">The current operating system is not Linux.</exception>
