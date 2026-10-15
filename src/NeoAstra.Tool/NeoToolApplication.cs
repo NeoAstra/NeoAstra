@@ -371,7 +371,7 @@ internal static class NeoToolApplication
                 },
                 {
                     "platform=",
-                    "Target {PLATFORM}: windows, macos, or linux.",
+                    "Target {PLATFORM}: windows, macos, linux, ios, or android.",
                     value => platform = value
                 },
                 {

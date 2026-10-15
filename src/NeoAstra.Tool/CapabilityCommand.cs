@@ -24,6 +24,8 @@ internal static class CapabilityCommand
                 "windows" => NeoCapabilityPlatform.Windows,
                 "macos" => NeoCapabilityPlatform.MacOS,
                 "linux" => NeoCapabilityPlatform.Linux,
+                "ios" => NeoCapabilityPlatform.IOS,
+                "android" => NeoCapabilityPlatform.Android,
                 _ => throw new ArgumentException("Unknown target platform.")
             };
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
@@ -142,6 +144,8 @@ internal static class CapabilityCommand
         "windows" => NeoCapabilityPlatform.Windows,
         "macos" => NeoCapabilityPlatform.MacOS,
         "linux" => NeoCapabilityPlatform.Linux,
+        "ios" => NeoCapabilityPlatform.IOS,
+        "android" => NeoCapabilityPlatform.Android,
         _ => throw new ArgumentException("Unknown permission platform.")
     };
     static NeoAuditRedaction ParseRedaction(string? value) => value switch

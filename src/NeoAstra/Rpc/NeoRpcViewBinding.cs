@@ -188,7 +188,9 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         if (OperatingSystem.IsWindows()) return NeoCapabilityPlatform.Windows;
         if (OperatingSystem.IsMacOS()) return NeoCapabilityPlatform.MacOS;
         if (OperatingSystem.IsLinux()) return NeoCapabilityPlatform.Linux;
-        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require a supported Windows, macOS, or Linux backend.");
+        if (OperatingSystem.IsIOS()) return NeoCapabilityPlatform.IOS;
+        if (OperatingSystem.IsAndroid()) return NeoCapabilityPlatform.Android;
+        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require a supported Windows, macOS, Linux, iOS, or Android backend.");
     }
 
     private void OnMessage(NeoTransportApplicationMessage message)

@@ -211,6 +211,37 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void CapabilityCommand_ResolvesMobilePlatformsAndRejectsUnknownOnes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-capability-platforms-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = Path.Combine(root, "catalog.json");
+            var capabilities = Path.Combine(root, "capabilities.json");
+            File.WriteAllText(catalog, """{"version":1,"permissions":[{"id":"documents:open","version":1,"commands":["documents.open"],"risk":"sensitive","scopeFamily":"none","platforms":["ios","android"]}]}""");
+            File.WriteAllText(capabilities, """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"platforms":["ios"],"permissions":["documents:open"]}]}""");
+            var error = Console.Error;
+            using var captured = new StringWriter();
+            Console.SetError(captured);
+            try
+            {
+                foreach (var platform in new[] { "ios", "android" })
+                {
+                    var output = Path.Combine(root, platform + ".resolved.json");
+                    Assert.AreEqual(0, global::NeoAstra.Tool.CapabilityCommand.Resolve(capabilities, catalog, platform, "Release", output), captured.ToString());
+                    using var document = JsonDocument.Parse(File.ReadAllText(output));
+                    Assert.AreEqual(platform == "ios" ? 1 : 0, document.RootElement.GetProperty("capabilities").GetArrayLength());
+                }
+
+                Assert.AreEqual(1, global::NeoAstra.Tool.CapabilityCommand.Resolve(capabilities, catalog, "tvos", "Release", Path.Combine(root, "tvos.resolved.json")));
+            }
+            finally { Console.SetError(error); }
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
     public void AdvancedCapabilities_ResolveForReleaseAndRestrictThePreviewView()
     {
         var root = FindRepositoryRoot(); var bytes = File.ReadAllBytes(Path.Combine(root, "samples", "NeoAstra.Sample.Advanced", "capabilities", "main.json"));
