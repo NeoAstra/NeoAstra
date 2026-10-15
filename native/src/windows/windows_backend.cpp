@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -112,6 +113,22 @@ std::string narrow(const wchar_t* value) {
     return result;
 }
 
+void append_protocol_number(std::wstring& output, double value);
+bool drag_started_in_view_browser(const neoastra_view_t* view) noexcept;
+std::string page_drag_data(IDataObject* data, DWORD allowed) noexcept;
+bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data) noexcept;
+
+// The page, not NeoAstra, takes a drag it forwards: the effect shown is the first one its source allows.
+DWORD page_drop_effect(DWORD allowed) noexcept {
+    if (allowed & DROPEFFECT_COPY) return DROPEFFECT_COPY;
+    if (allowed & DROPEFFECT_MOVE) return DROPEFFECT_MOVE;
+    return allowed & DROPEFFECT_LINK;
+}
+
+// Replaces WebView2's OLE drop targets, which live in its browser process and cannot be called from here. External
+// file, text, and URL drops go to the host. Drags that started in this view's own browser (in-page HTML5 drags) and
+// drags with none of those formats (custom MIME types) go to the page through the DevTools protocol, which dispatches
+// them as WebView2's own drop target would.
 class view_drop_target final : public IDropTarget {
 public:
     view_drop_target(neoastra_view_t* view, HWND window) : view_(view), window_(window) { }
@@ -129,23 +146,54 @@ public:
         if (value == 0) delete this;
         return value;
     }
-    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL, DWORD* effect) override {
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL point, DWORD* effect) override {
         if (!effect) return E_POINTER;
         FORMATETC files{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         FORMATETC text{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         FORMATETC url{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         valid_ = data && (SUCCEEDED(data->QueryGetData(&files)) || SUCCEEDED(data->QueryGetData(&text)) || SUCCEEDED(data->QueryGetData(&url)));
+        page_ = false;
+        if (data && (!valid_ || drag_started_in_view_browser(view_))) {
+            page_data_ = page_drag_data(data, *effect);
+            page_ = !page_data_.empty() && forward_page_drag(view_, L"dragEnter", point, keys, page_data_);
+        }
+        if (page_) {
+            valid_ = false;
+            last_point_ = point;
+            *effect = page_drop_effect(*effect);
+            return S_OK;
+        }
+        page_data_.clear();
         *effect = valid_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL, DWORD* effect) override {
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL point, DWORD* effect) override {
         if (!effect) return E_POINTER;
+        if (page_) {
+            last_point_ = point;
+            (void)forward_page_drag(view_, L"dragOver", point, keys, page_data_);
+            *effect = page_drop_effect(*effect);
+            return S_OK;
+        }
         *effect = valid_ ? DROPEFFECT_COPY : DROPEFFECT_NONE;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE DragLeave() override { valid_ = false; return S_OK; }
-    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD, POINTL point, DWORD* effect) override {
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        if (page_) (void)forward_page_drag(view_, L"dragCancel", last_point_, 0, page_data_);
+        page_ = false;
+        page_data_.clear();
+        valid_ = false;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD keys, POINTL point, DWORD* effect) override {
         if (!data || !effect) return E_POINTER;
+        if (page_) {
+            page_ = false;
+            const auto forwarded = forward_page_drag(view_, L"drop", point, keys, page_data_);
+            page_data_.clear();
+            *effect = forwarded ? page_drop_effect(*effect) : DROPEFFECT_NONE;
+            return S_OK;
+        }
         *effect = DROPEFFECT_NONE;
         if (!valid_) return S_OK;
         valid_ = false;
@@ -224,6 +272,9 @@ private:
     neoastra_view_t* view_{};
     HWND window_{};
     bool valid_{};
+    bool page_{};
+    std::string page_data_;
+    POINTL last_point_{};
 };
 
 std::string take_string(LPWSTR value) {
@@ -2043,6 +2094,151 @@ neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile, n
     }
     return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 browsing-data clearing could not be started", result, "webview2");
 }
+
+namespace {
+
+// OLE gives a drop target no source. While a drag runs, DoDragDrop holds the mouse capture of its source thread, so
+// a capture held by a thread of this view's browser process (not this process: its own outbound drags stay
+// external) means the drag started in that browser, as an in-page HTML5 drag does.
+bool drag_started_in_view_browser(const neoastra_view_t* view) noexcept {
+    const auto* state = view ? static_cast<const windows_view*>(view->platform) : nullptr;
+    if (!state) return false;
+    const auto self = GetCurrentProcessId();
+    for (const auto& registration : state->drop_registrations) {
+        DWORD process{};
+        const auto thread = GetWindowThreadProcessId(registration.window, &process);
+        if (!thread || process == self) continue;
+        GUITHREADINFO info{};
+        info.cbSize = sizeof(info);
+        if (GetGUIThreadInfo(thread, &info) && info.hwndCapture) return true;
+    }
+    return false;
+}
+
+constexpr SIZE_T maximum_page_drag_format_bytes = 8u * 1024u * 1024u;
+
+bool read_global_text(IDataObject* data, CLIPFORMAT format, std::string& value) {
+    FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (FAILED(data->GetData(&request, &medium))) return false;
+    bool read{};
+    const auto bytes = medium.tymed == TYMED_HGLOBAL ? GlobalSize(medium.hGlobal) : 0;
+    if (bytes >= sizeof(wchar_t) && bytes <= maximum_page_drag_format_bytes) {
+        if (const auto* text = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal))) {
+            const auto length = wcsnlen(text, bytes / sizeof(wchar_t));
+            try { value = narrow(std::wstring(text, length).c_str()); read = true; } catch (...) { }
+            GlobalUnlock(medium.hGlobal);
+        }
+    }
+    ReleaseStgMedium(&medium);
+    return read;
+}
+
+// Chromium writes the custom MIME types of a drag as a base::Pickle: a 32-bit payload size, a 32-bit entry count,
+// then for each entry a type and a value as a 32-bit UTF-16 length and its code units, each field padded to 4 bytes.
+void read_custom_drag_data(IDataObject* data, std::vector<std::pair<std::string, std::string>>& values) {
+    FORMATETC request{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Chromium Web Custom MIME Data Format")), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (FAILED(data->GetData(&request, &medium))) return;
+    const auto bytes = medium.tymed == TYMED_HGLOBAL ? GlobalSize(medium.hGlobal) : 0;
+    const auto* pickle = bytes >= 8 && bytes <= maximum_page_drag_format_bytes ? static_cast<const uint8_t*>(GlobalLock(medium.hGlobal)) : nullptr;
+    if (pickle) {
+        try {
+            uint32_t payload{}, count{};
+            std::memcpy(&payload, pickle, sizeof(payload));
+            const size_t end = std::min<size_t>(bytes, size_t{4} + payload);
+            size_t offset = 4;
+            auto read_string = [&](std::string& value) {
+                int32_t length{};
+                if (end - offset < sizeof(length)) return false;
+                std::memcpy(&length, pickle + offset, sizeof(length));
+                offset += sizeof(length);
+                if (length < 0 || static_cast<size_t>(length) > (end - offset) / sizeof(wchar_t)) return false;
+                std::wstring text(static_cast<size_t>(length), L'\0');
+                if (length) std::memcpy(text.data(), pickle + offset, static_cast<size_t>(length) * sizeof(wchar_t));
+                offset += (static_cast<size_t>(length) * sizeof(wchar_t) + 3u) & ~size_t{3};
+                if (offset > end) return false;
+                value = narrow(text.c_str());
+                return true;
+            };
+            if (end >= 8) {
+                std::memcpy(&count, pickle + 4, sizeof(count));
+                offset = 8;
+                for (uint32_t index = 0; index < count && index < 256; ++index) {
+                    std::string type, value;
+                    if (!read_string(type) || !read_string(value)) break;
+                    if (!type.empty()) values.emplace_back(std::move(type), std::move(value));
+                }
+            }
+        } catch (...) { values.clear(); }
+        GlobalUnlock(medium.hGlobal);
+    }
+    ReleaseStgMedium(&medium);
+}
+
+// The "data" member of Input.dispatchDragEvent, in UTF-8: text, URL, and custom MIME items, and the allowed operations.
+std::string page_drag_data(IDataObject* data, DWORD allowed) noexcept {
+    try {
+        int mask{};
+        if (allowed & DROPEFFECT_COPY) mask |= 1;
+        if (allowed & DROPEFFECT_LINK) mask |= 2;
+        if (allowed & DROPEFFECT_MOVE) mask |= 16;
+        if (!mask) return {};
+        std::vector<std::pair<std::string, std::string>> items;
+        std::string value;
+        if (read_global_text(data, CF_UNICODETEXT, value)) items.emplace_back("text/plain", std::move(value));
+        if (read_global_text(data, static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"UniformResourceLocatorW")), value)) items.emplace_back("text/uri-list", std::move(value));
+        read_custom_drag_data(data, items);
+        std::string json = "{\"items\":[";
+        for (size_t index = 0; index < items.size(); ++index) {
+            if (index) json.push_back(',');
+            json += "{\"mimeType\":";
+            append_json_string(json, items[index].first);
+            json += ",\"data\":";
+            append_json_string(json, items[index].second);
+            json.push_back('}');
+        }
+        json += "],\"dragOperationsMask\":" + std::to_string(mask) + "}";
+        return json;
+    } catch (...) { return {}; }
+}
+
+// Dispatches one drag event to the page at a screen point, in CSS pixels of its viewport.
+bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data) noexcept {
+    try {
+        auto* state = view ? static_cast<windows_view*>(view->platform) : nullptr;
+        if (!state || !state->core || !state->controller) return false;
+        HWND parent{};
+        RECT bounds{};
+        if (FAILED(state->controller->get_ParentWindow(&parent)) || !parent || FAILED(state->controller->get_Bounds(&bounds))) return false;
+        POINT client{point.x, point.y};
+        if (!ScreenToClient(parent, &client)) return false;
+        double scale = 1.0, zoom = 1.0;
+        ComPtr<ICoreWebView2Controller3> controller3;
+        if (SUCCEEDED(state->controller.As(&controller3)) && (FAILED(controller3->get_RasterizationScale(&scale)) || !(scale > 0.0))) scale = 1.0;
+        if (FAILED(state->controller->get_ZoomFactor(&zoom)) || !(zoom > 0.0)) zoom = 1.0;
+        int modifiers{};
+        if (keys & MK_ALT) modifiers |= 1;
+        if (keys & MK_CONTROL) modifiers |= 2;
+        if (keys & MK_SHIFT) modifiers |= 8;
+        std::wstring parameters = L"{\"type\":\"";
+        parameters += type;
+        parameters += L"\",\"x\":";
+        append_protocol_number(parameters, (client.x - bounds.left) / (scale * zoom));
+        parameters += L",\"y\":";
+        append_protocol_number(parameters, (client.y - bounds.top) / (scale * zoom));
+        parameters += L",\"modifiers\":" + std::to_wstring(modifiers) + L",\"data\":" + widen(data) + L"}";
+        auto* app = view->environment->app;
+        const bool report = wcscmp(type, L"dragOver") != 0;
+        return SUCCEEDED(state->core->CallDevToolsProtocolMethod(L"Input.dispatchDragEvent", parameters.c_str(),
+            Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([app, report](HRESULT result, LPCWSTR) -> HRESULT {
+                if (FAILED(result) && report) neo_log(app, NEOASTRA_LOG_WARNING, "drag-drop", "WebView2 did not dispatch a page drag event");
+                return S_OK;
+            }).Get()));
+    } catch (...) { return false; }
+}
+
+} // namespace
 
 void register_drop_target(neoastra_view_t* view, windows_view* state, HWND window) {
     if (!window) return;

@@ -54,6 +54,10 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
     BOOL handled=[super performDragOperation:sender];
     auto* view=self.nativeView;
     if(!view)return handled;
+    // A drag that started in a web view of this application (an in-page HTML5 drag) is the page's alone: WebKit has
+    // dispatched its drop. NeoAstra's own outbound drags have a source of their own and still reach the host.
+    for(id source=sender.draggingSource;[source isKindOfClass:[NSView class]];source=((NSView*)source).superview)
+        if([source isKindOfClass:[WKWebView class]])return handled;
     @try {
         NSPasteboard* pasteboard=sender.draggingPasteboard;
         NSArray<NSURL*>* urls=[pasteboard readObjectsForClasses:@[[NSURL class]] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
