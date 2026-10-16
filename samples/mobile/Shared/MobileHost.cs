@@ -4,6 +4,7 @@ using NeoAstra.Desktop;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.Opener;
 using NeoAstra.Location;
+using NeoAstra.Passkeys;
 using NeoAstra.Push;
 using NeoAstra.Rpc;
 
@@ -15,7 +16,7 @@ namespace NeoAstra.Samples.Mobile;
 /// <remarks>
 /// A window of NeoAstra is the UIWindow of the active scene on iOS and the content of the current activity on Android; the
 /// page in it reaches the window commands too. The page reaches the desktop services of NeoAstra (clipboard, theme, safe storage, opener, notifications, dialogs) through
-/// the official renderer handlers, the location of the device and push messages through their plugins, and the capability document grants
+/// the official renderer handlers, the location of the device, push messages, and passkeys through their plugins, and the capability document grants
 /// it exactly the permissions it uses on iOS and Android.
 /// A service that a platform does not offer answers Unsupported instead of failing.
 /// </remarks>
@@ -80,7 +81,8 @@ internal sealed class MobileHost
         var location = NeoLocation.CreateSystem(application.Dispatcher);
         // The push service of iOS observes the notification service of NeoAstra, which owns the delegate of the notification center.
         var push = NeoPush.CreateSystem(desktop.Notifications, application.Dispatcher);
-        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).AddNeoAstraPush(push).Build();
+        var passkeys = NeoPasskeys.CreateSystem(application.Dispatcher);
+        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).AddNeoAstraPush(push).AddNeoAstraPasskeys(passkeys).Build();
         await plugins.StartAsync(application);
 
         var capabilities = LoadCapabilities();
@@ -98,6 +100,7 @@ internal sealed class MobileHost
         });
         builder.AddNeoAstraLocationHandlers(location);
         builder.AddNeoAstraPushHandlers(push);
+        builder.AddNeoAstraPasskeysHandlers(passkeys);
         var mobile = new MobileHost(application, environment, builder.Build(), desktop);
         await mobile.OpenWindowAsync();
         // An application that attaches to a run loop of its own reports when its startup is complete.
@@ -113,7 +116,7 @@ internal sealed class MobileHost
         stream.CopyTo(memory);
         return NeoCapabilityManifest.Resolve(
             memory.ToArray(),
-            new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().AddNeoAstraLocationPermissions().AddNeoAstraPushPermissions().Build(),
+            new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().AddNeoAstraLocationPermissions().AddNeoAstraPushPermissions().AddNeoAstraPasskeysPermissions().Build(),
             new NeoCapabilityResolutionOptions
             {
                 Platform = OperatingSystem.IsIOS() ? NeoCapabilityPlatform.IOS : NeoCapabilityPlatform.Android,

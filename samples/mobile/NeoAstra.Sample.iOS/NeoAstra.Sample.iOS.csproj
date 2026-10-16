@@ -15,10 +15,16 @@
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-x64' Or '$(NeoAstraSamplePush)' == 'true'">
     <CodesignEntitlements>Entitlements.plist</CodesignEntitlements>
   </PropertyGroup>
+  <!-- A passkey needs a relying party whose apple-app-site-association lists this application: a local build names its domain
+       with NeoAstraSamplePasskeyDomain, which becomes the webcredentials of the associated domains entitlement. -->
+  <ItemGroup Condition="'$(NeoAstraSamplePasskeyDomain)' != ''">
+    <CustomEntitlements Include="com.apple.developer.associated-domains" Type="StringArray" Value="webcredentials:$(NeoAstraSamplePasskeyDomain)" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />

@@ -20,6 +20,8 @@
         "location:read",
         "push:register",
         "push:receive",
+        "passkeys:create",
+        "passkeys:get",
         "system-info:theme",
         "system-info:metadata",
         {

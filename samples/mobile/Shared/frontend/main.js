@@ -89,6 +89,26 @@ card("Push", (row, run) => {
     client.subscribe("push.token-changed", registration => run(async () => ({ status: "Token", ...registration })));
   });
 });
+// A passkey belongs to a relying party whose domain lists this application; the page creates the options that its server
+// would give, so the answer is not verified here.
+card("Passkeys", (row, run) => {
+  const bytes = length => base64url(crypto.getRandomValues(new Uint8Array(length)));
+  const base64url = data => btoa(String.fromCharCode(...data)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const rp = input(row, localStorage.getItem("passkeys.rp") ?? "");
+  rp.placeholder = "relying party domain";
+  rp.onchange = () => localStorage.setItem("passkeys.rp", rp.value);
+  button(row, "Create", () => run(async () => {
+    const options = { rp: { id: rp.value, name: "NeoAstra sample" }, user: { id: bytes(16), name: "neoastra-sample", displayName: "NeoAstra sample" }, challenge: bytes(32),
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }], authenticatorSelection: { residentKey: "required", userVerification: "preferred" }, attestation: "none" };
+    const result = await invoke("passkeys.create", { options });
+    if (result.value) localStorage.setItem("passkeys.id", result.value.id);
+    return result;
+  }));
+  button(row, "Sign in", () => run(() => {
+    const id = localStorage.getItem("passkeys.id");
+    return invoke("passkeys.get", { options: { rpId: rp.value, challenge: bytes(32), userVerification: "preferred", allowCredentials: id ? [{ type: "public-key", id }] : [] } });
+  }));
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });

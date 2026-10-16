@@ -16,10 +16,14 @@
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
     <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
     <PackageReference Include="Xamarin.Firebase.Messaging" Version="125.1.3" />
-    <!-- The Firebase project of the push messages is local: without its google-services.json, push answers Unsupported. -->
-    <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json')" />
+    <PackageReference Include="Xamarin.AndroidX.Credentials" Version="1.6.0.1" />
+    <PackageReference Include="Xamarin.AndroidX.Credentials.PlayServicesAuth" Version="1.6.0.2" />
+    <!-- The Firebase project of the push messages is local: without its google-services.json, or with NeoAstraSampleFirebase=false
+         for an ApplicationId that the file does not have, push answers Unsupported. -->
+    <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json') And '$(NeoAstraSampleFirebase)' != 'false'" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <AndroidAsset Include="../Shared/frontend/**/*" Link="Assets/web/%(RecursiveDir)%(Filename)%(Extension)" />
@@ -28,4 +32,5 @@
   <!-- Project references to the plugins take the targets that their packages give an Android application. -->
   <Import Project="../../../src/NeoAstra.Location/Build/NeoAstra.Location.targets" />
   <Import Project="../../../src/NeoAstra.Push/Build/NeoAstra.Push.targets" />
+  <Import Project="../../../src/NeoAstra.Passkeys/Build/NeoAstra.Passkeys.targets" />
 </Project>
