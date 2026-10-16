@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.push",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Push.NeoPushPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [
+    {
+      "name": "push.register",
+      "permission": "push:register",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "push.launch-message",
+      "permission": "push:receive",
+      "risk": "sensitive",
+      "audited": true
+    }
+  ],
+  "events": [
+    {
+      "name": "push.token-changed",
+      "permission": "push:register",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "push.message-received",
+      "permission": "push:receive",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "push.message-opened",
+      "permission": "push:receive",
+      "risk": "sensitive",
+      "audited": true
+    }
+  ],
+  "permissions": [
+    {
+      "id": "push:register",
+      "revision": 1,
+      "operations": ["push.register", "push.token-changed"],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "push:receive",
+      "revision": 1,
+      "operations": ["push.launch-message", "push.message-received", "push.message-opened"],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    }
+  ]
+}

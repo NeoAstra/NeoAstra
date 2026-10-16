@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>Push plugin for NeoAstra: remote notifications through the Apple Push Notification service on iOS and Firebase Cloud Messaging on Android, as a C# service and capability-gated renderer commands and events.</Description>
+    <PackageTags>neoastra;push;notifications;apns;fcm;firebase;ios;android;plugin</PackageTags>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageIcon>NeoAstra.png</PackageIcon>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/NeoAstra/NeoAstra</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="neoastra.plugin.json" />
+    <None Update="neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.push/neoastra.plugin.json" />
+    <None Update="Build\NeoAstra.Push.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.Push.targets" />
+    <None Remove="Android\**\*" />
+    <None Include="Android\**\*" Pack="true" PackagePath="java/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
