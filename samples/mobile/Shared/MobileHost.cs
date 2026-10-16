@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using NeoAstra;
 using NeoAstra.Desktop;
+using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.Opener;
 using NeoAstra.Rpc;
 
@@ -24,15 +25,17 @@ internal sealed class MobileHost
     private readonly NeoApplication _application;
     private readonly NeoEnvironment _environment;
     private readonly NeoRpcHost _rpc;
+    private readonly NeoDesktopServices _desktop;
     private NeoWindow? _window;
     private global::NeoAstra.NeoAstra? _view;
     private NeoRpcViewBinding? _binding;
 
-    private MobileHost(NeoApplication application, NeoEnvironment environment, NeoRpcHost rpc)
+    private MobileHost(NeoApplication application, NeoEnvironment environment, NeoRpcHost rpc, NeoDesktopServices desktop)
     {
         _application = application;
         _environment = environment;
         _rpc = rpc;
+        _desktop = desktop;
     }
 
     /// <summary>Shows the page in a new window; the first call attaches to the run loop of the platform.</summary>
@@ -87,7 +90,7 @@ internal sealed class MobileHost
             AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
             AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal) { "hello" },
         });
-        var mobile = new MobileHost(application, environment, builder.Build());
+        var mobile = new MobileHost(application, environment, builder.Build(), desktop);
         await mobile.OpenWindowAsync();
         // An application that attaches to a run loop of its own reports when its startup is complete.
         application.NotifyReady();
@@ -129,9 +132,26 @@ internal sealed class MobileHost
             BridgeOrigins = ["app://neoastra"],
         });
         _binding = NeoRpcViewBinding.Bind(_rpc, _view);
+        // What the page asks of the browser: its dialogs show as a native dialog, a file input opens the picker of the system,
+        // and a camera or a microphone is what the user allows the application.
+        _view.ScriptDialogRequested = ShowScriptDialogAsync;
+        _view.FileChooserRequested = _ => ValueTask.FromResult(new NeoFileChooserDecision(NeoDecisionAction.Default));
+        _view.PermissionRequested = request => ValueTask.FromResult(request.Kind is NeoPermissionKind.Camera or NeoPermissionKind.Microphone ? NeoPermissionDecision.Default : NeoPermissionDecision.DenyOnce);
         // iOS and Android end the web content process of a view under memory pressure; a lost view is recreated.
         _view.ProcessFailed += async (_, _) => await RecreateAsync();
         await _view.NavigateAsync(new Uri("app://neoastra/index.html"));
+    }
+
+    // The dialog service shows a message with buttons; a prompt, which needs a text field, is canceled.
+    private async ValueTask<NeoScriptDialogDecision> ShowScriptDialogAsync(NeoScriptDialogRequest request)
+    {
+        if (request.Kind is not (NeoScriptDialogKind.Alert or NeoScriptDialogKind.Confirm)) return NeoScriptDialogDecision.Cancel;
+        var result = await _desktop.Dialogs.ShowMessageAsync(new NeoMessageDialogOptions
+        {
+            Message = request.Message,
+            Buttons = request.Kind == NeoScriptDialogKind.Alert ? [NeoDialogButtonRole.Accept] : [NeoDialogButtonRole.Accept, NeoDialogButtonRole.Cancel],
+        });
+        return result.IsSuccess && result.Value == NeoDialogButtonRole.Accept ? NeoScriptDialogDecision.Accept : NeoScriptDialogDecision.Cancel;
     }
 
     private async Task RecreateAsync()

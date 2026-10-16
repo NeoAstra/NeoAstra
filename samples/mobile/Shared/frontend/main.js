@@ -56,6 +56,20 @@ card("Notification", (row, run) => {
 card("Message dialog", (row, run) => {
   button(row, "Show", () => run(() => desktop.dialogs.message({ title: "Hello", message: "A native dialog from the page. Which button do you choose?", icon: "Question", buttons: ["Accept", "Cancel"] })));
 });
+card("Web page (browser features)", (row, run) => {
+  button(row, "alert", () => run(() => { alert("An alert of the page."); return { status: "Success", alert: "closed" }; }));
+  button(row, "confirm", () => run(() => ({ status: "Success", confirmed: confirm("Do you confirm?") })));
+  const file = document.createElement("input");
+  file.type = "file";
+  file.onchange = () => run(() => ({ status: file.files.length ? "Success" : "Canceled", files: [...file.files].map(value => `${value.name} (${value.size} bytes)`) }));
+  row.append(file);
+  button(row, "Camera", () => run(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const tracks = stream.getVideoTracks().map(track => track.label);
+    stream.getTracks().forEach(track => track.stop());
+    return { status: "Success", tracks };
+  }));
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });
