@@ -11,7 +11,7 @@ using System.Text;
 namespace NeoAstra.Desktop.Notifications;
 
 /// <summary>Modern UserNotifications presenter with custom-dismiss action routing.</summary>
-internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoApplicationBoundDesktopService, IAsyncDisposable
+internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoExternalNotificationSource, INeoApplicationBoundDesktopService, IAsyncDisposable
 {
     private static readonly object ClassLock = new();
     private static readonly ConcurrentDictionary<nint, MacNotifications> Owners = new();
@@ -29,18 +29,24 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     private long _generation;
     private bool _disposed;
     private readonly string _nativePrefix;
+    private readonly bool _attachOnBind;
 
     internal MacNotifications() : this("neoastra.application") { }
-    internal MacNotifications(string applicationId)
+    // iOS reports a tapped notification only to a delegate that is there, so an iOS presenter takes the delegate when it is
+    // bound; on macOS the center needs an application bundle, so it is created on first use.
+    internal MacNotifications(string applicationId, bool attachOnBind = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationId);
+        _attachOnBind = attachOnBind;
         _nativePrefix = "neoastra." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(applicationId)))[..24].ToLowerInvariant();
     }
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0, "Modern UNUserNotificationCenter authorization status and first-display request, identifier replacement, action/default activation, custom dismissal, explicit pending/delivered removal, generation routing, and deterministic delegate/category teardown.");
     public event EventHandler<NeoNotificationActivation>? Activated;
+    public event EventHandler<NeoExternalNotification>? ExternalReceived;
+    public event EventHandler<NeoExternalNotification>? ExternalActivated;
 
-    void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; }
+    void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; if (_attachOnBind && !_disposed) { if (_dispatcher.CheckAccess()) EnsureCenter(); else _ = _dispatcher.InvokeAsync(() => { if (!_disposed) EnsureCenter(); }); } }
 
     public ValueTask<NeoNotificationPermissionStatus> GetPermissionStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -191,12 +197,19 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     private static void EnsureBlockRuntime() { if (s_stackBlock != 0) return; s_stackBlock = Native.dlsym(-2, "_NSConcreteStackBlock"); if (s_stackBlock == 0) throw new PlatformNotSupportedException("The Objective-C block runtime is unavailable."); s_blockDescriptor = (BlockDescriptor*)NativeMemory.Alloc((nuint)sizeof(BlockDescriptor)); *s_blockDescriptor = new() { Size = (nuint)sizeof(Block) }; }
     private static Block CreateBlock(nint invoke, nint context) => new() { Isa = s_stackBlock, Invoke = invoke, Descriptor = s_blockDescriptor, Context = context };
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void WillPresent(nint self, nint selector, nint center, nint notification, nint completion) { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, nuint, void>)((Block*)completion)->Invoke)((nint)completion, 0x1A); } catch { } }
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void WillPresent(nint self, nint selector, nint center, nint notification, nint completion)
+    {
+        try { if (Owners.ContainsKey(self) && External(notification) is { } external) Report(external.Id, null, external.Payload, activated: false); }
+        catch { }
+        finally { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, nuint, void>)((Block*)completion)->Invoke)((nint)completion, 0x1A); } catch { } }
+    }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void DidReceive(nint self, nint selector, nint center, nint response, nint completion)
     {
         try
         {
-            if (Owners.ContainsKey(self)) { var notification = Native.Send(response, Native.GetSelector("notification")); var request = Native.Send(notification, Native.GetSelector("request")); var id = ReadString(Native.Send(request, Native.GetSelector("identifier"))); var action = ReadString(Native.Send(response, Native.GetSelector("actionIdentifier"))); var content = Native.Send(request, Native.GetSelector("content")); var info = Native.Send(content, Native.GetSelector("userInfo")); using var key = NativeString.Create("neoastraGeneration"); var generationText = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), key.Value)); if (id is not null && action is not null && long.TryParse(generationText, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)) foreach (var owner in Owners.Values.Distinct()) { var dispatcher = owner._dispatcher; if (dispatcher is not null) { try { _ = dispatcher.InvokeAsync(() => owner.Response(id, generation, action)); } catch { } } } }
+            if (Owners.ContainsKey(self)) { var notification = Native.Send(response, Native.GetSelector("notification")); var request = Native.Send(notification, Native.GetSelector("request")); var id = ReadString(Native.Send(request, Native.GetSelector("identifier"))); var action = ReadString(Native.Send(response, Native.GetSelector("actionIdentifier"))); var content = Native.Send(request, Native.GetSelector("content")); var info = Native.Send(content, Native.GetSelector("userInfo")); using var key = NativeString.Create("neoastraGeneration"); var generationText = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), key.Value)); if (id is not null && action is not null && long.TryParse(generationText, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)) foreach (var owner in Owners.Values.Distinct()) { var dispatcher = owner._dispatcher; if (dispatcher is not null) { try { _ = dispatcher.InvokeAsync(() => owner.Response(id, generation, action)); } catch { } } }
+                // A notification that NeoAstra did not show, such as one of a push service, goes to whoever observes it; a dismissal is not an activation.
+                else if (action is not null && action != "com.apple.UNNotificationDismissActionIdentifier" && External(notification) is { } external) Report(external.Id, action == "com.apple.UNNotificationDefaultActionIdentifier" ? null : action, external.Payload, activated: true); }
         }
         catch { }
         finally { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, void>)((Block*)completion)->Invoke)((nint)completion); } catch { } }
@@ -205,8 +218,41 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoA
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void AuthorizationCompleted(Block* block, byte granted, nint error) { var handle = GCHandle.FromIntPtr(block->Context); try { if (handle.Target is AuthorizationState state) state.Owner.CompleteAuthorization(state, error != 0 ? NeoNotificationPermissionStatus.Unknown : granted != 0 ? NeoNotificationPermissionStatus.Granted : NeoNotificationPermissionStatus.Denied); } catch (Exception exception) { if (handle.Target is AuthorizationState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void ShowCompleted(Block* block, nint error) { var handle = GCHandle.FromIntPtr(block->Context); try { if (handle.Target is ShowState state) state.Owner.CompleteShow(state, error == 0); } catch (Exception exception) { if (handle.Target is ShowState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
 
-    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; if (_center != 0) foreach (var id in _entries.Keys) RemoveNative(id); _entries.Clear(); _pending.Clear(); foreach (var state in _pendingShows.Values) { if (state.PreviousCategory != 0) Native.SendVoid(state.PreviousCategory, Native.GetSelector("release")); state.Completion.TrySetResult(NeoDesktopStatus.Canceled); } _pendingShows.Clear(); foreach (var state in _pendingSettings) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingSettings.Clear(); foreach (var state in _pendingAuthorizations) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingAuthorizations.Clear(); foreach (var value in _categories.Values) Native.SendVoid(value, Native.GetSelector("release")); _categories.Clear(); if (_center != 0) RebuildCategories(); if (_delegate != 0) { Owners.TryRemove(_delegate, out _); if (_center != 0) Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), Owners.Keys.FirstOrDefault()); Native.SendVoid(_delegate, Native.GetSelector("release")); } _delegate = 0; _center = 0; }
+    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; ExternalReceived = null; ExternalActivated = null; if (_center != 0) foreach (var id in _entries.Keys) RemoveNative(id); _entries.Clear(); _pending.Clear(); foreach (var state in _pendingShows.Values) { if (state.PreviousCategory != 0) Native.SendVoid(state.PreviousCategory, Native.GetSelector("release")); state.Completion.TrySetResult(NeoDesktopStatus.Canceled); } _pendingShows.Clear(); foreach (var state in _pendingSettings) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingSettings.Clear(); foreach (var state in _pendingAuthorizations) state.Completion.TrySetResult(NeoNotificationPermissionStatus.Unknown); _pendingAuthorizations.Clear(); foreach (var value in _categories.Values) Native.SendVoid(value, Native.GetSelector("release")); _categories.Clear(); if (_center != 0) RebuildCategories(); if (_delegate != 0) { Owners.TryRemove(_delegate, out _); if (_center != 0) Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), Owners.Keys.FirstOrDefault()); Native.SendVoid(_delegate, Native.GetSelector("release")); } _delegate = 0; _center = 0; }
     private string NativeId(string id) => _nativePrefix + "." + id;
+
+    // The identifier and the userInfo, as JSON, of a notification that carries no generation of NeoAstra.
+    private static (string Id, string Payload)? External(nint notification)
+    {
+        var request = Native.Send(notification, Native.GetSelector("request"));
+        var id = ReadString(Native.Send(request, Native.GetSelector("identifier")));
+        var info = Native.Send(Native.Send(request, Native.GetSelector("content")), Native.GetSelector("userInfo"));
+        if (id is null) return null;
+        if (info != 0) { using var key = NativeString.Create("neoastraGeneration"); if (Native.SendArg(info, Native.GetSelector("objectForKey:"), key.Value) != 0) return null; }
+        return (id, Json(info));
+    }
+
+    private static string Json(nint dictionary)
+    {
+        var serialization = Native.GetClass("NSJSONSerialization");
+        if (dictionary == 0 || (Native.SendArg(serialization, Native.GetSelector("isValidJSONObject:"), dictionary) & 0xFF) == 0) return "{}";
+        var data = Native.Send3(serialization, Native.GetSelector("dataWithJSONObject:options:error:"), dictionary, 0, 0);
+        var length = data == 0 ? 0 : (long)Native.Send(data, Native.GetSelector("length"));
+        // A remote notification has at most 4 KiB; a larger payload is not one that a push service sends.
+        if (length is <= 0 or > 65536) return "{}";
+        return Encoding.UTF8.GetString((byte*)Native.Send(data, Native.GetSelector("bytes")), (int)length);
+    }
+
+    private static void Report(string id, string? action, string payload, bool activated)
+    {
+        foreach (var owner in Owners.Values.Distinct())
+        {
+            var dispatcher = owner._dispatcher;
+            if (dispatcher is null) continue;
+            var notification = new NeoExternalNotification(id, action, payload);
+            try { _ = dispatcher.InvokeAsync(() => { if (owner._disposed) return; try { (activated ? owner.ExternalActivated : owner.ExternalReceived)?.Invoke(owner, notification); } catch { } }); } catch { }
+        }
+    }
     private static nint Allocate(string className) { var result = Native.Send(Native.Send(Native.GetClass(className), Native.GetSelector("alloc")), Native.GetSelector("init")); return result != 0 ? result : throw new InvalidOperationException($"Unable to allocate {className}."); }
     private static void SetString(nint target, string selector, string value) { using var text = NativeString.Create(value); Native.SendVoidArg(target, Native.GetSelector(selector), text.Value); }
     private static string? ReadString(nint value) { if (value == 0) return null; var pointer = Native.Send(value, Native.GetSelector("UTF8String")); return pointer == 0 ? null : Marshal.PtrToStringUTF8(pointer); }

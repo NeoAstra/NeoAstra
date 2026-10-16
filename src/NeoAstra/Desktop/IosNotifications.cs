@@ -11,5 +11,5 @@ internal static class IosNotifications
     private const string Framework = "/System/Library/Frameworks/UserNotifications.framework/UserNotifications";
 
     internal static INeoNotifications Create(string applicationId)
-        => NativeLibrary.TryLoad(Framework, out _) ? new MacNotifications(applicationId) : new UnsupportedNotifications("The UserNotifications framework is unavailable.");
+        => NativeLibrary.TryLoad(Framework, out _) ? new MacNotifications(applicationId, attachOnBind: true) : new UnsupportedNotifications("The UserNotifications framework is unavailable.");
 }

@@ -60,6 +60,27 @@ public sealed record NeoNotificationRequest
 /// <param name="Dismissed">Whether this is a dismissal.</param>
 public sealed record NeoNotificationActivation(string NotificationId, string? ActionId, string? ActivationData, bool Dismissed);
 
+/// <summary>Contains a notification that the application did not show through NeoAstra, such as one of a push service.</summary>
+/// <param name="NotificationId">The identifier that the system gave the notification.</param>
+/// <param name="ActionId">The action that the user chose, or <see langword="null"/> for the notification itself or one that arrived.</param>
+/// <param name="Payload">The content of the notification as a JSON object: on iOS the <c>userInfo</c> of the notification, which a push service fills.</param>
+public sealed record NeoExternalNotification(string NotificationId, string? ActionId, string Payload);
+
+/// <summary>Reports the notifications that the application did not show through NeoAstra, which a push plugin observes.</summary>
+/// <remarks>
+/// iOS reports every notification of an application to one delegate, which the notification service of NeoAstra owns: that
+/// service reports the notifications that it did not show through this interface, which the service of the platform implements
+/// where it receives them. A notification that arrives while the application is in the foreground is shown and reported by
+/// <see cref="ExternalReceived"/>; one that the user taps is reported by <see cref="ExternalActivated"/>.
+/// </remarks>
+public interface INeoExternalNotificationSource
+{
+    /// <summary>Occurs on the UI dispatcher when a notification arrives while the application is in the foreground.</summary>
+    event EventHandler<NeoExternalNotification>? ExternalReceived;
+    /// <summary>Occurs on the UI dispatcher when the user taps a notification or one of its actions.</summary>
+    event EventHandler<NeoExternalNotification>? ExternalActivated;
+}
+
 /// <summary>Provides bounded native notifications and early activation routing.</summary>
 public interface INeoNotifications
 {
