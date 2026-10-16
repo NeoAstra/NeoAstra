@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.purchases",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Purchases.NeoPurchasesPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [
+    {
+      "name": "purchases.products",
+      "permission": "purchases:read",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "purchases.list",
+      "permission": "purchases:read",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "purchases.purchase",
+      "permission": "purchases:buy",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "purchases.restore",
+      "permission": "purchases:buy",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "purchases.finish",
+      "permission": "purchases:finish",
+      "risk": "high",
+      "audited": true
+    }
+  ],
+  "events": [
+    {
+      "name": "purchases.updated",
+      "permission": "purchases:read",
+      "risk": "sensitive",
+      "audited": true
+    }
+  ],
+  "permissions": [
+    {
+      "id": "purchases:read",
+      "revision": 1,
+      "operations": [
+        "purchases.products",
+        "purchases.list",
+        "purchases.updated"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "purchases:buy",
+      "revision": 1,
+      "operations": [
+        "purchases.purchase",
+        "purchases.restore"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "purchases:finish",
+      "revision": 1,
+      "operations": [
+        "purchases.finish"
+      ],
+      "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    }
+  ]
+}

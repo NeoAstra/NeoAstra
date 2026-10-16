@@ -46,4 +46,5 @@
   <Project Path="NeoAstra.Location/NeoAstra.Location.csproj" />
   <Project Path="NeoAstra.Push/NeoAstra.Push.csproj" />
   <Project Path="NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
+  <Project Path="NeoAstra.Purchases/NeoAstra.Purchases.csproj" />
 </Solution>

@@ -1,0 +1,23 @@
+<Project>
+  <!-- The purchases plugin gives an iOS application the StoreKit 2 bridge, a framework that the application embeds, and an
+       Android application that references the Play Billing Library (Xamarin.Android.Google.BillingClient) the Java side of its
+       service. The package keeps both beside its build files, and a project reference finds them in the plugin: the bridge in
+       its build output, which a build of the plugin on macOS makes, the Java side in its sources. An Android application
+       without the Play Billing Library builds without it, and purchases answer Unsupported; NeoAstraPurchasesBilling=false
+       leaves it out. -->
+  <PropertyGroup>
+    <NeoAstraPurchasesAppleFramework Condition="'$(NeoAstraPurchasesAppleFramework)' == '' And Exists('$(MSBuildThisFileDirectory)../xcframework/NeoAstraPurchases.xcframework/Info.plist')">$(MSBuildThisFileDirectory)../xcframework/NeoAstraPurchases.xcframework</NeoAstraPurchasesAppleFramework>
+    <NeoAstraPurchasesAppleFramework Condition="'$(NeoAstraPurchasesAppleFramework)' == ''">$(MSBuildThisFileDirectory)../obj/apple/NeoAstraPurchases.xcframework</NeoAstraPurchasesAppleFramework>
+    <NeoAstraPurchasesJavaDirectory Condition="'$(NeoAstraPurchasesJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraPurchasesJavaDirectory>
+    <NeoAstraPurchasesJavaDirectory Condition="'$(NeoAstraPurchasesJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../Android/</NeoAstraPurchasesJavaDirectory>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+    <NativeReference Include="$(NeoAstraPurchasesAppleFramework)" Kind="Framework" SmartLink="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' And '$(NeoAstraPurchasesBilling)' != 'false' And '@(PackageReference->AnyHaveMetadataValue('Identity', 'Xamarin.Android.Google.BillingClient'))' == 'true'">
+    <AndroidJavaSource Include="$(NeoAstraPurchasesJavaDirectory)com/neoastra/purchases/*.java" />
+    <AndroidManifestOverlay Include="$(NeoAstraPurchasesJavaDirectory)AndroidManifest.xml" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>In-app purchases plugin for NeoAstra: the products, purchases, and subscriptions of the App Store through StoreKit 2 on iOS and of Google Play through the Play Billing Library on Android, as a C# service and capability-gated renderer commands and events.</Description>
+    <PackageTags>neoastra;purchases;in-app;storekit;billing;subscriptions;ios;android;plugin</PackageTags>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageIcon>NeoAstra.png</PackageIcon>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/NeoAstra/NeoAstra</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- StoreKit 2 is a Swift API: on macOS the build compiles its bridge into a framework that iOS applications embed. -->
+    <NeoAstraPurchasesAppleFramework>$(MSBuildThisFileDirectory)obj/apple/NeoAstraPurchases.xcframework</NeoAstraPurchasesAppleFramework>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);NeoAstraCollectApplePurchases</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="neoastra.plugin.json" />
+    <None Update="neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.purchases/neoastra.plugin.json" />
+    <None Update="Build\NeoAstra.Purchases.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.Purchases.targets" />
+    <None Remove="Android\**\*" />
+    <None Include="Android\**\*" Pack="true" PackagePath="java/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <Target Name="NeoAstraBuildApplePurchases" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))"
+          Inputs="Apple/NeoAstraPurchases.swift;Apple/build.sh" Outputs="$(NeoAstraPurchasesAppleFramework)/Info.plist">
+    <Exec Command="/bin/sh &quot;$(MSBuildThisFileDirectory)Apple/build.sh&quot; &quot;$(MSBuildThisFileDirectory)Apple/NeoAstraPurchases.swift&quot; &quot;$(NeoAstraPurchasesAppleFramework)&quot;" />
+  </Target>
+
+  <Target Name="NeoAstraCollectApplePurchases" DependsOnTargets="NeoAstraBuildApplePurchases">
+    <ItemGroup>
+      <_NeoAstraApplePurchasesFile Include="$(NeoAstraPurchasesAppleFramework)/**/*" />
+      <TfmSpecificPackageFile Include="@(_NeoAstraApplePurchasesFile)" PackagePath="xcframework/NeoAstraPurchases.xcframework/" />
+    </ItemGroup>
+  </Target>
+</Project>
