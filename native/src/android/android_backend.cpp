@@ -489,6 +489,93 @@ void read_window_bounds(JNIEnv* env, neoastra_window_t* window, bool report) noe
     if (!failed(env, window->app, "Could not read the size of the Android window")) sync_window_bounds(window, width, height, density, report);
 }
 
+// A decision of the host loads what it allowed after the WebView was told not to wait: Android asks synchronously, while the
+// host may answer later. A decision that completes while Android waits answers it directly.
+struct navigation_context {
+    neoastra_view_t* view{};
+    std::string uri;
+    int* immediate{};
+};
+
+void load_decided(neoastra_view_t* view, const std::string& uri) noexcept {
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) return;
+    }
+    neoastra_error_t* error{};
+    (void)neo_platform_view_navigate(view, uri, &error);
+    if (error) neoastra_error_release(error);
+}
+
+void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    std::unique_ptr<navigation_context> context(static_cast<navigation_context*>(pointer));
+    const bool allowed = response->action == NEOASTRA_DECISION_ALLOW || response->action == NEOASTRA_DECISION_DEFAULT;
+    if (context->immediate) { *context->immediate = allowed ? 0 : 1; return; }
+    if (allowed) load_decided(context->view, context->uri);
+}
+
+jboolean JNICALL on_navigation(JNIEnv* env, jclass, jlong pointer, jstring url_value, jboolean main_frame, jboolean gesture) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) return JNI_TRUE;
+    }
+    try {
+        std::string uri = unproject(view->environment, to_utf8(env, url_value));
+        int immediate = -1;
+        auto* context = new navigation_context{view, uri, &immediate};
+        auto* decision = new neoastra_decision;
+        neo_configure_decision(decision, view, NEOASTRA_DECISION_NAVIGATION, NEOASTRA_DECISION_ALLOW);
+        decision->completion = navigation_decided;
+        decision->completion_context = context;
+        decision->external_uri = uri;
+        // Android reports the gesture behind a navigation, not whether a link was activated.
+        const uint64_t flags = (main_frame ? NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME : 0) | (gesture ? NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED : 0) | NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
+        neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri, flags, 0, decision);
+        neo_finish_decision_event(view, decision);
+        decision->release();
+        if (immediate >= 0) return immediate == 0 ? JNI_FALSE : JNI_TRUE;
+        // The decision completes later; a frame other than the main one cannot be loaded again, so it stays where it is.
+        context->immediate = nullptr;
+        if (!main_frame) context->view = nullptr;
+        return JNI_TRUE;
+    } catch (...) {
+        neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android navigation decision failed");
+        return JNI_TRUE;
+    }
+}
+
+struct new_window_context {
+    neoastra_view_t* view{};
+    std::string uri;
+};
+
+// The backend creates no popup view: an allowed new window loads in the view that asked for it.
+void new_window_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    std::unique_ptr<new_window_context> context(static_cast<new_window_context*>(pointer));
+    if (response->action == NEOASTRA_DECISION_ALLOW && !response->target_view) load_decided(context->view, context->uri);
+}
+
+void JNICALL on_new_window(JNIEnv* env, jclass, jlong pointer, jstring url_value, jboolean gesture) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) return;
+    }
+    try {
+        std::string uri = unproject(view->environment, to_utf8(env, url_value));
+        std::string name;
+        auto* decision = new neoastra_decision;
+        neo_configure_decision(decision, view, NEOASTRA_DECISION_NEW_WINDOW, NEOASTRA_DECISION_CANCEL);
+        decision->completion = new_window_decided;
+        decision->completion_context = new new_window_context{view, uri};
+        decision->external_uri = uri;
+        neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, gesture ? NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED : 0, 0, decision);
+        neo_finish_decision_event(view, decision);
+        decision->release();
+    } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android new-window decision failed"); }
+}
+
 // Runs on the main thread; the Java side stops reporting once the window is destroyed.
 void JNICALL on_window_event(JNIEnv*, jclass, jlong pointer, jint kind, jint width, jint height, jfloat density) {
     auto* window = reinterpret_cast<neoastra_window_t*>(pointer);
@@ -531,8 +618,10 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         {const_cast<char*>("nativeResource"), const_cast<char*>("(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Lcom/neoastra/backend/NeoAstraWebHost$Response;"), reinterpret_cast<void*>(on_resource)},
         {const_cast<char*>("nativeEvent"), const_cast<char*>("(JILjava/lang/String;Ljava/lang/String;I)V"), reinterpret_cast<void*>(on_event)},
         {const_cast<char*>("nativeEvaluated"), const_cast<char*>("(JLjava/lang/String;)V"), reinterpret_cast<void*>(on_evaluated)},
+        {const_cast<char*>("nativeNavigation"), const_cast<char*>("(JLjava/lang/String;ZZ)Z"), reinterpret_cast<void*>(on_navigation)},
+        {const_cast<char*>("nativeNewWindow"), const_cast<char*>("(JLjava/lang/String;Z)V"), reinterpret_cast<void*>(on_new_window)},
     };
-    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 4) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
+    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 6) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
     if (jclass services = env->FindClass("com/neoastra/backend/NeoAstraServices")) {
         services_class = static_cast<jclass>(env->NewGlobalRef(services));
         services_call = env->GetStaticMethodID(services_class, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
@@ -788,7 +877,27 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_
         default: return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }
-bool neo_platform_open_external(const std::string&, int64_t* native_code) noexcept { if (native_code) *native_code = 0; return false; }
+// The system opens the address in the application that the user chose for it, through the opener of the Java services.
+bool neo_platform_open_external(const std::string& uri, int64_t* native_code) noexcept {
+    if (native_code) *native_code = 0;
+    try {
+        std::string request = "{\"url\":\"";
+        for (const char character : uri) {
+            if (character == '"' || character == '\\') request.push_back('\\');
+            request.push_back(character);
+        }
+        request += "\"}";
+        neoastra_buffer_t* response{};
+        neoastra_error_t* error{};
+        const auto result = neo_android_platform_call("opener", request, &response, &error);
+        if (error) neoastra_error_release(error);
+        if (result != NEOASTRA_OK || !response) return false;
+        const std::string_view text(reinterpret_cast<const char*>(response->bytes.data()), response->bytes.size());
+        const bool opened = text.find("\"Success\"") != std::string_view::npos;
+        neoastra_buffer_release(response);
+        return opened;
+    } catch (...) { return false; }
+}
 neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t*, double, double) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept { return view_state(view) ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_ERROR_NOT_INITIALIZED; }
 neoastra_result_t neo_platform_view_capture(neoastra_view_t*, const neoastra_capture_options_t&, neoastra_buffer_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return unsupported(error, "Capture"); }

@@ -2,6 +2,7 @@ package com.neoastra.backend;
 
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Message;
 import android.view.ViewGroup;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
@@ -63,6 +64,9 @@ public final class NeoAstraWebHost {
     public static native Response nativeResource(long view, String url, String method, String headers, boolean isMainFrame);
     public static native void nativeEvent(long view, int kind, String url, String text, int value);
     public static native void nativeEvaluated(long token, String json);
+    /** Asks the host about a navigation and answers whether the WebView must not load it now. */
+    public static native boolean nativeNavigation(long view, String url, boolean isMainFrame, boolean hasGesture);
+    public static native void nativeNewWindow(long view, String url, boolean hasGesture);
 
     private final WebView webView;
     private final ViewGroup parent;
@@ -101,6 +105,9 @@ public final class NeoAstraWebHost {
         webView.getSettings().setAllowFileAccess(false);
         webView.getSettings().setAllowContentAccess(false);
         webView.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        // A link with a target and window.open after a gesture ask for a new window, which the host decides about.
+        webView.getSettings().setSupportMultipleWindows(true);
+        webView.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
         webView.setWebViewClient(new Client());
         webView.setWebChromeClient(new Chrome());
         if (listenerOrigins != null) {
@@ -187,6 +194,14 @@ public final class NeoAstraWebHost {
     }
 
     private final class Client extends WebViewClient {
+        // Android asks before it follows a link, a redirect, or a script navigation, but not before a load that the backend
+        // starts itself, so an allowed navigation that the host decided later is loaded again without being asked again.
+        @Override public boolean shouldOverrideUrlLoading(WebView source, WebResourceRequest request) {
+            long current = view;
+            if (current == 0) return true;
+            return nativeNavigation(current, request.getUrl().toString(), request.isForMainFrame(), request.hasGesture());
+        }
+
         @Override public WebResourceResponse shouldInterceptRequest(WebView source, WebResourceRequest request) {
             Uri uri = request.getUrl();
             if (!projected(uri)) return null;
@@ -246,6 +261,29 @@ public final class NeoAstraWebHost {
     }
 
     private final class Chrome extends WebChromeClient {
+        // Android names the address of a new window only to the WebView that opens it: a probe takes the first address,
+        // reports it, and is destroyed, since the backend creates no popup view.
+        @Override public boolean onCreateWindow(WebView source, boolean isDialog, boolean isUserGesture, Message result) {
+            final WebView probe = new WebView(source.getContext());
+            probe.setWebViewClient(new WebViewClient() {
+                private boolean delivered;
+                private void deliver(WebView target, String url) {
+                    if (delivered || url == null) return;
+                    delivered = true;
+                    long current = view;
+                    if (current != 0) nativeNewWindow(current, url, isUserGesture);
+                    target.stopLoading();
+                    target.post(target::destroy);
+                }
+                @Override public boolean shouldOverrideUrlLoading(WebView target, WebResourceRequest request) { deliver(target, request.getUrl().toString()); return true; }
+                @Override public void onPageStarted(WebView target, String url, Bitmap favicon) { deliver(target, url); }
+            });
+            WebView.WebViewTransport transport = (WebView.WebViewTransport) result.obj;
+            transport.setWebView(probe);
+            result.sendToTarget();
+            return true;
+        }
+
         @Override public void onReceivedTitle(WebView source, String title) {
             long current = view;
             if (current != 0) nativeEvent(current, EVENT_TITLE, null, title, 0);
