@@ -15,6 +15,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <DefineConstants>$(DefineConstants);NEOASTRA_TOOL</DefineConstants>
+    <!-- The build runs the tool with the runtime of the SDK that builds the application, which may be a later major version,
+         as for an iOS or Android application. -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>
     <!-- Keep the tool standalone by compiling only the shared models and validation it uses. -->

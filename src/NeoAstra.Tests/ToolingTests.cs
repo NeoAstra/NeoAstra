@@ -29,6 +29,16 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void ToolRuntimeConfiguration_RollsForwardToALaterMajorRuntime()
+    {
+        // The build runs the tool with the runtime of the SDK that builds the application, such as .NET 11 for iOS and Android.
+        var runtimeConfig = Path.ChangeExtension(typeof(NeoProjectConfiguration).Assembly.Location, ".runtimeconfig.json");
+        Assert.IsTrue(File.Exists(runtimeConfig), runtimeConfig);
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(runtimeConfig));
+        Assert.AreEqual("Major", document.RootElement.GetProperty("runtimeOptions").GetProperty("rollForward").GetString());
+    }
+
+    [TestMethod]
     public void ProjectConfiguration_ResolvesFromConfigDirectoryAndRedactsSecrets()
     {
         using var fixture = new ProjectFixture();
