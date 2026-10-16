@@ -97,7 +97,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             throw new ArgumentException("The host window must belong to this environment's application.", nameof(host));
         }
 
-        if (options.BridgeOrigins.Count != 0 && !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsIOS())
+        if (options.BridgeOrigins.Count != 0 && !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsIOS() && !OperatingSystem.IsAndroid())
         {
             throw new PlatformNotSupportedException("Explicit bridge origins are not supported by this backend.");
         }
@@ -116,6 +116,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
                 NeoNativeHandleKind.CocoaNSView => NativeMethods.neoastra_native_parent_kind.NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW,
                 NeoNativeHandleKind.GtkWidget => NativeMethods.neoastra_native_parent_kind.NEOASTRA_NATIVE_PARENT_GTK_WIDGET,
                 NeoNativeHandleKind.UIKitUIView => NativeMethods.neoastra_native_parent_kind.NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW,
+                NeoNativeHandleKind.AndroidViewGroup => NativeMethods.neoastra_native_parent_kind.NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP,
                 _ => NativeMethods.neoastra_native_parent_kind.NEOASTRA_NATIVE_PARENT_NONE,
             };
             parent.handle = (void*)nativeParent.Value;

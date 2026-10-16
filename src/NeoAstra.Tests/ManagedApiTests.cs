@@ -426,6 +426,25 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void HostFactories_AcceptAnAndroidViewGroupOnlyOnAndroid()
+    {
+        var handle = new NeoNativeHandle(NeoNativeHandleKind.AndroidViewGroup, 1);
+        Assert.AreEqual(11, (int)NeoNativeHandleKind.AndroidViewGroup);
+        Assert.AreEqual(12, (int)NeoNativeHandleKind.AndroidWebView);
+        if (OperatingSystem.IsAndroid())
+        {
+            Assert.ThrowsExactly<ArgumentException>(() => NeoAstraHost.FromAndroidViewGroup(0));
+            Assert.IsNotNull(NeoAstraHost.FromNativeParent(handle));
+            Assert.AreEqual((nint)1, handle.GetAndroidViewGroup());
+            return;
+        }
+
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromAndroidViewGroup(1));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromNativeParent(handle));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => handle.GetAndroidViewGroup());
+    }
+
+    [TestMethod]
     public void NativeHandle_NamedConversionChecksKind()
     {
         if (!OperatingSystem.IsWindows())

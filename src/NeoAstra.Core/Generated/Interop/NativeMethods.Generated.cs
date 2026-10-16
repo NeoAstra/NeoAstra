@@ -87,6 +87,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_NATIVE_PARENT_GTK_WIDGET = unchecked((uint)3),
 
             NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW = unchecked((uint)4),
+
+            NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP = unchecked((uint)5),
         }
 
         public enum neoastra_native_handle_kind : uint
@@ -112,6 +114,10 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = unchecked((uint)9),
 
             NEOASTRA_NATIVE_HANDLE_UIKIT_UIVIEW = unchecked((uint)10),
+
+            NEOASTRA_NATIVE_HANDLE_ANDROID_VIEW_GROUP = unchecked((uint)11),
+
+            NEOASTRA_NATIVE_HANDLE_ANDROID_WEBVIEW = unchecked((uint)12),
         }
 
         public enum neoastra_window_state : uint

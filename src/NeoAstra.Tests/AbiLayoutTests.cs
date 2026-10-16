@@ -63,8 +63,8 @@ public sealed class AbiLayoutTests
         AssertEnum<int, NativeMethods.neoastra_result>(-14, 0);
         AssertEnum<uint, NativeMethods.neoastra_support_level>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_app_shutdown_mode>(0, 2);
-        AssertEnum<uint, NativeMethods.neoastra_native_parent_kind>(0, 4);
-        AssertEnum<uint, NativeMethods.neoastra_native_handle_kind>(0, 10);
+        AssertEnum<uint, NativeMethods.neoastra_native_parent_kind>(0, 5);
+        AssertEnum<uint, NativeMethods.neoastra_native_handle_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_window_state>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_window_attribute>(0, 4);
         AssertEnum<uint, NativeMethods.neoastra_window_resize_edge>(0, 7);

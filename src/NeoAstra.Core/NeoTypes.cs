@@ -156,6 +156,10 @@ public enum NeoNativeHandleKind
     WebKitGtkWebView = 9,
     /// <summary>A UIKit <c>UIView*</c>.</summary>
     UIKitUIView = 10,
+    /// <summary>A JNI reference to an Android <c>ViewGroup</c>.</summary>
+    AndroidViewGroup = 11,
+    /// <summary>A JNI global reference to an Android <c>WebView</c>.</summary>
+    AndroidWebView = 12,
 }
 
 /// <summary>Describes the presentation state of a window.</summary>
@@ -533,6 +537,11 @@ public readonly record struct NeoNativeHandle(NeoNativeHandleKind Kind, nint Val
     /// <exception cref="PlatformNotSupportedException">The current operating system is not iOS.</exception>
     /// <exception cref="InvalidOperationException">This value does not contain a UIKit <c>UIView*</c>.</exception>
     public nint GetUIKitUIView() => Get(NeoNativeHandleKind.UIKitUIView, OperatingSystem.IsIOS(), "iOS");
+
+    /// <summary>Returns this value as a JNI reference to an Android <c>ViewGroup</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">The current operating system is not Android.</exception>
+    /// <exception cref="InvalidOperationException">This value does not contain an Android <c>ViewGroup</c>.</exception>
+    public nint GetAndroidViewGroup() => Get(NeoNativeHandleKind.AndroidViewGroup, OperatingSystem.IsAndroid(), "Android");
 
     /// <summary>Returns this value as a GTK widget.</summary>
     /// <exception cref="PlatformNotSupportedException">The current operating system is not Linux.</exception>
