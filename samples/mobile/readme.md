@@ -1,6 +1,10 @@
 # NeoAstra mobile samples (preview)
 
-A Hello page that calls one generated RPC service (`greeting.hello`) and the desktop services of NeoAstra through
+`NeoAstra.Sample.Hello` is the conventional application of NeoAstra on a phone: one project for iOS and Android, with the page
+in `frontend/`, which the frontend pipeline of NeoAstra prepares and packages as on the desktop, and the application in
+`HelloApp.cs`, which `NeoApp.AttachAsync` shows from the scene delegate on iOS and from the activity on Android.
+
+`NeoAstra.Sample.iOS` and `NeoAstra.Sample.Android` compose the host by hand instead: a Hello page that calls one generated RPC service (`greeting.hello`) and the desktop services of NeoAstra through
 `createDesktopClient`, hosted on iOS and on Android with the same `MobileHost`. The capability document
 `Shared/capabilities/main.json` grants the page exactly the permissions it uses on `ios` and `android`, with scopes, and a
 service that a platform does not offer answers `Unsupported`. The host: the application attaches NeoAstra to the run loop of
@@ -20,6 +24,8 @@ ANDROID_NDK_HOME=/path/to/ndk python eng/build_native.py --rid android-arm64
 From this folder:
 
 ```sh
+dotnet build NeoAstra.Sample.Hello -f net11.0-ios -c Release -r iossimulator-arm64
+dotnet build NeoAstra.Sample.Hello -f net11.0-android -c Release -r android-arm64
 dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64
 dotnet build NeoAstra.Sample.Android -c Release -r android-arm64
 ```

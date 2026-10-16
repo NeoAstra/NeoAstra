@@ -1,0 +1,8 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, "Roboto", sans-serif; }
+body { margin: 0; padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom)); }
+h1 { font-size: 2rem; margin: 0 0 8px; }
+h1 span { color: #2563eb; }
+form { display: grid; gap: 10px; margin: 24px 0 16px; }
+input, button { font: inherit; padding: 12px 14px; border-radius: 12px; border: 1px solid #c7ccd4; }
+button { background: #2563eb; color: white; border: none; font-weight: 600; }
+#result { font-size: 1.25rem; font-weight: 600; }

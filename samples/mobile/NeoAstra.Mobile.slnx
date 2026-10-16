@@ -4,5 +4,6 @@
     <File Path="readme.md" />
   </Folder>
   <Project Path="NeoAstra.Sample.Android/NeoAstra.Sample.Android.csproj" />
+  <Project Path="NeoAstra.Sample.Hello/NeoAstra.Sample.Hello.csproj" />
   <Project Path="NeoAstra.Sample.iOS/NeoAstra.Sample.iOS.csproj" />
 </Solution>
