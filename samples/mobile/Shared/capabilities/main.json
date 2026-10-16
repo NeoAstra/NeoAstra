@@ -22,6 +22,9 @@
         "push:receive",
         "passkeys:create",
         "passkeys:get",
+        "purchases:read",
+        "purchases:buy",
+        "purchases:finish",
         "system-info:theme",
         "system-info:metadata",
         {

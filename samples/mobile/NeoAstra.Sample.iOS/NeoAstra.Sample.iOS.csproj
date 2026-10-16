@@ -25,9 +25,13 @@
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Purchases/NeoAstra.Purchases.csproj" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />
     <BundleResource Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" LogicalName="assets/client/%(Filename)%(Extension)" />
   </ItemGroup>
+  <!-- A project reference to the purchases plugin takes the targets that its package gives an iOS application: they embed
+       the StoreKit 2 bridge. -->
+  <Import Project="../../../src/NeoAstra.Purchases/Build/NeoAstra.Purchases.targets" />
 </Project>

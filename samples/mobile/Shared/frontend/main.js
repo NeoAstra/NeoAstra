@@ -109,6 +109,24 @@ card("Passkeys", (row, run) => {
     return invoke("passkeys.get", { options: { rpId: rp.value, challenge: bytes(32), userVerification: "preferred", allowCredentials: id ? [{ type: "public-key", id }] : [] } });
   }));
 });
+// The products are those of the store of the application, whose identifiers the field takes.
+card("Purchases", (row, run) => {
+  const id = input(row, localStorage.getItem("purchases.id") ?? "");
+  id.placeholder = "product identifier";
+  id.onchange = () => localStorage.setItem("purchases.id", id.value);
+  const type = document.createElement("select");
+  type.innerHTML = `<option>InApp</option><option>Subscription</option>`;
+  type.value = localStorage.getItem("purchases.type") ?? "InApp";
+  type.onchange = () => localStorage.setItem("purchases.type", type.value);
+  row.append(type);
+  let last;
+  button(row, "Load", () => run(() => invoke("purchases.products", { products: [{ id: id.value, type: type.value }] })));
+  button(row, "Buy", () => run(async () => { const result = await invoke("purchases.purchase", { id: id.value, type: type.value }); last = result.value ?? last; return result; }));
+  button(row, "Owned", () => run(async () => { const result = await invoke("purchases.list", {}); last = result.value?.[0] ?? last; return result; }));
+  button(row, "Restore", () => run(() => invoke("purchases.restore", {})));
+  button(row, "Finish", () => run(() => last ? invoke("purchases.finish", { purchase: last, consume: type.value === "InApp" }) : { status: "NotFound" }));
+  rpcClient().then(client => client.subscribe("purchases.updated", purchase => run(async () => ({ status: "Updated", ...purchase }))));
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });
