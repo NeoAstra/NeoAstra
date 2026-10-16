@@ -35,6 +35,7 @@ public static class NeoSafeStorage
         if (OperatingSystem.IsWindows()) return new WindowsSafeStorage(applicationNamespace, privateDataDirectory);
         if (OperatingSystem.IsMacOS()) return new MacKeychainSafeStorage(applicationNamespace);
         if (OperatingSystem.IsLinux()) return new SecretToolSafeStorage(applicationNamespace, DesktopProcess.FindTrustedExecutable("/usr/bin/secret-tool", "/usr/local/bin/secret-tool"));
+        if (OperatingSystem.IsIOS()) return new IosKeychainSafeStorage(applicationNamespace);
         return new UnsupportedSafeStorage("No OS credential service is available.");
     }
 

@@ -178,6 +178,8 @@ public sealed class NeoExternalOpener
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            // iOS opens web addresses only: an application has no file manager to reveal in and no other files to open.
+            if (OperatingSystem.IsIOS()) return reveal || !Uri.TryCreate(target, UriKind.Absolute, out var web) || web.Scheme is not ("http" or "https") ? NeoDesktopStatus.Unsupported : IosOpener.OpenUrl(target);
             if (OperatingSystem.IsWindows())
             {
                 var start = reveal
