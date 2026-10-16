@@ -169,6 +169,43 @@ void new_window_decided(void* pointer, const neoastra_decision_response_t* respo
     }
 }
 
+// WKWebView has no JavaScript dialogs of its own: the host answers alert, confirm, and prompt, and without a handler an alert
+// is accepted and the others are canceled.
+struct dialog_context { void (^completion)(BOOL, NSString*); };
+void dialog_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    @autoreleasepool {
+        std::unique_ptr<dialog_context> context(static_cast<dialog_context*>(pointer));
+        try {
+            NSString* text = response->text.length ? ns_string(neo_string(response->text)) : nil;
+            context->completion(response->action == NEOASTRA_DECISION_ALLOW, text);
+        } catch (...) { context->completion(NO, nil); }
+    }
+}
+void request_dialog(neoastra_view_t* view, neoastra_script_dialog_kind_t kind, NSString* message, NSString* initial, WKFrameInfo* frame, neoastra_decision_action_t fallback, void (^completion)(BOOL, NSString*)) {
+    std::string text = utf8(message), value = utf8(initial), origin = url_origin(frame.request.URL);
+    auto* decision = new neoastra_decision;
+    neo_configure_decision(decision, view, NEOASTRA_DECISION_SCRIPT_DIALOG, fallback);
+    decision->completion = dialog_decided;
+    decision->completion_context = new dialog_context{[completion copy]};
+    neo_event_details details{};
+    if (kind == NEOASTRA_SCRIPT_DIALOG_PROMPT) details.text2 = &value;
+    neo_emit_view_detailed(view, NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED, 0, &text, &origin, kind, 0, decision, details);
+    neo_finish_decision_event(view, decision);
+    decision->release();
+}
+
+// A request for a microphone and a camera at once asks the host for each; the last answer settles it. The default answer
+// lets WebKit ask the user itself.
+struct permission_context { void (^handler)(WKPermissionDecision); int pending{1}; WKPermissionDecision outcome{WKPermissionDecisionGrant}; };
+void permission_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    auto* context = static_cast<permission_context*>(pointer);
+    if (response->action == NEOASTRA_DECISION_DEFAULT) { if (context->outcome == WKPermissionDecisionGrant) context->outcome = WKPermissionDecisionPrompt; }
+    else if (response->action != NEOASTRA_DECISION_ALLOW) context->outcome = WKPermissionDecisionDeny;
+    if (--context->pending > 0) return;
+    context->handler(context->outcome);
+    delete context;
+}
+
 struct navigation_context { void (^handler)(WKNavigationActionPolicy); std::string uri; };
 void navigation_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
     @autoreleasepool {
@@ -380,6 +417,45 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri, flags, 0, decision);
     neo_finish_decision_event(view, decision);
     decision->release();
+}
+- (void)webView:(WKWebView*)webView runJavaScriptAlertPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(void))completionHandler {
+    (void)webView;
+    auto* view = self.nativeView;
+    if (!view) { completionHandler(); return; }
+    request_dialog(view, NEOASTRA_SCRIPT_DIALOG_ALERT, message, nil, frame, NEOASTRA_DECISION_ALLOW, ^(BOOL, NSString*) { completionHandler(); });
+}
+- (void)webView:(WKWebView*)webView runJavaScriptConfirmPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(BOOL))completionHandler {
+    (void)webView;
+    auto* view = self.nativeView;
+    if (!view) { completionHandler(NO); return; }
+    request_dialog(view, NEOASTRA_SCRIPT_DIALOG_CONFIRM, message, nil, frame, NEOASTRA_DECISION_CANCEL, ^(BOOL accepted, NSString*) { completionHandler(accepted); });
+}
+- (void)webView:(WKWebView*)webView runJavaScriptTextInputPanelWithPrompt:(NSString*)prompt defaultText:(NSString*)defaultText initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(NSString*))completionHandler {
+    (void)webView;
+    auto* view = self.nativeView;
+    if (!view) { completionHandler(nil); return; }
+    request_dialog(view, NEOASTRA_SCRIPT_DIALOG_PROMPT, prompt, defaultText, frame, NEOASTRA_DECISION_CANCEL, ^(BOOL accepted, NSString* value) { completionHandler(accepted ? (value ? value : @"") : nil); });
+}
+- (void)webView:(WKWebView*)webView requestMediaCapturePermissionForOrigin:(WKSecurityOrigin*)origin initiatedByFrame:(WKFrameInfo*)frame type:(WKMediaCaptureType)type decisionHandler:(void (^)(WKPermissionDecision))handler {
+    (void)webView;
+    (void)frame;
+    auto* view = self.nativeView;
+    if (!view) { handler(WKPermissionDecisionDeny); return; }
+    NSString* raw = origin.port ? [NSString stringWithFormat:@"%@://%@:%ld", origin.protocol, origin.host, (long)origin.port] : [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
+    std::string uri = utf8(raw);
+    const bool both = type == WKMediaCaptureTypeCameraAndMicrophone;
+    const int count = both ? 2 : 1;
+    const neoastra_permission_kind_t kinds[2] = {both || type == WKMediaCaptureTypeMicrophone ? NEOASTRA_PERMISSION_MICROPHONE : type == WKMediaCaptureTypeCamera ? NEOASTRA_PERMISSION_CAMERA : NEOASTRA_PERMISSION_UNKNOWN, NEOASTRA_PERMISSION_CAMERA};
+    auto* context = new permission_context{[handler copy], count};
+    for (int index = 0; index < count; ++index) {
+        auto* decision = new neoastra_decision;
+        neo_configure_decision(decision, view, NEOASTRA_DECISION_PERMISSION, NEOASTRA_DECISION_DENY);
+        decision->completion = permission_decided;
+        decision->completion_context = context;
+        neo_emit_view(view, NEOASTRA_EVENT_PERMISSION_REQUESTED, 0, nullptr, &uri, kinds[index], 0, decision);
+        neo_finish_decision_event(view, decision);
+        decision->release();
+    }
 }
 // A link with a target or window.open asks for a new window. The host decides; a popup view is not created, so WebKit gets none.
 - (WKWebView*)webView:(WKWebView*)webView createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration forNavigationAction:(WKNavigationAction*)action windowFeatures:(WKWindowFeatures*)features {
