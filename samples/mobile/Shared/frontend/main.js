@@ -54,7 +54,7 @@ card("Notification", (row, run) => {
   button(row, "Show", () => run(() => desktop.notifications.show({ appIdentity: "dev.neoastra.sample.mobile", category: "general", urgency: "normal", persistent: false, id: "hello", title: "Hello NeoAstra", body: "A notification from the page.", actions: [] })));
 });
 card("Message dialog", (row, run) => {
-  button(row, "Show", () => run(() => desktop.dialogs.message({ title: "Hello", message: "A native dialog from the page.", icon: "Information", buttons: ["Accept"] })));
+  button(row, "Show", () => run(() => desktop.dialogs.message({ title: "Hello", message: "A native dialog from the page. Which button do you choose?", icon: "Question", buttons: ["Accept", "Cancel"] })));
 });
 card("Window title (a desktop window)", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
