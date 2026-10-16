@@ -61,23 +61,21 @@ import javax.crypto.spec.GCMParameterSpec;
  */
 public final class NeoAstraServices {
     private static final String CHANNEL = "neoastra.notifications";
-    private static final int PERMISSION_REQUEST = 0x4E41;
     private static volatile Context context;
     private static volatile WeakReference<Activity> resumed = new WeakReference<>(null);
     private static volatile WeakReference<Activity> current = new WeakReference<>(null);
-    private static volatile CountDownLatch paused, resumedAgain;
 
     private NeoAstraServices() { }
 
     /**
-     * Keeps the application context, which the services need, and follows the resumed activity, which dialogs and permission
-     * requests need. The initializer calls it when the process starts.
+     * Keeps the application context, which the services need, and follows the activities: dialogs need the resumed one, and a
+     * window and the result activity start from the current one. The initializer calls it when the process starts.
      */
     public static void initialize(Context value) {
         context = value.getApplicationContext();
         if (context instanceof Application) ((Application) context).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); current = resumed; CountDownLatch latch = resumedAgain; if (latch != null) latch.countDown(); }
-            @Override public void onActivityPaused(Activity activity) { CountDownLatch latch = paused; if (latch != null) latch.countDown(); }
+            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); current = resumed; }
+            @Override public void onActivityPaused(Activity activity) { }
             @Override public void onActivityCreated(Activity activity, Bundle state) { current = new WeakReference<>(activity); }
             @Override public void onActivityStarted(Activity activity) { }
             @Override public void onActivityStopped(Activity activity) { }
@@ -256,31 +254,16 @@ public final class NeoAstraServices {
         return manager.areNotificationsEnabled() ? "Granted" : "Denied";
     }
 
-    // Asks for the notification permission on the resumed activity. The answer goes to the activity, which NeoAstra does not
-    // own, so the service waits for the activity to resume after the system dialog and reads the permission again; when the
-    // system answers without a dialog, the activity does not pause and the service reads it at once.
+    // Asks for the notification permission in the result activity of NeoAstra, which receives the answer of the system, and
+    // waits for that answer on the calling thread, which is never the main thread.
     private static String authorize(Context current, NotificationManager manager) throws Exception {
         if (Build.VERSION.SDK_INT < 33 || !"NotRequested".equals(permission(current, manager))) return permission(current, manager);
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("The notification permission cannot be requested on the main thread.");
-        CountDownLatch pause = new CountDownLatch(1), resume = new CountDownLatch(1);
-        AtomicReference<Boolean> asked = new AtomicReference<>(false);
-        paused = pause;
-        resumedAgain = resume;
-        try {
-            CountDownLatch posted = new CountDownLatch(1);
-            new Handler(Looper.getMainLooper()).post(() -> {
-                Activity activity = resumed.get();
-                if (activity != null) { activity.requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, PERMISSION_REQUEST); asked.set(true); }
-                posted.countDown();
-            });
-            posted.await(10, TimeUnit.SECONDS);
-            if (!asked.get()) return "NotRequested";
-            current.getSharedPreferences("neoastra.notifications", Context.MODE_PRIVATE).edit().putBoolean("requested", true).commit();
-            if (pause.await(2, TimeUnit.SECONDS)) resume.await(2, TimeUnit.MINUTES);
-        } finally {
-            paused = null;
-            resumedAgain = null;
-        }
+        CountDownLatch answered = new CountDownLatch(1);
+        new Handler(Looper.getMainLooper()).post(() -> NeoAstraResultActivity.requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, (resultCode, data, grants) -> answered.countDown()));
+        // Android does not ask again after a refusal, so a later status reads a missing permission as denied.
+        current.getSharedPreferences("neoastra.notifications", Context.MODE_PRIVATE).edit().putBoolean("requested", true).commit();
+        answered.await(2, TimeUnit.MINUTES);
         return permission(current, manager);
     }
 
