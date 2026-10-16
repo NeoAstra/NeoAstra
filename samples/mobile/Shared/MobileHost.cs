@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using NeoAstra;
+using NeoAstra.Desktop;
+using NeoAstra.Desktop.Opener;
 using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(NeoAstra.Samples.Mobile.AppJsonContext))]
@@ -7,8 +9,15 @@ using NeoAstra.Rpc;
 namespace NeoAstra.Samples.Mobile;
 
 /// <summary>Hosts the sample page in a view of the application, the same way on iOS and Android.</summary>
+/// <remarks>
+/// The page reaches the desktop services of NeoAstra (clipboard, theme, safe storage, opener, notifications, dialogs) through
+/// the official renderer handlers, and the capability document grants it exactly the permissions it uses on iOS and Android.
+/// A service that a platform does not offer answers Unsupported instead of failing.
+/// </remarks>
 internal sealed class MobileHost
 {
+    private const string ApplicationId = "dev.neoastra.sample.mobile";
+
     private readonly NeoApplication _application;
     private readonly NeoEnvironment _environment;
     private readonly NeoRpcHost _rpc;
@@ -37,11 +46,53 @@ internal sealed class MobileHost
         {
             CustomSchemes = [NeoCustomScheme.Application("app", new NeoDirectoryResourceProvider(assetsDirectory))],
         });
-        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        var desktop = NeoDesktopServices.CreateSystem(
+            ApplicationId,
+            "NeoAstra Mobile",
+            "1.0",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "neoastra"),
+            ["https://github.com"],
+            [assetsDirectory],
+            [assetsDirectory],
+            [NeoOpenFileIntent.TextDocument],
+            application.Dispatcher);
+        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).Build();
+        await plugins.StartAsync(application);
+
+        var capabilities = LoadCapabilities();
+        var builder = new NeoRpcBuilder(new NeoRpcOptions
+        {
+            CapabilityManifest = capabilities,
+            SecurityProfile = capabilities.Profile,
+            AuthorizationService = new NeoCapabilityAuthorizationService(capabilities),
+        });
         builder.AddGreetingService(new GreetingService());
+        builder.AddNeoAstraDesktopHandlers(desktop, new NeoDesktopRendererOptions
+        {
+            AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
+            AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal) { "hello" },
+        });
         var mobile = new MobileHost(application, environment, builder.Build(), host);
         await mobile.ShowAsync();
+        // An application that attaches to a run loop of its own reports when its startup is complete.
+        application.NotifyReady();
         return mobile;
+    }
+
+    // The capability document is resolved for the platform that runs it, so the same file serves iOS and Android.
+    private static NeoCapabilityManifest LoadCapabilities()
+    {
+        using var stream = typeof(MobileHost).Assembly.GetManifestResourceStream("capabilities.json") ?? throw new InvalidOperationException("The capability document is missing.");
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return NeoCapabilityManifest.Resolve(
+            memory.ToArray(),
+            new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().Build(),
+            new NeoCapabilityResolutionOptions
+            {
+                Platform = OperatingSystem.IsIOS() ? NeoCapabilityPlatform.IOS : NeoCapabilityPlatform.Android,
+                Profile = NeoSecurityProfile.ProductionLocalApp,
+            });
     }
 
     private async Task ShowAsync()

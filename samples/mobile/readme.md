@@ -1,6 +1,10 @@
 # NeoAstra mobile samples (preview)
 
-One page and one generated RPC service (`greeting.hello`), hosted on iOS and on Android with the same `MobileHost`:
+A Hello page that calls one generated RPC service (`greeting.hello`) and the desktop services of NeoAstra through
+`createDesktopClient`, hosted on iOS and on Android with the same `MobileHost`. The capability document
+`Shared/capabilities/main.json` grants the page exactly the permissions it uses on `ios` and `android`, with scopes, and a
+service that a platform does not offer answers `Unsupported`, a window command answers that it needs a desktop window. The
+host:
 the application attaches NeoAstra to the run loop of the platform, creates an environment with the `app` custom scheme, shows
 a view in a native view of its own (`NeoAstraHost.FromUIKitUIView` or `NeoAstraHost.FromAndroidViewGroup`), and recreates the
 view when the platform ends its web content process.

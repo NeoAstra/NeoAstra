@@ -1,0 +1,77 @@
+{
+  "$schema": "neoastra-capabilities-v1.schema.json",
+  "version": 1,
+  "capabilities": [
+    {
+      "id": "mobile-main",
+      "views": [
+        "main"
+      ],
+      "platforms": [
+        "ios",
+        "android"
+      ],
+      "origins": [
+        "app://neoastra"
+      ],
+      "permissions": [
+        "system-info:theme",
+        "system-info:metadata",
+        {
+          "id": "clipboard:read-text",
+          "scope": {
+            "formats": [
+              "text"
+            ],
+            "operations": [
+              "read"
+            ]
+          }
+        },
+        {
+          "id": "clipboard:write-text",
+          "scope": {
+            "formats": [
+              "text"
+            ],
+            "operations": [
+              "write"
+            ]
+          }
+        },
+        "safe-storage:store",
+        "safe-storage:retrieve",
+        "safe-storage:delete",
+        {
+          "id": "opener:url",
+          "scope": {
+            "schemes": [
+              "https"
+            ],
+            "hosts": [
+              "github.com"
+            ]
+          }
+        },
+        "notifications:status",
+        {
+          "id": "notifications:display",
+          "scope": {
+            "appIdentity": "dev.neoastra.sample.mobile",
+            "categories": [
+              "general"
+            ],
+            "maximumPayloadBytes": 1024,
+            "persistent": false,
+            "urgencies": [
+              "normal"
+            ]
+          }
+        },
+        "dialogs:message",
+        "window:management",
+        "tray:create"
+      ]
+    }
+  ]
+}

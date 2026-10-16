@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <Compile Include="../Shared/*.cs" />
+    <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />
     <BundleResource Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" LogicalName="assets/client/%(Filename)%(Extension)" />
   </ItemGroup>

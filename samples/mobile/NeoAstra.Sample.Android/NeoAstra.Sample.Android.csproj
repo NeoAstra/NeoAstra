@@ -16,6 +16,7 @@
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
     <Compile Include="../Shared/*.cs" />
+    <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <AndroidAsset Include="../Shared/frontend/**/*" Link="Assets/web/%(RecursiveDir)%(Filename)%(Extension)" />
     <AndroidAsset Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" Link="Assets/web/client/%(Filename)%(Extension)" />
   </ItemGroup>
