@@ -147,7 +147,11 @@ public static class NeoDialogs
                 ? new ProcessDialogs("/usr/bin/osascript", true)
                 : OperatingSystem.IsLinux()
                     ? new LinuxDialogs(dispatcher)
-                    : new UnsupportedDialogs("No supported native dialog API is available.");
+                    : OperatingSystem.IsIOS()
+                        ? new IosDialogs(dispatcher)
+                        : OperatingSystem.IsAndroid()
+                            ? new AndroidDialogs()
+                            : new UnsupportedDialogs("No supported native dialog API is available.");
         return new OwnerBoundDialogs(presenter);
     }
 }

@@ -133,6 +133,8 @@ public static class NeoNotifications
         if (OperatingSystem.IsWindows()) return new WindowsNotifications(dispatcher);
         if (OperatingSystem.IsMacOS()) return new MacNotifications(applicationId);
         if (OperatingSystem.IsLinux()) return new LinuxNotifications(applicationId, applicationName);
+        if (OperatingSystem.IsIOS()) return IosNotifications.Create(applicationId);
+        if (OperatingSystem.IsAndroid()) return new AndroidNotifications();
         return new UnsupportedNotifications("No supported native notification service is available.");
     }
 }

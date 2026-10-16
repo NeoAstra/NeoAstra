@@ -3,6 +3,7 @@
 
 using NeoAstra.Desktop;
 using NeoAstra.Desktop.Clipboard;
+using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.SafeStorage;
 
 namespace NeoAstra.Tests;
@@ -29,6 +30,16 @@ public sealed class IosDesktopAdapterTests
         await Assert.ThrowsAsync<ArgumentException>(async () => await storage.StoreAsync("bad key", new byte[] { 1 }));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await storage.StoreAsync("key", ReadOnlyMemory<byte>.Empty));
         await Assert.ThrowsAsync<ArgumentException>(async () => await storage.RetrieveAsync("bad/key"));
+    }
+
+    [TestMethod]
+    public async Task Dialogs_AnswerUnsupportedForFileDialogsAndNeedADispatcherForMessages()
+    {
+        var dialogs = new IosDialogs(null);
+        var scope = new NeoFileScope([Path.GetTempPath()]);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.OpenFilesAsync(new() { Scope = scope })).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.SaveFileAsync(new() { Scope = scope })).Status);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await dialogs.ShowMessageAsync(new() { Message = "Hello" }));
     }
 
     [TestMethod]

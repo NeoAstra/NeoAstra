@@ -3,6 +3,8 @@
 
 using NeoAstra.Desktop;
 using NeoAstra.Desktop.Clipboard;
+using NeoAstra.Desktop.Dialogs;
+using NeoAstra.Desktop.Notifications;
 using NeoAstra.Desktop.SafeStorage;
 using NeoAstra.Interop;
 
@@ -33,6 +35,27 @@ public sealed class AndroidDesktopAdapterTests
     }
 
     [TestMethod]
+    public async Task Notifications_AnswerUnsupportedForActionsBeforeThePlatform()
+    {
+        var notifications = new AndroidNotifications();
+        Assert.AreEqual(NeoSupportLevel.Limited, notifications.Support.SupportLevel);
+        var request = new NeoNotificationRequest { Id = "hello", Title = "Hello", Body = "Body", Actions = [new("open", "Open")] };
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await notifications.ShowAsync(request));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await notifications.RemoveAsync("bad id"));
+    }
+
+    [TestMethod]
+    public async Task Dialogs_AnswerUnsupportedForFileDialogs()
+    {
+        var dialogs = new AndroidDialogs();
+        var scope = new NeoFileScope([Path.GetTempPath()]);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.OpenFilesAsync(new() { Scope = scope })).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.OpenFoldersAsync(new() { Scope = scope })).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.SaveFileAsync(new() { Scope = scope })).Status);
+        await Assert.ThrowsAsync<ArgumentException>(async () => await dialogs.ShowMessageAsync(new() { Message = "Hello", Buttons = [] }));
+    }
+
+    [TestMethod]
     public void PlatformCall_IsNotSupportedByTheDesktopBackends()
     {
         Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformCall.Invoke("clipboard", "{}"));
@@ -43,5 +66,6 @@ public sealed class AndroidDesktopAdapterTests
     {
         Assert.IsNotInstanceOfType<AndroidClipboard>(NeoClipboard.CreateSystem());
         Assert.IsNotInstanceOfType<AndroidKeystoreSafeStorage>(NeoSafeStorage.CreateSystem("dev.neoastra.tests", Path.GetTempPath()));
+        Assert.IsNotInstanceOfType<AndroidNotifications>(NeoNotifications.CreateSystem("dev.neoastra.tests", "Tests"));
     }
 }

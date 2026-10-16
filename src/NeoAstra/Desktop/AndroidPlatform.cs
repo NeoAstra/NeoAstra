@@ -11,12 +11,15 @@ namespace NeoAstra.Desktop;
 internal static class AndroidPlatform
 {
     internal static JsonDocument Call(string service, params (string Name, string Value)[] fields)
+        => Call(service, writer => { foreach (var (name, value) in fields) writer.WriteString(name, value); });
+
+    internal static JsonDocument Call(string service, Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            foreach (var (name, value) in fields) writer.WriteString(name, value);
+            write(writer);
             writer.WriteEndObject();
         }
         return JsonDocument.Parse(NeoPlatformCall.Invoke(service, Encoding.UTF8.GetString(stream.ToArray())));
