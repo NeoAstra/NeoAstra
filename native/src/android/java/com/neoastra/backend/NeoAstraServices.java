@@ -14,6 +14,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
@@ -36,6 +37,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.security.KeyStore;
@@ -97,6 +100,7 @@ public final class NeoAstraServices {
             case "notifications": notifications(current, input, output); break;
             case "dialog": dialog(input, output); break;
             case "assets": assets(current, input, output); break;
+            case "development": development(current, output); break;
             default: output.put("status", "Unsupported"); break;
         }
         return output.toString();
@@ -380,5 +384,15 @@ public final class NeoAstraServices {
         if (children != null) for (File child : children) delete(child);
         //noinspection ResultOfMethodCallIgnored
         file.delete();
+    }
+
+    // The address of a development server that adb gave a debuggable application, in a file of its private files that only
+    // `adb shell run-as` writes: another application can neither write the file nor start a release build with it.
+    private static void development(Context current, JSONObject output) throws Exception {
+        if ((current.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) { output.put("status", "Unsupported"); return; }
+        File file = new File(current.getFilesDir(), "neoastra-development-url");
+        if (!file.isFile() || file.length() > 2048) { output.put("status", "NotFound"); return; }
+        String url = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
+        output.put("status", url.isEmpty() ? "NotFound" : "Success").put("url", url);
     }
 }

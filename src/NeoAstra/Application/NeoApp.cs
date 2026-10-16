@@ -281,7 +281,7 @@ public sealed class NeoAppBuilder
         NeoEnvironment? environment = null;
         try
         {
-            var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
+            var developmentUrl = DevelopmentUrl();
             var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
             var release = developmentOrigin is null;
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
@@ -431,6 +431,16 @@ public sealed class NeoAppBuilder
                 Release = release,
                 Profile = profile,
             });
+    }
+
+    // The development server of `dotnet neoastra dev`: an environment variable on the desktop and in the iOS simulator, which
+    // inherits it from its launch, and on Android a file that adb gives a debuggable application.
+    private static string? DevelopmentUrl()
+    {
+        var value = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
+        if (value is not null || !OperatingSystem.IsAndroid()) return value;
+        using var response = Desktop.AndroidPlatform.Call("development");
+        return Desktop.AndroidPlatform.Status(response) == Desktop.NeoDesktopStatus.Success ? Desktop.AndroidPlatform.Text(response, "url") : null;
     }
 
     private static string DefaultAssetsDirectory()

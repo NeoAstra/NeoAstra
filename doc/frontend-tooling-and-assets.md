@@ -72,6 +72,23 @@ setting enabled, reserve the configured development port, and run only a trusted
 on an origin given bridge authority. Readiness does not authenticate a different process already
 listening on that port.
 
+An iOS or Android application (preview) reaches the same loopback development server. The iOS simulator shares the network of
+the Mac, so `127.0.0.1` is the development machine there, and it passes an environment variable to the application when the
+variable carries the `SIMCTL_CHILD_` prefix:
+
+```sh
+SIMCTL_CHILD_NEOASTRA_DEV_URL=http://127.0.0.1:5173/ xcrun simctl launch --terminate-running-process booted <bundle id>
+```
+
+On Android, `adb reverse` forwards the loopback port of the device or emulator to the development machine, and the address
+is a file in the private files of a debuggable build, which only `adb shell run-as` writes: another application can neither
+write it nor give it to a release build. Remove the file to load the packaged assets again.
+
+```sh
+adb reverse tcp:5173 tcp:5173
+adb shell "run-as <application id> sh -c 'mkdir -p files && echo http://127.0.0.1:5173/ > files/neoastra-development-url'"
+```
+
 ## Build, run, publish, and MSBuild properties
 
 Reference only the `NeoAstra` package. The package carries the compiled, framework-neutral `@neoastra/client` runtime under its SDK tools; repository `ProjectReference` builds compile the same runtime as part of the `NeoAstra` project. For package-based `frontend` projects, the transitive targets stage that package under `obj/neoastra/client` before locked npm restore, so `"@neoastra/client": "file:../obj/neoastra/client"` remains offline and version-aligned with the .NET package without compiling NeoAstra's TypeScript source in each application. For static `frontend/index.html` projects, the targets copy the browser runtime modules and an optional generated JavaScript RPC binding directly into the materialized frontend under `obj`; SDK files never appear in the project tree. When frontend work is configured, normal `dotnet build` runs preparation after C# compilation, generates `neoastra-assets.json`, and re-verifies every hash while copying an exact staging directory under `obj`. The same prepared assets are copied to `bin/.../assets`, so ordinary `dotnet run` consumes regular build output. Publish reuses that preparation instead of requiring a publish-only frontend build.
