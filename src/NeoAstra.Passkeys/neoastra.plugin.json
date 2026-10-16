@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.passkeys",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Passkeys.NeoPasskeysPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [
+    {
+      "name": "passkeys.create",
+      "permission": "passkeys:create",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "passkeys.get",
+      "permission": "passkeys:get",
+      "risk": "sensitive",
+      "audited": true
+    }
+  ],
+  "events": [],
+  "permissions": [
+    {
+      "id": "passkeys:create",
+      "revision": 1,
+      "operations": [
+        "passkeys.create"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "passkeys:get",
+      "revision": 1,
+      "operations": [
+        "passkeys.get"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    }
+  ]
+}

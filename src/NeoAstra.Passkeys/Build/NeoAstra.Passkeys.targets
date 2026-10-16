@@ -1,0 +1,15 @@
+<Project>
+  <!-- The passkeys plugin gives an Android application that references the Credential Manager (Xamarin.AndroidX.Credentials)
+       the Java side of its service: the package keeps it beside its build files, and a project reference finds it in the
+       sources of the plugin. An application without the Credential Manager builds without it, and passkeys answer Unsupported;
+       NeoAstraPasskeysCredentialManager=false leaves it out. -->
+  <PropertyGroup>
+    <NeoAstraPasskeysJavaDirectory Condition="'$(NeoAstraPasskeysJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraPasskeysJavaDirectory>
+    <NeoAstraPasskeysJavaDirectory Condition="'$(NeoAstraPasskeysJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../Android/</NeoAstraPasskeysJavaDirectory>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' And '$(NeoAstraPasskeysCredentialManager)' != 'false' And '@(PackageReference->AnyHaveMetadataValue('Identity', 'Xamarin.AndroidX.Credentials'))' == 'true'">
+    <AndroidJavaSource Include="$(NeoAstraPasskeysJavaDirectory)com/neoastra/passkeys/*.java" />
+    <AndroidManifestOverlay Include="$(NeoAstraPasskeysJavaDirectory)AndroidManifest.xml" />
+  </ItemGroup>
+</Project>
