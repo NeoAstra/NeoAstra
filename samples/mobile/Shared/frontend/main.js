@@ -56,7 +56,7 @@ card("Notification", (row, run) => {
 card("Message dialog", (row, run) => {
   button(row, "Show", () => run(() => desktop.dialogs.message({ title: "Hello", message: "A native dialog from the page. Which button do you choose?", icon: "Question", buttons: ["Accept", "Cancel"] })));
 });
-card("Window title (a desktop window)", (row, run) => {
+card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });
 card("Tray icon (a desktop tray)", (row, run) => {

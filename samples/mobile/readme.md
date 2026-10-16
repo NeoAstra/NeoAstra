@@ -3,11 +3,11 @@
 A Hello page that calls one generated RPC service (`greeting.hello`) and the desktop services of NeoAstra through
 `createDesktopClient`, hosted on iOS and on Android with the same `MobileHost`. The capability document
 `Shared/capabilities/main.json` grants the page exactly the permissions it uses on `ios` and `android`, with scopes, and a
-service that a platform does not offer answers `Unsupported`, a window command answers that it needs a desktop window. The
-host:
-the application attaches NeoAstra to the run loop of the platform, creates an environment with the `app` custom scheme, shows
-a view in a native view of its own (`NeoAstraHost.FromUIKitUIView` or `NeoAstraHost.FromAndroidViewGroup`), and recreates the
-view when the platform ends its web content process.
+service that a platform does not offer answers `Unsupported`. The host: the application attaches NeoAstra to the run loop of
+the platform, creates an environment with the `app` custom scheme, creates a window of NeoAstra (the `UIWindow` of the scene on
+iOS, the content of the activity on Android) with the page in it, so that the window commands work too, and recreates the
+view when the platform ends its web content process. A later activity on Android, after back closed the previous window,
+takes a new window in the same application.
 
 The samples need the .NET 11 SDK with the `ios` and `android` workloads, which `global.json` selects, and the native libraries
 of the targets, which `eng/build_native.py` builds and stages:

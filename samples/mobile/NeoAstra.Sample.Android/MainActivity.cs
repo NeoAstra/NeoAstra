@@ -1,26 +1,18 @@
 using Android.Content.PM;
-using Android.Widget;
 
 namespace NeoAstra.Samples.Mobile;
 
-/// <summary>Shows the sample page in the content view of the activity.</summary>
+/// <summary>Shows the sample page in a window of NeoAstra, which takes the content of the activity.</summary>
 [Activity(Label = "NeoAstra", MainLauncher = true, LaunchMode = LaunchMode.SingleTask, Theme = "@android:style/Theme.DeviceDefault.Light.NoActionBar",
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.UiMode | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden)]
 public sealed class MainActivity : Activity
 {
-    private static MobileHost? host;
-
     protected override async void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
-        // Android 15 draws an application edge to edge, and the WebView reports no safe-area insets there: the root view keeps
-        // the page clear of the system bars instead.
-        var root = new FrameLayout(this);
-        root.SetFitsSystemWindows(true);
-        SetContentView(root);
         try
         {
-            host = await MobileHost.StartAsync(NeoAstraHost.FromAndroidViewGroup(root.Handle), CopyAssets());
+            await MobileHost.ShowAsync(CopyAssets());
         }
         catch (Exception exception)
         {

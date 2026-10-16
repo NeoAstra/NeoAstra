@@ -8,9 +8,10 @@ using NeoAstra.Rpc;
 
 namespace NeoAstra.Samples.Mobile;
 
-/// <summary>Hosts the sample page in a view of the application, the same way on iOS and Android.</summary>
+/// <summary>Hosts the sample page in a window of NeoAstra, the same way on iOS and Android.</summary>
 /// <remarks>
-/// The page reaches the desktop services of NeoAstra (clipboard, theme, safe storage, opener, notifications, dialogs) through
+/// A window of NeoAstra is the UIWindow of the active scene on iOS and the content of the current activity on Android; the
+/// page in it reaches the window commands too. The page reaches the desktop services of NeoAstra (clipboard, theme, safe storage, opener, notifications, dialogs) through
 /// the official renderer handlers, and the capability document grants it exactly the permissions it uses on iOS and Android.
 /// A service that a platform does not offer answers Unsupported instead of failing.
 /// </remarks>
@@ -18,24 +19,38 @@ internal sealed class MobileHost
 {
     private const string ApplicationId = "dev.neoastra.sample.mobile";
 
+    private static MobileHost? s_current;
+
     private readonly NeoApplication _application;
     private readonly NeoEnvironment _environment;
     private readonly NeoRpcHost _rpc;
-    private readonly NeoAstraHost _host;
+    private NeoWindow? _window;
     private global::NeoAstra.NeoAstra? _view;
     private NeoRpcViewBinding? _binding;
 
-    private MobileHost(NeoApplication application, NeoEnvironment environment, NeoRpcHost rpc, NeoAstraHost host)
+    private MobileHost(NeoApplication application, NeoEnvironment environment, NeoRpcHost rpc)
     {
         _application = application;
         _environment = environment;
         _rpc = rpc;
-        _host = host;
     }
 
-    /// <summary>Attaches to the run loop of the platform and shows the page in the given host.</summary>
-    /// <remarks>Call it on the main thread, which the platform owns.</remarks>
-    public static async Task<MobileHost> StartAsync(NeoAstraHost host, string assetsDirectory)
+    /// <summary>Shows the page in a new window; the first call attaches to the run loop of the platform.</summary>
+    /// <remarks>
+    /// Call it on the main thread, which the platform owns, once a scene is connected on iOS or in the creation of an activity
+    /// on Android. A later activity, after the user left the previous one, takes a new window in the same application.
+    /// </remarks>
+    public static async Task ShowAsync(string assetsDirectory)
+    {
+        if (s_current is not null)
+        {
+            await s_current.OpenWindowAsync();
+            return;
+        }
+        s_current = await StartAsync(assetsDirectory);
+    }
+
+    private static async Task<MobileHost> StartAsync(string assetsDirectory)
     {
         var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
         {
@@ -72,8 +87,8 @@ internal sealed class MobileHost
             AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
             AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal) { "hello" },
         });
-        var mobile = new MobileHost(application, environment, builder.Build(), host);
-        await mobile.ShowAsync();
+        var mobile = new MobileHost(application, environment, builder.Build());
+        await mobile.OpenWindowAsync();
         // An application that attaches to a run loop of its own reports when its startup is complete.
         application.NotifyReady();
         return mobile;
@@ -95,9 +110,19 @@ internal sealed class MobileHost
             });
     }
 
-    private async Task ShowAsync()
+    private async Task OpenWindowAsync()
     {
-        _view = await _environment.CreateWebViewAsync(_host, new NeoAstraOptions
+        var window = _application.CreateWindow(new NeoWindowOptions { Title = "NeoAstra Mobile", IsVisible = true });
+        _window = window;
+        // The window ends with its scene or activity; the view in it goes with it.
+        window.Closed += async (_, _) => { if (ReferenceEquals(_window, window)) await CloseViewAsync(); };
+        await ShowViewAsync();
+    }
+
+    private async Task ShowViewAsync()
+    {
+        if (_window is null) return;
+        _view = await _environment.CreateWebViewAsync(NeoAstraHost.FillWindow(_window), new NeoAstraOptions
         {
             ViewLabel = "main",
             BridgePolicy = NeoBridgePolicy.TrustedOrigins,
@@ -111,9 +136,16 @@ internal sealed class MobileHost
 
     private async Task RecreateAsync()
     {
+        await CloseViewAsync();
+        await ShowViewAsync();
+    }
+
+    private async Task CloseViewAsync()
+    {
         if (_binding is not null) await _binding.DisposeAsync();
         if (_view is not null) await _view.DisposeAsync();
-        await ShowAsync();
+        _binding = null;
+        _view = null;
     }
 }
 
