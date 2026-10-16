@@ -50,6 +50,7 @@
     <ReferenceNativeSymbol Include="neoastra_operation_cancel" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_operation_release" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_operation_retain" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_platform_call" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_profile_clear_data_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_profile_delete_cookie_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_profile_get_cookies_async" SymbolType="Function" />

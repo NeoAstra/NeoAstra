@@ -290,6 +290,9 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_detach(neoastra_app_t*
 NEOASTRA_API int32_t NEOASTRA_CALL neoastra_app_run(neoastra_app_t*);
 NEOASTRA_API void NEOASTRA_CALL neoastra_app_quit(neoastra_app_t*, int32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t*, neoastra_dispatch_callback_t, void*);
+/** Calls a platform service that only the native backend can reach, with a JSON request and a JSON response that the caller
+    releases. Only the Android backend offers services; the other backends answer NEOASTRA_ERROR_NOT_SUPPORTED. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_platform_call(neoastra_string_view_t service, neoastra_string_view_t request, neoastra_buffer_t** response, neoastra_error_t** error);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_set_event_callback(neoastra_app_t*, neoastra_event_callback_t, void*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t*, const neoastra_window_options_t*, neoastra_window_t**, neoastra_error_t**);
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_app_get_window_count(const neoastra_app_t*);

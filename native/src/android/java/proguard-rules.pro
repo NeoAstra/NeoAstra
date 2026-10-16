@@ -6,3 +6,6 @@
 -keep class com.neoastra.backend.NeoAstraWebHost$Response {
     public <init>(...);
 }
+-keep class com.neoastra.backend.NeoAstraServices {
+    public static java.lang.String call(java.lang.String, java.lang.String);
+}

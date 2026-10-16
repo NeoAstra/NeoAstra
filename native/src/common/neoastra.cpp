@@ -1130,6 +1130,17 @@ int32_t NEOASTRA_CALL neoastra_app_run(neoastra_app_t* app) {
     return result;
 }
 void NEOASTRA_CALL neoastra_app_quit(neoastra_app_t* app, int32_t code) { if(!app)return; app->exit_code.store(code); app->quit_requested.store(true,std::memory_order_release); std::lock_guard lock(app->platform_mutex); if(app->platform&&!app->stopped.load(std::memory_order_acquire)){neo_platform_wake(app);neo_platform_quit(app);} }
+neoastra_result_t NEOASTRA_CALL neoastra_platform_call(neoastra_string_view_t service, neoastra_string_view_t request, neoastra_buffer_t** response, neoastra_error_t** error) {
+    if (error) *error = nullptr;
+    if (!response || !neo_valid_utf8(service) || !neo_valid_utf8(request) || service.length == 0 || service.length > 64) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "invalid platform service call");
+    *response = nullptr;
+#if defined(__ANDROID__)
+    try { return neo_android_platform_call(neo_string(service), neo_string(request), response, error); }
+    catch (...) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "the platform service call failed"); }
+#else
+    return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "this backend offers no platform services");
+#endif
+}
 neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t* app, neoastra_dispatch_callback_t callback, void* context) {
     if(!app||!callback)return NEOASTRA_ERROR_INVALID_ARGUMENT;
     if(!app->retain())return NEOASTRA_ERROR_DISPOSED;

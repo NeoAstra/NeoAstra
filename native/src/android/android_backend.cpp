@@ -192,6 +192,8 @@ jclass response_class{};
 jclass string_class{};
 jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{};
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
+jclass services_class{};
+jmethodID services_call{};
 
 // A custom-scheme origin such as app://neoastra is served to the WebView as https://neoastra.app.invalid: Android has no
 // custom schemes, and the reserved top-level domain can never reach the network. The managed side only ever sees the
@@ -501,6 +503,11 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         {const_cast<char*>("nativeEvaluated"), const_cast<char*>("(JLjava/lang/String;)V"), reinterpret_cast<void*>(on_evaluated)},
     };
     if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 4) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
+    if (jclass services = env->FindClass("com/neoastra/backend/NeoAstraServices")) {
+        services_class = static_cast<jclass>(env->NewGlobalRef(services));
+        services_call = env->GetStaticMethodID(services_class, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    }
+    if (env->ExceptionCheck()) { env->ExceptionClear(); services_class = nullptr; }
     java_vm = vm;
     return JNI_VERSION_1_6;
 }
@@ -742,4 +749,39 @@ neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_n
     handle->kind = kind;
     handle->value = state->web_view;
     return NEOASTRA_OK;
+}
+
+// The services of the Java side answer one JSON request with one JSON response; a Java exception becomes a native failure.
+neoastra_result_t neo_android_platform_call(const std::string& service, const std::string& request, neoastra_buffer_t** response, neoastra_error_t** error) noexcept {
+    JNIEnv* env = jni();
+    if (!env || !services_class || !services_call) return not_ready(error);
+    try {
+        jstring service_value = to_java(env, service);
+        jstring request_value = to_java(env, request);
+        auto* result = static_cast<jstring>(env->CallStaticObjectMethod(services_class, services_call, service_value, request_value));
+        env->DeleteLocalRef(service_value);
+        env->DeleteLocalRef(request_value);
+        if (env->ExceptionCheck()) {
+            jthrowable thrown = env->ExceptionOccurred();
+            env->ExceptionClear();
+            std::string message = "The Android platform service failed";
+            if (thrown) {
+                jclass throwable = env->FindClass("java/lang/Throwable");
+                jmethodID describe = throwable ? env->GetMethodID(throwable, "toString", "()Ljava/lang/String;") : nullptr;
+                if (describe) {
+                    auto* text = static_cast<jstring>(env->CallObjectMethod(thrown, describe));
+                    if (!env->ExceptionCheck() && text) { message += ": " + to_utf8(env, text); env->DeleteLocalRef(text); }
+                    env->ExceptionClear();
+                }
+                env->DeleteLocalRef(thrown);
+            }
+            return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, message, 0, android_domain);
+        }
+        const auto text = to_utf8(env, result);
+        if (result) env->DeleteLocalRef(result);
+        *response = new neoastra_buffer(std::vector<uint8_t>(text.begin(), text.end()));
+        return NEOASTRA_OK;
+    } catch (...) {
+        return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "The Android platform service call failed", 0, android_domain);
+    }
 }

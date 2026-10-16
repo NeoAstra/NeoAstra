@@ -12,6 +12,7 @@ import android.net.Uri;
 public final class NeoAstraInitializer extends ContentProvider {
     @Override public boolean onCreate() {
         NeoAstraWebHost.load();
+        NeoAstraServices.initialize(getContext());
         return true;
     }
 
