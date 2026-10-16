@@ -9,6 +9,7 @@ using NeoAstra.Desktop.Clipboard;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.DragDrop;
 using NeoAstra.Desktop.GlobalShortcuts;
+using NeoAstra.Desktop.Haptics;
 using NeoAstra.Desktop.Menus;
 using NeoAstra.Desktop.Notifications;
 using NeoAstra.Desktop.Opener;
@@ -134,6 +135,7 @@ internal static class NeoDesktopRendererContract
         "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
         "desktop.application.request-quit",
         "desktop.safe-storage.store", "desktop.safe-storage.retrieve", "desktop.safe-storage.delete", "desktop.safe-storage.contains",
+        "desktop.haptics.play",
     ];
     internal static readonly string[] Events =
     [
@@ -236,6 +238,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.safe-storage.retrieve", "safe-storage:retrieve", RetrieveSecretAsync, json.DesktopIdRequest, json.DesktopBytesResult);
         Add(builder, "desktop.safe-storage.delete", "safe-storage:delete", DeleteSecretAsync, json.DesktopIdRequest, json.DesktopStatusResult);
         Add(builder, "desktop.safe-storage.contains", "safe-storage:retrieve", ContainsSecretAsync, json.DesktopIdRequest, json.DesktopBoolResult);
+        Add(builder, "desktop.haptics.play", "haptics:play", PlayHapticAsync, json.DesktopHapticRequest, json.DesktopStatusResult);
 
         _trayActivated = builder.AddEvent("desktop.tray.activated", json.DesktopIdEvent, new() { Permission = "tray:control" });
         _notificationActivated = builder.AddEvent("desktop.notifications.activated", json.DesktopNotificationActivatedEvent, new() { Permission = "notifications:activation" });
@@ -677,6 +680,11 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         EnsureAllowed(applicationOptions.AllowedSafeStorageKeys, request.Id, "safe-storage key"); var result = await services.SafeStorage.RetrieveAsync(request.Id, token).ConfigureAwait(false); if (result.Value is null) return new(result.Status, null, result.Code);
         try { return new(result.Status, Convert.ToBase64String(result.Value), result.Code); } finally { CryptographicOperations.ZeroMemory(result.Value); }
     }
+    private async ValueTask<DesktopStatusResult> PlayHapticAsync(DesktopHapticRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        if (!Enum.IsDefined(request.Feedback)) throw NeoDesktopRendererOptions.Denied("The haptic feedback is invalid.");
+        return Status(await services.Haptics.PlayAsync(request.Feedback, token).ConfigureAwait(false));
+    }
     private async ValueTask<DesktopStatusResult> DeleteSecretAsync(DesktopIdRequest request, NeoRpcContext context, CancellationToken token) { EnsureAllowed(applicationOptions.AllowedSafeStorageKeys, request.Id, "safe-storage key"); return Status(await services.SafeStorage.DeleteAsync(request.Id, token).ConfigureAwait(false)); }
     private async ValueTask<DesktopBoolResult> ContainsSecretAsync(DesktopIdRequest request, NeoRpcContext context, CancellationToken token) { EnsureAllowed(applicationOptions.AllowedSafeStorageKeys, request.Id, "safe-storage key"); var result = await services.SafeStorage.ContainsAsync(request.Id, token).ConfigureAwait(false); return new(result.Status, result.Value, result.Code); }
 
@@ -915,6 +923,7 @@ internal sealed record DesktopSecretWriteRequest(string Id, [property: JsonPrope
 internal sealed record DesktopDropFileRequest(string Token);
 internal sealed record DesktopWindowProgressRequest(NeoWindowProgressState State, double Value);
 internal sealed record DesktopWindowThemeRequest(NeoWindowTitleBarTheme Theme);
+internal sealed record DesktopHapticRequest(NeoHapticFeedback Feedback);
 internal sealed record DesktopIdEvent(string Id, bool Secondary = false);
 internal sealed record DesktopNotificationActivatedEvent(string Id, string? ActionId, string? Payload);
 internal sealed record DesktopThemeChangedEvent(NeoThemeSnapshot Theme);
@@ -964,6 +973,7 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopDropFileRequest))]
 [JsonSerializable(typeof(DesktopWindowProgressRequest))]
 [JsonSerializable(typeof(DesktopWindowThemeRequest))]
+[JsonSerializable(typeof(DesktopHapticRequest))]
 [JsonSerializable(typeof(DesktopIdEvent))]
 [JsonSerializable(typeof(DesktopNotificationActivatedEvent))]
 [JsonSerializable(typeof(DesktopThemeChangedEvent))]

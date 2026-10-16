@@ -24,6 +24,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -103,6 +105,7 @@ public final class NeoAstraServices {
             case "dialog": dialog(input, output); break;
             case "assets": assets(current, input, output); break;
             case "development": development(current, output); break;
+            case "haptics": haptics(current, input, output); break;
             default: output.put("status", "Unsupported"); break;
         }
         return output.toString();
@@ -396,5 +399,37 @@ public final class NeoAstraServices {
         if (!file.isFile() || file.length() > 2048) { output.put("status", "NotFound"); return; }
         String url = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
         output.put("status", url.isEmpty() ? "NotFound" : "Success").put("url", url);
+    }
+
+    // The predefined effects of the vibrator, which the device tunes to its motor, and short patterns for the outcomes of a
+    // task. The application declares android.permission.VIBRATE.
+    @SuppressWarnings("deprecation")
+    private static void haptics(Context current, JSONObject input, JSONObject output) throws Exception {
+        Vibrator vibrator = current.getSystemService(Vibrator.class);
+        if (vibrator == null || !vibrator.hasVibrator()) { output.put("status", "Unsupported"); return; }
+        String feedback = input.getString("feedback");
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                switch (feedback) {
+                    case "Light": vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)); break;
+                    case "Medium": vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)); break;
+                    case "Heavy": vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK)); break;
+                    case "Selection": vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK)); break;
+                    case "Success": vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_DOUBLE_CLICK)); break;
+                    case "Warning": vibrator.vibrate(VibrationEffect.createWaveform(new long[] { 0, 30, 80, 30 }, -1)); break;
+                    case "Error": vibrator.vibrate(VibrationEffect.createWaveform(new long[] { 0, 40, 60, 40, 60, 40 }, -1)); break;
+                    default: output.put("status", "Unsupported"); return;
+                }
+            } else if (Build.VERSION.SDK_INT >= 26) {
+                long duration = "Heavy".equals(feedback) || "Error".equals(feedback) ? 40 : "Light".equals(feedback) || "Selection".equals(feedback) ? 10 : 20;
+                vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(20);
+            }
+            output.put("status", "Success");
+        } catch (SecurityException exception) {
+            // The application does not declare android.permission.VIBRATE.
+            output.put("status", "Denied");
+        }
     }
 }

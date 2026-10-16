@@ -16,6 +16,13 @@ test("desktop clients use the static command contract and typed intent fields", 
   ]);
 });
 
+test("desktop haptics send the portable feedback name", async () => {
+  const mock = createMockDesktop();
+  mock.setResult(desktopCommands.haptics.play, { status: "Unsupported" });
+  assert.deepEqual(await mock.client.haptics.play("Success"), { status: "Unsupported" });
+  assert.deepEqual(mock.invocations, [{ command: "desktop.haptics.play", args: { feedback: "Success" } }]);
+});
+
 test("desktop mock is grant-free and contains event listener exceptions", async () => {
   const mock = createMockDesktop();
   await assert.rejects(() => mock.client.safeStorage.retrieve("missing"), error => error.code === "permission_denied");

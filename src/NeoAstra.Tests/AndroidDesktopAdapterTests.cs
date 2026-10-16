@@ -56,6 +56,16 @@ public sealed class AndroidDesktopAdapterTests
     }
 
     [TestMethod]
+    public async Task Haptics_AnswerUnsupportedOnADesktopAndValidateTheFeedback()
+    {
+        var haptics = global::NeoAstra.Desktop.Haptics.NeoHaptics.CreateSystem();
+        Assert.AreEqual(NeoSupportLevel.None, haptics.Support.SupportLevel);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await haptics.PlayAsync(global::NeoAstra.Desktop.Haptics.NeoHapticFeedback.Success));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await haptics.PlayAsync((global::NeoAstra.Desktop.Haptics.NeoHapticFeedback)42));
+        Assert.AreEqual(NeoSupportLevel.Native, new global::NeoAstra.Desktop.Haptics.AndroidHaptics().Support.SupportLevel);
+    }
+
+    [TestMethod]
     public void PlatformCall_IsNotSupportedByTheDesktopBackends()
     {
         Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformCall.Invoke("clipboard", "{}"));

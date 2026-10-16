@@ -5,6 +5,7 @@ using NeoAstra.Desktop.Clipboard;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.DragDrop;
 using NeoAstra.Desktop.GlobalShortcuts;
+using NeoAstra.Desktop.Haptics;
 using NeoAstra.Desktop.Menus;
 using NeoAstra.Desktop.Notifications;
 using NeoAstra.Desktop.Opener;
@@ -38,6 +39,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         DragDrop = dragDrop ?? throw new ArgumentNullException(nameof(dragDrop));
         SafeStorage = safeStorage ?? throw new ArgumentNullException(nameof(safeStorage));
         WindowPolish = new NeoWindowPolishService();
+        Haptics = NeoHaptics.CreateSystem();
     }
 
     /// <summary>Creates the statically selected system adapters with explicit application identity and opener/file policy.</summary>
@@ -117,6 +119,8 @@ public sealed class NeoDesktopServices : IAsyncDisposable
     public INeoSafeStorage SafeStorage { get; }
     /// <summary>Gets native window polish operations.</summary>
     public NeoWindowPolishService WindowPolish { get; }
+    /// <summary>Gets haptic feedback, which a phone plays and a desktop answers as unsupported.</summary>
+    public INeoHaptics Haptics { get; }
 
     internal void BindApplication(NeoApplication application)
     {
@@ -129,6 +133,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         if (Notifications is INeoApplicationBoundDesktopService notifications) notifications.BindApplication(application);
         if (GlobalShortcuts is INeoApplicationBoundDesktopService shortcuts) shortcuts.BindApplication(application);
         if (DragDrop is INeoApplicationBoundDesktopService dragDrop) dragDrop.BindApplication(application);
+        if (Haptics is INeoApplicationBoundDesktopService haptics) haptics.BindApplication(application);
     }
 
     internal void TrackRendererRegistration(IAsyncDisposable registration)
@@ -253,6 +258,7 @@ public sealed class NeoDesktopEssentialsPlugin : INeoAstraPlugin
             Permission("safe-storage:store", ["desktop.safe-storage.store"], NeoPermissionRisk.High),
             Permission("safe-storage:retrieve", ["desktop.safe-storage.retrieve", "desktop.safe-storage.contains"], NeoPermissionRisk.High),
             Permission("safe-storage:delete", ["desktop.safe-storage.delete"], NeoPermissionRisk.High),
+            Permission("haptics:play", ["desktop.haptics.play"], NeoPermissionRisk.Low),
         };
         return new(Id, "1.0.0", "0.1.0", declarations, new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {

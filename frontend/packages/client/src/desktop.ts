@@ -79,6 +79,7 @@ export const desktopCommands = Object.freeze({
   opener: Object.freeze({ url: "desktop.opener.url", file: "desktop.opener.file", reveal: "desktop.opener.reveal" }),
   dragDrop: Object.freeze({ outbound: "desktop.drag-drop.outbound", resolveFile: "desktop.drag-drop.resolve-file", inbound: "desktop.drag-drop.inbound" }),
   safeStorage: Object.freeze({ store: "desktop.safe-storage.store", retrieve: "desktop.safe-storage.retrieve", delete: "desktop.safe-storage.delete", contains: "desktop.safe-storage.contains" }),
+  haptics: Object.freeze({ play: "desktop.haptics.play" }),
   window: Object.freeze({
     getState: "desktop.window.get-state", setTitle: "desktop.window.set-title", setPosition: "desktop.window.set-position", setSize: "desktop.window.set-size", setMinimumSize: "desktop.window.set-minimum-size", setMaximumSize: "desktop.window.set-maximum-size",
     show: "desktop.window.show", hide: "desktop.window.hide", focus: "desktop.window.focus", maximize: "desktop.window.maximize", minimize: "desktop.window.minimize", restore: "desktop.window.restore", setFullscreen: "desktop.window.set-fullscreen",
@@ -293,6 +294,10 @@ export function createDesktopClient(rpc: DesktopRpc) {
       retrieve: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopBytesResult>(desktopCommands.safeStorage.retrieve, { id }, options),
       contains: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopValueResult<boolean>>(desktopCommands.safeStorage.contains, { id }, options),
       delete: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.safeStorage.delete, { id }, options),
+    }),
+    haptics: Object.freeze({
+      /** Plays haptic feedback on a phone; a desktop answers `Unsupported`. */
+      play: (feedback: "Light" | "Medium" | "Heavy" | "Selection" | "Success" | "Warning" | "Error", options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.haptics.play, { feedback }, options),
     }),
     window: Object.freeze({
       state: windowState,

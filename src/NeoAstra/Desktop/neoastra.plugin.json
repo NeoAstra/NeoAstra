@@ -216,6 +216,12 @@
       "audited": true
     },
     {
+      "name": "desktop.haptics.play",
+      "permission": "haptics:play",
+      "risk": "low",
+      "audited": true
+    },
+    {
       "name": "desktop.window.get-state",
       "permission": "window:management",
       "risk": "high",
@@ -834,6 +840,17 @@
         "desktop.safe-storage.delete"
       ],
       "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "haptics:play",
+      "revision": 1,
+      "operations": [
+        "desktop.haptics.play"
+      ],
+      "risk": "low",
       "scopeFamily": "none",
       "scopeRequired": false,
       "audited": true
