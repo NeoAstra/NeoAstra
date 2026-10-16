@@ -211,6 +211,24 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void CorePackage_DeclaresEveryImportedExportForIOSAndShipsItsMobileTargets()
+    {
+        var root = FindRepositoryRoot();
+        var generated = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Core", "Generated", "Interop", "NativeMethods.Generated.cs"));
+        var imported = System.Text.RegularExpressions.Regex.Matches(generated, "EntryPoint = \"(neoastra_[A-Za-z0-9_]+)\"").Select(static match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        var symbols = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.NativeSymbols.props"));
+        var declared = symbols.Descendants("ReferenceNativeSymbol").Select(static item => (string)item.Attribute("Include")!).ToHashSet(StringComparer.Ordinal);
+        Assert.IsNotEmpty(imported);
+        Assert.IsTrue(imported.SetEquals(declared), "Run NeoAstra.CodeGen: the iOS symbol list does not match the generated imports.");
+
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "NeoAstra.Core.csproj"));
+        var packaged = project.Descendants("None").Select(static item => (string?)item.Attribute("PackagePath")).ToArray();
+        CollectionAssert.Contains(packaged, "buildTransitive/NeoAstra.Core.targets");
+        CollectionAssert.Contains(packaged, "buildTransitive/NeoAstra.Core.NativeSymbols.props");
+        Assert.IsTrue(File.Exists(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraInitializer.java")));
+    }
+
+    [TestMethod]
     public void PackagedToolReference_DoesNotTakeTheRuntimeIdentifierOfTheApplication()
     {
         // An application built for a runtime identifier without an apphost, such as iossimulator-arm64, passes it as a global

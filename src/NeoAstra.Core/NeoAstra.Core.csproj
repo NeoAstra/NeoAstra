@@ -43,6 +43,9 @@
     <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra.h" Pack="true" PackagePath="build/native/include/" />
     <None Include="$(MSBuildThisFileDirectory)../../native/include/neoastra_version.h" Pack="true" PackagePath="build/native/include/" />
     <None Update="runtimes/**/*" Pack="true" PackagePath="%(Identity)" />
+    <None Include="Build/Sdk/NeoAstra.Core.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.Core.targets" />
+    <None Include="Build/Sdk/NeoAstra.Core.NativeSymbols.props" Pack="true" PackagePath="buildTransitive/NeoAstra.Core.NativeSymbols.props" />
+    <None Include="$(MSBuildThisFileDirectory)../../native/src/android/java/**/*" Pack="true" PackagePath="java/%(RecursiveDir)%(Filename)%(Extension)" Visible="false" />
     <!-- Keep the host native library beside development outputs while packing every downloaded RID asset. -->
     <None Update="runtimes/$(NETCoreSdkPortableRuntimeIdentifier)/native/*"
           Link="%(Filename)%(Extension)"

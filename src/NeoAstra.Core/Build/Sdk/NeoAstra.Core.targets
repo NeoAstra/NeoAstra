@@ -1,0 +1,35 @@
+<Project>
+  <!--
+    Mobile applications. An iOS application links the native library statically and declares the exports that NeoAstra.Core
+    imports; an Android application packages the library for each ABI with the Java side of the backend. Desktop applications
+    are not affected: their library is a runtime asset of the package.
+  -->
+  <PropertyGroup>
+    <_NeoAstraTargetPlatform>$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)'))</_NeoAstraTargetPlatform>
+    <NeoAstraNativeRuntimesDirectory Condition="'$(NeoAstraNativeRuntimesDirectory)' == ''">$(MSBuildThisFileDirectory)../runtimes/</NeoAstraNativeRuntimesDirectory>
+    <!-- The package keeps the Java side beside its build files; a project reference finds it in the native sources. -->
+    <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraAndroidJavaDirectory>
+    <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../../../../native/src/android/java/</NeoAstraAndroidJavaDirectory>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)NeoAstra.Core.NativeSymbols.props" Condition="'$(_NeoAstraTargetPlatform)' == 'ios'" />
+
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'ios' And '$(RuntimeIdentifier)' != ''">
+    <NativeReference Include="$(NeoAstraNativeRuntimesDirectory)$(RuntimeIdentifier)/native/libneoastra_native.a" Kind="Static" ForceLoad="true" SmartLink="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android'">
+    <AndroidNativeLibrary Include="$(NeoAstraNativeRuntimesDirectory)android-arm64/native/libneoastra_native.so" Abi="arm64-v8a" Condition="Exists('$(NeoAstraNativeRuntimesDirectory)android-arm64/native/libneoastra_native.so')" />
+    <AndroidNativeLibrary Include="$(NeoAstraNativeRuntimesDirectory)android-x64/native/libneoastra_native.so" Abi="x86_64" Condition="Exists('$(NeoAstraNativeRuntimesDirectory)android-x64/native/libneoastra_native.so')" />
+    <AndroidJavaSource Include="$(NeoAstraAndroidJavaDirectory)com/neoastra/backend/*.java" />
+    <ProguardConfiguration Include="$(NeoAstraAndroidJavaDirectory)proguard-rules.pro" />
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)AndroidManifest.xml" />
+  </ItemGroup>
+
+  <!-- A runtime asset or a project reference also brings the library of other platforms; the items above are the ones that belong. -->
+  <Target Name="_NeoAstraRemoveForeignNativeLibraries" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(_NeoAstraTargetPlatform)' == 'ios' Or '$(_NeoAstraTargetPlatform)' == 'android'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)' == 'libneoastra_native' Or '%(Filename)' == 'neoastra_native' Or '%(Filename)%(Extension)' == 'neoastra-native.json'" />
+    </ItemGroup>
+  </Target>
+</Project>
