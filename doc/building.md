@@ -103,6 +103,8 @@ against portable COM/teardown stand-ins. It checks that a deferred decision keep
 through lifecycle teardown and COM cleanup without a client retain. This is not Windows backend
 compilation, WebView2 execution, or a real application-detach test.
 
+The [mobile samples](../samples/mobile/readme.md) host one page and one generated RPC service on iOS and Android with the libraries below.
+
 ### iOS native library (preview)
 
 The iOS backend is a static library, because an iOS application cannot load a library of its own at run time. An application attaches to the run loop of UIKit instead of running one, and it hosts a view in a `UIView` that it owns: create the host with `NeoAstraHost.FromUIKitUIView` and call `CreateWebViewAsync` as on the desktop. Custom schemes, document-start and document-end scripts, authenticated messages with the origin of the sender, navigation decisions, ephemeral profiles, and viewport capture work; the capability query says what is missing. Windows, popups, downloads, dialogs, permissions, cookies, and zoom report `NEOASTRA_ERROR_NOT_SUPPORTED`. Build the library on macOS with Xcode:

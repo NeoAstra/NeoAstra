@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>NeoAstra Mobile</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: max(env(safe-area-inset-top), 1.5rem) 1.5rem 1.5rem; }
+    input, button { font: inherit; padding: 0.5rem; }
+    #runtime { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>NeoAstra Mobile</h1>
+  <form id="greeting-form">
+    <input id="name" value="NeoAstra" aria-label="Name">
+    <button type="submit">Greet</button>
+  </form>
+  <p id="result"></p>
+  <p id="runtime"></p>
+  <script type="module">
+    import { invoke, getRuntimeInfo } from "./client/index.js";
+
+    const result = document.querySelector("#result");
+    async function greet(name) {
+      try {
+        const response = await invoke("greeting.hello", { name });
+        result.textContent = response.message;
+        const runtime = getRuntimeInfo();
+        document.querySelector("#runtime").textContent = `${runtime.platform} · ${runtime.backend}`;
+      } catch (error) {
+        result.textContent = error instanceof Error ? error.message : "The greeting failed.";
+      }
+    }
+    document.querySelector("#greeting-form").addEventListener("submit", event => {
+      event.preventDefault();
+      greet(document.querySelector("#name").value);
+    });
+    greet("NeoAstra");
+  </script>
+</body>
+</html>
