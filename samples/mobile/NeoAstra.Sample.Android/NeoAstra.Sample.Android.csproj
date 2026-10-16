@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />

@@ -10,9 +10,15 @@
     <IsPackable>false</IsPackable>
     <TrimMode Condition="'$(Configuration)' == 'Release'">full</TrimMode>
   </PropertyGroup>
+  <!-- APNs registers only an application with the aps-environment entitlement. The simulator takes it as it is; a device needs a
+       provisioning profile with push, so a device build asks for it with NeoAstraSamplePush=true. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-x64' Or '$(NeoAstraSamplePush)' == 'true'">
+    <CodesignEntitlements>Entitlements.plist</CodesignEntitlements>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />

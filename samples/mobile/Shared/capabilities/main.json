@@ -18,6 +18,8 @@
         "haptics:play",
         "location:status",
         "location:read",
+        "push:register",
+        "push:receive",
         "system-info:theme",
         "system-info:metadata",
         {

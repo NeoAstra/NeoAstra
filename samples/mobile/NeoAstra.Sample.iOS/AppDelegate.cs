@@ -1,9 +1,16 @@
+using NeoAstra.Push;
+
 namespace NeoAstra.Samples.Mobile;
 
 [Register("AppDelegate")]
 public sealed class AppDelegate : UIApplicationDelegate
 {
     public override bool FinishedLaunching(UIApplication application, NSDictionary? launchOptions) => true;
+
+    // iOS gives the device token of APNs to the application delegate, which NeoAstra does not own.
+    public override void RegisteredForRemoteNotifications(UIApplication application, NSData deviceToken) => NeoApplePush.DidRegister(deviceToken.ToArray());
+
+    public override void FailedToRegisterForRemoteNotifications(UIApplication application, NSError error) => NeoApplePush.DidFailToRegister(error.LocalizedDescription);
 
     public override UISceneConfiguration GetConfiguration(UIApplication application, UISceneSession connectingSceneSession, UISceneConnectionOptions options) =>
         new("Default Configuration", connectingSceneSession.Role);
@@ -17,6 +24,8 @@ public sealed class SceneDelegate : UIResponder, IUIWindowSceneDelegate
     public async void WillConnect(UIScene scene, UISceneSession session, UISceneConnectionOptions connectionOptions)
     {
         if (scene is not UIWindowScene) return;
+        // A scene that the user opened by tapping a notification has it in its options.
+        NeoApplePush.DidLaunch(connectionOptions.NotificationResponse?.Handle.Handle ?? 0);
         try
         {
             await MobileHost.ShowAsync(Path.Combine(NSBundle.MainBundle.BundlePath, "assets"));

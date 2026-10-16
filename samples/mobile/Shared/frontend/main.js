@@ -79,6 +79,16 @@ card("Location", (row, run) => {
   button(row, "Ask", () => run(() => invoke("location.request-authorization", {})));
   button(row, "Where am I?", () => run(() => invoke("location.current-position", fix)));
 });
+card("Push", (row, run) => {
+  const rpc = rpcClient();
+  button(row, "Register", () => run(() => invoke("push.register", {})));
+  button(row, "Launch message", () => run(() => invoke("push.launch-message", {})));
+  rpc.then(client => {
+    client.subscribe("push.message-received", message => run(async () => ({ status: "Received", ...message })));
+    client.subscribe("push.message-opened", message => run(async () => ({ status: "Opened", ...message })));
+    client.subscribe("push.token-changed", registration => run(async () => ({ status: "Token", ...registration })));
+  });
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });
