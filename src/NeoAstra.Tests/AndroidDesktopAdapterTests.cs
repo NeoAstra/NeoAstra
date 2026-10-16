@@ -72,6 +72,17 @@ public sealed class AndroidDesktopAdapterTests
     }
 
     [TestMethod]
+    public void PlatformServices_ValidateTheServiceAndAreNotSupportedByTheDesktopBackends()
+    {
+        Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformServices.Call("neoastra.test", "{}"));
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoPlatformServices.Call(null!, "{}"));
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoPlatformServices.Call("neoastra.test", null!));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoPlatformServices.Call("", "{}"));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoPlatformServices.Call("Neoastra.Test", "{}"));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoPlatformServices.Call(new string('a', 65), "{}"));
+    }
+
+    [TestMethod]
     public void SystemSelection_KeepsTheDesktopAdaptersOnDesktopHosts()
     {
         Assert.IsNotInstanceOfType<AndroidClipboard>(NeoClipboard.CreateSystem());

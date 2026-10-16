@@ -44,6 +44,8 @@ import java.nio.file.Files;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.security.KeyStore;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -57,10 +59,15 @@ import javax.crypto.spec.GCMParameterSpec;
  * The platform services of the Android backend: what the desktop services of NeoAstra need from Java. The native library
  * calls {@link #call} with one JSON request and returns the JSON response to NeoAstra. Every member that JNI reaches is
  * public so that R8 keeps its name. The services that wait for the user (a dialog, the notification permission) block the
- * calling thread, which is never the main thread, until the main thread has an answer.
+ * calling thread, which is never the main thread, until the main thread has an answer. A plugin of NeoAstra adds a service of
+ * its own with {@link #register}.
  */
 public final class NeoAstraServices {
+    /** A service that a plugin adds: it reads the request and writes the response, with the status of the call. */
+    public interface Service { void call(Context context, JSONObject input, JSONObject output) throws Exception; }
+
     private static final String CHANNEL = "neoastra.notifications";
+    private static final Map<String, Service> PLUGINS = new ConcurrentHashMap<>();
     private static volatile Context context;
     private static volatile WeakReference<Activity> resumed = new WeakReference<>(null);
     private static volatile WeakReference<Activity> current = new WeakReference<>(null);
@@ -86,6 +93,28 @@ public final class NeoAstraServices {
 
     static Context context() { return context; }
 
+    /**
+     * Adds the service of a plugin, which NeoAstra calls by its name. The name has a dot, such as {@code neoastra.location}, so
+     * that it never replaces a service of NeoAstra, whose names have none; a name serves one service.
+     */
+    public static void register(String name, Service service) {
+        if (name == null || !name.matches("[a-z0-9]+(?:[.-][a-z0-9]+)*") || name.indexOf('.') < 0 || name.length() > 64) throw new IllegalArgumentException("A plugin service needs a dotted lowercase name of at most 64 characters.");
+        if (service == null) throw new IllegalArgumentException("A plugin service is required.");
+        if (PLUGINS.putIfAbsent(name, service) != null) throw new IllegalStateException("The plugin service " + name + " is already registered.");
+    }
+
+    /**
+     * Asks the user for runtime permissions of the application in the result activity of NeoAstra, which receives the answer of
+     * the system, and waits for that answer on the calling thread, which must not be the main thread. A request that nobody
+     * answers in two minutes ends; the caller then reads the permissions that the application has.
+     */
+    public static void requestPermissions(String... permissions) throws InterruptedException {
+        if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("A permission cannot be requested on the main thread.");
+        CountDownLatch answered = new CountDownLatch(1);
+        new Handler(Looper.getMainLooper()).post(() -> NeoAstraResultActivity.requestPermissions(permissions, (resultCode, data, grants) -> answered.countDown()));
+        answered.await(2, TimeUnit.MINUTES);
+    }
+
     /** The activity created or resumed last that is not destroyed: the one that takes a window. */
     static Activity currentActivity() { return current.get(); }
 
@@ -104,7 +133,11 @@ public final class NeoAstraServices {
             case "assets": assets(current, input, output); break;
             case "development": development(current, output); break;
             case "haptics": haptics(current, input, output); break;
-            default: output.put("status", "Unsupported"); break;
+            default: {
+                Service plugin = PLUGINS.get(service);
+                if (plugin != null) plugin.call(current, input, output); else output.put("status", "Unsupported");
+                break;
+            }
         }
         return output.toString();
     }
@@ -254,16 +287,11 @@ public final class NeoAstraServices {
         return manager.areNotificationsEnabled() ? "Granted" : "Denied";
     }
 
-    // Asks for the notification permission in the result activity of NeoAstra, which receives the answer of the system, and
-    // waits for that answer on the calling thread, which is never the main thread.
     private static String authorize(Context current, NotificationManager manager) throws Exception {
         if (Build.VERSION.SDK_INT < 33 || !"NotRequested".equals(permission(current, manager))) return permission(current, manager);
-        if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("The notification permission cannot be requested on the main thread.");
-        CountDownLatch answered = new CountDownLatch(1);
-        new Handler(Looper.getMainLooper()).post(() -> NeoAstraResultActivity.requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, (resultCode, data, grants) -> answered.countDown()));
         // Android does not ask again after a refusal, so a later status reads a missing permission as denied.
         current.getSharedPreferences("neoastra.notifications", Context.MODE_PRIVATE).edit().putBoolean("requested", true).commit();
-        answered.await(2, TimeUnit.MINUTES);
+        requestPermissions(Manifest.permission.POST_NOTIFICATIONS);
         return permission(current, manager);
     }
 
