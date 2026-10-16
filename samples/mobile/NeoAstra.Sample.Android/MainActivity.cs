@@ -1,3 +1,4 @@
+using Android.Content;
 using Android.Content.PM;
 
 namespace NeoAstra.Samples.Mobile;
@@ -18,6 +19,13 @@ public sealed class MainActivity : Activity
         {
             Android.Util.Log.Error("NeoAstra", $"NeoAstra could not start: {exception}");
         }
+    }
+
+    // A tapped notification brings this single-task activity back with a new intent, which the push plugin reads when it resumes.
+    protected override void OnNewIntent(Intent? intent)
+    {
+        base.OnNewIntent(intent);
+        Intent = intent;
     }
 
     // The resource provider serves files, and Android keeps the assets of an application inside its package.

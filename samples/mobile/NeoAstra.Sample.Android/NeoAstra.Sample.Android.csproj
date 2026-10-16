@@ -17,11 +17,15 @@
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
+    <PackageReference Include="Xamarin.Firebase.Messaging" Version="125.1.3" />
+    <!-- The Firebase project of the push messages is local: without its google-services.json, push answers Unsupported. -->
+    <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json')" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <AndroidAsset Include="../Shared/frontend/**/*" Link="Assets/web/%(RecursiveDir)%(Filename)%(Extension)" />
     <AndroidAsset Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" Link="Assets/web/client/%(Filename)%(Extension)" />
   </ItemGroup>
-  <!-- A project reference to the location plugin takes the targets that its package gives an Android application. -->
+  <!-- Project references to the plugins take the targets that their packages give an Android application. -->
   <Import Project="../../../src/NeoAstra.Location/Build/NeoAstra.Location.targets" />
+  <Import Project="../../../src/NeoAstra.Push/Build/NeoAstra.Push.targets" />
 </Project>
