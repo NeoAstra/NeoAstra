@@ -5,7 +5,7 @@ in `frontend/`, which the frontend pipeline of NeoAstra prepares and packages as
 `HelloApp.cs`, which `NeoApp.AttachAsync` shows from the scene delegate on iOS and from the activity on Android.
 
 `NeoAstra.Sample.iOS` and `NeoAstra.Sample.Android` compose the host by hand instead: a Hello page that calls one generated RPC service (`greeting.hello`) and the desktop services of NeoAstra through
-`createDesktopClient`, hosted on iOS and on Android with the same `MobileHost`. The capability document
+`createDesktopClient`, and the location of the device through the [location plugin](../../doc/desktop-services.md#location-plugin), hosted on iOS and on Android with the same `MobileHost`. The capability document
 `Shared/capabilities/main.json` grants the page exactly the permissions it uses on `ios` and `android`, with scopes, and a
 service that a platform does not offer answers `Unsupported`. The host: the application attaches NeoAstra to the run loop of
 the platform, creates an environment with the `app` custom scheme, creates a window of NeoAstra (the `UIWindow` of the scene on
@@ -30,6 +30,7 @@ dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64
 dotnet build NeoAstra.Sample.Android -c Release -r android-arm64
 ```
 
-They reference the NeoAstra projects and import the targets that the `NeoAstra.Core` package gives a mobile application;
+They reference the NeoAstra projects and import the targets that the `NeoAstra.Core` package gives a mobile application
+(and `NeoAstra.Sample.Android` those of the location plugin);
 see [building](../../doc/building.md) for what those targets do and for what the mobile backends do not offer yet. These
 samples are not part of `src/NeoAstra.slnx`, so the desktop build needs no mobile workload.

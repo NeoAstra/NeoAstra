@@ -3,6 +3,7 @@ using NeoAstra;
 using NeoAstra.Desktop;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.Opener;
+using NeoAstra.Location;
 using NeoAstra.Rpc;
 
 [assembly: NeoRpcJsonContext(typeof(NeoAstra.Samples.Mobile.AppJsonContext))]
@@ -13,7 +14,8 @@ namespace NeoAstra.Samples.Mobile;
 /// <remarks>
 /// A window of NeoAstra is the UIWindow of the active scene on iOS and the content of the current activity on Android; the
 /// page in it reaches the window commands too. The page reaches the desktop services of NeoAstra (clipboard, theme, safe storage, opener, notifications, dialogs) through
-/// the official renderer handlers, and the capability document grants it exactly the permissions it uses on iOS and Android.
+/// the official renderer handlers, the location of the device through the location plugin, and the capability document grants
+/// it exactly the permissions it uses on iOS and Android.
 /// A service that a platform does not offer answers Unsupported instead of failing.
 /// </remarks>
 internal sealed class MobileHost
@@ -74,7 +76,8 @@ internal sealed class MobileHost
             [assetsDirectory],
             [NeoOpenFileIntent.TextDocument],
             application.Dispatcher);
-        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).Build();
+        var location = NeoLocation.CreateSystem(application.Dispatcher);
+        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).Build();
         await plugins.StartAsync(application);
 
         var capabilities = LoadCapabilities();
@@ -90,6 +93,7 @@ internal sealed class MobileHost
             AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
             AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal) { "hello" },
         });
+        builder.AddNeoAstraLocationHandlers(location);
         var mobile = new MobileHost(application, environment, builder.Build(), desktop);
         await mobile.OpenWindowAsync();
         // An application that attaches to a run loop of its own reports when its startup is complete.
@@ -105,7 +109,7 @@ internal sealed class MobileHost
         stream.CopyTo(memory);
         return NeoCapabilityManifest.Resolve(
             memory.ToArray(),
-            new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().Build(),
+            new NeoPermissionCatalogBuilder().AddNeoAstraDesktopPermissions().AddNeoAstraLocationPermissions().Build(),
             new NeoCapabilityResolutionOptions
             {
                 Platform = OperatingSystem.IsIOS() ? NeoCapabilityPlatform.IOS : NeoCapabilityPlatform.Android,

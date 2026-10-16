@@ -73,6 +73,12 @@ card("Web page (browser features)", (row, run) => {
 card("Haptics", (row, run) => {
   for (const feedback of ["Light", "Medium", "Heavy", "Selection", "Success", "Warning", "Error"]) button(row, feedback, () => run(() => desktop.haptics.play(feedback)));
 });
+card("Location", (row, run) => {
+  const fix = { accuracy: "High", timeoutMilliseconds: 20000 };
+  button(row, "Status", () => run(() => invoke("location.authorization", {})));
+  button(row, "Ask", () => run(() => invoke("location.request-authorization", {})));
+  button(row, "Where am I?", () => run(() => invoke("location.current-position", fix)));
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });

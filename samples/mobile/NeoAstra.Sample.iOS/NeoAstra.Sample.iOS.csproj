@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
     <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />

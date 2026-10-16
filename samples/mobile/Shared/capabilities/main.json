@@ -16,6 +16,8 @@
       ],
       "permissions": [
         "haptics:play",
+        "location:status",
+        "location:read",
         "system-info:theme",
         "system-info:metadata",
         {
