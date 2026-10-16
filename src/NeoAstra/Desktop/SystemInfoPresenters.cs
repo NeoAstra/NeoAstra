@@ -22,7 +22,9 @@ internal static partial class NeoSystemInfoPlatform
                 ? new(NeoSupportLevel.Limited, 1, 0, "Freedesktop/GNOME color-scheme and accessibility preferences are queried when gsettings is available; desktop environments may not expose every preference.")
                 : OperatingSystem.IsIOS()
                     ? new(NeoSupportLevel.Limited, 1, 0, "The UIKit interface style and the reduce-motion and reduce-transparency settings, read when the services are created; later changes are not reported and the accent color is unavailable.")
-                    : new(NeoSupportLevel.None, 1, 0, "No supported system theme presenter.");
+                    : OperatingSystem.IsAndroid()
+                        ? new(NeoSupportLevel.Limited, 1, 0, "The night mode of the Android configuration and the animator duration scale, read when the services are created; later changes are not reported and the accent color is unavailable.")
+                        : new(NeoSupportLevel.None, 1, 0, "No supported system theme presenter.");
 
     internal static NeoCapabilityInfo DisplaySupport => OperatingSystem.IsWindows()
         ? new(NeoSupportLevel.Native, 1, 0, "Win32 monitor topology, work areas, primary display, stable device IDs, and per-monitor DPI in logical desktop coordinates.")
@@ -34,7 +36,7 @@ internal static partial class NeoSystemInfoPlatform
 
     internal static NeoThemeSnapshot ReadInitialTheme()
     {
-        try { return OperatingSystem.IsWindows() ? ReadWindowsTheme() : OperatingSystem.IsIOS() ? ReadIosTheme() : new(NeoSystemTheme.Unknown, null, null, null); }
+        try { return OperatingSystem.IsWindows() ? ReadWindowsTheme() : OperatingSystem.IsIOS() ? ReadIosTheme() : OperatingSystem.IsAndroid() ? ReadAndroidTheme() : new(NeoSystemTheme.Unknown, null, null, null); }
         catch { return new(NeoSystemTheme.Unknown, null, null, null); }
     }
 

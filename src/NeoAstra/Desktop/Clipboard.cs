@@ -45,6 +45,7 @@ public static class NeoClipboard
         if (OperatingSystem.IsMacOS()) return new MacClipboard(dispatcher);
         if (OperatingSystem.IsLinux()) return new LinuxClipboard(dispatcher);
         if (OperatingSystem.IsIOS()) return new IosClipboard(dispatcher);
+        if (OperatingSystem.IsAndroid()) return new AndroidClipboard(dispatcher);
         return new UnsupportedClipboard();
     }
 }
