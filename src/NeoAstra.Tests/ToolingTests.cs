@@ -714,6 +714,73 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void MobileDevelopment_SelectsThePlatformFrameworkAndBuildsOnlyItsContract()
+    {
+        Assert.AreEqual(NeoDevelopmentPlatform.Desktop, NeoMobileTarget.ParsePlatform(null));
+        Assert.AreEqual(NeoDevelopmentPlatform.IOS, NeoMobileTarget.ParsePlatform("iOS"));
+        Assert.AreEqual(NeoDevelopmentPlatform.Android, NeoMobileTarget.ParsePlatform("android"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoMobileTarget.ParsePlatform("windows-phone"));
+
+        Assert.AreEqual("net11.0-android", NeoMobileLauncher.SelectFramework("net11.0-ios;net11.0-android", null, "android"));
+        Assert.AreEqual("net11.0-ios26.0", NeoMobileLauncher.SelectFramework(" net11.0-ios26.0 ; net11.0-android ", null, "ios"));
+        Assert.AreEqual("net11.0-android", NeoMobileLauncher.SelectFramework("", "net11.0-android", "android"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoMobileLauncher.SelectFramework("net10.0", null, "ios"));
+
+        CollectionAssert.AreEqual(new[] { "dotnet", "build", "-f", "net11.0-android" }, NeoMobileLauncher.ContractCommand(new(["dotnet", "build", "--no-restore"]), "net11.0-android").Arguments.ToArray());
+        CollectionAssert.AreEqual(new[] { "dotnet", "build", "-f", "net10.0" }, NeoMobileLauncher.ContractCommand(new(["dotnet", "build", "-f", "net10.0"]), "net11.0-android").Arguments.ToArray());
+        CollectionAssert.AreEqual(new[] { "make", "contract" }, NeoMobileLauncher.ContractCommand(new(["make", "contract"]), "net11.0-android").Arguments.ToArray());
+
+        Assert.AreEqual("dev.neoastra.app", NeoMobileLauncher.ParseProperties("dev.neoastra.app\n", ["ApplicationId"])["ApplicationId"]);
+        var properties = NeoMobileLauncher.ParseProperties("""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", ["TargetFramework", "TargetFrameworks"]);
+        Assert.AreEqual("net11.0-ios;net11.0-android", properties["TargetFrameworks"]);
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_RunsAnAndroidApplicationAgainstTheServerAndRemovesItsForwardingAfterwards()
+    {
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(3);
+        Assert.AreEqual(3, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:reverse", "start:address", "start:launch", "start:launch", "start:app", "start:cleanup", "start:cleanup" }, order);
+        var starts = factory.Starts;
+        CollectionAssert.AreEqual(NeoMobileLauncher.ContractCommand(project.ContractCommand, "net11.0-android").Arguments.ToArray(), starts[1].Command.Arguments.ToArray());
+        CollectionAssert.Contains(starts[3].Command.Arguments.ToArray(), "-t:Install");
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "tcp:5173", "tcp:5173" }, starts[5].Command.Arguments.Skip(1).ToArray());
+        StringAssert.Contains(starts[6].Command.Arguments[^1], "run-as dev.neoastra.fixture");
+        StringAssert.Contains(starts[6].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);
+        StringAssert.Contains(starts[10].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[11].Command.Arguments.Skip(1).ToArray());
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_LaunchesAnIOSApplicationWithTheServerInItsEnvironment()
+    {
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var output = Path.Combine(fixture.Root, "bin"); Directory.CreateDirectory(Path.Combine(output, "Fixture.app"));
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(4);
+        Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
+        var install = factory.Starts[5].Command.Arguments.ToArray();
+        CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "install", "booted", Path.Combine(output, "Fixture.app") }, install);
+        var app = factory.Starts[6];
+        Assert.AreEqual("http://127.0.0.1:5173/", app.Environment["SIMCTL_CHILD_NEOASTRA_DEV_URL"]);
+        CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", "booted", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_FailsFastWhenFrontendExitsBeforeReadiness()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -1030,6 +1097,23 @@ public sealed class ToolingTests
         internal void Exit(int code) { ExitCode = code; _completion.TrySetResult(code); }
         public Task StopAsync(TimeSpan timeout) { Stopped = true; Exit(ExitCode ?? 0); return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Stopped = true; Exit(ExitCode ?? 0); return ValueTask.CompletedTask; }
+    }
+    // Every step exits at once with success and prints its scripted output; the frontend and the application run until stopped.
+    private sealed class ScriptedFactory(List<string> order) : INeoProcessFactory
+    {
+        internal Dictionary<string, Queue<string>> Output { get; } = new(StringComparer.Ordinal);
+        internal List<NeoProcessStart> Starts { get; } = [];
+        internal FakeProcess? App { get; private set; }
+        internal TaskCompletionSource AppStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public INeoChildProcess Start(NeoProcessStart start)
+        {
+            lock (order) { order.Add("start:" + start.Label); Starts.Add(start); }
+            var process = new FakeProcess();
+            if (Output.TryGetValue(start.Label, out var lines) && lines.Count != 0) foreach (var line in lines.Dequeue().Split('\n')) start.Log(line, false);
+            if (start.Label == "app") { App = process; AppStarted.TrySetResult(); }
+            else if (start.Label != "frontend") process.Exit(0);
+            return process;
+        }
     }
     private sealed class FakeFactory(List<string> order, params FakeProcess[] processes) : INeoProcessFactory
     {

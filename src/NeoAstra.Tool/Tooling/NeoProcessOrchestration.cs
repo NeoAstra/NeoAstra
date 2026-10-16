@@ -350,7 +350,11 @@ internal sealed class NeoReadinessProbe : INeoReadinessProbe
 
 internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFactory, INeoReadinessProbe readiness)
 {
-    internal async Task<int> RunAsync(NeoResolvedProject project, CancellationToken cancellationToken)
+    internal Task<int> RunAsync(NeoResolvedProject project, CancellationToken cancellationToken)
+        => RunAsync(project, null, cancellationToken);
+
+    /// <summary>Runs the development session; a mobile target replaces the backend command with its application.</summary>
+    internal async Task<int> RunAsync(NeoResolvedProject project, NeoMobileTarget? mobile, CancellationToken cancellationToken)
     {
         if (project.AllowRemoteDevServer)
             Console.Error.WriteLine("WARNING: insecure remote development server opt-in is active; release policy is unchanged.");
@@ -359,7 +363,10 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         {
             ["NeoAstraBuildFrontend"] = "false"
         };
-        await using (var contract = processFactory.Start(new("contract", project.ContractCommand, project.ProjectDirectory, contractEnvironment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
+        var launcher = mobile is null ? null : new NeoMobileLauncher(processFactory);
+        var framework = launcher is null ? null : await launcher.ResolveFrameworkAsync(project, mobile!, contractEnvironment, Log, cancellationToken).ConfigureAwait(false);
+        var contractCommand = framework is null ? project.ContractCommand : NeoMobileLauncher.ContractCommand(project.ContractCommand, framework);
+        await using (var contract = processFactory.Start(new("contract", contractCommand, project.ProjectDirectory, contractEnvironment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
         {
             var contractExit = await contract.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
             if (contractExit != 0)
@@ -388,7 +395,9 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
                 ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri,
                 ["NeoAstraBuildFrontend"] = "false",
             };
-            await using var backend = processFactory.Start(new("backend", project.BackendCommand, project.ProjectDirectory, backendEnvironment, project.SecretEnvironment, (line, error) => Log("backend", line, error)));
+            await using var backend = mobile is null
+                ? processFactory.Start(new("backend", project.BackendCommand, project.ProjectDirectory, backendEnvironment, project.SecretEnvironment, (line, error) => Log("backend", line, error)))
+                : await launcher!.StartAsync(project, mobile, framework!, backendEnvironment, Log, cancellationToken).ConfigureAwait(false);
             using var registration = cancellationToken.Register(() =>
             {
             });

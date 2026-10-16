@@ -72,7 +72,19 @@ setting enabled, reserve the configured development port, and run only a trusted
 on an origin given bridge authority. Readiness does not authenticate a different process already
 listening on that port.
 
-An iOS or Android application (preview) reaches the same loopback development server. The iOS simulator shares the network of
+An iOS or Android application (preview) runs against the same loopback development server:
+
+```sh
+dotnet neoastra dev --platform android            # the connected device or emulator
+dotnet neoastra dev --platform ios                # the booted simulator
+dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android serial, among several
+```
+
+After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
+only that framework too), installs it, and starts it with the address of the server; it follows the log of the application
+until the session ends, and on Android it then removes the port forwarding and the address. Frontend changes reach the running
+application through the development server; a backend change needs a new session. What the tool does by hand: the iOS
+simulator shares the network of
 the Mac, so `127.0.0.1` is the development machine there, and it passes an environment variable to the application when the
 variable carries the `SIMCTL_CHILD_` prefix:
 

@@ -99,6 +99,8 @@ internal static class NeoToolApplication
     {
         string? config = null;
         string? devUrl = null;
+        string? platform = null;
+        string? device = null;
         return new Command("dev", "Restore dependencies and coordinate frontend and backend development.")
         {
             new CommandUsage(),
@@ -112,8 +114,18 @@ internal static class NeoToolApplication
                 "Override the development {URL}.",
                 value => devUrl = value
             },
+            {
+                "platform=",
+                "Run the {PLATFORM} application against the development server: desktop (default), ios (simulator), or android (device or emulator).",
+                value => platform = value
+            },
+            {
+                "device=",
+                "The iOS simulator {ID} or the Android device serial, when more than one is running.",
+                value => device = value
+            },
             new HelpOption(),
-            (_, _) => new ValueTask<int>(NeoToolCommands.DevAsync(config, devUrl)),
+            (_, _) => new ValueTask<int>(NeoToolCommands.DevAsync(config, devUrl, platform, device)),
         };
     }
 
