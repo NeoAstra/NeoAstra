@@ -6,3 +6,5 @@ form { display: grid; gap: 10px; margin: 24px 0 16px; }
 input, button { font: inherit; padding: 12px 14px; border-radius: 12px; border: 1px solid #c7ccd4; }
 button { background: #2563eb; color: white; border: none; font-weight: 600; }
 #result { font-size: 1.25rem; font-weight: 600; }
+nav { display: grid; gap: 14px; margin-top: 28px; }
+nav a { color: #2563eb; }

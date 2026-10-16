@@ -12,6 +12,8 @@ internal static class HelloApp
     public static void Configure(NeoAppBuilder app)
     {
         app.Title = "NeoAstra Hello";
+        // A tapped link to GitHub opens in the browser of the system; the page itself stays on its own origin.
+        app.OpenExternalLinksInSystemBrowser("https://github.com");
         app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
     }
 }
