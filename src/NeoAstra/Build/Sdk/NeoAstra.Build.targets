@@ -171,6 +171,23 @@
     </ItemGroup>
   </Target>
 
+  <!-- A mobile application carries its assets in its package: in the app bundle on iOS, where NeoApp finds them next to the
+       application, and in the neoastra folder of the APK assets on Android, which NeoApp copies to its files once. -->
+  <Target Name="NeoAstraAddAssetsToMobilePackage" BeforeTargets="_CollectBundleResources;_ComputeAndroidAssetsPaths;UpdateAndroidAssets"
+          DependsOnTargets="NeoAstraReadPreparedFrontend"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true' and ('$(TargetPlatformIdentifier)' == 'ios' or '$(TargetPlatformIdentifier)' == 'android')">
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'ios'">
+      <BundleResource Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
+        <LogicalName>assets/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+      </BundleResource>
+    </ItemGroup>
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+      <AndroidAsset Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
+        <Link>Assets/neoastra/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </AndroidAsset>
+    </ItemGroup>
+  </Target>
+
   <Target Name="NeoAstraInspect">
     <Exec Command="&quot;$(NeoAstraDotNetHost)&quot; exec &quot;$(NeoAstraToolPath)&quot; inspect --config &quot;$(NeoAstraProjectConfig)&quot;" />
   </Target>

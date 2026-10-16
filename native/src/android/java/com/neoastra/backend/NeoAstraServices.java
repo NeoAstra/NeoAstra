@@ -16,6 +16,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Build;
@@ -31,6 +32,11 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.nio.ByteBuffer;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.security.KeyStore;
 import java.util.concurrent.CountDownLatch;
@@ -90,6 +96,7 @@ public final class NeoAstraServices {
             case "safe-storage": safeStorage(current, input, output); break;
             case "notifications": notifications(current, input, output); break;
             case "dialog": dialog(input, output); break;
+            case "assets": assets(current, input, output); break;
             default: output.put("status", "Unsupported"); break;
         }
         return output.toString();
@@ -331,5 +338,47 @@ public final class NeoAstraServices {
             case "Destructive": return "Delete";
             default: return role;
         }
+    }
+
+    // The resource provider of NeoAstra serves files, and Android keeps the assets of an application inside its package: a
+    // folder of the assets is copied once per installed version into the private files of the application.
+    private static void assets(Context current, JSONObject input, JSONObject output) throws Exception {
+        String source = input.getString("source");
+        if (!source.matches("[a-z0-9][a-z0-9-]{0,63}")) { output.put("status", "Failed"); return; }
+        long version = current.getPackageManager().getPackageInfo(current.getPackageName(), 0).lastUpdateTime;
+        File root = new File(current.getFilesDir(), "neoastra-assets");
+        File target = new File(root, source + "-" + version);
+        File complete = new File(target, ".complete");
+        if (!complete.exists()) {
+            File[] previous = root.listFiles();
+            if (previous != null) for (File file : previous) if (file.getName().startsWith(source + "-")) delete(file);
+            AssetManager manager = current.getAssets();
+            String[] entries = manager.list(source);
+            if (entries == null || entries.length == 0) { output.put("status", "NotFound"); return; }
+            copy(manager, source, target);
+            if (!complete.createNewFile()) { output.put("status", "Failed"); return; }
+        }
+        // The files of an application are reached through the link /data/user/0, which the resource provider rejects.
+        output.put("status", "Success").put("path", target.getCanonicalPath());
+    }
+
+    private static void copy(AssetManager manager, String source, File target) throws IOException {
+        String[] entries = manager.list(source);
+        if (entries != null && entries.length > 0) {
+            if (!target.isDirectory() && !target.mkdirs()) throw new IOException("Could not create " + target);
+            for (String entry : entries) copy(manager, source + "/" + entry, new File(target, entry));
+            return;
+        }
+        try (InputStream in = manager.open(source); OutputStream out = new FileOutputStream(target)) {
+            byte[] buffer = new byte[16384];
+            for (int read; (read = in.read(buffer)) > 0; ) out.write(buffer, 0, read);
+        }
+    }
+
+    private static void delete(File file) {
+        File[] children = file.listFiles();
+        if (children != null) for (File child : children) delete(child);
+        //noinspection ResultOfMethodCallIgnored
+        file.delete();
     }
 }

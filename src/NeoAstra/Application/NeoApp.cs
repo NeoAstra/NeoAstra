@@ -107,6 +107,7 @@ public sealed class NeoAppBuilder
     private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
     private Session? _session;
     private Uri? _target;
+    private string? _assetsDirectory;
 
     /// <summary>Gets or sets the main window title.</summary>
     public string Title { get; set; } = AppDomain.CurrentDomain.FriendlyName;
@@ -118,7 +119,16 @@ public sealed class NeoAppBuilder
     public int Height { get; set; } = 640;
 
     /// <summary>Gets or sets the production asset directory.</summary>
-    public string AssetsDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "assets");
+    /// <remarks>
+    /// The default is the <c>assets</c> folder next to the application, which is inside the app bundle on iOS. Android keeps
+    /// the assets in the package, so the default there is the folder into which NeoAstra copies them once per installed
+    /// version.
+    /// </remarks>
+    public string AssetsDirectory
+    {
+        get => _assetsDirectory ??= DefaultAssetsDirectory();
+        set => _assetsDirectory = value;
+    }
 
     /// <summary>Gets or sets which engine-provided browser features the main view keeps.</summary>
     public NeoBrowserFeatures BrowserFeatures { get; set; } = new();
@@ -421,6 +431,16 @@ public sealed class NeoAppBuilder
                 Release = release,
                 Profile = profile,
             });
+    }
+
+    private static string DefaultAssetsDirectory()
+    {
+        if (!OperatingSystem.IsAndroid()) return Path.Combine(AppContext.BaseDirectory, "assets");
+        // The build packages the assets of the frontend in the neoastra folder of the APK assets.
+        using var response = Desktop.AndroidPlatform.Call("assets", ("source", "neoastra"));
+        return Desktop.AndroidPlatform.Status(response) == Desktop.NeoDesktopStatus.Success && Desktop.AndroidPlatform.Text(response, "path") is { } path
+            ? path
+            : throw new InvalidOperationException("The assets of the application are missing from its package.");
     }
 
     internal static NeoCapabilityPlatform CurrentPlatform() =>

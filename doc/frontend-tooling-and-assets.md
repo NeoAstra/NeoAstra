@@ -117,6 +117,12 @@ dotnet run -c Release --no-build
 dotnet publish -c Release -r win-x64 --self-contained
 ```
 
+An iOS or Android application (preview) carries the prepared assets in its package instead of an `assets` folder of its
+output: the build adds them to the app bundle as `assets/` on iOS, where `NeoAppBuilder.AssetsDirectory` finds them next to
+the application, and to the `neoastra` folder of the APK assets on Android, which NeoAstra copies once per installed version
+into the private files of the application, the default `AssetsDirectory` there. The tool runs on the runtime of the SDK that
+builds the application, such as .NET 11.
+
 Prebuilt/offline publish:
 
 ```sh
