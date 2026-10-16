@@ -29,6 +29,24 @@ propagates from `NeoApp.Run`. Bridge, capability, and navigation policies remain
 For custom application options, single-instance acquisition before window creation, multiple views,
 or independently owned backend services, use explicit `NeoApplication` composition instead.
 
+## The simple host on iOS and Android (preview)
+
+iOS and Android own the run loop of their main thread, so a mobile application calls `NeoApp.AttachAsync` instead of
+`NeoApp.Run`: on the main thread once a window scene is connected on iOS, or in `OnCreate` of an activity on Android. The first
+call attaches NeoAstra to the run loop of the platform, runs the configuration, and shows the main window, a window of NeoAstra
+that fills the scene or the activity; the application reports itself ready then. A later call, such as for a new activity after
+back closed the previous window, shows the same application in a new main window and does not run the configuration again,
+while `ConfigureMainWindow` runs for each main window. The application, its RPC host, and its browser environment live as long
+as the process; a closed main window releases only its own view.
+
+```csharp
+await NeoApp.AttachAsync(app =>
+{
+    app.Title = "NeoAstra Hello";
+    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+});
+```
+
 ## Managed ordering
 
 `NeoApplication.State` transitions through `Created`, `Starting`, `Ready`, `QuitRequested`, `ClosingWindows`, `Stopping`, and `Stopped`. `Run` enters `Ready` after its startup callback; attached hosts call `NotifyReady`. State changes and launch delivery are serialized by the application dispatcher.

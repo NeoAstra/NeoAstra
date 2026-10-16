@@ -51,6 +51,22 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public async Task AttachIsForMobileApplicationsOnly()
+    {
+        var configured = false;
+        await Assert.ThrowsExactlyAsync<PlatformNotSupportedException>(() => NeoApp.AttachAsync(_ => configured = true));
+        Assert.IsFalse(configured);
+        await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => NeoApp.AttachAsync(null!));
+    }
+
+    [TestMethod]
+    public void CapabilityPlatformFollowsTheOperatingSystem()
+    {
+        var expected = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
+        Assert.AreEqual(expected, NeoAppBuilder.CurrentPlatform());
+    }
+
+    [TestMethod]
     public void CodeFirstGrantRejectsUnknownAndScopedPermissions()
     {
         var unknown = CreateBuilder(ApplicationPermission());
