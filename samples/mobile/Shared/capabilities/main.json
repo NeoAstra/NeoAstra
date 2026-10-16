@@ -15,6 +15,7 @@
         "app://neoastra"
       ],
       "permissions": [
+        "haptics:play",
         "system-info:theme",
         "system-info:metadata",
         {

@@ -70,6 +70,9 @@ card("Web page (browser features)", (row, run) => {
     return { status: "Success", tracks };
   }));
 });
+card("Haptics", (row, run) => {
+  for (const feedback of ["Light", "Medium", "Heavy", "Selection", "Success", "Warning", "Error"]) button(row, feedback, () => run(() => desktop.haptics.play(feedback)));
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });
