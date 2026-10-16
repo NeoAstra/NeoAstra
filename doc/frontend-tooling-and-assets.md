@@ -94,7 +94,10 @@ SIMCTL_CHILD_NEOASTRA_DEV_URL=http://127.0.0.1:5173/ xcrun simctl launch --termi
 
 On Android, `adb reverse` forwards the loopback port of the device or emulator to the development machine, and the address
 is a file in the private files of a debuggable build, which only `adb shell run-as` writes: another application can neither
-write it nor give it to a release build. Remove the file to load the packaged assets again.
+write it nor give it to a release build. Remove the file to load the packaged assets again. Android blocks plain HTTP, so the
+`NeoAstra.Core` package gives a debug build a network security configuration that allows it to `127.0.0.1` only; an
+application with a configuration of its own sets `NeoAstraAndroidDevelopmentNetwork` to `false` and allows `127.0.0.1` in
+its own.
 
 ```sh
 adb reverse tcp:5173 tcp:5173

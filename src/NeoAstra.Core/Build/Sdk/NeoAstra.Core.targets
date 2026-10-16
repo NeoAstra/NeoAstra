@@ -28,6 +28,17 @@
     <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)AndroidManifest.xml" />
   </ItemGroup>
 
+  <!-- A debug build reaches the development server of `dotnet neoastra dev`, which serves plain HTTP on 127.0.0.1, and Android
+       blocks plain HTTP to it as to any address. An application with a network security configuration of its own turns this
+       off with NeoAstraAndroidDevelopmentNetwork=false and allows 127.0.0.1 in its own. -->
+  <PropertyGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidDevelopmentNetwork)' == ''">
+    <NeoAstraAndroidDevelopmentNetwork Condition="'$(Configuration)' == 'Debug'">true</NeoAstraAndroidDevelopmentNetwork>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidDevelopmentNetwork)' == 'true'">
+    <AndroidResource Include="$(NeoAstraAndroidJavaDirectory)development/xml/neoastra_development_network.xml" Link="Resources/xml/neoastra_development_network.xml" />
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)development/AndroidManifest.xml" />
+  </ItemGroup>
+
   <!-- A missing library would otherwise surface as an unresolved import when the application runs. -->
   <Target Name="_NeoAstraCheckMobileNativeLibraries" BeforeTargets="Build" Condition="'$(_NeoAstraTargetPlatform)' == 'ios' Or '$(_NeoAstraTargetPlatform)' == 'android'">
     <Error Condition="'$(_NeoAstraTargetPlatform)' == 'ios' And '$(RuntimeIdentifier)' != '' And !Exists('$(NeoAstraNativeRuntimesDirectory)$(RuntimeIdentifier)/native/libneoastra_native.a')"

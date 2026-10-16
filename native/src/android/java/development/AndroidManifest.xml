@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of a debug build of an Android application: plain HTTP to the loopback development server. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:networkSecurityConfig="@xml/neoastra_development_network" />
+</manifest>
