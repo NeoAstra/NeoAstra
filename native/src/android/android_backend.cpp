@@ -179,6 +179,9 @@ jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
+jmethodID host_set_engine_dialogs{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
+jclass js_result_class{}, js_prompt_result_class{};
+jmethodID js_result_confirm{}, js_result_cancel{}, js_prompt_result_confirm{};
 jclass window_class{};
 jmethodID window_create{}, window_set_title{}, window_set_visible{}, window_set_background{}, window_content{}, window_width{}, window_height{};
 jmethodID window_density{}, window_close{}, window_destroy{};
@@ -576,6 +579,144 @@ void JNICALL on_new_window(JNIEnv* env, jclass, jlong pointer, jstring url_value
     } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android new-window decision failed"); }
 }
 
+// A JavaScript dialog that the WebView does not show is answered by the host; without a handler an alert is accepted and the
+// others are canceled.
+struct dialog_context {
+    jobject result{};
+    bool prompt{};
+};
+
+void dialog_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    std::unique_ptr<dialog_context> context(static_cast<dialog_context*>(pointer));
+    JNIEnv* env = jni();
+    if (!env) return;
+    try {
+        if (response->action != NEOASTRA_DECISION_ALLOW) env->CallVoidMethod(context->result, js_result_cancel);
+        else if (context->prompt) {
+            jstring text = to_java(env, neo_string(response->text));
+            env->CallVoidMethod(context->result, js_prompt_result_confirm, text);
+            env->DeleteLocalRef(text);
+        } else env->CallVoidMethod(context->result, js_result_confirm);
+    } catch (...) { }
+    failed(env, nullptr, "Could not answer the JavaScript dialog");
+    env->DeleteGlobalRef(context->result);
+}
+
+void JNICALL on_script_dialog(JNIEnv* env, jclass, jlong pointer, jint kind, jstring message_value, jstring initial_value, jstring url_value, jobject result) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) { env->CallVoidMethod(result, js_result_cancel); return; }
+    }
+    try {
+        std::string text = to_utf8(env, message_value), initial = to_utf8(env, initial_value);
+        std::string origin = origin_of(unproject(view->environment, to_utf8(env, url_value)));
+        auto* decision = new neoastra_decision;
+        neo_configure_decision(decision, view, NEOASTRA_DECISION_SCRIPT_DIALOG, kind == NEOASTRA_SCRIPT_DIALOG_ALERT ? NEOASTRA_DECISION_ALLOW : NEOASTRA_DECISION_CANCEL);
+        decision->completion = dialog_decided;
+        decision->completion_context = new dialog_context{env->NewGlobalRef(result), kind == NEOASTRA_SCRIPT_DIALOG_PROMPT};
+        neo_event_details details{};
+        if (kind == NEOASTRA_SCRIPT_DIALOG_PROMPT) details.text2 = &initial;
+        neo_emit_view_detailed(view, NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED, 0, &text, &origin, static_cast<uint64_t>(kind), 0, decision, details);
+        neo_finish_decision_event(view, decision);
+        decision->release();
+    } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android JavaScript dialog failed"); }
+}
+
+// The host chooses the files of a file input: paths it gives, the picker of the system for the default answer, or none.
+struct chooser_context {
+    jobject host{};
+    jobject callback{};
+    jobject parameters{};
+};
+
+void chooser_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    std::unique_ptr<chooser_context> context(static_cast<chooser_context*>(pointer));
+    JNIEnv* env = jni();
+    if (!env) return;
+    try {
+        if (response->action == NEOASTRA_DECISION_DEFAULT) env->CallVoidMethod(context->host, host_choose_with_system, context->callback, context->parameters);
+        else {
+            jobjectArray paths{};
+            if (response->action == NEOASTRA_DECISION_ALLOW && response->path_count) {
+                std::vector<std::string> values;
+                for (uint32_t index = 0; index < response->path_count; ++index) values.push_back(neo_string(response->paths[index]));
+                paths = string_array(env, values);
+            }
+            env->CallStaticVoidMethod(host_class, host_deliver_files, context->callback, paths);
+            if (paths) env->DeleteLocalRef(paths);
+        }
+    } catch (...) { }
+    failed(env, nullptr, "Could not answer the file chooser");
+    env->DeleteGlobalRef(context->host);
+    env->DeleteGlobalRef(context->callback);
+    env->DeleteGlobalRef(context->parameters);
+}
+
+void JNICALL on_file_chooser(JNIEnv* env, jclass, jlong pointer, jstring types_value, jboolean multiple, jobject host, jobject callback, jobject parameters) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) { env->CallStaticVoidMethod(host_class, host_deliver_files, callback, nullptr); return; }
+    }
+    try {
+        std::string accepted = to_utf8(env, types_value);
+        auto* decision = new neoastra_decision;
+        neo_configure_decision(decision, view, NEOASTRA_DECISION_FILE_CHOOSER, NEOASTRA_DECISION_CANCEL);
+        decision->completion = chooser_decided;
+        decision->completion_context = new chooser_context{env->NewGlobalRef(host), env->NewGlobalRef(callback), env->NewGlobalRef(parameters)};
+        neo_emit_view(view, NEOASTRA_EVENT_FILE_CHOOSER_REQUESTED, 0, &accepted, nullptr, multiple ? 1u : 0u, 0, decision);
+        neo_finish_decision_event(view, decision);
+        decision->release();
+    } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android file chooser failed"); }
+}
+
+// A request for a microphone and a camera at once asks the host for each; the last answer settles it. The default answer
+// lets the system ask the user, as an allowed one does when the application does not hold the runtime permission yet.
+struct permission_context {
+    jobject host{};
+    jobject request{};
+    int pending{};
+    bool allowed{true};
+};
+
+void permission_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    auto* context = static_cast<permission_context*>(pointer);
+    if (response->action != NEOASTRA_DECISION_ALLOW && response->action != NEOASTRA_DECISION_DEFAULT) context->allowed = false;
+    if (--context->pending > 0) return;
+    std::unique_ptr<permission_context> owned(context);
+    JNIEnv* env = jni();
+    if (!env) return;
+    env->CallVoidMethod(context->host, host_answer_permission, context->request, context->allowed ? JNI_TRUE : JNI_FALSE);
+    failed(env, nullptr, "Could not answer the permission request");
+    env->DeleteGlobalRef(context->host);
+    env->DeleteGlobalRef(context->request);
+}
+
+void JNICALL on_permission(JNIEnv* env, jclass, jlong pointer, jstring origin_value, jintArray kinds_value, jobject host, jobject request) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    {
+        std::lock_guard lock(live_mutex);
+        if (!is_live(view)) { env->CallVoidMethod(host, host_answer_permission, request, JNI_FALSE); return; }
+    }
+    try {
+        std::string origin = origin_of(unproject(view->environment, to_utf8(env, origin_value)));
+        const jsize count = env->GetArrayLength(kinds_value);
+        std::vector<jint> kinds(static_cast<size_t>(count));
+        env->GetIntArrayRegion(kinds_value, 0, count, kinds.data());
+        auto* context = new permission_context{env->NewGlobalRef(host), env->NewGlobalRef(request), static_cast<int>(count)};
+        for (const jint kind : kinds) {
+            auto* decision = new neoastra_decision;
+            neo_configure_decision(decision, view, NEOASTRA_DECISION_PERMISSION, NEOASTRA_DECISION_DENY);
+            decision->completion = permission_decided;
+            decision->completion_context = context;
+            neo_emit_view(view, NEOASTRA_EVENT_PERMISSION_REQUESTED, 0, nullptr, &origin, static_cast<uint64_t>(kind), 0, decision);
+            neo_finish_decision_event(view, decision);
+            decision->release();
+        }
+    } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "android", "Android permission request failed"); }
+}
+
 // Runs on the main thread; the Java side stops reporting once the window is destroyed.
 void JNICALL on_window_event(JNIEnv*, jclass, jlong pointer, jint kind, jint width, jint height, jfloat density) {
     auto* window = reinterpret_cast<neoastra_window_t*>(pointer);
@@ -620,8 +761,24 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         {const_cast<char*>("nativeEvaluated"), const_cast<char*>("(JLjava/lang/String;)V"), reinterpret_cast<void*>(on_evaluated)},
         {const_cast<char*>("nativeNavigation"), const_cast<char*>("(JLjava/lang/String;ZZ)Z"), reinterpret_cast<void*>(on_navigation)},
         {const_cast<char*>("nativeNewWindow"), const_cast<char*>("(JLjava/lang/String;Z)V"), reinterpret_cast<void*>(on_new_window)},
+        {const_cast<char*>("nativeScriptDialog"), const_cast<char*>("(JILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)V"), reinterpret_cast<void*>(on_script_dialog)},
+        {const_cast<char*>("nativeFileChooser"), const_cast<char*>("(JLjava/lang/String;ZLcom/neoastra/backend/NeoAstraWebHost;Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)V"), reinterpret_cast<void*>(on_file_chooser)},
+        {const_cast<char*>("nativePermission"), const_cast<char*>("(JLjava/lang/String;[ILcom/neoastra/backend/NeoAstraWebHost;Landroid/webkit/PermissionRequest;)V"), reinterpret_cast<void*>(on_permission)},
     };
-    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 6) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
+    host_set_engine_dialogs = env->GetMethodID(host_class, "setEngineDialogs", "(Z)V");
+    host_deliver_files = env->GetStaticMethodID(host_class, "deliverFiles", "(Landroid/webkit/ValueCallback;[Ljava/lang/String;)V");
+    host_choose_with_system = env->GetMethodID(host_class, "chooseWithSystem", "(Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)V");
+    host_answer_permission = env->GetMethodID(host_class, "answerPermission", "(Landroid/webkit/PermissionRequest;Z)V");
+    if (jclass result_class = env->FindClass("android/webkit/JsResult")) {
+        js_result_class = static_cast<jclass>(env->NewGlobalRef(result_class));
+        js_result_confirm = env->GetMethodID(js_result_class, "confirm", "()V");
+        js_result_cancel = env->GetMethodID(js_result_class, "cancel", "()V");
+    }
+    if (jclass prompt_class = env->FindClass("android/webkit/JsPromptResult")) {
+        js_prompt_result_class = static_cast<jclass>(env->NewGlobalRef(prompt_class));
+        js_prompt_result_confirm = env->GetMethodID(js_prompt_result_class, "confirm", "(Ljava/lang/String;)V");
+    }
+    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 9) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
     if (jclass services = env->FindClass("com/neoastra/backend/NeoAstraServices")) {
         services_class = static_cast<jclass>(env->NewGlobalRef(services));
         services_call = env->GetStaticMethodID(services_class, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
@@ -865,9 +1022,15 @@ neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t*, double) no
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept {
     if (!view_state(view)) return NEOASTRA_ERROR_NOT_INITIALIZED;
     switch (setting) {
+        // The WebView shows its own JavaScript dialogs; while they are off, the host answers them.
+        case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS: {
+            JNIEnv* env = jni();
+            if (!env) return NEOASTRA_ERROR_NOT_INITIALIZED;
+            env->CallVoidMethod(view_state(view)->host, host_set_engine_dialogs, enabled ? JNI_TRUE : JNI_FALSE);
+            return failed(env, view->environment->app, "Could not switch the JavaScript dialogs") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+        }
         case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:
         case NEOASTRA_VIEW_SETTING_STATUS_BAR:
-        case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:

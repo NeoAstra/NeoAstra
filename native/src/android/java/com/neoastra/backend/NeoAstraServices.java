@@ -84,6 +84,8 @@ public final class NeoAstraServices {
         });
     }
 
+    static Context context() { return context; }
+
     /** The activity created or resumed last that is not destroyed: the one that takes a window. */
     static Activity currentActivity() { return current.get(); }
 

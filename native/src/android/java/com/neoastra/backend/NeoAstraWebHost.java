@@ -1,10 +1,19 @@
 package com.neoastra.backend;
 
+import android.Manifest;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Message;
 import android.view.ViewGroup;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
+import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -20,12 +29,15 @@ import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -67,6 +79,13 @@ public final class NeoAstraWebHost {
     /** Asks the host about a navigation and answers whether the WebView must not load it now. */
     public static native boolean nativeNavigation(long view, String url, boolean isMainFrame, boolean hasGesture);
     public static native void nativeNewWindow(long view, String url, boolean hasGesture);
+    /** Asks the host about a JavaScript dialog; the native library answers the result through JNI. */
+    public static native void nativeScriptDialog(long view, int kind, String message, String defaultText, String url, JsResult result);
+    public static native void nativeFileChooser(long view, String acceptedTypes, boolean multiple, NeoAstraWebHost host, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams parameters);
+    public static native void nativePermission(long view, String origin, int[] kinds, NeoAstraWebHost host, PermissionRequest request);
+
+    /** Kinds of NEOASTRA_PERMISSION_* that a WebView asks for. */
+    private static final int PERMISSION_CAMERA = 2, PERMISSION_MICROPHONE = 3;
 
     private final WebView webView;
     private final ViewGroup parent;
@@ -75,6 +94,7 @@ public final class NeoAstraWebHost {
     private volatile long view;
     private volatile JavaScriptReplyProxy reply;
     private int nextScript = 1;
+    private volatile boolean engineDialogs = true;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
     public static void load() { }
@@ -179,6 +199,54 @@ public final class NeoAstraWebHost {
 
     public WebView webView() { return webView; }
 
+    /** Whether the WebView shows its own JavaScript dialogs; while it does not, the host answers them. */
+    public void setEngineDialogs(boolean value) { engineDialogs = value; }
+
+    /** Gives the page the files that the host chose, or none. */
+    public static void deliverFiles(ValueCallback<Uri[]> callback, String[] paths) {
+        if (paths == null) { callback.onReceiveValue(null); return; }
+        Uri[] files = new Uri[paths.length];
+        for (int index = 0; index < paths.length; index++) files[index] = Uri.fromFile(new File(paths[index]));
+        callback.onReceiveValue(files);
+    }
+
+    /** Shows the picker of the system, which the host asked for with its default answer. */
+    public void chooseWithSystem(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams parameters) {
+        Intent intent;
+        try { intent = parameters.createIntent(); }
+        catch (RuntimeException exception) { callback.onReceiveValue(null); return; }
+        NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data)));
+    }
+
+    /**
+     * Answers a request of the page for a camera or a microphone. An allowed request also needs the runtime permission of the
+     * application, which the system asks the user for once; the page gets the devices that the user allowed.
+     */
+    public void answerPermission(PermissionRequest request, boolean allowed) {
+        if (!allowed) { request.deny(); return; }
+        Context context = webView.getContext();
+        List<String> resources = new ArrayList<>(), missing = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            String permission = PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) ? Manifest.permission.CAMERA : PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource) ? Manifest.permission.RECORD_AUDIO : null;
+            if (permission == null) continue;
+            resources.add(resource);
+            if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
+        }
+        if (missing.isEmpty()) { grant(request, resources); return; }
+        NeoAstraResultActivity.requestPermissions(missing.toArray(new String[0]), (resultCode, data, grants) -> {
+            List<String> granted = new ArrayList<>();
+            for (String resource : resources) {
+                String permission = PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) ? Manifest.permission.CAMERA : Manifest.permission.RECORD_AUDIO;
+                if (context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) granted.add(resource);
+            }
+            grant(request, granted);
+        });
+    }
+
+    private static void grant(PermissionRequest request, List<String> resources) {
+        if (resources.isEmpty()) request.deny(); else request.grant(resources.toArray(new String[0]));
+    }
+
     public void destroy() {
         view = 0;
         reply = null;
@@ -282,6 +350,40 @@ public final class NeoAstraWebHost {
             transport.setWebView(probe);
             result.sendToTarget();
             return true;
+        }
+
+        @Override public boolean onJsAlert(WebView source, String url, String message, JsResult result) { return dialog(0, message, null, url, result); }
+        @Override public boolean onJsConfirm(WebView source, String url, String message, JsResult result) { return dialog(1, message, null, url, result); }
+        @Override public boolean onJsPrompt(WebView source, String url, String message, String defaultValue, JsPromptResult result) { return dialog(2, message, defaultValue, url, result); }
+        @Override public boolean onJsBeforeUnload(WebView source, String url, String message, JsResult result) { return dialog(3, message, null, url, result); }
+
+        private boolean dialog(int kind, String message, String defaultText, String url, JsResult result) {
+            long current = view;
+            if (engineDialogs || current == 0) return false;
+            nativeScriptDialog(current, kind, message, defaultText, url, result);
+            return true;
+        }
+
+        @Override public boolean onShowFileChooser(WebView source, ValueCallback<Uri[]> callback, FileChooserParams parameters) {
+            long current = view;
+            if (current == 0) return false;
+            nativeFileChooser(current, String.join(",", parameters.getAcceptTypes()), parameters.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE, NeoAstraWebHost.this, callback, parameters);
+            return true;
+        }
+
+        @Override public void onPermissionRequest(PermissionRequest request) {
+            long current = view;
+            if (current == 0) { request.deny(); return; }
+            List<Integer> kinds = new ArrayList<>();
+            for (String resource : request.getResources()) {
+                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) kinds.add(PERMISSION_MICROPHONE);
+                else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) kinds.add(PERMISSION_CAMERA);
+            }
+            if (kinds.isEmpty()) { request.deny(); return; }
+            int[] values = new int[kinds.size()];
+            for (int index = 0; index < values.length; index++) values[index] = kinds.get(index);
+            Uri origin = request.getOrigin();
+            nativePermission(current, origin == null ? null : origin.toString(), values, NeoAstraWebHost.this, request);
         }
 
         @Override public void onReceivedTitle(WebView source, String title) {

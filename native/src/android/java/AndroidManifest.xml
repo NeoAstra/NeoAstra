@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Merged into the manifest of an Android application: the provider loads the Java side of NeoAstra when the process starts. -->
+<!-- Merged into the manifest of an Android application: the provider loads the Java side of NeoAstra when the process starts,
+     and the activity receives the answers of the system to a picker or a permission request. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application>
     <provider
@@ -7,5 +8,10 @@
         android:authorities="${applicationId}.neoastra"
         android:exported="false"
         android:initOrder="1000" />
+    <activity
+        android:name="com.neoastra.backend.NeoAstraResultActivity"
+        android:exported="false"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode" />
   </application>
 </manifest>
