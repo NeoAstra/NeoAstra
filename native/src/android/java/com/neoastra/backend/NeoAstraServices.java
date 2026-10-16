@@ -53,6 +53,7 @@ public final class NeoAstraServices {
     private static final int PERMISSION_REQUEST = 0x4E41;
     private static volatile Context context;
     private static volatile WeakReference<Activity> resumed = new WeakReference<>(null);
+    private static volatile WeakReference<Activity> current = new WeakReference<>(null);
     private static volatile CountDownLatch paused, resumedAgain;
 
     private NeoAstraServices() { }
@@ -64,15 +65,18 @@ public final class NeoAstraServices {
     public static void initialize(Context value) {
         context = value.getApplicationContext();
         if (context instanceof Application) ((Application) context).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); CountDownLatch latch = resumedAgain; if (latch != null) latch.countDown(); }
+            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); current = resumed; CountDownLatch latch = resumedAgain; if (latch != null) latch.countDown(); }
             @Override public void onActivityPaused(Activity activity) { CountDownLatch latch = paused; if (latch != null) latch.countDown(); }
-            @Override public void onActivityCreated(Activity activity, Bundle state) { }
+            @Override public void onActivityCreated(Activity activity, Bundle state) { current = new WeakReference<>(activity); }
             @Override public void onActivityStarted(Activity activity) { }
             @Override public void onActivityStopped(Activity activity) { }
             @Override public void onActivitySaveInstanceState(Activity activity, Bundle state) { }
-            @Override public void onActivityDestroyed(Activity activity) { if (resumed.get() == activity) resumed = new WeakReference<>(null); }
+            @Override public void onActivityDestroyed(Activity activity) { if (resumed.get() == activity) resumed = new WeakReference<>(null); if (current.get() == activity) current = new WeakReference<>(null); }
         });
     }
+
+    /** The activity created or resumed last that is not destroyed: the one that takes a window. */
+    static Activity currentActivity() { return current.get(); }
 
     public static String call(String service, String request) throws Exception {
         Context current = context;

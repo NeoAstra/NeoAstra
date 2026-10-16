@@ -2,9 +2,11 @@
 //
 // UIKit owns the application and its run loop, so an iOS application attaches to the loop that is already running
 // (neoastra_app_attach) instead of running one. The backend implements the application level (creation, dispatch to the
-// main queue, decision timeouts, teardown) and the browser: an environment, a profile, and a view that WKWebView draws
-// inside a UIView of the application. Windows, popups, downloads, dialogs, permissions, and cookies answer
-// NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows, and the capability report says so.
+// main queue, decision timeouts, teardown), windows, and the browser: an environment, a profile, and a view that WKWebView
+// draws inside a UIView of the application or of a window. A window is a UIWindow of the active window scene, which fills
+// the scene: its title is the title of the scene, and it cannot be moved, resized, or minimized. Popups, downloads,
+// dialogs, permissions, and cookies answer NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows, and the
+// capability report says so.
 #include "../common/native_internal.hpp"
 
 #import <CommonCrypto/CommonDigest.h>
@@ -33,6 +35,11 @@
 @property(nonatomic, assign) neoastra_view_t* nativeView;
 @end
 
+// The root view controller of a window, which reports the size of the scene as the bounds of the window.
+@interface NeoAstraWindowController : UIViewController
+@property(nonatomic, assign) neoastra_window_t* nativeWindow;
+@end
+
 namespace {
 struct uikit_app {};
 struct uikit_environment { WKWebsiteDataStore* data_store; };
@@ -44,6 +51,15 @@ struct uikit_view {
     std::unordered_map<std::string, WKUserScript*> scripts;
     uint64_t history{};
     ~uikit_view() { if (delegate) delegate.nativeView = nullptr; }
+};
+struct uikit_window {
+    UIWindow* window;
+    NeoAstraWindowController* controller;
+    id disconnect_observer;
+    ~uikit_window() {
+        if (controller) controller.nativeWindow = nullptr;
+        if (disconnect_observer) [NSNotificationCenter.defaultCenter removeObserver:disconnect_observer];
+    }
 };
 
 constexpr const char* uikit_domain = "uikit";
@@ -187,7 +203,49 @@ WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app, const std::string
 }
 
 UIView* view_parent(neoastra_view_t* view) {
+    if (view->window) {
+        auto* state = static_cast<uikit_window*>(view->window->platform);
+        return state && state->window ? state->controller.view : nil;
+    }
     return view->parent.kind == NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW ? (__bridge UIView*)view->parent.handle : nil;
+}
+
+// The scene in the foreground takes a new window; while an application starts, its scene is still inactive.
+UIWindowScene* active_window_scene() {
+    UIWindowScene* fallback = nil;
+    for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        if (scene.activationState == UISceneActivationStateForegroundActive) return (UIWindowScene*)scene;
+        if (!fallback || scene.activationState == UISceneActivationStateForegroundInactive) fallback = (UIWindowScene*)scene;
+    }
+    return fallback;
+}
+UIColor* ui_color(neoastra_color_t color) {
+    return [UIColor colorWithRed:color.red / 255.0 green:color.green / 255.0 blue:color.blue / 255.0 alpha:color.alpha / 255.0];
+}
+// A window fills its scene, so its bounds are the size of the scene in points, at the origin.
+void sync_window_bounds(neoastra_window_t* value, UIWindow* window, bool report) {
+    if (!window) return;
+    const CGSize size = window.bounds.size;
+    const neoastra_rect_t bounds{0, 0, (int32_t)lround(size.width), (int32_t)lround(size.height)};
+    bool changed{};
+    {
+        std::lock_guard lock(value->state_mutex);
+        changed = value->bounds.x != bounds.x || value->bounds.y != bounds.y || value->bounds.width != bounds.width || value->bounds.height != bounds.height;
+        value->bounds = bounds;
+    }
+    if (changed && report) neo_emit_app(value->app, NEOASTRA_EVENT_WINDOW_RESIZED, value->id);
+    neo_window_set_scale_factor(value, window.traitCollection.displayScale > 0 ? window.traitCollection.displayScale : 1.0, report);
+}
+// A window ends with its scene, or when NeoAstra closes it; either way it leaves the screen once and is reported closed.
+void close_window(neoastra_window_t* value) {
+    auto* state = static_cast<uikit_window*>(value->platform);
+    if (state && state->window) {
+        state->window.hidden = YES;
+        state->window = nil;
+    }
+    value->force_closing = false;
+    neo_window_closed(value);
 }
 CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     if (view->fill_parent) return parent.bounds;
@@ -280,6 +338,14 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     }
 }
 - (void)webView:(WKWebView*)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task { (void)webView; (void)task; }
+@end
+
+@implementation NeoAstraWindowController
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    auto* value = self.nativeWindow;
+    if (value) sync_window_bounds(value, self.view.window, true);
+}
 @end
 
 @implementation NeoAstraDelegate
@@ -392,23 +458,110 @@ bool neo_platform_schedule_decision_timeout(neoastra_app_t*, neoastra_decision_t
     return true;
 }
 
-bool neo_platform_window_create(neoastra_window_t*, const neoastra_window_options_t*, neoastra_error_t** error) noexcept { unsupported(error, "A window"); return false; }
-void neo_platform_window_destroy(neoastra_window_t*) noexcept {}
-neoastra_result_t neo_platform_window_show(neoastra_window_t*, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_activate(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_force_close(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_title(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window_options_t* options, neoastra_error_t** error) noexcept {
+    @autoreleasepool {
+        @try {
+            if (options->owner) { unsupported(error, "An owned window"); return false; }
+            UIWindowScene* scene = active_window_scene();
+            if (!scene) { neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The application has no connected window scene", 0, uikit_domain); return false; }
+            auto state = std::make_unique<uikit_window>();
+            state->controller = [NeoAstraWindowController new];
+            state->window = [[UIWindow alloc] initWithWindowScene:scene];
+            if (!state->controller || !state->window) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "UIKit could not create the window", 0, uikit_domain); return false; }
+            state->controller.view.backgroundColor = ui_color(window->background_color);
+            state->window.rootViewController = state->controller;
+            scene.title = ns_string(window->title);
+            neoastra_window_t* target = window;
+            state->disconnect_observer = [NSNotificationCenter.defaultCenter addObserverForName:UISceneDidDisconnectNotification object:scene queue:nil usingBlock:^(NSNotification*) { close_window(target); }];
+            {
+                std::lock_guard lock(window->state_mutex);
+                window->state = NEOASTRA_WINDOW_NORMAL;
+            }
+            window->platform = state.get();
+            sync_window_bounds(window, state->window, false);
+            state->controller.nativeWindow = window;
+            if (options->flags & 4u) [state->window makeKeyAndVisible];
+            state.release();
+            return true;
+        } @catch (NSException* exception) {
+            window->platform = nullptr;
+            neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, utf8(exception.reason), 0, uikit_domain);
+            return false;
+        }
+    }
+}
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept {
+    @autoreleasepool {
+        auto* state = static_cast<uikit_window*>(window->platform);
+        if (!state) return;
+        if (state->window) state->window.hidden = YES;
+        delete state;
+        window->platform = nullptr;
+    }
+}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* window, bool visible) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    if (visible) [state->window makeKeyAndVisible]; else state->window.hidden = YES;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_activate(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    [state->window makeKeyAndVisible];
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    close_window(window);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    std::string title;
+    {
+        std::lock_guard lock(window->state_mutex);
+        title = window->title;
+    }
+    state->window.windowScene.title = ns_string(title);
+    return NEOASTRA_OK;
+}
+// A window fills its scene: the scene, not the application, decides where it is and how large.
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_get_frame(neoastra_window_t*, neoastra_rect_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_state(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* window, neoastra_rect_t* value) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    sync_window_bounds(window, state->window, false);
+    std::lock_guard lock(window->state_mutex);
+    *value = window->bounds;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexcept {
+    std::lock_guard lock(window->state_mutex);
+    return window->state == NEOASTRA_WINDOW_NORMAL ? NEOASTRA_OK : NEOASTRA_ERROR_NOT_SUPPORTED;
+}
 neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t*, neoastra_window_attribute_t, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t*, neoastra_window_resize_edge_t) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    state->controller.view.backgroundColor = ui_color(window->background_color);
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t*, neoastra_title_bar_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_get_handle(neoastra_window_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window) return NEOASTRA_ERROR_DISPOSED;
+    if (kind != NEOASTRA_NATIVE_HANDLE_UIKIT_UIVIEW) return NEOASTRA_ERROR_NOT_SUPPORTED;
+    handle->value = (__bridge void*)state->controller.view;
+    handle->kind = kind;
+    return NEOASTRA_OK;
+}
 
 
 bool neo_platform_environment_create_async(neoastra_environment_t* environment, const neoastra_environment_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept {

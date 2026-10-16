@@ -2,10 +2,12 @@
 //
 // The Android framework owns the process and the run loop of its main thread, so an Android application attaches to the
 // native looper of the thread that it calls from (neoastra_app_attach) instead of running a loop. The backend implements
-// the application level and a view: a WebView that the Java class com.neoastra.backend.NeoAstraWebHost creates inside a
-// ViewGroup of the application, driven through JNI. Android has no custom schemes, so a custom-scheme origin is served as
-// a projected HTTPS origin under the reserved .invalid domain. Windows, popups, downloads, dialogs, permissions, cookies,
-// zoom, and capture answer NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows.
+// the application level, windows, and a view: a WebView that the Java class com.neoastra.backend.NeoAstraWebHost creates
+// inside a ViewGroup of the application or of a window, driven through JNI. A window is the content of the current activity,
+// which com.neoastra.backend.NeoAstraWindow replaces with a layout of its own; it fills the activity and ends with it, so it
+// cannot be moved, resized, or minimized. Android has no custom schemes, so a custom-scheme origin is served as a projected
+// HTTPS origin under the reserved .invalid domain. Popups, downloads, dialogs, permissions, cookies, zoom, and capture answer
+// NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows.
 #include "../common/native_internal.hpp"
 
 #include <android/looper.h>
@@ -166,23 +168,6 @@ bool neo_platform_schedule_decision_timeout(neoastra_app_t* app, neoastra_decisi
     return true;
 }
 
-bool neo_platform_window_create(neoastra_window_t*, const neoastra_window_options_t*, neoastra_error_t** error) noexcept { unsupported(error, "A window"); return false; }
-void neo_platform_window_destroy(neoastra_window_t*) noexcept {}
-neoastra_result_t neo_platform_window_show(neoastra_window_t*, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_activate(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_force_close(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_title(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_get_frame(neoastra_window_t*, neoastra_rect_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_state(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t*, neoastra_window_attribute_t, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t*, neoastra_window_resize_edge_t) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t*, neoastra_title_bar_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_window_get_handle(neoastra_window_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 
 namespace {
 // The Java side: the class that NeoAstraWebHost.java defines, found once when Java loads the library.
@@ -194,6 +179,9 @@ jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
+jclass window_class{};
+jmethodID window_create{}, window_set_title{}, window_set_visible{}, window_set_background{}, window_content{}, window_width{}, window_height{};
+jmethodID window_density{}, window_close{}, window_destroy{};
 
 // A custom-scheme origin such as app://neoastra is served to the WebView as https://neoastra.app.invalid: Android has no
 // custom schemes, and the reserved top-level domain can never reach the network. The managed side only ever sees the
@@ -202,6 +190,10 @@ constexpr std::string_view projected_suffix = ".invalid";
 
 struct android_environment {};
 struct android_profile {};
+struct android_window {
+    jobject host{};
+    jobject content{};
+};
 struct android_view {
     jobject host{};
     jobject web_view{};
@@ -473,6 +465,44 @@ neoastra_result_t not_ready(neoastra_error_t** error) noexcept {
 }  // namespace
 
 // Java runs this when NeoAstraWebHost loads the library; a load by .NET alone does not, so the class has to load first.
+namespace {
+// A window counts in logical units, which the density of the display turns into the pixels that Android lays out in.
+void sync_window_bounds(neoastra_window_t* window, jint width, jint height, jfloat density, bool report) noexcept {
+    const double scale = density > 0 ? density : 1.0;
+    const neoastra_rect_t bounds{0, 0, static_cast<int32_t>(std::lround(width / scale)), static_cast<int32_t>(std::lround(height / scale))};
+    bool changed{};
+    {
+        std::lock_guard lock(window->state_mutex);
+        changed = window->bounds.width != bounds.width || window->bounds.height != bounds.height || window->bounds.x != 0 || window->bounds.y != 0;
+        window->bounds = bounds;
+    }
+    if (changed && report) neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_RESIZED, window->id);
+    neo_window_set_scale_factor(window, scale, report);
+}
+
+void read_window_bounds(JNIEnv* env, neoastra_window_t* window, bool report) noexcept {
+    auto* state = static_cast<android_window*>(window->platform);
+    if (!state) return;
+    const jint width = env->CallIntMethod(state->host, window_width);
+    const jint height = env->CallIntMethod(state->host, window_height);
+    const jfloat density = env->CallFloatMethod(state->host, window_density);
+    if (!failed(env, window->app, "Could not read the size of the Android window")) sync_window_bounds(window, width, height, density, report);
+}
+
+// Runs on the main thread; the Java side stops reporting once the window is destroyed.
+void JNICALL on_window_event(JNIEnv*, jclass, jlong pointer, jint kind, jint width, jint height, jfloat density) {
+    auto* window = reinterpret_cast<neoastra_window_t*>(pointer);
+    if (!window) return;
+    switch (kind) {
+        case 0: sync_window_bounds(window, width, height, density, true); break;
+        case 1: neo_window_request_close(window, NEOASTRA_WINDOW_CLOSE_USER, true); break;
+        case 2: window->force_closing = false; neo_window_closed(window); break;
+        case 3: neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED, window->id, nullptr, nullptr, width != 0 ? 1 : 0); break;
+        default: break;
+    }
+}
+}  // namespace
+
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     JNIEnv* env{};
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
@@ -508,6 +538,24 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         services_call = env->GetStaticMethodID(services_class, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
     }
     if (env->ExceptionCheck()) { env->ExceptionClear(); services_class = nullptr; }
+    if (jclass window = env->FindClass("com/neoastra/backend/NeoAstraWindow")) {
+        window_class = static_cast<jclass>(env->NewGlobalRef(window));
+        window_create = env->GetStaticMethodID(window_class, "create", "(JLjava/lang/String;I)Lcom/neoastra/backend/NeoAstraWindow;");
+        window_set_title = env->GetMethodID(window_class, "setTitle", "(Ljava/lang/String;)V");
+        window_set_visible = env->GetMethodID(window_class, "setVisible", "(Z)V");
+        window_set_background = env->GetMethodID(window_class, "setBackground", "(I)V");
+        window_content = env->GetMethodID(window_class, "content", "()Landroid/widget/FrameLayout;");
+        window_width = env->GetMethodID(window_class, "width", "()I");
+        window_height = env->GetMethodID(window_class, "height", "()I");
+        window_density = env->GetMethodID(window_class, "density", "()F");
+        window_close = env->GetMethodID(window_class, "close", "()V");
+        window_destroy = env->GetMethodID(window_class, "destroy", "()V");
+        const JNINativeMethod window_methods[] = {
+            {const_cast<char*>("nativeWindowEvent"), const_cast<char*>("(JIIIF)V"), reinterpret_cast<void*>(on_window_event)},
+        };
+        if (env->ExceptionCheck() || env->RegisterNatives(window_class, window_methods, 1) != JNI_OK) { env->ExceptionClear(); window_class = nullptr; }
+    }
+    if (env->ExceptionCheck()) { env->ExceptionClear(); window_class = nullptr; }
     java_vm = vm;
     return JNI_VERSION_1_6;
 }
@@ -556,8 +604,10 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
     if (options->popup_request) { unsupported(error, "A popup view"); return false; }
     JNIEnv* env = jni();
     if (!env || !host_class) { not_ready(error); return false; }
-    if (view->parent.kind != NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP || !view->parent.handle) {
-        neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "An Android view needs a ViewGroup of the application as its parent", 0, android_domain);
+    auto* window = view->window ? static_cast<android_window*>(view->window->platform) : nullptr;
+    jobject parent = window ? window->content : view->parent.kind == NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP ? static_cast<jobject>(view->parent.handle) : nullptr;
+    if (!parent) {
+        neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "An Android view needs a window or a ViewGroup of the application as its parent", 0, android_domain);
         return false;
     }
     try {
@@ -569,7 +619,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
             origins = string_array(env, rules);
         } else if (view->bridge_policy == NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW) origins = string_array(env, {"*"});
         jstring suffix = to_java(env, projected_suffix);
-        jobject host = env->CallStaticObjectMethod(host_class, host_create, static_cast<jobject>(view->parent.handle), reinterpret_cast<jlong>(view), origins, suffix);
+        jobject host = env->CallStaticObjectMethod(host_class, host_create, parent, reinterpret_cast<jlong>(view), origins, suffix);
         env->DeleteLocalRef(suffix);
         if (origins) env->DeleteLocalRef(origins);
         if (failed(env, view->environment->app, "The Android WebView could not be created") || !host) {
@@ -784,4 +834,126 @@ neoastra_result_t neo_android_platform_call(const std::string& service, const st
     } catch (...) {
         return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "The Android platform service call failed", 0, android_domain);
     }
+}
+
+namespace {
+jint argb(neoastra_color_t color) noexcept {
+    return static_cast<jint>((static_cast<uint32_t>(color.alpha) << 24) | (static_cast<uint32_t>(color.red) << 16) | (static_cast<uint32_t>(color.green) << 8) | color.blue);
+}
+android_window* window_state(neoastra_window_t* window) noexcept { return static_cast<android_window*>(window->platform); }
+}  // namespace
+
+bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window_options_t* options, neoastra_error_t** error) noexcept {
+    if (options->owner) { unsupported(error, "An owned window"); return false; }
+    JNIEnv* env = jni();
+    if (!env || !window_class) { not_ready(error); return false; }
+    try {
+        auto state = std::make_unique<android_window>();
+        jstring title = to_java(env, window->title);
+        jobject host = env->CallStaticObjectMethod(window_class, window_create, reinterpret_cast<jlong>(window), title, argb(window->background_color));
+        env->DeleteLocalRef(title);
+        if (failed(env, window->app, "The Android window could not be created") || !host) {
+            neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "No activity without a window is available", 0, android_domain);
+            return false;
+        }
+        state->host = env->NewGlobalRef(host);
+        env->DeleteLocalRef(host);
+        jobject content = env->CallObjectMethod(state->host, window_content);
+        if (!failed(env, window->app, "Could not read the content of the Android window") && content) {
+            state->content = env->NewGlobalRef(content);
+            env->DeleteLocalRef(content);
+        }
+        {
+            std::lock_guard lock(window->state_mutex);
+            window->state = NEOASTRA_WINDOW_NORMAL;
+        }
+        window->platform = state.release();
+        read_window_bounds(env, window, false);
+        if ((options->flags & 4u) == 0) {
+            env->CallVoidMethod(window_state(window)->host, window_set_visible, JNI_FALSE);
+            failed(env, window->app, "Could not hide the Android window");
+        }
+        return true;
+    } catch (...) {
+        neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "The Android window could not be created", 0, android_domain);
+        return false;
+    }
+}
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept {
+    auto* state = window_state(window);
+    if (!state) return;
+    if (JNIEnv* env = jni()) {
+        env->CallVoidMethod(state->host, window_destroy);
+        failed(env, window->app, "Could not release the Android window");
+        if (state->content) env->DeleteGlobalRef(state->content);
+        env->DeleteGlobalRef(state->host);
+    }
+    delete state;
+    window->platform = nullptr;
+}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* window, bool visible) noexcept {
+    auto* state = window_state(window);
+    JNIEnv* env = jni();
+    if (!state || !env) return NEOASTRA_ERROR_DISPOSED;
+    env->CallVoidMethod(state->host, window_set_visible, visible ? JNI_TRUE : JNI_FALSE);
+    return failed(env, window->app, "Could not show the Android window") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+}
+// The activity of a window is in the foreground whenever the user sees the window; an application cannot raise it.
+neoastra_result_t neo_platform_window_activate(neoastra_window_t* window) noexcept { return window_state(window) ? NEOASTRA_OK : NEOASTRA_ERROR_DISPOSED; }
+// The activity finishes, and its end reports the window closed.
+neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept {
+    auto* state = window_state(window);
+    JNIEnv* env = jni();
+    if (!state || !env) return NEOASTRA_ERROR_DISPOSED;
+    env->CallVoidMethod(state->host, window_close);
+    return failed(env, window->app, "Could not close the Android window") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept {
+    auto* state = window_state(window);
+    JNIEnv* env = jni();
+    if (!state || !env) return NEOASTRA_ERROR_DISPOSED;
+    std::string title;
+    {
+        std::lock_guard lock(window->state_mutex);
+        title = window->title;
+    }
+    jstring value = to_java(env, title);
+    env->CallVoidMethod(state->host, window_set_title, value);
+    env->DeleteLocalRef(value);
+    return failed(env, window->app, "Could not set the title of the Android window") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+}
+// A window fills its activity: the system, not the application, decides where it is and how large.
+neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_get_frame(neoastra_window_t* window, neoastra_rect_t* value) noexcept {
+    JNIEnv* env = jni();
+    if (!window_state(window) || !env) return NEOASTRA_ERROR_DISPOSED;
+    read_window_bounds(env, window, false);
+    std::lock_guard lock(window->state_mutex);
+    *value = window->bounds;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexcept {
+    std::lock_guard lock(window->state_mutex);
+    return window->state == NEOASTRA_WINDOW_NORMAL ? NEOASTRA_OK : NEOASTRA_ERROR_NOT_SUPPORTED;
+}
+neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t*, neoastra_window_attribute_t, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t*, neoastra_window_resize_edge_t) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t* window) noexcept {
+    auto* state = window_state(window);
+    JNIEnv* env = jni();
+    if (!state || !env) return NEOASTRA_ERROR_DISPOSED;
+    env->CallVoidMethod(state->host, window_set_background, argb(window->background_color));
+    return failed(env, window->app, "Could not set the background of the Android window") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t*, neoastra_title_bar_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept {
+    auto* state = window_state(window);
+    if (!state || !state->content) return NEOASTRA_ERROR_DISPOSED;
+    if (kind != NEOASTRA_NATIVE_HANDLE_ANDROID_VIEW_GROUP) return NEOASTRA_ERROR_NOT_SUPPORTED;
+    handle->value = state->content;
+    handle->kind = kind;
+    return NEOASTRA_OK;
 }
