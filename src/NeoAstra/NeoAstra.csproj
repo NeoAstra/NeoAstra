@@ -24,11 +24,13 @@
   <ItemGroup>
     <ProjectReference Include="..\NeoAstra.Core\NeoAstra.Core.csproj" />
     <ProjectReference Include="..\NeoAstra.Generator\NeoAstra.Generator.csproj" ReferenceOutputAssembly="false" />
-    <!-- Build the packaged tool through the normal acyclic graph without copying or referencing it. -->
+    <!-- Build the packaged tool through the normal acyclic graph without copying or referencing it. The tool runs on the
+         build machine, so it never takes the runtime identifier of the application, which can be one without an apphost. -->
     <ProjectReference Include="..\NeoAstra.Tool\NeoAstra.Tool.csproj"
                       ReferenceOutputAssembly="false"
                       Private="false"
-                      PrivateAssets="all" />
+                      PrivateAssets="all"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
   </ItemGroup>

@@ -211,6 +211,18 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void PackagedToolReference_DoesNotTakeTheRuntimeIdentifierOfTheApplication()
+    {
+        // An application built for a runtime identifier without an apphost, such as iossimulator-arm64, passes it as a global
+        // property; the tool runs on the build machine and must be built without it.
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "NeoAstra.csproj"));
+        var reference = project.Descendants("ProjectReference").Single(static item => ((string?)item.Attribute("Include"))?.EndsWith("NeoAstra.Tool.csproj", StringComparison.Ordinal) == true);
+        var removed = ((string?)reference.Attribute("GlobalPropertiesToRemove") ?? string.Empty).Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        CollectionAssert.Contains(removed, "RuntimeIdentifier");
+        CollectionAssert.Contains(removed, "SelfContained");
+    }
+
+    [TestMethod]
     public void CapabilityCommand_ResolvesMobilePlatformsAndRejectsUnknownOnes()
     {
         var root = Path.Combine(Path.GetTempPath(), "neoastra-capability-platforms-" + Guid.NewGuid().ToString("N"));
