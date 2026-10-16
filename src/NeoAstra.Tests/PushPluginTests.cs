@@ -125,6 +125,22 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public void Android_ReadsTheMessagesOfTheJavaService()
+    {
+        using var document = JsonDocument.Parse("""{"messageId":"0:17","payload":{"data":{"order":"42"},"notification":{"title":"Hello"}}}""");
+        var message = AndroidPush.Message(document.RootElement);
+        Assert.AreEqual("0:17", message.MessageId);
+        Assert.IsNull(message.ActionId);
+        using var payload = JsonDocument.Parse(message.Payload);
+        Assert.AreEqual("42", payload.RootElement.GetProperty("data").GetProperty("order").GetString());
+        using var empty = JsonDocument.Parse("{}");
+        Assert.AreEqual("{}", AndroidPush.Message(empty.RootElement).Payload);
+        // A desktop backend has no platform services to reach the Java service with.
+        Assert.ThrowsExactly<NotSupportedException>(() => AndroidPush.Call("launch", null));
+        Assert.IsNull(new AndroidPush().LaunchMessage);
+    }
+
+    [TestMethod]
     public void AppleNotifications_ReportTheNotificationsThatNeoAstraDidNotShow()
     {
         // The presenter of iOS and macOS owns the delegate of the notification center, so it is the one that reports them.

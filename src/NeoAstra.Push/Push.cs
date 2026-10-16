@@ -87,6 +87,7 @@ public static class NeoPush
     {
         ArgumentNullException.ThrowIfNull(notifications);
         if (OperatingSystem.IsIOS()) return IosPush.Create(notifications, dispatcher);
+        if (OperatingSystem.IsAndroid()) return new AndroidPush();
         return new UnsupportedPush("Push messages are not available on this platform yet.");
     }
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of an Android application that references Firebase Cloud Messaging: the provider adds the push
+     service to the platform services of NeoAstra when the process starts, and the messaging service receives the messages and
+     the tokens of Firebase. The application declares android.permission.POST_NOTIFICATIONS to show their notifications. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <provider
+        android:name="com.neoastra.push.NeoAstraPushInitializer"
+        android:authorities="${applicationId}.neoastra.push"
+        android:exported="false" />
+    <service
+        android:name="com.neoastra.push.NeoAstraPushMessagingService"
+        android:exported="false">
+      <intent-filter>
+        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
