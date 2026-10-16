@@ -60,6 +60,23 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public void ResolvingLinksReplacesALinkedDirectoryWithItsTarget()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-links-" + Guid.NewGuid().ToString("N"));
+        var target = Directory.CreateDirectory(Path.Combine(root, "real", "assets")).Parent!.FullName;
+        try
+        {
+            var link = Path.Combine(root, "linked");
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { Assert.Inconclusive("Symbolic links cannot be created here."); }
+            var resolved = NeoAppBuilder.ResolveLinks(Path.Combine(link, "assets"));
+            Assert.AreEqual(NeoAppBuilder.ResolveLinks(Path.Combine(target, "assets")), resolved);
+            Assert.IsFalse(resolved.Contains("linked", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public void CapabilityPlatformFollowsTheOperatingSystem()
     {
         var expected = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;

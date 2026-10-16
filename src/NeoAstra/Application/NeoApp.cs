@@ -445,12 +445,33 @@ public sealed class NeoAppBuilder
 
     private static string DefaultAssetsDirectory()
     {
+        // An iOS device installs an application under /var, a link to /private/var, and the resource provider refuses a root
+        // reached through a link.
+        if (OperatingSystem.IsIOS()) return ResolveLinks(Path.Combine(AppContext.BaseDirectory, "assets"));
         if (!OperatingSystem.IsAndroid()) return Path.Combine(AppContext.BaseDirectory, "assets");
         // The build packages the assets of the frontend in the neoastra folder of the APK assets.
         using var response = Desktop.AndroidPlatform.Call("assets", ("source", "neoastra"));
         return Desktop.AndroidPlatform.Status(response) == Desktop.NeoDesktopStatus.Success && Desktop.AndroidPlatform.Text(response, "path") is { } path
             ? path
             : throw new InvalidOperationException("The assets of the application are missing from its package.");
+    }
+
+    // The same path with every link among its directories replaced by its target, whose own links are resolved too.
+    internal static string ResolveLinks(string path) => ResolveLinks(path, 0);
+
+    private static string ResolveLinks(string path, int depth)
+    {
+        if (depth > 32) throw new IOException("The asset directory is reached through too many links.");
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? string.Empty;
+        var current = root;
+        foreach (var segment in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (NeoFileLinks.IsLink(current) && Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target)
+                current = ResolveLinks(target.FullName, depth + 1);
+        }
+        return current;
     }
 
     internal static NeoCapabilityPlatform CurrentPlatform() =>
