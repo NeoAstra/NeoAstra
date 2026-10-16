@@ -31,7 +31,7 @@
 @property(nonatomic, assign) const neo_custom_scheme_registration* registration;
 @end
 
-@interface NeoAstraDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
+@interface NeoAstraDelegate : NSObject <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property(nonatomic, assign) neoastra_view_t* nativeView;
 @end
 
@@ -142,9 +142,10 @@ void fail_scheme_task(id<WKURLSchemeTask> task, NSInteger code, NSString* messag
 
 // The public interface of WKNavigationAction has no user-gesture flag on iOS and no mouse button either, so a link that was
 // activated is reported without user initiation: a script can activate a link as well as a tap.
-uint64_t link_activation(WKNavigationAction* action) {
+// A link activates only when the user taps it, so an activated link is also a navigation that the user started.
+uint64_t link_activation(WKNavigationAction* action, uint64_t user_initiated) {
     const bool activated = action.navigationType == WKNavigationTypeLinkActivated;
-    return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED | (activated ? NEOASTRA_REQUEST_LINK_ACTIVATED : 0);
+    return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED | (activated ? NEOASTRA_REQUEST_LINK_ACTIVATED | user_initiated : 0);
 }
 // WKWebView names the reload and the history navigation of a submitted form with one type, which does not tell the kind.
 uint64_t navigation_kind(WKNavigationAction* action) {
@@ -153,6 +154,18 @@ uint64_t navigation_kind(WKNavigationAction* action) {
         case WKNavigationTypeReload: return NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD;
         case WKNavigationTypeFormResubmitted: return NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN;
         default: return NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT;
+    }
+}
+
+struct new_window_context { neoastra_view_t* view{}; std::string uri; };
+// The backend creates no popup view: an allowed new window loads in the view that asked for it.
+void new_window_decided(void* pointer, const neoastra_decision_response_t* response) noexcept {
+    @autoreleasepool {
+        std::unique_ptr<new_window_context> context(static_cast<new_window_context*>(pointer));
+        if (response->action != NEOASTRA_DECISION_ALLOW || response->target_view) return;
+        auto* state = static_cast<uikit_view*>(context->view->platform);
+        NSURL* url = [NSURL URLWithString:ns_string(context->uri)];
+        if (state && state->webview && url) [state->webview loadRequest:[NSURLRequest requestWithURL:url]];
     }
 }
 
@@ -353,8 +366,8 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     (void)webView;
     auto* view = self.nativeView;
     if (!view) { handler(WKNavigationActionPolicyCancel); return; }
-    // An action without a target frame asks for a window of its own, which this backend does not provide yet.
-    if (!action.targetFrame) { handler(WKNavigationActionPolicyCancel); return; }
+    // An action without a target frame asks for a new window: WebKit asks to create its view next, and that request decides.
+    if (!action.targetFrame) { handler(WKNavigationActionPolicyAllow); return; }
     const uint64_t kind = navigation_kind(action);
     if (neo_refuses_navigation(view, kind)) { handler(WKNavigationActionPolicyCancel); return; }
     std::string uri = utf8(action.request.URL.absoluteString);
@@ -363,10 +376,29 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     decision->completion = navigation_decided;
     decision->completion_context = new navigation_context{[handler copy], uri};
     decision->external_uri = uri;
-    const uint64_t flags = (action.targetFrame.isMainFrame ? NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME : 0) | link_activation(action) | kind;
+    const uint64_t flags = (action.targetFrame.isMainFrame ? NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME : 0) | link_activation(action, NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED) | kind;
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri, flags, 0, decision);
     neo_finish_decision_event(view, decision);
     decision->release();
+}
+// A link with a target or window.open asks for a new window. The host decides; a popup view is not created, so WebKit gets none.
+- (WKWebView*)webView:(WKWebView*)webView createWebViewWithConfiguration:(WKWebViewConfiguration*)configuration forNavigationAction:(WKNavigationAction*)action windowFeatures:(WKWindowFeatures*)features {
+    (void)webView;
+    (void)configuration;
+    (void)features;
+    auto* view = self.nativeView;
+    if (!view) return nil;
+    std::string uri = utf8(action.request.URL.absoluteString);
+    std::string name;
+    auto* decision = new neoastra_decision;
+    neo_configure_decision(decision, view, NEOASTRA_DECISION_NEW_WINDOW, NEOASTRA_DECISION_CANCEL);
+    decision->completion = new_window_decided;
+    decision->completion_context = new new_window_context{view, uri};
+    decision->external_uri = uri;
+    neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, link_activation(action, NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED), 0, decision);
+    neo_finish_decision_event(view, decision);
+    decision->release();
+    return nil;
 }
 - (void)webView:(WKWebView*)webView didStartProvisionalNavigation:(WKNavigation*)navigation {
     (void)navigation;
@@ -658,6 +690,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
                     return false;
                 }
                 state->webview.navigationDelegate = state->delegate;
+                state->webview.UIDelegate = state->delegate;
                 if (view->fill_parent) state->webview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
                 [state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
@@ -689,6 +722,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
         } @catch (NSException*) { }
         state->delegate.nativeView = nullptr;
         state->webview.navigationDelegate = nil;
+        state->webview.UIDelegate = nil;
         if (view->bridge_policy != NEOASTRA_BRIDGE_DISABLED)
             [state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];
         [state->webview removeFromSuperview];
