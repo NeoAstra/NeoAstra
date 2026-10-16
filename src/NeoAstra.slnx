@@ -43,4 +43,5 @@
   </Folder>
   <Project Path="NeoAstra.Core/NeoAstra.Core.csproj" />
   <Project Path="NeoAstra/NeoAstra.csproj" />
+  <Project Path="NeoAstra.Location/NeoAstra.Location.csproj" />
 </Solution>
