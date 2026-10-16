@@ -1338,6 +1338,20 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
     return NEOASTRA_OK;
 #endif
+#if defined(__ANDROID__)
+    // The Android backend reports what it implements. Custom schemes are served as projected HTTPS origins, which is a limit.
+    switch(capability){
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
+        case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
+        case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+        case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:
+            info->support=NEOASTRA_SUPPORT_LIMITED;break;
+        default:break;
+    }
+    info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
+    return NEOASTRA_OK;
+#endif
     switch(capability){
         case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
         case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
