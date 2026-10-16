@@ -11,11 +11,11 @@
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(TargetPlatformIdentifier)' == 'ios'">
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
     <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
     <TrimMode Condition="'$(Configuration)' == 'Release'">full</TrimMode>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
     <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
     <AndroidManifest>Platforms/Android/AndroidManifest.xml</AndroidManifest>
     <TrimMode>full</TrimMode>
@@ -23,10 +23,10 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <Compile Remove="Platforms/**" />
-    <Compile Include="Platforms/iOS/**/*.cs" Condition="'$(TargetPlatformIdentifier)' == 'ios'" />
-    <Compile Include="Platforms/Android/**/*.cs" Condition="'$(TargetPlatformIdentifier)' == 'android'" />
+    <Compile Include="Platforms/iOS/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'" />
+    <Compile Include="Platforms/Android/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />
   </ItemGroup>
-  <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
     <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
   </ItemGroup>
   <Import Project="../../../src/NeoAstra/Build/Sdk/NeoAstra.props" />
