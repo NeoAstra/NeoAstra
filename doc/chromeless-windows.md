@@ -162,7 +162,7 @@ engine default. Each property can also be set on its own; `null` keeps the engin
 | --- | --- | --- | --- | --- |
 | `AcceleratorKeys` | Find, print, reload, zoom, caret-browsing, and similar browser shortcuts | Switchable | Engine has none | Engine has none |
 | `ContextMenus` | The default context menu | Switchable | Switchable | Switchable |
-| `DevTools` | User access to DevTools | Switchable; on by default | Switchable; off by default | Switchable; off by default |
+| `DevTools` | User access to DevTools | Switchable; on by default | Off by default; Safari inspection on macOS 13.3+, local inspection best-effort | Switchable; off by default |
 | `ScriptDialogs` | The engine's own `alert`, `confirm`, `prompt`, and `beforeunload` dialogs | Switchable; on by default | Engine has none | Switchable; off by default |
 | `StatusBar` | The hovered-link status bubble | Switchable | Engine has none | Engine has none |
 | `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification, which is not part of `ZoomFactor`; on by default | Engine has none |
@@ -182,6 +182,51 @@ still receives `contextmenu` events when the default menu is off, so it can show
 The DevTools shortcut follows `DevTools` rather than `AcceleratorKeys`. With DevTools enabled, `F12`
 opens them on Windows (together with `Ctrl+Shift+I`) and on Linux even when every other browser
 shortcut is off. `NeoAstra.OpenDevTools()` opens them from application code on Windows and Linux.
+
+### macOS Web Inspector
+
+Inspection is an explicit, per-view opt-in. Neither a Debug build nor
+`NeoBrowserFeatures.ApplicationShell()` enables it. An application such as a developer tool can
+enable it after applying its own development or user permission policy:
+
+```csharp
+var features = NeoBrowserFeatures.ApplicationShell();
+features.DevTools = true; // Explicit host opt-in; do not enable unconditionally in production.
+var view = await environment.CreateWebViewAsync(
+    NeoAstraHost.FillWindow(window),
+    new NeoAstraOptions { BrowserFeatures = features });
+```
+
+On **macOS 13.3 and later**, this sets the public `WKWebView.inspectable` property. To inspect the
+running application:
+
+1. In Safari, enable its developer features in **Settings > Advanced** (called **Show features for
+   web developers**, or **Show Develop menu in menu bar** in older Safari versions).
+2. Open Safari's **Develop** menu and select the running application and its page under the submenu
+   for this Mac. The page title identifies the view.
+
+Safari's inspector works even when `ContextMenus` and `AcceleratorKeys` are `false`, as they are in
+the application-shell example. `DevTools = false` turns the public inspectable flag off; WebKit
+closes an active Safari inspection session. `null` keeps the engine default, which is off on macOS.
+The API minimum of macOS 13.3 does not lower the [packaged native runtime's OS requirements](platform-support.md).
+See [WebKit's inspection API announcement](https://webkit.org/blog/13936/enabling-the-inspection-of-web-content-in-apps/).
+
+For compatibility, NeoAstra also retains its existing best-effort local **Inspect Element** item.
+Set `ContextMenus = true` as well as `DevTools = true` to reach it by right-clicking the page; enabling
+DevTools does not override a host's disabled context menus, and a page can suppress its own context
+menu. This local item depends on WebKit's undocumented `developerExtrasEnabled` preference, not a
+public supported inspector API. It can vary or disappear with an OS update and is not a guarantee
+for Mac App Store distribution. Before macOS 13.3, only this best-effort local route exists. If the
+preference is unavailable on a newer system, public Safari inspection can still be enabled; the
+native setting call reports `NEOASTRA_ERROR_NOT_SUPPORTED` if it cannot turn local inspection off,
+rather than claiming complete revocation.
+
+**`⌥⌘I` is not a built-in WKWebView inspector shortcut.** WKWebView exposes no public inspector-opening
+method or responder action that an application can bind to an AppKit menu shortcut. AppKit's generic
+inspector actions refer to an application's own inspector UI, not Web Inspector. The local menu
+item's identifier and action are not public WebKit API either, so NeoAstra does not synthesize a menu
+or invoke private launch selectors to imitate Safari's shortcut. `NeoAstra.OpenDevTools()` therefore
+continues to throw `NotSupportedException` on macOS; use the context menu or Safari Develop instead.
 
 ### History navigation
 
@@ -250,9 +295,6 @@ await view.EvaluateScriptAsync($"location.replace({JsonSerializer.Serialize(targ
 That is a navigation of the page and has its limits: it needs a document that runs scripts, an engine
 refuses some addresses to a page that it takes from its host (Chromium does not let a page navigate
 its top-level document to a `data:` address), and nothing reports an address that was refused.
-WKWebView has no public way to open the Web Inspector, so on macOS it is reached through the context
-menu's Inspect Element item or Safari's Develop menu, and `OpenDevTools()` reports
-`NotSupportedException`.
 
 While `ScriptDialogs` is off, a JavaScript dialog is shown by nobody but the application: it reaches
 `NeoAstra.ScriptDialogRequested`, which answers it or shows a dialog of its own, and the page waits

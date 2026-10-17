@@ -217,6 +217,12 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_macos_zoom_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa")
     add_test(NAME neoastra_macos_zoom_tests COMMAND neoastra_macos_zoom_tests)
+    add_executable(neoastra_macos_devtools_tests native/tests/macos_devtools_tests.mm)
+    target_compile_options(neoastra_macos_devtools_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_devtools_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_devtools_tests COMMAND neoastra_macos_devtools_tests)
+    set_tests_properties(neoastra_macos_devtools_tests PROPERTIES TIMEOUT 90)
   elseif(UNIX)
     add_executable(neoastra_linux_backend_tests native/tests/linux_backend_tests.cpp)
     target_link_libraries(neoastra_linux_backend_tests PRIVATE

@@ -39,7 +39,7 @@ assuming that every browser engine supports every portable event.
 | Origin of a permission request (`NeoPermissionRequest.Origin`) | The document that asks | The top document of the view | The page of the view for a microphone or a camera; none for the other kinds |
 | User action of a permission request (`NeoPermissionRequest.IsUserInitiated`) | Reported by the engine | Not exposed; always `false` | Not exposed; always `false` |
 | Permission answer kept for the origin (`NeoPermissionRequest.CanPersist`) | Available | Not exposed; every document is asked | Not exposed; every document is asked |
-| DevTools from `F12` or `OpenDevTools()` | Available | Not exposed; use the context menu or Safari | Available |
+| DevTools from a keyboard shortcut or `OpenDevTools()` | Available | No public launch API; [opt in to the context menu or Safari Develop](chromeless-windows.md#macos-web-inspector) | Available |
 | Capture of the viewport or a region of it (`CaptureAsync`) | Available; the view must be visible | Available | Available |
 | Capture of the whole document (`NeoCaptureOptions.FullPage`) | Available; each side is limited to 16,384 CSS pixels at a zoom of 100 percent, and to as many divided by the zoom in a zoomed view | Not exposed | Available |
 | Reload that leaves the cache out (`Reload(true)`) | Available through the DevTools protocol | Available | Available |
