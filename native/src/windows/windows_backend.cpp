@@ -596,7 +596,17 @@ bool register_download_events(neoastra_download_t* download) noexcept {
     return false;
 }
 
-struct download_decision_context { ComPtr<ICoreWebView2DownloadStartingEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; neoastra_download_t* download{}; };
+struct download_decision_context {
+    // Shutdown can release the lifecycle reference before the view abandons its
+    // deferred decision. Keep the download through completion and COM cleanup.
+    neo_retain_guard download_owner;
+    ComPtr<ICoreWebView2DownloadStartingEventArgs> args;
+    ComPtr<ICoreWebView2Deferral> deferral;
+    neoastra_download_t* download;
+
+    explicit download_decision_context(neoastra_download_t* value) noexcept
+        : download_owner(value), download(value) { }
+};
 void download_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {
     auto* download=static_cast<download_decision_context*>(pointer)->download;
     neo_retain_guard owner(download);
@@ -1130,7 +1140,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                 LPWSTR raw_uri{},raw_mime{},raw_disposition{};INT64 total{-1};operation->get_Uri(&raw_uri);operation->get_MimeType(&raw_mime);operation->get_ContentDisposition(&raw_disposition);operation->get_TotalBytesToReceive(&total);
                  download->source_uri=take_string(raw_uri);download->total_bytes.store(total<0?UINT64_MAX:static_cast<uint64_t>(total));download->destination_path=take_string(raw_path);download->can_pause=true;raw_path=nullptr;
                 auto mime=take_string(raw_mime);auto disposition=take_string(raw_disposition);auto suggested=download->destination_path;const auto slash=suggested.find_last_of("/\\");if(slash!=std::string::npos)suggested.erase(0,slash+1);
-                auto context=std::make_unique<download_decision_context>();context->args=args;context->deferral=deferral;context->download=download;
+                auto context=std::make_unique<download_decision_context>(download);context->args=args;context->deferral=deferral;
                 auto decision_guard=std::make_unique<neoastra_decision>();auto* decision=decision_guard.get();neo_configure_decision(decision,view,NEOASTRA_DECISION_DOWNLOAD_REQUEST,NEOASTRA_DECISION_CANCEL);decision->completion=download_decided;decision->completion_context=context.release();download_guard.release();decision_guard.release();
                 neo_event_details details{};details.text2=&mime;details.text3=&disposition;details.value2=1;details.download=download;download->event_published=true;
                 neo_retain_guard download_owner(download);
