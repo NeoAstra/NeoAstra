@@ -81,7 +81,27 @@ internal sealed unsafe partial class MacTrayPresenter(NeoCommandService commands
 
     private void StatusActivated(nint sender)
     {
-        if (!_buttons.TryGetValue(sender, out var id) || !_entries.TryGetValue(id, out var entry)) return; var app = Native.Send(Native.GetClass("NSApplication"), Native.GetSelector("sharedApplication")); var currentEvent = Native.Send(app, Native.GetSelector("currentEvent")); var secondary = currentEvent != 0 && Native.SendLong(currentEvent, Native.GetSelector("buttonNumber")) == 1; try { Activated?.Invoke(id, secondary); } catch { } if (entry.Menu != 0) Native.SendVoidArg(entry.Item, Native.GetSelector("popUpStatusItemMenu:"), entry.Menu);
+        if (_disposed || !_buttons.TryGetValue(sender, out var id) || !_entries.TryGetValue(id, out var entry)) return;
+        var app = Native.Send(Native.GetClass("NSApplication"), Native.GetSelector("sharedApplication"));
+        var currentEvent = Native.Send(app, Native.GetSelector("currentEvent"));
+        var secondary = currentEvent != 0 && Native.SendLong(currentEvent, Native.GetSelector("buttonNumber")) == 1;
+        try { Activated?.Invoke(id, secondary); } catch { }
+        // A synchronous handler may retire this entry, even by recreating the same ID.
+        if (_disposed || !_entries.TryGetValue(id, out var current) || !ReferenceEquals(current, entry) || entry.Menu == 0) return;
+
+        // AppKit tracks the popup in a nested loop. Keep the native objects alive if that loop removes,
+        // replaces, or disposes the entry; retaining the managed Entry alone does not retain its pointers.
+        var target = _target;
+        Native.SendVoid(entry.Item, Native.GetSelector("retain"));
+        Native.SendVoid(entry.Menu, Native.GetSelector("retain"));
+        Native.SendVoid(target, Native.GetSelector("retain"));
+        try { Native.SendVoidArg(entry.Item, Native.GetSelector("popUpStatusItemMenu:"), entry.Menu); }
+        finally
+        {
+            Native.SendVoid(entry.Item, Native.GetSelector("release"));
+            Native.SendVoid(entry.Menu, Native.GetSelector("release"));
+            Native.SendVoid(target, Native.GetSelector("release"));
+        }
     }
     private void MenuActivated(nint sender) { if (!_menuActions.TryGetValue(sender, out var action) || action.CommandId is null) return; try { _ = commands.ActivateAsync(action.CommandId); } catch { } }
 

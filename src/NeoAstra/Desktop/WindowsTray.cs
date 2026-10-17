@@ -14,10 +14,12 @@ internal sealed unsafe partial class WindowsTrayPresenter(NeoCommandService comm
     private static readonly ConcurrentDictionary<nint, WindowsTrayPresenter> Presenters = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<uint, string> _ids = [];
+    private readonly List<Entry> _retiredEntries = [];
     private NeoDispatcher? _dispatcher = dispatcher;
     private NeoApplication? _application;
     private nint _window, _previousProcedure;
     private uint _nextId;
+    private int _popupDepth;
     private bool _disposed;
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0, "Native Windows notification-area icons with atomic update, tooltips up to the native 127 UTF-16-unit limit, ICO policy, popup menus, ordered primary/secondary activation, and deterministic teardown. Role behavior is native, but Win32 has no reliable complete localized role-label set, so role labels must be supplied by the application. Template-image intent is rejected because Windows has no equivalent policy; reliable bounds and a distinct attention semantic are unavailable through Shell_NotifyIcon.");
@@ -56,13 +58,35 @@ internal sealed unsafe partial class WindowsTrayPresenter(NeoCommandService comm
 
     private void Receive(uint nativeId, uint message)
     {
-        if (!_ids.TryGetValue(nativeId, out var id) || !_entries.TryGetValue(id, out var entry)) return;
+        if (_disposed || !_ids.TryGetValue(nativeId, out var id) || !_entries.TryGetValue(id, out var entry)) return;
         if (message is 0x0202 or 0x0203 or 0x0400 or 0x0401) Raise(id, false);
         else if (message is 0x0205 or 0x007B)
         {
-            Raise(id, true); if (entry.Menu != 0) { Native.GetCursorPos(out var point); Native.SetForegroundWindow(_window); var command = Native.TrackPopupMenu(entry.Menu, 0x100 | 0x2, point.X, point.Y, 0, _window, 0); if (command != 0 && entry.Actions.TryGetValue(command, out var action)) Activate(action); }
+            Raise(id, true);
+            if (!IsCurrentEntry(id, entry) || entry.Menu == 0) return;
+            // TrackPopupMenu pumps messages: retire menus and the callback HWND only after all popup loops exit.
+            _popupDepth++;
+            try
+            {
+                Native.GetCursorPos(out var point);
+                Native.SetForegroundWindow(_window);
+                if (!IsCurrentEntry(id, entry)) return;
+                var command = Native.TrackPopupMenu(entry.Menu, 0x100 | 0x2, point.X, point.Y, 0, _window, 0);
+                if (IsCurrentEntry(id, entry) && command != 0 && entry.Actions.TryGetValue(command, out var action)) Activate(action);
+            }
+            finally
+            {
+                if (--_popupDepth == 0)
+                {
+                    foreach (var retired in _retiredEntries) ReleaseResources(retired);
+                    _retiredEntries.Clear();
+                    if (_disposed) DestroyCallbackWindow();
+                }
+            }
         }
     }
+
+    private bool IsCurrentEntry(string id, Entry entry) => !_disposed && _entries.TryGetValue(id, out var current) && ReferenceEquals(current, entry);
 
     private void Activate(ActionItem action)
     {
@@ -104,14 +128,16 @@ internal sealed unsafe partial class WindowsTrayPresenter(NeoCommandService comm
     }
     private NotifyIconData CreateData(uint id, NeoTrayItemOptions options, nint icon) { var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Window = _window, Id = id, Flags = 0x1 | 0x2 | 0x4, CallbackMessage = CallbackMessage, Icon = icon }; Copy(options.ToolTip ?? string.Empty, data.Tip, 128); return data; }
     private static void Copy(string value, char* output, int capacity) { var length = Math.Min(value.Length, capacity - 1); value.AsSpan(0, length).CopyTo(new Span<char>(output, capacity)); output[length] = '\0'; }
-    private void DestroyResources(Entry entry) { if (entry.Menu != 0) Native.DestroyMenu(entry.Menu); if (entry.OwnedIcon && entry.Icon != 0) Native.DestroyIcon(entry.Icon); }
+    private void DestroyResources(Entry entry) { if (_popupDepth != 0) { _retiredEntries.Add(entry); return; } ReleaseResources(entry); }
+    private static void ReleaseResources(Entry entry) { if (entry.Menu != 0) Native.DestroyMenu(entry.Menu); if (entry.OwnedIcon && entry.Icon != 0) Native.DestroyIcon(entry.Icon); }
     private uint NextId() { do _nextId = unchecked(_nextId + 1); while (_nextId == 0 || _ids.ContainsKey(_nextId)); return _nextId; }
 
     private void EnsureWindow()
     {
         if (_window != 0) return; _window = Native.CreateWindowEx(0, "STATIC", string.Empty, 0, 0, 0, 0, 0, -3, 0, 0, 0); if (_window == 0) throw new InvalidOperationException("Unable to create a tray callback window."); _previousProcedure = Native.SetWindowLongPtr(_window, -4, (nint)(delegate* unmanaged[Stdcall]<nint, uint, nuint, nint, nint>)&WindowProcedure); if (_previousProcedure == 0) { Native.DestroyWindow(_window); _window = 0; throw new InvalidOperationException("Unable to attach the tray callback window procedure."); } Presenters[_window] = this;
     }
-    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; foreach (var entry in _entries.Values) { var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Window = _window, Id = entry.NativeId }; Native.ShellNotifyIcon(NimDelete, &data); DestroyResources(entry); } _entries.Clear(); _ids.Clear(); if (_window != 0) { Presenters.TryRemove(_window, out _); if (_previousProcedure != 0) Native.SetWindowLongPtr(_window, -4, _previousProcedure); Native.DestroyWindow(_window); _window = 0; _previousProcedure = 0; } }
+    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; Activated = null; foreach (var entry in _entries.Values) { var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Window = _window, Id = entry.NativeId }; Native.ShellNotifyIcon(NimDelete, &data); DestroyResources(entry); } _entries.Clear(); _ids.Clear(); if (_popupDepth == 0) DestroyCallbackWindow(); }
+    private void DestroyCallbackWindow() { if (_window == 0) return; Presenters.TryRemove(_window, out _); if (_previousProcedure != 0) Native.SetWindowLongPtr(_window, -4, _previousProcedure); Native.DestroyWindow(_window); _window = 0; _previousProcedure = 0; }
     private void EnsureAccess() { var value = _dispatcher ?? throw new InvalidOperationException("The tray presenter is not bound to the UI dispatcher."); if (!value.CheckAccess()) throw new InvalidOperationException("Native tray mutations require the NeoAstra UI dispatcher."); }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])] private static nint WindowProcedure(nint window, uint message, nuint wParam, nint lParam) { try { if (Presenters.TryGetValue(window, out var presenter)) { if (message == CallbackMessage) { presenter.Receive((uint)wParam, unchecked((uint)lParam)); return 0; } if (presenter._previousProcedure != 0) return Native.CallWindowProc(presenter._previousProcedure, window, message, wParam, lParam); } } catch { } return Native.DefWindowProc(window, message, wParam, lParam); }

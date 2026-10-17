@@ -26,6 +26,8 @@ Plugin IDs and dependencies are validated and topologically sorted with ordinal 
 
 `NeoPluginOwner` identifies application, window, view, session, or resource ownership. Track native registrations through `NeoPluginContext.TrackAsync` so shortcuts, tray items, callbacks, and broker tokens cannot outlive their owner.
 
+On macOS and Windows, tray activation handlers run before native menu presentation. If a handler removes or replaces that item (including removal followed by recreation of the same ID), or disposes the tray service, that activation does not open a menu. Otherwise the existing platform popup policy is unchanged: macOS opens the menu for primary or secondary activation; Windows opens it for secondary activation. Resources used by a popup stay alive until its native tracking loop returns, even if nested dispatcher work removes/replaces the item or disposes the service. Retired menu command-ID callbacks are ignored.
+
 ## Platform support
 
 Support is reported per service through `NeoCapabilityInfo`; callers must not infer support from OS name. `None` and `Limited` are expected outcomes and never cause an insecure plaintext or unrestricted fallback.
@@ -73,6 +75,8 @@ Headless Linux commonly reports clipboard, notification, tray-host, shortcut, an
 `NeoSafeStorage.CreateSystem` accepts a stable application namespace and an absolute private data directory. Windows persists only DPAPI-protected bytes and zeroes temporary protected/native buffers. macOS uses binary-safe Security.framework calls and zeroes Keychain-owned retrieved bytes before freeing them. Linux passes base64 secret bytes over redirected standard input to Secret Service and zeroes encoded/captured buffers. Retrieval returns an owned byte array; applications should zero it with `CryptographicOperations.ZeroMemory` as soon as possible.
 
 ## Testing
+
+`TrayActivationTests` exercises the production macOS and Windows presenter sources with a recording native boundary, without an interactive desktop. It covers handler-triggered removal, replacement, same-ID recreation, service disposal, and mutations inside popup tracking, including resource release and rejection of stale commands. These deterministic lifetime regressions supplement rather than replace native desktop-session conformance.
 
 `WindowsMenuTests` exercises repeated window-menu show/hide requests through browser RPC with an active WebView2, checks the actual Win32 menu attachment, and closes the window while the menu is still visible. This is fresh-session baseline coverage, not coverage of every preceding interaction in the advanced sample.
 
