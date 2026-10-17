@@ -91,16 +91,13 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   (`native/src/windows/windows_backend.cpp`). `NeoWindowStateController` leaves such bounds out. To
   decide: whether the backend keeps reporting the bounds that the window goes back to while it is
   minimized.
-- **Linux: a download may be reported once for each environment that shares its session.** The GTK
-  backend connects a download handler to the network session of every environment it creates
-  (`neo_platform_environment_create_async` in `native/src/linux/gtk_backend.cpp`). Environments of one
-  process share a session when they are on the same `UserDataRoot` or have none, so a download from a
-  view of that session is expected to reach `download_started` once for each of them, and
-  `DownloadRequested` and the download events to be raised more than once for it. This follows from
-  the source and has not been reproduced. To do: reproduce it in `native/tests/linux_backend_tests.cpp`
-  with two environments on one root and one download, then connect the handler once for each session,
-  still canceling the downloads of views that NeoAstra does not own only while an environment uses
-  that session. Until then, create one environment for each root in a process.
+- **Linux: shared-session download tracking needs target-host validation.** The 2026-10-17 source
+  change tags each native download before creating its tracked lifecycle, so handlers of environments
+  that share a network session cannot publish it more than once. `native/tests/linux_download_tests.cpp`
+  includes two environments on one root and one download. The GTK backend and this regression were not
+  compiled or run on the macOS development host; run the Linux native tests before treating the fix as
+  runtime-qualified. Downloads from views that NeoAstra does not own are still canceled while an
+  environment uses that session.
 - **Linux: applications without a root share one default session.** A NeoAstra host has no GLib
   program name, so WebKitGTK keeps the default session of every such application in the same
   `webkitgtk` directories and keeps its cookies in memory; see

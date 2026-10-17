@@ -280,10 +280,26 @@ void test_retained_history_list_detaches_when_the_widget_dies_first(neoastra_app
     neoastra_environment_release(environment);
 }
 
+void NEOASTRA_CALL approve_retained_window_close(void* context, const neoastra_event_t* event) {
+    if (event->header.type == NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED) {
+        neoastra_decision_response_t response{};
+        response.size = sizeof(response);
+        response.version = 1;
+        response.action = NEOASTRA_DECISION_ALLOW;
+        assert(neoastra_decision_complete(event->decision, &response, nullptr) == NEOASTRA_OK);
+    } else if (event->header.type == NEOASTRA_EVENT_WINDOW_CLOSED) {
+        *static_cast<bool*>(context) = true;
+    }
+}
+
 void test_retained_closed_window_does_not_write_to_freed_backend_state(neoastra_app_t* app) {
     auto* window = create_window(app);
     auto* native = GTK_WINDOW(g_object_ref(gtk_window(window)));
+    bool closed{};
+    assert(neoastra_app_set_event_callback(app, approve_retained_window_close, &closed) == NEOASTRA_OK);
     assert(neoastra_window_close(window) == NEOASTRA_OK);
+    assert(closed);
+    assert(neoastra_app_set_event_callback(app, nullptr, nullptr) == NEOASTRA_OK);
     assert(!g_signal_handler_find(native, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, window));
     neoastra_window_release(window);
     // Weak pointers must be unregistered before freeing gtk_window, even if a host retains the closed native window.
