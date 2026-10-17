@@ -28,6 +28,8 @@ Plugin IDs and dependencies are validated and topologically sorted with ordinal 
 
 On macOS and Windows, tray activation handlers run before native menu presentation. If a handler removes or replaces that item (including removal followed by recreation of the same ID), or disposes the tray service, that activation does not open a menu. Otherwise the existing platform popup policy is unchanged: macOS opens the menu for primary or secondary activation; Windows opens it for secondary activation. Resources used by a popup stay alive until its native tracking loop returns, even if nested dispatcher work removes/replaces the item or disposes the service. Retired menu command-ID callbacks are ignored.
 
+Windows context-menu tracking likewise keeps retired native menus alive until the outermost tracking loop returns. Removal, replacement, service disposal, or owner closure during tracking prevents the retired menu's returned selection from dispatching. The owner HWND remains application-owned: the menu presenter neither keeps a closed window alive nor destroys it.
+
 ## Platform support
 
 Support is reported per service through `NeoCapabilityInfo`; callers must not infer support from OS name. `None` and `Limited` are expected outcomes and never cause an insecure plaintext or unrestricted fallback.
@@ -77,6 +79,8 @@ Headless Linux commonly reports clipboard, notification, tray-host, shortcut, an
 ## Testing
 
 `TrayActivationTests` exercises the production macOS and Windows presenter sources with a recording native boundary, without an interactive desktop. It covers handler-triggered removal, replacement, same-ID recreation, service disposal, and mutations inside popup tracking, including resource release and rejection of stale commands. These deterministic lifetime regressions supplement rather than replace native desktop-session conformance.
+
+`ContextMenuActivationTests` uses the same recording boundary for Windows context-menu tracking, including owner closure, nested popups, exception cleanup, and unchanged live-menu selection. Native HWND discovery is stubbed separately; real window/view binding remains covered by the desktop-session fixtures.
 
 `WindowsMenuTests` exercises repeated window-menu show/hide requests through browser RPC with an active WebView2, checks the actual Win32 menu attachment, and closes the window while the menu is still visible. This is fresh-session baseline coverage, not coverage of every preceding interaction in the advanced sample.
 

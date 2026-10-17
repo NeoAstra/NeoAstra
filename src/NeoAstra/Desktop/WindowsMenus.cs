@@ -19,11 +19,13 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
     private static long s_nextSubclassId;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<nint, AttachedWindow> _windows = [];
+    private readonly List<nint> _retiredMenus = [];
     private NeoDispatcher? _dispatcher = dispatcher;
     private NeoApplication? _application;
     private nuint _subclassId;
     private uint _hookThread;
     private long _generation;
+    private int _popupDepth;
     private bool _disposed;
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0, "Native Win32 application/window menu bars and context menus, focused-control edit/window roles, local key accelerators, generation-safe callbacks, deterministic HWND teardown, and window-scope override/fallback when Win32's single menu bar also has an application menu. Win32 exposes no reliable complete localized label set for these roles, so role labels must be supplied by the application.");
@@ -63,9 +65,23 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
         if (!_entries.TryGetValue(targetId, out var entry) || entry.Target.Kind != TargetKind.Context) return NeoDesktopStatus.NotFound;
         var window = entry.Target.Window; if (window == 0 || !Native.IsWindow(window)) return NeoDesktopStatus.NotFound;
         var point = new Point { X = position.X, Y = position.Y }; if (!Native.ClientToScreen(window, &point)) return NeoDesktopStatus.Failed;
-        var command = Native.TrackPopupMenu(entry.Menu, TpmReturnCommand | TpmRightButton, point.X, point.Y, 0, window, 0);
-        if (command != 0) Activate(entry, command, window);
-        return NeoDesktopStatus.Success;
+        // Nested dispatcher work can retire this menu while Win32 still tracks it. The owner HWND
+        // belongs to the application, so preserve only the HMENU and revalidate the owner on return.
+        _popupDepth++;
+        try
+        {
+            var command = Native.TrackPopupMenu(entry.Menu, TpmReturnCommand | TpmRightButton, point.X, point.Y, 0, window, 0);
+            if (command != 0 && Native.IsWindow(window)) Activate(entry, command, window);
+            return NeoDesktopStatus.Success;
+        }
+        finally
+        {
+            if (--_popupDepth == 0)
+            {
+                foreach (var retired in _retiredMenus) _ = Native.DestroyMenu(retired);
+                _retiredMenus.Clear();
+            }
+        }
     }
 
     public ValueTask DisposeAsync()
@@ -96,8 +112,10 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
             if (detach && Native.IsWindow(entry.Target.Window)) ApplyPreferred(entry.Target.Window);
             ReleaseWindow(entry.Target.Window);
         }
-        if (entry.Menu != 0) _ = Native.DestroyMenu(entry.Menu);
+        DestroyMenu(entry.Menu);
     }
+
+    private void DestroyMenu(nint menu) { if (menu == 0) return; if (_popupDepth != 0) { _retiredMenus.Add(menu); return; } _ = Native.DestroyMenu(menu); }
 
     private void ReleaseWindow(nint window)
     {
@@ -200,7 +218,7 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
 
     private static nint WindowHandle(NeoWindow window) => window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
     private void EnsureAccess() { var value = _dispatcher ?? throw new InvalidOperationException("The native menu presenter is not bound to a UI dispatcher."); if (!value.CheckAccess()) throw new InvalidOperationException("Native menu presenter mutations require the NeoAstra UI dispatcher."); }
-    private void OwnerDestroyed(nint window) { _windows.Remove(window); foreach (var id in _entries.Where(pair => pair.Value.Target.Window == window).Select(static pair => pair.Key).ToArray()) { if (_entries.Remove(id, out var entry) && entry.Menu != 0) _ = Native.DestroyMenu(entry.Menu); } if (_windows.Count == 0 && _subclassId != 0) { Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); } }
+    private void OwnerDestroyed(nint window) { _windows.Remove(window); foreach (var id in _entries.Where(pair => pair.Value.Target.Window == window).Select(static pair => pair.Key).ToArray()) { if (_entries.Remove(id, out var entry)) DestroyMenu(entry.Menu); } if (_windows.Count == 0 && _subclassId != 0) { Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); } }
     private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; foreach (var entry in _entries.Values.ToArray()) Destroy(entry, true); _entries.Clear(); foreach (var window in _windows.Keys.ToArray()) ReleaseWindow(window); if (_subclassId != 0) Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); }
 
     private void EnsureKeyboardHook()

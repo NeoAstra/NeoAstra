@@ -18,6 +18,8 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
     private readonly MethodInfo _receive;
     private readonly bool _mac;
 
+    internal static Assembly PresenterAssembly => Presenters.Value;
+
     internal TrayPresenterFixture(bool mac)
     {
         _mac = mac;
@@ -62,21 +64,30 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
     {
         var trees = new List<SyntaxTree>
         {
-            CSharpSyntaxTree.ParseText("global using System; global using System.Collections.Generic; global using System.IO; global using System.Linq; global using System.Threading.Tasks;"),
+            CSharpSyntaxTree.ParseText("global using System; global using System.Collections.Generic; global using System.IO; global using System.Linq; global using System.Threading; global using System.Threading.Tasks;"),
             CSharpSyntaxTree.ParseText(NativeSource),
         };
-        foreach (var platform in new[] { "Mac", "Windows" })
+        foreach (var file in new[] { "MacTray", "WindowsTray", "WindowsMenus" })
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
-            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra", "Desktop", platform + "Tray.cs"))) directory = directory.Parent;
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra", "Desktop", file + ".cs"))) directory = directory.Parent;
             Assert.IsNotNull(directory, "The native lifetime regression needs the presenter source checkout.");
-            var root = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(directory.FullName, "src", "NeoAstra", "Desktop", platform + "Tray.cs"))).GetRoot();
+            var root = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(directory.FullName, "src", "NeoAstra", "Desktop", file + ".cs"))).GetRoot();
+            if (file == "WindowsMenus")
+            {
+                // HWND discovery belongs to NeoWindow/native core, not the menu lifetime under test.
+                var resolve = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(static node => node.Identifier.ValueText == "ResolveTarget");
+                root = root.ReplaceNode(resolve, resolve.WithBody((BlockSyntax)SyntaxFactory.ParseStatement("{ return new(id, TargetKind.Context, global::NeoAstra.Desktop.Tray.TrayTestNative.ContextWindow); }")));
+            }
             var native = root.DescendantNodes().OfType<ClassDeclarationSyntax>().Single(static node => node.Identifier.ValueText == "Native");
             var replacement = native.WithMembers(SyntaxFactory.List<MemberDeclarationSyntax>(native.Members.OfType<MethodDeclarationSyntax>().Select(method =>
                 method.WithAttributeLists(default)
                     .WithModifiers(SyntaxFactory.TokenList(method.Modifiers.Where(static token => !token.IsKind(SyntaxKind.PartialKeyword))))
                     .WithExpressionBody(null).WithSemicolonToken(default)
-                    .WithBody((BlockSyntax)SyntaxFactory.ParseStatement(NativeBody(platform, method.Identifier.ValueText))))));
+                    .WithBody((BlockSyntax)SyntaxFactory.ParseStatement(NativeBody(file.StartsWith("Mac", StringComparison.Ordinal) ? "Mac" : "Windows", method.Identifier.ValueText))))));
+            // The shared recording boundary lives beside the tray presenters.
+            replacement = replacement.ReplaceNodes(replacement.DescendantNodes().OfType<IdentifierNameSyntax>().Where(static node => node.Identifier.ValueText == "TrayTestNative"),
+                static (_, _) => SyntaxFactory.ParseName("global::NeoAstra.Desktop.Tray.TrayTestNative"));
             trees.Add(CSharpSyntaxTree.Create((CSharpSyntaxNode)root.ReplaceNode(native, replacement)));
         }
 
@@ -111,6 +122,8 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
         ("Windows", "AppendMenu") => "{ return true; }",
         ("Windows", "DestroyMenu" or "DestroyWindow" or "DestroyIcon") => "{ TrayTestNative.Release(" + (method == "DestroyMenu" ? "menu" : method == "DestroyWindow" ? "window" : "icon") + "); return true; }",
         ("Windows", "GetCursorPos") => "{ point = default; return true; }",
+        ("Windows", "ClientToScreen") => "{ return true; }",
+        ("Windows", "IsWindow") => "{ return TrayTestNative.References.GetValueOrDefault(window) > 0; }",
         ("Windows", "SetForegroundWindow") => "{ TrayTestNative.Check(window); return true; }",
         ("Windows", "TrackPopupMenu") => "{ TrayTestNative.Popup(menu, window, 0); return 100; }",
         _ => "{ throw new NotSupportedException(\"Unexpected native call: " + method + "\"); }",
@@ -126,16 +139,17 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
             private static readonly Dictionary<nint, List<nint>> Children = [];
             private static nint _next;
             private static nint _target;
-            public static nint Button, MenuItem;
+            public static nint Button, MenuItem, ContextWindow;
             public static uint NativeId;
             public static bool Secondary;
+            public static bool OwnerCanClose;
             public static int PopupCount;
             public static Action? DuringPopup;
 
             public static void Reset()
             {
                 References.Clear(); Violations.Clear(); Names.Clear(); Children.Clear();
-                _next = 100; _target = Button = MenuItem = 0; NativeId = 0; Secondary = true; PopupCount = 0; DuringPopup = null;
+                _next = 100; _target = Button = MenuItem = ContextWindow = 0; NativeId = 0; Secondary = true; OwnerCanClose = false; PopupCount = 0; DuringPopup = null;
             }
             public static nint Name(string name)
             {
@@ -178,7 +192,7 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
                 PopupCount++;
                 Check(menu); Check(owner); Check(target);
                 DuringPopup?.Invoke();
-                Check(menu); Check(owner); Check(target);
+                Check(menu); if (!OwnerCanClose) Check(owner); Check(target);
             }
         }
         """;
