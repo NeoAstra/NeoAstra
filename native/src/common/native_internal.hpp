@@ -420,6 +420,10 @@ struct neoastra_window final : neo_ui_ref_counted {
     explicit neoastra_window(neoastra_app_t* value) : neo_ui_ref_counted(value, 1), app(value) { }
     ~neoastra_window() override;
     void destroy_ui() noexcept override;
+
+private:
+    void unregister() noexcept;
+    void on_zero_references() noexcept override;
 };
 
 struct neoastra_view final : neo_ui_ref_counted {

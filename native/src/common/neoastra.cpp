@@ -193,7 +193,20 @@ neoastra_window::~neoastra_window() {
     destroy_ui_once();
     if (owner) owner->release();
 }
+void neoastra_window::unregister() noexcept {
+    std::lock_guard lock(app->windows_mutex);
+    const auto found = app->windows.find(id);
+    if (found != app->windows.end() && found->second == this) app->windows.erase(found);
+}
+void neoastra_window::on_zero_references() noexcept {
+    // Lookups retain under the same lock. Remove the weak entry before storage
+    // can be deleted, including when platform destruction must wait for the UI.
+    unregister();
+    neo_ui_ref_counted::on_zero_references();
+}
 void neoastra_window::destroy_ui() noexcept {
+    // Shutdown can destroy the platform window while callers still own handles.
+    unregister();
     if (pending_close) {
         auto* decision = pending_close;
         pending_close = nullptr;
@@ -895,7 +908,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t* app,c
     }catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}
 }
 uint64_t NEOASTRA_CALL neoastra_app_get_window_count(const neoastra_app_t* app){if(!app)return 0;std::lock_guard lock(const_cast<neoastra_app_t*>(app)->windows_mutex);return app->windows.size();}
-neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_app_t* app,uint64_t id,neoastra_window_t** output){if(output)*output=nullptr;if(!app||!output)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(app->windows_mutex);auto found=app->windows.find(id);if(found==app->windows.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;found->second->retain();*output=found->second;return NEOASTRA_OK;}
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_app_t* app,uint64_t id,neoastra_window_t** output){if(output)*output=nullptr;if(!app||!output)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(app->windows_mutex);auto found=app->windows.find(id);if(found==app->windows.end()||!found->second->retain())return NEOASTRA_ERROR_INVALID_ARGUMENT;*output=found->second;return NEOASTRA_OK;}
 
 uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t* w){return w?w->id:0;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t* w,neoastra_rect_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->bounds;return NEOASTRA_OK;}

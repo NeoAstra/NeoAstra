@@ -44,6 +44,11 @@ No new window is accepted once quit negotiation starts. A canceled normal negoti
 
 Directly closing an owner snapshots its current descendant tree, preflights that snapshot child-first, rejects descendants created under that tree during negotiation, and, only after every request is approved, explicitly closes descendants child-before-owner. This does not depend on incidental native owner-destruction behavior.
 
+The native application's window registry is non-owning. Releasing a window's final reference removes
+it from lookup and window counts before destruction, including when a worker-thread release queues
+platform teardown on the UI thread. Application shutdown also unregisters windows whose handles are
+still retained; retaining a handle does not keep its platform window available after shutdown.
+
 ## Launch events and single instance
 
 `NeoLaunchEvent` is immutable and bounded: at most 256 arguments/files/URLs, 4 KiB per value, 32 metadata entries, and no environment block. Paths must be absolute and URLs must be absolute non-file URIs. Initial process activation is queued once by managed core. macOS reopen/open-file/open-URL and Windows session end enter the same queue. Linux desktop activation varies by launcher and is normally supplied by the single-instance endpoint. Before `Ready`, at most `MaximumPendingLaunchEvents` (128 by default) are retained. Overflow returns `false`, raises `LaunchQueueOverflow`, and is never silent. Ready delivery is one event at a time in monotonic `Order`.

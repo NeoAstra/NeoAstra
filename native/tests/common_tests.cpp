@@ -187,6 +187,72 @@ void test_reference_counting_threads() {
     assert(destroyed.load() == 1);
 }
 
+neoastra_window_t* create_test_window(neoastra_app_t* app) {
+    neoastra_window_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.bounds = {100, 100, 320, 240};
+    neoastra_window_t* window{};
+    assert(neoastra_app_create_window(app, &options, &window, nullptr) == NEOASTRA_OK);
+    assert(window != nullptr);
+    return window;
+}
+
+void assert_window_absent(neoastra_app_t* app, uint64_t id) {
+    neoastra_window_t* found{};
+    assert(neoastra_app_get_window(app, id, &found) != NEOASTRA_OK);
+    assert(found == nullptr);
+}
+
+void test_window_registry_final_release() {
+    for (const bool worker_release : {false, true}) {
+        auto* app = create_test_app(true);
+        auto* first = create_test_window(app);
+        auto* other = create_test_window(app);
+        const auto id = neoastra_window_get_id(first);
+        const auto other_id = neoastra_window_get_id(other);
+        assert(neoastra_app_get_window_count(app) == 2);
+
+        if (worker_release) {
+            std::thread worker([first] { neoastra_window_release(first); });
+            worker.join();
+        } else neoastra_window_release(first);
+
+        // Worker destruction has not been pumped yet, but a zero-reference entry
+        // must already be unavailable. The other window remains independently owned.
+        assert(neoastra_app_get_window_count(app) == 1);
+        assert_window_absent(app, id);
+        neoastra_window_t* found{};
+        assert(neoastra_app_get_window(app, other_id, &found) == NEOASTRA_OK);
+        assert(found == other);
+        neoastra_window_release(found);
+
+        assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+        assert(neoastra_app_get_window_count(app) == 0);
+        assert_window_absent(app, other_id);
+        neoastra_window_release(other);
+        neoastra_app_release(app);
+    }
+}
+
+void test_window_registry_rejects_zero_reference_entry() {
+    auto* app = create_test_app(true);
+    auto* window = create_test_window(app);
+    const auto id = neoastra_window_get_id(window);
+
+    // Hold the registry lock across the last-reference transition, exercising a
+    // lookup before the releasing worker can unregister and enqueue destruction.
+    std::unique_lock lock(app->windows_mutex);
+    std::thread worker([window] { neoastra_window_release(window); });
+    while (window->references.load(std::memory_order_acquire) != 0) std::this_thread::yield();
+    lock.unlock();
+    assert_window_absent(app, id);
+    worker.join();
+    assert(neoastra_app_get_window_count(app) == 0);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+}
+
 void test_ui_destruction_from_worker() {
     auto* app = create_test_app();
     std::atomic<int> teardown_count{};
@@ -874,6 +940,8 @@ void test_bridge_origin_trust() {
 int main() {
     test_reference_counting();
     test_reference_counting_threads();
+    test_window_registry_final_release();
+    test_window_registry_rejects_zero_reference_entry();
     test_ui_destruction_from_worker();
     test_ui_destruction_after_shutdown();
     test_worker_release_while_shutdown_is_draining();
