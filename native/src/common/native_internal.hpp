@@ -118,6 +118,21 @@ protected:
     virtual void on_zero_references() noexcept { delete this; }
 };
 
+// Keep an owner alive through an entire reentrant platform/API operation, not
+// just its event delivery. A failed retain never resurrects a tearing-down object.
+class neo_retain_guard final {
+public:
+    explicit neo_retain_guard(neo_ref_counted* value) noexcept
+        : _value(value && value->retain() ? value : nullptr) { }
+    ~neo_retain_guard() { if (_value) _value->release(); }
+    neo_retain_guard(const neo_retain_guard&) = delete;
+    neo_retain_guard& operator=(const neo_retain_guard&) = delete;
+    explicit operator bool() const noexcept { return _value != nullptr; }
+
+private:
+    neo_ref_counted* _value;
+};
+
 struct neoastra_error final : neo_ref_counted {
     const neoastra_result_t code;
     const int64_t native_code;

@@ -168,6 +168,32 @@ void test_reference_counting() {
     assert(destroyed.load() == 1);
 }
 
+void test_retained_operation_scope() {
+    std::atomic<int> destroyed{};
+    auto* value = new counted(destroyed);
+    {
+        neo_retain_guard operation(value);
+        assert(operation);
+        assert(value->release()); // A synchronous callback drops its ownership.
+        assert(destroyed.load() == 0);
+        assert(value->references.load() == 1);
+    }
+    assert(destroyed.load() == 1);
+    neo_retain_guard absent(nullptr);
+    assert(!absent);
+
+    // Simulate storage awaiting its UI destruction, which must not be revived.
+    value = new counted(destroyed);
+    value->references.store(0);
+    {
+        neo_retain_guard pending_destruction(value);
+        assert(!pending_destruction);
+        assert(value->references.load() == 0);
+    }
+    delete value;
+    assert(destroyed.load() == 2);
+}
+
 void test_reference_counting_threads() {
     std::atomic<int> destroyed{};
     auto* value = new counted(destroyed);
@@ -939,6 +965,7 @@ void test_bridge_origin_trust() {
 
 int main() {
     test_reference_counting();
+    test_retained_operation_scope();
     test_reference_counting_threads();
     test_window_registry_final_release();
     test_window_registry_rejects_zero_reference_entry();
