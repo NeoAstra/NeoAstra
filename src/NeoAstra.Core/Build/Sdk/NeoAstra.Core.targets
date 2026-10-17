@@ -39,6 +39,12 @@
     <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)development/AndroidManifest.xml" />
   </ItemGroup>
 
+  <!-- A window keeps clear of the system bars. An application whose page lays itself out with env(safe-area-inset-*), as it
+       does on iOS, draws under them with NeoAstraAndroidEdgeToEdge=true. -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidEdgeToEdge)' == 'true'">
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)edgetoedge/AndroidManifest.xml" />
+  </ItemGroup>
+
   <!-- A missing library would otherwise surface as an unresolved import when the application runs. -->
   <Target Name="_NeoAstraCheckMobileNativeLibraries" BeforeTargets="Build" Condition="'$(_NeoAstraTargetPlatform)' == 'ios' Or '$(_NeoAstraTargetPlatform)' == 'android'">
     <Error Condition="'$(_NeoAstraTargetPlatform)' == 'ios' And '$(RuntimeIdentifier)' != '' And !Exists('$(NeoAstraNativeRuntimesDirectory)$(RuntimeIdentifier)/native/libneoastra_native.a')"

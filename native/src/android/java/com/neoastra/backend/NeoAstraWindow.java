@@ -3,10 +3,12 @@ package com.neoastra.backend;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.Window;
 import android.view.WindowInsetsController;
 import android.widget.FrameLayout;
 import android.window.OnBackInvokedCallback;
@@ -18,8 +20,8 @@ import java.util.WeakHashMap;
 
 /**
  * A window of NeoAstra on Android: the content of the current activity, which it replaces with a layout of its own. One
- * activity has at most one window. The window fills the activity, keeps clear of the system bars, and ends with the
- * activity; back asks the application to close it on Android 13 and later, and finishes the activity before.
+ * activity has at most one window. The window fills the activity, keeps clear of the system bars unless the application
+ * opted into edge-to-edge windows, and ends with the activity; back asks the application to close it on Android 13 and later, and finishes the activity before.
  *
  * <p>The native library drives it through JNI on the main thread and receives what it reports through
  * {@link #nativeWindowEvent}, which it registers when Java loads it. Every member that JNI reaches is public so that R8
@@ -52,9 +54,12 @@ public final class NeoAstraWindow {
         activity = owner;
         window = nativeWindow;
         content = new FrameLayout(owner);
-        // Android 15 draws an application edge to edge, and the WebView reports no safe-area insets there: the layout keeps
-        // its content clear of the system bars instead.
-        content.setFitsSystemWindows(true);
+        // By default the layout keeps its content clear of the system bars, which Android 15 otherwise draws over an
+        // application. With the edge-to-edge opt-in the window draws under them, transparent, and the WebView reports their
+        // size to the page as env(safe-area-inset-*).
+        boolean edgeToEdge = edgeToEdge(owner);
+        content.setFitsSystemWindows(!edgeToEdge);
+        if (edgeToEdge) drawUnderSystemBars(owner);
         content.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> reportSize());
         owner.setContentView(content);
         // The system bars take their appearance from the decor view, which the content view creates.
@@ -120,6 +125,32 @@ public final class NeoAstraWindow {
         activity.getApplication().unregisterActivityLifecycleCallbacks(callbacks);
         if (Build.VERSION.SDK_INT >= 33 && back != null) activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback((OnBackInvokedCallback) back);
         back = null;
+    }
+
+    /** Whether the application opted into edge-to-edge windows (NeoAstraAndroidEdgeToEdge=true merges the meta-data). */
+    private static boolean edgeToEdge(Activity activity) {
+        try {
+            Bundle metaData = activity.getPackageManager().getApplicationInfo(activity.getPackageName(), PackageManager.GET_META_DATA).metaData;
+            return metaData != null && metaData.getBoolean("com.neoastra.window.edgeToEdge", false);
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void drawUnderSystemBars(Activity activity) {
+        Window window = activity.getWindow();
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+        } else {
+            View decor = window.getDecorView();
+            decor.setSystemUiVisibility(decor.getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        // The system would otherwise lay a translucent scrim under the navigation buttons.
+        if (Build.VERSION.SDK_INT >= 29) window.setNavigationBarContrastEnforced(false);
     }
 
     private void reportSize() {

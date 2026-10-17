@@ -239,6 +239,24 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void AndroidEdgeToEdge_IsAnOptInThatTheTargetsMergeIntoTheManifest()
+    {
+        // NeoAstraAndroidEdgeToEdge=true merges an application meta-data entry, which the window reads to draw under the system
+        // bars; without it the window keeps clear of them, as before.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var overlay = targets.Descendants("AndroidManifestOverlay").Single(static item => ((string)item.Attribute("Include")!).Contains("edgetoedge/AndroidManifest.xml", StringComparison.Ordinal));
+        StringAssert.Contains((string?)overlay.Parent!.Attribute("Condition"), "'$(NeoAstraAndroidEdgeToEdge)' == 'true'");
+
+        const string Key = "com.neoastra.window.edgeToEdge";
+        var manifest = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "edgetoedge", "AndroidManifest.xml"));
+        StringAssert.Contains(manifest, $"android:name=\"{Key}\"");
+        StringAssert.Contains(manifest, "android:value=\"true\"");
+        var window = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, $"\"{Key}\"");
+    }
+
+    [TestMethod]
     public void PackagedToolReference_DoesNotTakeTheRuntimeIdentifierOfTheApplication()
     {
         // An application built for a runtime identifier without an apphost, such as iossimulator-arm64, passes it as a global
