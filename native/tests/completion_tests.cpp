@@ -30,6 +30,7 @@ struct captured_completion {
 };
 struct callback_context {
     captured_completion& captured;
+    neoastra_app_t* detach_app{};
     ~callback_context() { ++captured.contexts_released; }
 };
 
@@ -58,6 +59,15 @@ void NEOASTRA_CALL capture_script(void* pointer, neoastra_result_t result, neoas
     captured->result = result;
     if (result == NEOASTRA_OK) assert(neo_string(value) == "42");
     else assert(value.length == 0);
+    if (context->detach_app) {
+        assert(neoastra_app_detach(context->detach_app, nullptr) == NEOASTRA_OK);
+        neoastra_environment_options_t options{};
+        options.size = sizeof(options);
+        options.version = 1;
+        neoastra_operation_t* rejected{};
+        assert(neoastra_environment_create_async(context->detach_app, &options, capture_environment, nullptr, &rejected, nullptr) == NEOASTRA_ERROR_DISPOSED);
+        assert(rejected == nullptr);
+    }
 }
 
 neoastra_app_t* create_app() {
@@ -296,6 +306,47 @@ void test_script_shutdown_and_late_completion() {
     neoastra_app_release(app);
 }
 
+void test_completion_callback_detach(bool shutdown) {
+    auto* app = create_app();
+    captured_completion waiting_result, detaching_result;
+    auto* waiting_operation = new neoastra_operation;
+    auto* detaching_operation = new neoastra_operation;
+    waiting_operation->retain();
+    detaching_operation->retain();
+    auto waiting = std::make_shared<neo_script_source>(app, capture_script, new callback_context{waiting_result}, waiting_operation);
+    auto detaching = std::make_shared<neo_script_source>(app, capture_script, new callback_context{detaching_result, app}, detaching_operation);
+    waiting->accepted = detaching->accepted = true;
+    if (shutdown) {
+        // The newest registration is canceled first; detaching again from its
+        // callback must leave shutdown able to cancel the other registration.
+        assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    } else {
+        detaching->completion->result = "42";
+        detaching->completion->requested = NEOASTRA_OK;
+        detaching->completion->submit();
+        neo_drain_dispatch(app);
+    }
+    assert(detaching_result.calls == 1 && detaching_result.contexts_released == 1);
+    assert(detaching_result.result == (shutdown ? NEOASTRA_ERROR_CANCELED : NEOASTRA_OK));
+    assert(waiting_result.calls == 1 && waiting_result.contexts_released == 1 && waiting_result.result == NEOASTRA_ERROR_CANCELED);
+    assert(app->pending_completions == nullptr && app->ready_completions == nullptr);
+    std::thread late_result([waiting] {
+        waiting->completion->result = "42";
+        waiting->completion->requested = NEOASTRA_OK;
+        waiting->completion->submit();
+    });
+    late_result.join();
+    waiting.reset();
+    detaching.reset();
+    neo_drain_dispatch(app);
+    assert(waiting_result.calls == 1 && detaching_result.calls == 1);
+    assert(waiting_operation->references.load() == 1 && detaching_operation->references.load() == 1);
+    assert(app->ui_objects == nullptr && app->references.load() == 1);
+    neoastra_operation_release(waiting_operation);
+    neoastra_operation_release(detaching_operation);
+    neoastra_app_release(app);
+}
+
 void test_script_cancellation_failure_and_dropped_handler() {
     auto* app = create_app();
     for (const auto requested : {NEOASTRA_OK, NEOASTRA_ERROR_NATIVE_FAILURE, NEOASTRA_ERROR_CANCELED}) {
@@ -385,6 +436,8 @@ int main() {
     test_creation_cancellation_and_failure_cleanup();
     test_popup_inline_completion_does_not_deliver_other_operations();
     test_script_shutdown_and_late_completion();
+    test_completion_callback_detach(false);
+    test_completion_callback_detach(true);
     test_script_cancellation_failure_and_dropped_handler();
     test_failed_script_start_does_not_own_terminal_callback();
     test_completion_races_with_shutdown();

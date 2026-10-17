@@ -106,8 +106,8 @@ terminal-callback ownership. Canceling a managed token cancels the wait and requ
 cancellation, but **does not free its `GCHandle`**: only native terminal delivery or failed-start
 cleanup can safely release that context.
 
-The GUI-free native completion tests inject public-queue saturation, shutdown, late results,
-handler release, failures, and cancellation using the production common/Windows completion
+The GUI-free native completion tests inject public-queue saturation, shutdown, callback-driven detach,
+late results, handler release, failures, and cancellation using the production common/Windows completion
 helpers. They verify UI affinity, exact-once callback/context release, and native reference
 cleanup without claiming WebView2 runtime validation on non-Windows hosts.
 
