@@ -1,4 +1,5 @@
 #include "native_internal.hpp"
+#include "operation_completion.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -361,33 +362,32 @@ void initialize_event(neoastra_app_t* app, neoastra_event_t& event, event_string
     }
 }
 
-struct environment_completion {
-    neoastra_environment_created_callback_t callback{}; void* context{}; neoastra_operation_t* operation{};
+struct environment_completion final : neo_operation_completion {
+    neoastra_environment_created_callback_t callback{}; void* context{};
     neoastra_environment_t* value{}; neoastra_error_t* error{};
+    environment_completion(neoastra_environment_created_callback_t callback, void* context,
+                           neoastra_operation_t* operation, neoastra_environment_t* value)
+        : neo_operation_completion(value->app), callback(callback), context(context), value(value) { accept(operation); }
+    ~environment_completion() override {
+        if (value) value->release();
+        if (error) error->release();
+    }
+    void invoke(neoastra_operation_t* pending, bool shutdown) override {
+        neoastra_result_t result{};
+        const auto requested = shutdown ? NEOASTRA_ERROR_CANCELED : error ? error->code : NEOASTRA_OK;
+        if (pending->try_complete(requested, result)) {
+            auto* transferred = result == NEOASTRA_OK ? std::exchange(value, nullptr) : nullptr;
+            callback(context, result, transferred, !shutdown && result == requested ? error : nullptr);
+        }
+        callback = nullptr;
+        context = nullptr;
+    }
 };
-void NEOASTRA_CALL complete_environment(void* pointer) {
-    auto* state = static_cast<environment_completion*>(pointer);
-    neoastra_result_t result{};
-    const auto requested = state->error ? state->error->code : NEOASTRA_OK;
-    if (state->operation->try_complete(requested, result)) {
-        state->callback(state->context, result, result == NEOASTRA_OK ? state->value : nullptr, state->error);
-        if (result != NEOASTRA_OK && state->value) state->value->release();
-    } else if (state->value) state->value->release();
-    if (state->error) state->error->release();
-    state->operation->release();
-    delete state;
-}
 void platform_environment_created(void* pointer, neoastra_error_t* error) noexcept {
     auto* state = static_cast<environment_completion*>(pointer);
     state->error = error;
-    if (neoastra_app_dispatch(state->value->app, complete_environment, state) != NEOASTRA_OK) {
-        neoastra_result_t ignored{};
-        state->operation->try_complete(NEOASTRA_ERROR_CANCELED, ignored);
-        state->value->release();
-        if (state->error) state->error->release();
-        state->operation->release();
-        delete state;
-    }
+    state->submit();
+    state->release(); // Native source ownership; the registry owns terminal delivery.
 }
 
 struct profile_completion {
@@ -404,37 +404,37 @@ void NEOASTRA_CALL complete_profile(void* pointer) {
     delete state;
 }
 
-struct view_completion {
-    neoastra_view_created_callback_t callback{}; void* context{}; neoastra_operation_t* operation{};
+struct view_completion final : neo_operation_completion {
+    neoastra_view_created_callback_t callback{}; void* context{};
     neoastra_view_t* value{}; neoastra_error_t* error{}; bool popup{};
+    view_completion(neoastra_view_created_callback_t callback, void* context, neoastra_operation_t* operation,
+                    neoastra_view_t* value, bool popup)
+        : neo_operation_completion(value->environment->app), callback(callback), context(context), value(value), popup(popup) { accept(operation); }
+    ~view_completion() override {
+        if (value) value->release();
+        if (error) error->release();
+    }
+    void invoke(neoastra_operation_t* pending, bool shutdown) override {
+        neoastra_result_t result{};
+        const auto requested = shutdown ? NEOASTRA_ERROR_CANCELED : error ? error->code : NEOASTRA_OK;
+        if (pending->try_complete(requested, result)) {
+            auto* transferred = result == NEOASTRA_OK ? std::exchange(value, nullptr) : nullptr;
+            callback(context, result, transferred, !shutdown && result == requested ? error : nullptr);
+        }
+        callback = nullptr;
+        context = nullptr;
+    }
 };
-void NEOASTRA_CALL complete_view(void* pointer) {
-    auto* state = static_cast<view_completion*>(pointer);
-    neoastra_result_t result{};
-    const auto requested = state->error ? state->error->code : NEOASTRA_OK;
-    if (state->operation->try_complete(requested, result)) {
-        state->callback(state->context, result, result == NEOASTRA_OK ? state->value : nullptr, state->error);
-        if (result != NEOASTRA_OK && state->value) state->value->release();
-    } else if (state->value) state->value->release();
-    if (state->error) state->error->release();
-    state->operation->release();
-    delete state;
-}
 void platform_view_created(void* pointer, neoastra_error_t* error) noexcept {
     auto* state = static_cast<view_completion*>(pointer);
     state->error = error;
-    if (state->popup && check_ui(state->value->environment->app)) {
-        complete_view(state);
-        return;
+    state->submit();
+    if (state->popup && check_ui(state->app)) {
+        // WKWebView and WebKitGTK require a popup target before their synchronous
+        // new-window callback returns. Preserve that existing completion exception.
+        state->deliver_inline();
     }
-    if (neoastra_app_dispatch(state->value->environment->app, complete_view, state) != NEOASTRA_OK) {
-        neoastra_result_t ignored{};
-        state->operation->try_complete(NEOASTRA_ERROR_CANCELED, ignored);
-        state->value->release();
-        if (state->error) state->error->release();
-        state->operation->release();
-        delete state;
-    }
+    state->release();
 }
 
 neoastra_operation_t* make_operation(neoastra_operation_t** output) {
@@ -567,6 +567,11 @@ void neo_drain_dispatch(neoastra_app_t* app) noexcept {
     if (!app || !check_ui(app) || !app->retain()) return;
     drain_ui_destructions(app);
     for (;;) {
+        if (auto* completion = neo_operation_completion::take(app)) {
+            completion->deliver(false);
+            drain_ui_destructions(app);
+            continue;
+        }
         neo_dispatch_item item{};
         {
             std::lock_guard lock(app->dispatch_mutex);
@@ -585,6 +590,7 @@ void neo_drain_dispatch(neoastra_app_t* app) noexcept {
             app->stopping.store(true, std::memory_order_release);
             app->state.store(neo_app_state::stopping, std::memory_order_release);
         }
+        neo_cancel_pending_completions(app);
         neo_complete_ui_shutdown(app);
     }
     app->release();
@@ -655,6 +661,7 @@ void neo_complete_app_shutdown(neoastra_app_t* app) noexcept {
 
     neo_log(app, NEOASTRA_LOG_INFORMATION, "application", "Native application shutdown started");
     neo_drain_dispatch(app);
+    neo_cancel_pending_completions(app);
     neo_complete_ui_shutdown(app);
     abandon_app_decisions(app);
     app->events.clear();
@@ -991,7 +998,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t
         op=make_operation(outop);
         value=new neoastra_environment(app);
         copy_custom_schemes(value,options);
-        auto* state=new environment_completion{callback,context,op,value,nullptr};
+        auto* state=new environment_completion(callback,context,op,value);
         // Provider ownership transfers only once every potentially throwing allocation has succeeded.
         for(uint32_t index=0;index<options->custom_scheme_count;++index)value->custom_schemes[index].release_provider_context=custom_scheme_at(options,index).release_resource_provider_context;
         neoastra_error_t* start_error=nullptr;
@@ -1011,7 +1018,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_view_async(neoastra_
     if(outop)*outop=nullptr;if(!env||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!valid_native_parent(options->parent)||options->maximum_message_size>NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE||options->decision_timeout_ms>600000||options->bridge_policy>NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW||((options->bridge_origin_count!=0)!=(options->bridge_origins!=nullptr))||(options->bridge_policy==NEOASTRA_BRIDGE_DISABLED&&options->bridge_origin_count!=0)||(options->bridge_policy==NEOASTRA_BRIDGE_TRUSTED_ORIGINS&&options->bridge_origin_count==0)||(options->bridge_policy==NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW&&options->bridge_origin_count!=0))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid view arguments");for(uint32_t index=0;index<options->bridge_origin_count;++index)if(!neo_valid_utf8(options->bridge_origins[index])||!valid_origin(neo_string(options->bridge_origins[index])))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid bridge origin");if(!check_ui(env->app))return neo_fail(error,NEOASTRA_ERROR_WRONG_THREAD,"view creation must begin on the UI thread");if(!accepts_ui_objects(env->app))return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application shutdown has begun");
     if(options->profile&&options->profile->environment!=env)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"view profile belongs to a different environment");
     if(options->popup_request){auto* request=options->popup_request;if(request->kind!=NEOASTRA_DECISION_NEW_WINDOW||request->owner==nullptr||request->owner->environment!=env||options->profile!=request->owner->profile||request->state.load(std::memory_order_acquire)>neo_decision_state::deferred)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup request is no longer valid or opener-compatible");if(request->popup_creation_started.exchange(true,std::memory_order_acq_rel))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup target creation has already started");}
-    try{auto* op=make_operation(outop);auto* value=new neoastra_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->maximum_message_size)value->maximum_message_size=options->maximum_message_size;value->bridge_policy=options->bridge_policy;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion{callback,context,op,value,nullptr,options->popup_request!=nullptr};neoastra_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEOASTRA_OK;}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}}
+    try{auto* op=make_operation(outop);auto* value=new neoastra_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->maximum_message_size)value->maximum_message_size=options->maximum_message_size;value->bridge_policy=options->bridge_policy;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion(callback,context,op,value,options->popup_request!=nullptr);neoastra_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEOASTRA_OK;}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}}
 neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoastra_environment_t* env,neoastra_capability_t capability,neoastra_capability_info_t* info){
     if(!env||capability<NEOASTRA_CAPABILITY_CUSTOM_SCHEME||capability>NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEOASTRA_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoAstra backend";

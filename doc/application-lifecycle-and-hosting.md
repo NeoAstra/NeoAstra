@@ -90,6 +90,27 @@ Host `ApplicationStopping` requests normal NeoAstra quit. A stop recorded before
 
 The native hosting tests exercise this path on Windows with staged native assets; unsupported hosts or missing assets are inconclusive, not passing native validation. The Generic Host integration still creates its own UI thread. macOS/AppKit main-thread ownership and Linux startup/shutdown behavior require separate target-host qualification; these Windows checks do not establish those guarantees. Use explicit native-main-loop ownership where the Generic Host path has not been qualified.
 
+## Native asynchronous completion ownership
+
+Accepted native environment/view creation and Windows script operations reserve their terminal
+completion before starting browser work. These completions do not consume the bounded public
+dispatcher queue (`MaximumPendingDispatches`), so saturating that queue cannot drop a completion
+or strand its managed callback context. Normal completion remains deferred to the owning UI
+thread; synchronous popup-target creation retains its existing backend-required exception.
+
+Shutdown delivers a canceled terminal callback for unfinished registered operations on that UI
+thread before destroying native UI objects. A late browser result only releases its retained
+native state and cannot call the terminal context again. Windows script handlers released by
+WebView2 without a result also queue a canceled completion. A rejected start does not transfer
+terminal-callback ownership. Canceling a managed token cancels the wait and requests native
+cancellation, but **does not free its `GCHandle`**: only native terminal delivery or failed-start
+cleanup can safely release that context.
+
+The GUI-free native completion tests inject public-queue saturation, shutdown, late results,
+handler release, failures, and cancellation using the production common/Windows completion
+helpers. They verify UI affinity, exact-once callback/context release, and native reference
+cleanup without claiming WebView2 runtime validation on non-Windows hosts.
+
 ## Platform shutdown limitations
 
 - **Windows:** `WM_QUERYENDSESSION` cannot wait for asynchronous save. NeoAstra reports one non-cancelable query phase with a two-second managed deadline and returns success to Windows immediately. The hook may perform best-effort flush work while the process remains alive, but Windows does not guarantee that time. `WM_ENDSESSION` is a separate exact-once final phase and forces teardown; an aborted end-session resets query delivery.
