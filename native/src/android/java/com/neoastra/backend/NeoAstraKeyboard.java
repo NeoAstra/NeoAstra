@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.pm.PackageManager;
+import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
@@ -71,13 +72,23 @@ final class NeoAstraKeyboard {
                 public WindowInsets onProgress(@NonNull WindowInsets insets, @NonNull List<WindowInsetsAnimation> animations) { return insets; }
             });
         }
+        // Chromium shrinks its visual viewport by the keyboard that the insets of the WebView report, even with overlaysContent,
+        // and the page can then be dragged up as a whole. The WebView sees the insets without the keyboard; the system bars
+        // stay, which the page reads as env(safe-area-inset-*). The height reported to the page comes from the root insets.
+        if (Build.VERSION.SDK_INT >= 30) {
+            webView.setOnApplyWindowInsetsListener((target, insets) ->
+                target.onApplyWindowInsets(new WindowInsets.Builder(insets).setInsets(WindowInsets.Type.ime(), Insets.NONE).build()));
+        }
         webView.getViewTreeObserver().addOnGlobalLayoutListener(layout);
     }
 
     void detach() {
         if (overlay != null) overlay.remove();
         webView.getViewTreeObserver().removeOnGlobalLayoutListener(layout);
-        if (Build.VERSION.SDK_INT >= 30) parent.setWindowInsetsAnimationCallback(null);
+        if (Build.VERSION.SDK_INT >= 30) {
+            parent.setWindowInsetsAnimationCallback(null);
+            webView.setOnApplyWindowInsetsListener(null);
+        }
     }
 
     private void report(double duration) {
