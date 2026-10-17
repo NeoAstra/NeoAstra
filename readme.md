@@ -23,6 +23,9 @@ See the [documentation](doc/readme.md) for getting started, samples, platform su
 Large UI/.NET transfers use runtime-sized payload budgets by default, with configurable smaller
 [transport and RPC limits](doc/frontend-transport.md#lifecycle-and-limits).
 
+Download policies can choose a destination asynchronously, including on Linux; timeouts and failed
+handlers safely cancel the request. See the [platform notes](doc/known-limitations.md#download-policies-on-linux).
+
 ## 🪪 License
 
 This software is released under the [BSD-2-Clause license](https://opensource.org/licenses/BSD-2-Clause).
