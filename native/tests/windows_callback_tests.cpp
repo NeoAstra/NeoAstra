@@ -274,6 +274,63 @@ void test_modal_sibling_final_release(bool shutdown) {
     neoastra_app_release(app);
 }
 
+struct detaching_window_context {
+    neoastra_app_t* app{};
+    uint64_t id{};
+    int calls{};
+};
+
+void NEOASTRA_CALL detach_on_resize(void* pointer, const neoastra_event_t* event) {
+    auto* context = static_cast<detaching_window_context*>(pointer);
+    if (event->type != NEOASTRA_EVENT_WINDOW_RESIZED || (context->id && event->object_id != context->id)) return;
+    ++context->calls;
+    assert(neoastra_app_detach(context->app, nullptr) == NEOASTRA_OK);
+}
+
+enum class window_change { bounds, show_minimized, leave_fullscreen };
+
+void test_window_api_callback_detach(window_change change) {
+    auto* app = create_app();
+    auto* window = create_window(app);
+    const auto hwnd = window_handle(window);
+    if (change == window_change::show_minimized) assert(neoastra_window_set_state(window, NEOASTRA_WINDOW_MINIMIZED) == NEOASTRA_OK);
+    if (change == window_change::leave_fullscreen) {
+        assert(neoastra_window_show(window) == NEOASTRA_OK);
+        assert(neoastra_window_set_state(window, NEOASTRA_WINDOW_FULLSCREEN) == NEOASTRA_OK);
+    }
+    detaching_window_context context{app, neoastra_window_get_id(window)};
+    assert(neoastra_app_set_event_callback(app, detach_on_resize, &context) == NEOASTRA_OK);
+    neoastra_result_t result{};
+    switch (change) {
+        case window_change::bounds: result = neoastra_window_set_bounds(window, {100, 100, 400, 300}); break;
+        case window_change::show_minimized: result = neoastra_window_show(window); break;
+        case window_change::leave_fullscreen: result = neoastra_window_set_state(window, NEOASTRA_WINDOW_NORMAL); break;
+    }
+    // Retaining the native object does not retain its platform state across an
+    // explicit detach from a callback nested inside the platform API.
+    assert(context.calls == 1 && result == NEOASTRA_ERROR_DISPOSED);
+    assert(window->platform == nullptr && !IsWindow(hwnd));
+    neoastra_window_release(window);
+    neoastra_app_release(app);
+}
+
+void test_window_creation_callback_detach() {
+    auto* app = create_app();
+    detaching_window_context context{app};
+    assert(neoastra_app_set_event_callback(app, detach_on_resize, &context) == NEOASTRA_OK);
+    neoastra_window_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.bounds = {100, 100, 320, 240};
+    options.flags = 3;
+    neoastra_window_t* window{};
+    neoastra_error_t* error{};
+    assert(neoastra_app_create_window(app, &options, &window, &error) == NEOASTRA_ERROR_DISPOSED);
+    assert(context.calls == 1 && window == nullptr && error != nullptr);
+    neoastra_error_release(error);
+    neoastra_app_release(app);
+}
+
 } // namespace
 
 int main() {
@@ -288,5 +345,9 @@ int main() {
     test_zero_reference_app_native_cleanup();
     test_modal_sibling_final_release(false);
     test_modal_sibling_final_release(true);
+    test_window_api_callback_detach(window_change::bounds);
+    test_window_api_callback_detach(window_change::show_minimized);
+    test_window_api_callback_detach(window_change::leave_fullscreen);
+    test_window_creation_callback_detach();
     return 0;
 }

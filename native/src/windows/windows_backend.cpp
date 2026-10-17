@@ -510,12 +510,18 @@ RECT view_bounds(const neoastra_view_t* view) noexcept {
 }
 
 void sync_window_view_visibility(neoastra_window_t* window, bool visible) noexcept {
-    for (auto* view : window->views) {
-        if (!view) continue;
-        auto* state = static_cast<windows_view*>(view->platform);
-        if (!state || !state->controller) continue;
-        if (visible && view->fill_parent) (void)state->controller->put_Bounds(view_bounds(view));
-        (void)state->controller->put_IsVisible(visible ? TRUE : FALSE);
+    for (size_t index = 0; index < window->views.size();) {
+        auto* view = window->views[index];
+        {
+            neo_retain_guard owner(view);
+            auto* state = owner ? static_cast<windows_view*>(view->platform) : nullptr;
+            const auto controller = state ? state->controller : ComPtr<ICoreWebView2Controller>{};
+            if (controller) {
+                if (visible && view->fill_parent) (void)controller->put_Bounds(view_bounds(view));
+                if (view->platform == state) (void)controller->put_IsVisible(visible ? TRUE : FALSE);
+            }
+        }
+        if (index < window->views.size() && window->views[index] == view) ++index;
     }
 }
 
@@ -592,9 +598,10 @@ bool register_download_events(neoastra_download_t* download) noexcept {
 
 struct download_decision_context { ComPtr<ICoreWebView2DownloadStartingEventArgs> args; ComPtr<ICoreWebView2Deferral> deferral; neoastra_download_t* download{}; };
 void download_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {
-    std::unique_ptr<download_decision_context> context(static_cast<download_decision_context*>(pointer));auto* download=context->download;
+    auto* download=static_cast<download_decision_context*>(pointer)->download;
     neo_retain_guard owner(download);
     neo_retain_guard view_owner(owner ? download->view : nullptr);
+    std::unique_ptr<download_decision_context> context(static_cast<download_decision_context*>(pointer));
     if (!owner || !view_owner) {
         context->args->put_Cancel(TRUE);
         if (owner) { download->state.store(NEOASTRA_DOWNLOAD_CANCELED); download->release_lifecycle(); }
@@ -1926,18 +1933,30 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         const auto requested=window->bounds;
         const auto x=(options->flags&32u)?CW_USEDEFAULT:requested.x;
         const auto y=(options->flags&32u)?CW_USEDEFAULT:requested.y;
-        state->hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(requested.width,1),std::max(requested.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
+        const auto hwnd=CreateWindowExW(extended,window_class,title.c_str(),style,x,y,std::max(requested.width,1),std::max(requested.height,1),owner,nullptr,GetModuleHandleW(nullptr),window);
+        if (window->platform != state) {
+            // Creation can deliver resize events before returning its HWND, so
+            // shutdown may not have had a handle with which to destroy it.
+            if (hwnd && IsWindow(hwnd)) { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0); DestroyWindow(hwnd); }
+            neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Application shutdown interrupted Win32 window creation", 0, "win32");
+            return false;
+        }
+        state->hwnd=hwnd;
         if(!state->hwnd){const auto code=GetLastError();delete state;window->platform=nullptr;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Win32 window creation failed",code,"win32");return false;}
         layout_title_bar(window);
+        if (window->platform != state || !state->hwnd) { neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Win32 window was destroyed during creation", 0, "win32"); return false; }
         // The frame depends on the DPI of the monitor the window landed on, so the client size is applied once the window exists.
         const auto outer=outer_size(window,state->hwnd,requested.width,requested.height);
         if(options->flags&64u){RECT area{};if(owner){RECT owner_rect{};GetWindowRect(owner,&owner_rect);area=owner_rect;}else{MONITORINFO monitor{};monitor.cbSize=sizeof(MONITORINFO);if(GetMonitorInfoW(MonitorFromWindow(state->hwnd,MONITOR_DEFAULTTOPRIMARY),&monitor))area=monitor.rcWork;}SetWindowPos(state->hwnd,nullptr,area.left+((area.right-area.left)-outer.cx)/2,area.top+((area.bottom-area.top)-outer.cy)/2,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE);}
         else SetWindowPos(state->hwnd,nullptr,0,0,outer.cx,outer.cy,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        if (window->platform != state || !state->hwnd) { neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Win32 window was destroyed during creation", 0, "win32"); return false; }
         sync_bounds(window,state->hwnd);
         // A window is told of a scale only when it changes, so the one it starts with is read here.
         neo_window_set_scale_factor(window,window_scale_factor(state->hwnd),false);
-        state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);state->modal_active=true;}}
+        state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){state->modal_active=true;if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);}}
+        if (window->platform != state || !state->hwnd) { neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Win32 window was destroyed during creation", 0, "win32"); return false; }
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}
+        if (window->platform != state || !state->hwnd) { neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Win32 window was destroyed during creation", 0, "win32"); return false; }
         return true;
     } catch(const std::exception& ex){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
@@ -1961,7 +1980,44 @@ void neo_platform_window_destroy(neoastra_window_t* window) noexcept {
     delete state;
     window->platform = nullptr;
 }
-neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){sync_window_view_visibility(w,false);ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);sync_window_view_visibility(w,true);layout_title_bar(w);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {
+    auto* state = static_cast<windows_window*>(w->platform);
+    if (!state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    if (!visible) {
+        sync_window_view_visibility(w, false);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+        ShowWindow(state->hwnd, SW_HIDE);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+        if (state->modal_active && w->owner) {
+            state->modal_active = false;
+            auto* owner = static_cast<windows_window*>(w->owner->platform);
+            if (owner && owner->modal_children && --owner->modal_children == 0 && owner->hwnd) EnableWindow(owner->hwnd, TRUE);
+        }
+        return w->platform == state ? NEOASTRA_OK : NEOASTRA_ERROR_DISPOSED;
+    }
+    if (state->modal && !state->modal_active && w->owner) {
+        auto* owner = static_cast<windows_window*>(w->owner->platform);
+        if (owner && owner->hwnd) {
+            state->modal_active = true;
+            if (owner->modal_children++ == 0) EnableWindow(owner->hwnd, FALSE);
+        }
+    }
+    if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    neoastra_window_state_t desired{};
+    { std::lock_guard lock(w->state_mutex); desired = w->state; }
+    const auto command = desired == NEOASTRA_WINDOW_MINIMIZED ? SW_SHOWMINIMIZED : desired == NEOASTRA_WINDOW_MAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOW;
+    ShowWindow(state->hwnd, command);
+    if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    sync_window_view_visibility(w, true);
+    if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    layout_title_bar(w);
+    if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    if (desired == NEOASTRA_WINDOW_FULLSCREEN) {
+        { std::lock_guard lock(w->state_mutex); w->state = desired; }
+        return neo_platform_window_set_state(w);
+    }
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
@@ -1969,6 +2025,7 @@ neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept 
     auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;
     const auto outer=outer_size(w,s->hwnd,w->bounds.width,w->bounds.height);
     if(!SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE))return NEOASTRA_ERROR_DISPOSED;
+    if (w->platform != s || !s->hwnd) return NEOASTRA_ERROR_DISPOSED;
     // A request the system adjusted to a placement the window already had sends no move or size message.
     if(!IsIconic(s->hwnd))sync_bounds(w,s->hwnd);
     return NEOASTRA_OK;
@@ -1989,11 +2046,15 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
         monitor.cbSize = sizeof(monitor);
         if (!GetMonitorInfoW(MonitorFromWindow(state->hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) return NEOASTRA_ERROR_NATIVE_FAILURE;
         SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style & ~WS_OVERLAPPEDWINDOW));
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
         state->fullscreen = true;
-        if (SetWindowPos(state->hwnd, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+        const auto positioned = SetWindowPos(state->hwnd, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
                          monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
-                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED)) return NEOASTRA_OK;
+                          SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+        if (positioned) return NEOASTRA_OK;
         SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style));
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
         state->fullscreen = false;
         return NEOASTRA_ERROR_NATIVE_FAILURE;
     }
@@ -2010,11 +2071,17 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
                                           : requested == NEOASTRA_WINDOW_MINIMIZED ? SW_SHOWMINIMIZED
                                           : requested == NEOASTRA_WINDOW_MAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
         SetWindowLongW(state->hwnd, GWL_STYLE, static_cast<LONG>(state->restored_style));
-        SetWindowPlacement(state->hwnd, &state->restored_placement);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+        // Win32 may still read this input while delivering reentrant size events.
+        const auto placement = state->restored_placement;
+        SetWindowPlacement(state->hwnd, &placement);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
         SetWindowPos(state->hwnd, nullptr, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
         state->leaving_fullscreen = false;
         layout_title_bar(w);
+        if (w->platform != state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
         // A hidden window takes the state it was asked for when it is shown.
         const auto reached = !visible ? requested
                            : IsIconic(state->hwnd) ? NEOASTRA_WINDOW_MINIMIZED
@@ -2029,7 +2096,7 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
     const auto command = requested == NEOASTRA_WINDOW_MINIMIZED ? SW_MINIMIZE
                        : requested == NEOASTRA_WINDOW_MAXIMIZED ? SW_MAXIMIZE : SW_RESTORE;
     ShowWindow(state->hwnd, command);
-    return NEOASTRA_OK;
+    return w->platform == state && state->hwnd ? NEOASTRA_OK : NEOASTRA_ERROR_DISPOSED;
 }
 neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,bool enabled) noexcept {
     auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
