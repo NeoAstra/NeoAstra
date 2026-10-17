@@ -20,6 +20,9 @@ It uses the platform browser — WebView2 on Windows, WKWebView on macOS, and We
 
 See the [documentation](doc/readme.md) for getting started, samples, platform support, security, and building from source.
 
+On macOS, [Web Inspector is a per-view opt-in](doc/chromeless-windows.md#macos-web-inspector): use Safari's
+Develop menu (macOS 13.3+) or the best-effort Inspect Element context-menu item, not `⌥⌘I`.
+
 Large UI/.NET transfers use runtime-sized payload budgets by default, with configurable smaller
 [transport and RPC limits](doc/frontend-transport.md#lifecycle-and-limits).
 

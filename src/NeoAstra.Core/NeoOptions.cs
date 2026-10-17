@@ -358,6 +358,11 @@ public sealed class NeoBrowserFeatures
     public bool? ContextMenus { get; set; }
 
     /// <summary>Gets or sets whether the user can open DevTools, including through F12 where the engine has a shortcut.</summary>
+    /// <remarks>
+    /// On macOS, an explicit opt-in makes the view inspectable through Safari's Develop menu on macOS 13.3 and later.
+    /// The local Inspect Element context-menu item is best-effort WebKit behavior, and WKWebView has no public
+    /// inspector-opening command or Option+Command+I action. This setting does not turn context menus back on.
+    /// </remarks>
     public bool? DevTools { get; set; }
 
     /// <summary>Gets or sets whether the engine shows its status bar, such as the address of a hovered link.</summary>

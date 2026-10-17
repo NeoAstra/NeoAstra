@@ -600,10 +600,18 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         // WKWebView has no browser shortcuts, status bar, or script dialogs of its own, so there is nothing to turn off or on.
         case NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS:case NEOASTRA_VIEW_SETTING_STATUS_BAR:case NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS:return enabled?NEOASTRA_ERROR_NOT_SUPPORTED:NEOASTRA_OK;
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:if(![state->webview isKindOfClass:[NeoAstraWebView class]])return NEOASTRA_ERROR_NOT_SUPPORTED;((NeoAstraWebView*)state->webview).contextMenusDisabled=!enabled;return NEOASTRA_OK;
-        case NEOASTRA_VIEW_SETTING_DEVTOOLS:
-            // Both switches are set through key-value coding: `inspectable` only exists on macOS 13.3 and later.
-            @try{[state->webview.configuration.preferences setValue:@(enabled) forKey:@"developerExtrasEnabled"];if([state->webview respondsToSelector:NSSelectorFromString(@"setInspectable:")])[state->webview setValue:@(enabled) forKey:@"inspectable"];}@catch(NSException*){return NEOASTRA_ERROR_NOT_SUPPORTED;}
-            return NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_DEVTOOLS: {
+            // Retain the existing best-effort local Inspect Element item: WebKit has no public setting for it.
+            // A missing private preference must not prevent the public Safari opt-in or its revocation.
+            bool local_supported=false;
+            @try{[state->webview.configuration.preferences setValue:@(enabled) forKey:@"developerExtrasEnabled"];local_supported=true;}@catch(NSException*){}
+            if(@available(macOS 13.3,*)){
+                @try{state->webview.inspectable=enabled;}@catch(NSException*){return NEOASTRA_ERROR_NOT_SUPPORTED;}
+                if(enabled)return NEOASTRA_OK;
+            }
+            // Do not claim complete revocation if the local inspection switch could not be turned off.
+            return local_supported?NEOASTRA_OK:NEOASTRA_ERROR_NOT_SUPPORTED;
+        }
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:state->webview.allowsMagnification=enabled;return NEOASTRA_OK;
         // WebKit reads the preference at each Tab key press, and the Option key reverses it for that press.
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:state->webview.configuration.preferences.tabFocusesLinks=enabled;return NEOASTRA_OK;
@@ -614,7 +622,6 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
     }
 }}
 bool neo_platform_open_external(const std::string& uri,int64_t*) noexcept {@autoreleasepool{@try{NSURL* url=[NSURL URLWithString:ns_string(uri)];return url&&[[NSWorkspace sharedWorkspace]openURL:url];}@catch(NSException*){return false;}}}
-// WebKit offers no public call to open the Web Inspector; it is reached from the context menu or Safari's Develop menu.
 // A mouse-moved event handed to the web view moves the pointer of the page itself: the system cursor stays where it is.
 neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double x,double y) noexcept {@autoreleasepool{
     auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
@@ -627,6 +634,7 @@ neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double x,
     [web mouseMoved:event];
     return NEOASTRA_OK;
 }}
+// WKWebView has no public inspector-opening call or responder action for Option+Command+I; use Safari's Develop menu.
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);return !state||!state->webview?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
 // WKWebView snapshots what the view shows; it has no call for the part of a document outside the viewport.
 neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra_capture_options_t& options,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{

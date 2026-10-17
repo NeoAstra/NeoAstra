@@ -404,6 +404,11 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     /// <summary>Opens the engine's DevTools for this view.</summary>
+    /// <remarks>
+    /// WKWebView on macOS has no public inspector-opening API, so this method throws <see cref="NotSupportedException"/>.
+    /// Opt in with <see cref="NeoBrowserFeatures.DevTools"/> and use Safari's Develop menu (macOS 13.3 or later),
+    /// or the local Inspect Element context-menu item where WebKit provides it.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">DevTools are disabled for this view.</exception>
     /// <exception cref="NotSupportedException">The active engine offers no way to open DevTools programmatically.</exception>
     public void OpenDevTools()
