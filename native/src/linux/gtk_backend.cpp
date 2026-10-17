@@ -11,14 +11,16 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace {
 struct gtk_app { GMainContext* context{}; GMainLoop* loop{}; GSource* wake_source{}; };
 struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; GdkSurface* surface{}; gulong laid_out{}; };
-struct gtk_environment { WebKitWebContext* context{}; WebKitNetworkSession* session{}; gulong download_started{}; };
+struct gtk_scheme_context { neoastra_environment_t* environment{}; };
+struct gtk_environment { WebKitWebContext* context{}; WebKitNetworkSession* session{}; gulong download_started{}; std::vector<gtk_scheme_context*> schemes; };
 struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{}; };
-struct gtk_view { GtkWidget* widget{}; WebKitUserContentManager* content{}; GtkDropTarget* drop_target{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; };
+struct gtk_view { GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; };
 
 neoastra_error_t* make_error(neoastra_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neoastra_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
@@ -70,6 +72,7 @@ gboolean drop_accept(GtkDropTarget* target,GdkDrop* drop,void*) noexcept {
 
 gboolean drop_received(GtkDropTarget*,const GValue* value,double x,double y,void* data) noexcept {
     auto* view=static_cast<neoastra_view_t*>(data);
+    neo_retain_guard owner(view);if(!owner)return FALSE;
     try {
         neo_event_details details{};details.bounds={static_cast<int32_t>(x),static_cast<int32_t>(y),0,0};
         if(G_VALUE_HOLDS_STRING(value)){
@@ -130,7 +133,10 @@ soup_headers_ptr make_response_headers(const neoastra_resource_response_t& respo
 }
 
 void uri_scheme_requested(WebKitURISchemeRequest* native_request,void* data) noexcept {
-    auto* environment=static_cast<neoastra_environment_t*>(data);
+    auto* environment=static_cast<gtk_scheme_context*>(data)->environment;
+    neo_retain_guard owner(environment);
+    g_object_ptr<WebKitURISchemeRequest> request_owner(WEBKIT_URI_SCHEME_REQUEST(g_object_ref(native_request)));
+    if(!owner){fail_uri_scheme_request(native_request,"The custom-scheme environment is unavailable.");return;}
     const auto* scheme=find_custom_scheme(environment,webkit_uri_scheme_request_get_scheme(native_request));
     if(!scheme||!scheme->provider){fail_uri_scheme_request(native_request,"The custom-scheme provider is unavailable.");return;}
 
@@ -250,7 +256,13 @@ bool register_custom_schemes(neoastra_environment_t* environment,WebKitWebContex
     }
     auto* security=webkit_web_context_get_security_manager(context);
     for(const auto& scheme:environment->custom_schemes){
-        webkit_web_context_register_uri_scheme(context,scheme.name.c_str(),uri_scheme_requested,environment,nullptr);
+        // A host can retain the WebKit context after disposing NeoAstra's environment. WebKit owns this token; the backend
+        // invalidates its weak environment pointer on teardown instead of leaving a callback with freed userdata.
+        auto registration=std::unique_ptr<gtk_scheme_context>(new(std::nothrow) gtk_scheme_context{environment});
+        if(!registration){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK scheme callback allocation failed");return false;}
+        try{static_cast<gtk_environment*>(environment->platform)->schemes.push_back(registration.get());}
+        catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK scheme callback allocation failed");return false;}
+        webkit_web_context_register_uri_scheme(context,scheme.name.c_str(),uri_scheme_requested,registration.release(),[](void* value){delete static_cast<gtk_scheme_context*>(value);});
         if((scheme.flags&NEOASTRA_CUSTOM_SCHEME_SECURE)!=0)webkit_security_manager_register_uri_scheme_as_secure(security,scheme.name.c_str());
         if((scheme.flags&NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED)!=0)webkit_security_manager_register_uri_scheme_as_cors_enabled(security,scheme.name.c_str());
     }
@@ -307,7 +319,7 @@ void release_timed_decision(void* data){static_cast<neoastra_decision_t*>(data)-
 // A window has the size it was asked for until it is laid out on its surface. From then on it has the size of its widget, which
 // is the frame without the shadow around it: a screen, a size limit, or the user may have given it another size than it was asked for.
 void window_laid_out(GdkSurface*,int,int,void* data){
-    auto* window=static_cast<neoastra_window_t*>(data);auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return;
+    auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return;
     const auto width=gtk_widget_get_width(state->widget),height=gtk_widget_get_height(state->widget);if(width<=0||height<=0)return;
     bool changed{};{std::lock_guard lock(window->state_mutex);changed=window->bounds.width!=width||window->bounds.height!=height;window->bounds.width=width;window->bounds.height=height;}
     if(changed)neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_RESIZED,window->id);
@@ -316,16 +328,16 @@ void unwatch_window_size(gtk_window* state) noexcept {if(!state->surface)return;
 // The surface says when a size is settled, after the window gave its widgets their place. A window gets its surface when it is first
 // shown and keeps it while hidden, and the surface is held so that the handler can be removed whatever became of the window.
 void window_realized(GtkWidget* widget,void* data){
-    auto* window=static_cast<neoastra_window_t*>(data);auto* state=static_cast<gtk_window*>(window->platform);if(!state)return;
+    auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;auto* state=static_cast<gtk_window*>(window->platform);if(!state)return;
     auto* surface=gtk_native_get_surface(GTK_NATIVE(widget));if(surface==state->surface)return;
     unwatch_window_size(state);if(!surface)return;
     state->surface=GDK_SURFACE(g_object_ref(surface));state->laid_out=g_signal_connect_after(surface,"layout",G_CALLBACK(window_laid_out),window);
 }
 // GTK counts a display in whole pixels for each logical unit.
-void window_scale_changed(GObject* object,GParamSpec*,void* data){neo_window_set_scale_factor(static_cast<neoastra_window_t*>(data),gtk_widget_get_scale_factor(GTK_WIDGET(object)));}
-gboolean window_close_requested(GtkWindow*,void* data){auto* window=static_cast<neoastra_window_t*>(data);if(window->force_closing){window->force_closing=false;auto* state=static_cast<gtk_window*>(window->platform);if(state){unwatch_window_size(state);state->widget=nullptr;}neo_window_closed(window);return FALSE;}neo_window_request_close(window,NEOASTRA_WINDOW_CLOSE_USER,true);return TRUE;}
-void window_focus_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,window->id,nullptr,nullptr,gtk_window_is_active(GTK_WINDOW(object))?1u:0u);}
-void window_state_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);auto* value=GTK_WINDOW(object);const auto state=gtk_window_is_fullscreen(value)?NEOASTRA_WINDOW_FULLSCREEN:gtk_window_is_maximized(value)?NEOASTRA_WINDOW_MAXIMIZED:gtk_window_is_suspended(value)?NEOASTRA_WINDOW_MINIMIZED:NEOASTRA_WINDOW_NORMAL;auto* native=static_cast<gtk_window*>(window->platform);const auto changed=native&&native->reported_state!=state;if(native)native->reported_state=state;{std::lock_guard lock(window->state_mutex);window->state=state;}if(changed)neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_STATE_CHANGED,window->id,nullptr,nullptr,state);}
+void window_scale_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;neo_window_set_scale_factor(window,gtk_widget_get_scale_factor(GTK_WIDGET(object)));}
+gboolean window_close_requested(GtkWindow* native,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return FALSE;if(window->force_closing){window->force_closing=false;auto* state=static_cast<gtk_window*>(window->platform);if(state){unwatch_window_size(state);if(state->widget)g_object_remove_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->widget=nullptr;}g_signal_handlers_disconnect_by_data(native,window);neo_window_closed(window);return FALSE;}neo_window_request_close(window,NEOASTRA_WINDOW_CLOSE_USER,true);return TRUE;}
+void window_focus_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,window->id,nullptr,nullptr,gtk_window_is_active(GTK_WINDOW(object))?1u:0u);}
+void window_state_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;auto* value=GTK_WINDOW(object);const auto state=gtk_window_is_fullscreen(value)?NEOASTRA_WINDOW_FULLSCREEN:gtk_window_is_maximized(value)?NEOASTRA_WINDOW_MAXIMIZED:gtk_window_is_suspended(value)?NEOASTRA_WINDOW_MINIMIZED:NEOASTRA_WINDOW_NORMAL;auto* native=static_cast<gtk_window*>(window->platform);const auto changed=native&&native->reported_state!=state;if(native)native->reported_state=state;{std::lock_guard lock(window->state_mutex);window->state=state;}if(changed)neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_STATE_CHANGED,window->id,nullptr,nullptr,state);}
 
 // WebKitGTK tells the user gesture a request was made in, which a script keeps while it handles a click, and the redirect of
 // a request apart from the request.
@@ -374,6 +386,7 @@ std::string page_origin(WebKitWebView* web_view){
 // request come without that guarantee, and without an origin. A request for the screen is told apart from one for a microphone.
 gboolean permission_requested(WebKitWebView* web_view,WebKitPermissionRequest* request,void* data){
     auto* view=static_cast<neoastra_view_t*>(data);
+    neo_retain_guard owner(view);if(!owner){webkit_permission_request_deny(request);return TRUE;}
     neoastra_permission_kind_t kinds[2]={NEOASTRA_PERMISSION_UNKNOWN,NEOASTRA_PERMISSION_UNKNOWN};int count=1;std::string origin;
     if(WEBKIT_IS_GEOLOCATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_GEOLOCATION;
     else if(WEBKIT_IS_NOTIFICATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_NOTIFICATIONS;
@@ -399,10 +412,11 @@ gboolean permission_requested(WebKitWebView* web_view,WebKitPermissionRequest* r
     }
     return TRUE;
 }
-WebKitWebView* create_web_view(WebKitWebView*,WebKitNavigationAction* action,void* data){auto* view=static_cast<neoastra_view_t*>(data);auto* request=webkit_navigation_action_get_request(action);std::string uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";const char* raw_name=webkit_navigation_action_get_frame_name(action);std::string name=raw_name?raw_name:"";auto* decision=new(std::nothrow) neoastra_decision;auto* context=new(std::nothrow) new_window_context{view,uri};if(!decision||!context){delete decision;delete context;return nullptr;}neo_configure_decision(decision,view,NEOASTRA_DECISION_NEW_WINDOW,NEOASTRA_DECISION_CANCEL);decision->completion=new_window_decided;decision->completion_context=context;decision->external_uri=uri;neo_emit_view(view,NEOASTRA_EVENT_NEW_WINDOW_REQUESTED,0,&name,&uri,link_activation(action,NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED),0,decision);finish_synchronous_decision(decision);WebKitWebView* target{};if(decision->resolved_target){auto* target_state=static_cast<gtk_view*>(decision->resolved_target->platform);if(target_state&&target_state->widget)target=WEBKIT_WEB_VIEW(target_state->widget);}decision->release();return target;}
+WebKitWebView* create_web_view(WebKitWebView*,WebKitNavigationAction* action,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return nullptr;auto* request=webkit_navigation_action_get_request(action);std::string uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";const char* raw_name=webkit_navigation_action_get_frame_name(action);std::string name=raw_name?raw_name:"";auto* decision=new(std::nothrow) neoastra_decision;auto* context=new(std::nothrow) new_window_context{view,uri};if(!decision||!context){delete decision;delete context;return nullptr;}neo_configure_decision(decision,view,NEOASTRA_DECISION_NEW_WINDOW,NEOASTRA_DECISION_CANCEL);decision->completion=new_window_decided;decision->completion_context=context;decision->external_uri=uri;neo_emit_view(view,NEOASTRA_EVENT_NEW_WINDOW_REQUESTED,0,&name,&uri,link_activation(action,NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED),0,decision);finish_synchronous_decision(decision);WebKitWebView* target{};if(decision->resolved_target){auto* target_state=static_cast<gtk_view*>(decision->resolved_target->platform);if(target_state&&target_state->widget)target=WEBKIT_WEB_VIEW(g_object_ref(target_state->widget));}decision->release();return target;}
 gboolean decide_policy(WebKitWebView*, WebKitPolicyDecision* policy, WebKitPolicyDecisionType type, void* data) {
     if(type!=WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)return FALSE;
     auto* view=static_cast<neoastra_view_t*>(data);
+    neo_retain_guard owner(view);if(!owner){webkit_policy_decision_ignore(policy);return TRUE;}
     auto* navigation=WEBKIT_NAVIGATION_POLICY_DECISION(policy);
     auto* action=webkit_navigation_policy_decision_get_navigation_action(navigation);
     const uint64_t kind=navigation_kind(action);
@@ -417,44 +431,191 @@ gboolean decide_policy(WebKitWebView*, WebKitPolicyDecision* policy, WebKitPolic
     neo_finish_decision_event(view,decision);
     decision->release();return TRUE;
 }
+// These signals cannot wait. Completing the fallback consumes the native deferral reference, never the host's independent
+// retained reference: a late managed response must still be able to observe InvalidState and release its own handle safely.
 void finish_synchronous_decision(neoastra_decision_t* decision) {const auto state=decision->state.load(std::memory_order_acquire);if(state==neo_decision_state::pending||state==neo_decision_state::deferred){neoastra_decision_response_t response{};response.size=sizeof(response);response.version=1;response.action=decision->default_action;neoastra_decision_complete(decision,&response,nullptr);}}
 // The context holds a reference on its dialog. WebKitGTK closes a dialog decided inside the signal itself; one decided
 // later stays open, with the page waiting, until it is closed here.
 struct script_dialog_context { WebKitScriptDialog* dialog{}; bool deferred{}; };
 void script_dialog_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<script_dialog_context> context(static_cast<script_dialog_context*>(pointer));if(response->action==NEOASTRA_DECISION_ALLOW){const auto type=webkit_script_dialog_get_dialog_type(context->dialog);if(type==WEBKIT_SCRIPT_DIALOG_CONFIRM||type==WEBKIT_SCRIPT_DIALOG_BEFORE_UNLOAD_CONFIRM)webkit_script_dialog_confirm_set_confirmed(context->dialog,TRUE);else if(type==WEBKIT_SCRIPT_DIALOG_PROMPT){try{auto text=neo_string(response->text);webkit_script_dialog_prompt_set_text(context->dialog,text.c_str());}catch(...){}}}if(context->deferred)webkit_script_dialog_close(context->dialog);webkit_script_dialog_unref(context->dialog);}
-gboolean script_dialog(WebKitWebView*,WebKitScriptDialog* dialog,void* data){auto* view=static_cast<neoastra_view_t*>(data);if(auto* state=static_cast<gtk_view*>(view->platform);state&&state->default_script_dialogs)return FALSE;const auto native=webkit_script_dialog_get_dialog_type(dialog);const auto kind=native==WEBKIT_SCRIPT_DIALOG_ALERT?NEOASTRA_SCRIPT_DIALOG_ALERT:native==WEBKIT_SCRIPT_DIALOG_CONFIRM?NEOASTRA_SCRIPT_DIALOG_CONFIRM:native==WEBKIT_SCRIPT_DIALOG_PROMPT?NEOASTRA_SCRIPT_DIALOG_PROMPT:NEOASTRA_SCRIPT_DIALOG_BEFORE_UNLOAD;std::string message=webkit_script_dialog_get_message(dialog)?webkit_script_dialog_get_message(dialog):"";std::string default_text;if(native==WEBKIT_SCRIPT_DIALOG_PROMPT){const char* text=webkit_script_dialog_prompt_get_default_text(dialog);if(text)default_text=text;}auto* decision=new neoastra_decision;auto* context=new script_dialog_context{webkit_script_dialog_ref(dialog)};neo_configure_decision(decision,view,NEOASTRA_DECISION_SCRIPT_DIALOG,kind==NEOASTRA_SCRIPT_DIALOG_ALERT?NEOASTRA_DECISION_ALLOW:NEOASTRA_DECISION_CANCEL);decision->completion=script_dialog_decided;decision->completion_context=context;neo_event_details details{};details.text2=&default_text;neo_emit_view_detailed(view,NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED,0,&message,&view->source,kind,0,decision,details);neo_finish_decision_event(view,decision);
+gboolean script_dialog(WebKitWebView*,WebKitScriptDialog* dialog,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return TRUE;if(auto* state=static_cast<gtk_view*>(view->platform);state&&state->default_script_dialogs)return FALSE;const auto native=webkit_script_dialog_get_dialog_type(dialog);const auto kind=native==WEBKIT_SCRIPT_DIALOG_ALERT?NEOASTRA_SCRIPT_DIALOG_ALERT:native==WEBKIT_SCRIPT_DIALOG_CONFIRM?NEOASTRA_SCRIPT_DIALOG_CONFIRM:native==WEBKIT_SCRIPT_DIALOG_PROMPT?NEOASTRA_SCRIPT_DIALOG_PROMPT:NEOASTRA_SCRIPT_DIALOG_BEFORE_UNLOAD;std::string message=webkit_script_dialog_get_message(dialog)?webkit_script_dialog_get_message(dialog):"";std::string default_text;if(native==WEBKIT_SCRIPT_DIALOG_PROMPT){const char* text=webkit_script_dialog_prompt_get_default_text(dialog);if(text)default_text=text;}auto* decision=new neoastra_decision;auto* context=new script_dialog_context{webkit_script_dialog_ref(dialog)};neo_configure_decision(decision,view,NEOASTRA_DECISION_SCRIPT_DIALOG,kind==NEOASTRA_SCRIPT_DIALOG_ALERT?NEOASTRA_DECISION_ALLOW:NEOASTRA_DECISION_CANCEL);decision->completion=script_dialog_decided;decision->completion_context=context;neo_event_details details{};details.text2=&default_text;neo_emit_view_detailed(view,NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED,0,&message,&view->source,kind,0,decision,details);neo_finish_decision_event(view,decision);
     // A decision that is still deferred has not run its completion, so its context is alive and is told to close the dialog.
     if(decision->state.load(std::memory_order_acquire)==neo_decision_state::deferred)context->deferred=true;decision->release();return TRUE;}
 struct chooser_context { WebKitFileChooserRequest* request{}; };
 void chooser_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<chooser_context> context(static_cast<chooser_context*>(pointer));if(response->action!=NEOASTRA_DECISION_ALLOW){webkit_file_chooser_request_cancel(context->request);return;}try{std::vector<std::string> storage;std::vector<const char*> paths;storage.reserve(response->path_count);paths.reserve(static_cast<size_t>(response->path_count)+1);for(uint32_t i=0;i<response->path_count;++i)storage.push_back(neo_string(response->paths[i]));for(const auto& path:storage)paths.push_back(path.c_str());paths.push_back(nullptr);webkit_file_chooser_request_select_files(context->request,paths.data());}catch(...){webkit_file_chooser_request_cancel(context->request);}}
-gboolean run_file_chooser(WebKitWebView*,WebKitFileChooserRequest* request,void* data){auto* view=static_cast<neoastra_view_t*>(data);std::string accepted;for(auto* current=webkit_file_chooser_request_get_mime_types(request);current&&*current;++current){if(!accepted.empty())accepted.push_back(';');accepted+=*current;}auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_FILE_CHOOSER,NEOASTRA_DECISION_CANCEL);decision->completion=chooser_decided;decision->completion_context=new chooser_context{request};neo_emit_view(view,NEOASTRA_EVENT_FILE_CHOOSER_REQUESTED,0,&accepted,nullptr,webkit_file_chooser_request_get_select_multiple(request)?1u:0u,0,decision);finish_synchronous_decision(decision);decision->release();return TRUE;}
+gboolean run_file_chooser(WebKitWebView*,WebKitFileChooserRequest* request,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner){webkit_file_chooser_request_cancel(request);return TRUE;}std::string accepted;for(auto* current=webkit_file_chooser_request_get_mime_types(request);current&&*current;++current){if(!accepted.empty())accepted.push_back(';');accepted+=*current;}auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_FILE_CHOOSER,NEOASTRA_DECISION_CANCEL);decision->completion=chooser_decided;decision->completion_context=new chooser_context{request};neo_emit_view(view,NEOASTRA_EVENT_FILE_CHOOSER_REQUESTED,0,&accepted,nullptr,webkit_file_chooser_request_get_select_multiple(request)?1u:0u,0,decision);finish_synchronous_decision(decision);decision->release();return TRUE;}
 struct auth_context { WebKitAuthenticationRequest* request{}; };
 void auth_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<auth_context> context(static_cast<auth_context*>(pointer));if(response->action==NEOASTRA_DECISION_ALLOW){try{auto user=neo_string(response->text),password=neo_string(response->secondary_text);auto* credential=webkit_credential_new(user.c_str(),password.c_str(),WEBKIT_CREDENTIAL_PERSISTENCE_NONE);if(credential){webkit_authentication_request_authenticate(context->request,credential);webkit_credential_free(credential);return;}}catch(...){ }webkit_authentication_request_cancel(context->request);}else if(response->action==NEOASTRA_DECISION_CANCEL||response->action==NEOASTRA_DECISION_DENY)webkit_authentication_request_cancel(context->request);}
-gboolean authenticate(WebKitWebView*,WebKitAuthenticationRequest* request,void* data){auto* view=static_cast<neoastra_view_t*>(data);std::string host=webkit_authentication_request_get_host(request)?webkit_authentication_request_get_host(request):"";std::string realm=webkit_authentication_request_get_realm(request)?webkit_authentication_request_get_realm(request):"";auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_AUTHENTICATION,NEOASTRA_DECISION_DEFAULT);decision->completion=auth_decided;decision->completion_context=new auth_context{request};neo_event_details details{};details.text2=&realm;neo_emit_view_detailed(view,NEOASTRA_EVENT_AUTHENTICATION_REQUESTED,0,&host,nullptr,0,webkit_authentication_request_get_port(request),decision,details);finish_synchronous_decision(decision);const auto handled=decision->resolved_action.load()!=NEOASTRA_DECISION_DEFAULT;decision->release();return handled;}
+gboolean authenticate(WebKitWebView*,WebKitAuthenticationRequest* request,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner){webkit_authentication_request_cancel(request);return TRUE;}std::string host=webkit_authentication_request_get_host(request)?webkit_authentication_request_get_host(request):"";std::string realm=webkit_authentication_request_get_realm(request)?webkit_authentication_request_get_realm(request):"";auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_AUTHENTICATION,NEOASTRA_DECISION_DEFAULT);decision->completion=auth_decided;decision->completion_context=new auth_context{request};neo_event_details details{};details.text2=&realm;neo_emit_view_detailed(view,NEOASTRA_EVENT_AUTHENTICATION_REQUESTED,0,&host,nullptr,0,webkit_authentication_request_get_port(request),decision,details);finish_synchronous_decision(decision);const auto handled=decision->resolved_action.load()!=NEOASTRA_DECISION_DEFAULT;decision->release();return handled;}
 struct fullscreen_context { WebKitWebView* webview{}; };
 void fullscreen_decided(void* pointer,const neoastra_decision_response_t*) noexcept {delete static_cast<fullscreen_context*>(pointer);}
-gboolean enter_fullscreen(WebKitWebView* webview,void* data){auto* view=static_cast<neoastra_view_t*>(data);auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_FULLSCREEN,NEOASTRA_DECISION_DENY);decision->completion=fullscreen_decided;decision->completion_context=new fullscreen_context{webview};neo_emit_view(view,NEOASTRA_EVENT_FULLSCREEN_REQUESTED,0,nullptr,&view->source,1,0,decision);finish_synchronous_decision(decision);const auto allow=decision->resolved_action.load()==NEOASTRA_DECISION_ALLOW;decision->release();return allow?FALSE:TRUE;}
-struct gtk_download { WebKitDownload* value{};gulong destination{},received{},finished{},failed{}; };
-neoastra_result_t gtk_download_command(neoastra_download_t* download,uint32_t command) noexcept {auto* state=static_cast<gtk_download*>(download->platform);if(!state||!state->value)return NEOASTRA_ERROR_DISPOSED;if(command!=0)return NEOASTRA_ERROR_NOT_SUPPORTED;webkit_download_cancel(state->value);return NEOASTRA_OK;}
-void destroy_gtk_download(neoastra_download_t* download) noexcept {auto* state=static_cast<gtk_download*>(download->platform);if(!state)return;if(state->value){if(state->destination)g_signal_handler_disconnect(state->value,state->destination);if(state->received)g_signal_handler_disconnect(state->value,state->received);if(state->finished)g_signal_handler_disconnect(state->value,state->finished);if(state->failed)g_signal_handler_disconnect(state->value,state->failed);g_object_unref(state->value);}delete state;}
-struct download_destination_context { neoastra_download_t* download{}; };
-void download_destination_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {std::unique_ptr<download_destination_context> context(static_cast<download_destination_context*>(pointer));auto* state=static_cast<gtk_download*>(context->download->platform);if(!state)return;if(response->action==NEOASTRA_DECISION_DOWNLOAD){try{context->download->destination_path=neo_string(response->text);GError* error{};auto* uri=g_filename_to_uri(context->download->destination_path.c_str(),nullptr,&error);if(uri){webkit_download_set_destination(state->value,uri);g_free(uri);}else{webkit_download_cancel(state->value);if(error){context->download->failure_reason=error->message;g_error_free(error);}}}catch(...){webkit_download_cancel(state->value);}}else if(response->action!=NEOASTRA_DECISION_ALLOW&&response->action!=NEOASTRA_DECISION_DEFAULT)webkit_download_cancel(state->value);}
-gboolean download_decide_destination(WebKitDownload* native,const gchar* suggested,void* data) noexcept {auto* download=static_cast<neoastra_download_t*>(data);try{std::string filename=suggested?suggested:"";auto decision=std::make_unique<neoastra_decision>();neo_configure_decision(decision.get(),download->view,NEOASTRA_DECISION_DOWNLOAD_REQUEST,NEOASTRA_DECISION_CANCEL);decision->completion=download_destination_decided;decision->completion_context=new download_destination_context{download};neo_event_details details{};details.value2=1;details.download=download;download->event_published=true;neo_emit_view_detailed(download->view,NEOASTRA_EVENT_DOWNLOAD_REQUESTED,download->id,&filename,&download->source_uri,UINT64_MAX,0,decision.get(),details);finish_synchronous_decision(decision.get());const auto action=decision->resolved_action.load();const auto accepted=action==NEOASTRA_DECISION_DEFAULT||action==NEOASTRA_DECISION_ALLOW||action==NEOASTRA_DECISION_DOWNLOAD;if(accepted){download->state.store(NEOASTRA_DOWNLOAD_IN_PROGRESS);neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_STARTED);}return action==NEOASTRA_DECISION_ALLOW||action==NEOASTRA_DECISION_DEFAULT?FALSE:TRUE;}catch(...){webkit_download_cancel(native);return TRUE;}}
-void download_received(WebKitDownload* native,guint64 length,void* data) noexcept {auto* download=static_cast<neoastra_download_t*>(data);try{if(download->destination_path.empty()){const auto* destination=webkit_download_get_destination(native);if(destination){GError* error{};auto* path=g_filename_from_uri(destination,nullptr,&error);if(path){download->destination_path=path;g_free(path);}if(error)g_error_free(error);}}}catch(...){ }download->bytes_received.fetch_add(length);neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED);}
-void finish_gtk_download(neoastra_download_t* download,neoastra_download_state_t terminal,const GError* error=nullptr) noexcept {auto expected=NEOASTRA_DOWNLOAD_IN_PROGRESS;if(!download->state.compare_exchange_strong(expected,terminal)){expected=NEOASTRA_DOWNLOAD_REQUESTED;if(!download->state.compare_exchange_strong(expected,terminal))return;}if(error){try{download->failure_reason=error->message?error->message:"";}catch(...){}}neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_COMPLETED);download->release_lifecycle();}
+gboolean enter_fullscreen(WebKitWebView* webview,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return TRUE;auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_FULLSCREEN,NEOASTRA_DECISION_DENY);decision->completion=fullscreen_decided;decision->completion_context=new fullscreen_context{webview};neo_emit_view(view,NEOASTRA_EVENT_FULLSCREEN_REQUESTED,0,nullptr,&view->source,1,0,decision);finish_synchronous_decision(decision);const auto allow=decision->resolved_action.load()==NEOASTRA_DECISION_ALLOW;decision->release();return allow?FALSE:TRUE;}
+struct gtk_download {
+    WebKitDownload* value{};
+    gulong destination{},received{},finished{},failed{};
+    neoastra_decision_t* pending_destination{}; // Retained until resolution or download teardown.
+    bool cancel_requested{};
+};
+struct decision_deleter { void operator()(neoastra_decision_t* value) const noexcept { if(value)value->release(); } };
+void abandon_download_destination(gtk_download* state) noexcept {
+    if(auto* decision=std::exchange(state->pending_destination,nullptr)){decision->abandon();decision->release();}
+}
+neoastra_result_t gtk_download_command(neoastra_download_t* download,uint32_t command) noexcept {
+    // Destruction also calls this command at zero references: it must still cancel the engine, without resurrecting the owner.
+    neo_retain_guard owner(download);
+    neo_retain_guard view_owner(download->view);
+    auto* state=static_cast<gtk_download*>(download->platform);
+    if(!state||!state->value)return NEOASTRA_ERROR_DISPOSED;
+    if(command!=0)return NEOASTRA_ERROR_NOT_SUPPORTED;
+    if(state->cancel_requested)return NEOASTRA_OK;
+    g_object_ptr<WebKitDownload> native(WEBKIT_DOWNLOAD(g_object_ref(state->value)));
+    state->cancel_requested=true;
+    abandon_download_destination(state);
+    webkit_download_cancel(native.get());
+    return NEOASTRA_OK;
+}
+void destroy_gtk_download(neoastra_download_t* download) noexcept {
+    auto* state=static_cast<gtk_download*>(download->platform);
+    if(!state)return;
+    download->platform=nullptr;
+    abandon_download_destination(state);
+    if(state->value){
+        if(state->destination)g_signal_handler_disconnect(state->value,state->destination);
+        if(state->received)g_signal_handler_disconnect(state->value,state->received);
+        if(state->finished)g_signal_handler_disconnect(state->value,state->finished);
+        if(state->failed)g_signal_handler_disconnect(state->value,state->failed);
+        g_object_unref(state->value);
+    }
+    delete state;
+}
+struct download_destination_context {
+    neoastra_download_t* download;
+    std::string suggested_filename;
+    download_destination_context(neoastra_download_t* value,const std::string& suggested) : download(value),suggested_filename(suggested) { download->retain(); }
+    ~download_destination_context() { download->release(); }
+};
+void download_destination_decided(void* pointer,const neoastra_decision_response_t* response) noexcept {
+    std::unique_ptr<download_destination_context> context(static_cast<download_destination_context*>(pointer));
+    auto* download=context->download; // The context owns this reference, including after cancellation destroys the platform.
+    neo_retain_guard view_owner(download->view);
+    auto* state=static_cast<gtk_download*>(download->platform);
+    if(!state)return;
+    if(auto* decision=std::exchange(state->pending_destination,nullptr))decision->release();
+    if(state->cancel_requested||download->state.load()!=NEOASTRA_DOWNLOAD_REQUESTED)return;
+    g_object_ptr<WebKitDownload> native(WEBKIT_DOWNLOAD(g_object_ref(state->value)));
+    if(!view_owner||(response->action!=NEOASTRA_DECISION_DOWNLOAD&&response->action!=NEOASTRA_DECISION_ALLOW&&response->action!=NEOASTRA_DECISION_DEFAULT)){
+        state->cancel_requested=true;
+        webkit_download_cancel(native.get());
+        return;
+    }
+    try{
+        std::string destination;
+        if(response->action==NEOASTRA_DECISION_DOWNLOAD)destination=neo_string(response->text);
+        else if(const auto* existing=webkit_download_get_destination(native.get());existing&&*existing)destination=existing;
+        else{
+            // Match WebKit's default even when the response arrives after the signal: Downloads (or HOME), with directory
+            // separators in the suggested filename replaced. Returning FALSE later cannot invoke the signal's default handler.
+            auto filename=context->suggested_filename;
+            std::replace(filename.begin(),filename.end(),G_DIR_SEPARATOR,'_');
+            const auto* directory=g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+            if(!directory)directory=g_get_home_dir();
+            std::unique_ptr<gchar,decltype(&g_free)> path(g_build_filename(directory,filename.c_str(),nullptr),g_free);
+            if(path)destination=path.get();
+        }
+        // API 6.0 takes an absolute filesystem path, not the file URI used by the older WebKitGTK APIs. Invalid paths must
+        // cancel rather than leave WebKit waiting forever after returning TRUE from decide-destination.
+        if(destination.empty()||destination.find('\0')!=std::string::npos||!g_path_is_absolute(destination.c_str())){
+            state->cancel_requested=true;
+            webkit_download_cancel(native.get());
+            return;
+        }
+        download->destination_path=std::move(destination);
+        download->state.store(NEOASTRA_DOWNLOAD_IN_PROGRESS);
+        webkit_download_set_destination(native.get(),download->destination_path.c_str());
+        if(view_owner&&download->state.load()==NEOASTRA_DOWNLOAD_IN_PROGRESS)neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_STARTED);
+    }catch(...){webkit_download_cancel(native.get());}
+}
+gboolean download_decide_destination(WebKitDownload* native,const gchar* suggested,void* data) noexcept {
+    auto* download=static_cast<neoastra_download_t*>(data);
+    neo_retain_guard owner(download);
+    if(!owner)return TRUE;
+    neo_retain_guard view_owner(download->view);
+    g_object_ptr<WebKitDownload> native_owner(WEBKIT_DOWNLOAD(g_object_ref(native)));
+    if(!view_owner||download->state.load()!=NEOASTRA_DOWNLOAD_REQUESTED){webkit_download_cancel(native);return TRUE;}
+    try{
+        const std::string filename=suggested?suggested:"";
+        std::unique_ptr<neoastra_decision,decision_deleter> decision(new neoastra_decision);
+        auto context=std::make_unique<download_destination_context>(download,filename);
+        neo_configure_decision(decision.get(),download->view,NEOASTRA_DECISION_DOWNLOAD_REQUEST,NEOASTRA_DECISION_CANCEL);
+        decision->completion=download_destination_decided;
+        decision->completion_context=context.release();
+        auto* state=static_cast<gtk_download*>(download->platform);
+        decision->retain();state->pending_destination=decision.get();
+        neo_event_details details{};details.value2=1;details.download=download;
+        download->event_published=true;
+        neo_emit_view_detailed(download->view,NEOASTRA_EVENT_DOWNLOAD_REQUESTED,download->id,&filename,&download->source_uri,UINT64_MAX,0,decision.get(),details);
+        neo_finish_decision_event(download->destruction_app,decision.get());
+        // WebKitGTK 6.0 (since 2.40) waits after TRUE until set_destination or cancel, including when the host defers.
+        return TRUE;
+    }catch(...){webkit_download_cancel(native);return TRUE;}
+}
+void download_received(WebKitDownload* native,guint64 length,void* data) noexcept {
+    auto* download=static_cast<neoastra_download_t*>(data);
+    neo_retain_guard owner(download);if(!owner)return;
+    neo_retain_guard view_owner(download->view);
+    try{if(download->destination_path.empty()){if(const auto* destination=webkit_download_get_destination(native))download->destination_path=destination;}}catch(...){ }
+    download->bytes_received.fetch_add(length);
+    if(view_owner)neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED);
+}
+void finish_gtk_download(neoastra_download_t* download,neoastra_download_state_t terminal,const GError* error=nullptr) noexcept {
+    neo_retain_guard owner(download);if(!owner)return;
+    neo_retain_guard view_owner(download->view);
+    auto expected=NEOASTRA_DOWNLOAD_IN_PROGRESS;
+    if(!download->state.compare_exchange_strong(expected,terminal)){expected=NEOASTRA_DOWNLOAD_REQUESTED;if(!download->state.compare_exchange_strong(expected,terminal))return;}
+    if(auto* state=static_cast<gtk_download*>(download->platform))abandon_download_destination(state);
+    if(error){try{download->failure_reason=error->message?error->message:"";}catch(...){}}
+    if(view_owner)neo_download_emit(download,NEOASTRA_EVENT_DOWNLOAD_COMPLETED);
+    download->release_lifecycle();
+}
 void download_finished(WebKitDownload*,void* data){finish_gtk_download(static_cast<neoastra_download_t*>(data),NEOASTRA_DOWNLOAD_COMPLETED);}
-void download_failed(WebKitDownload*,GError* error,void* data){finish_gtk_download(static_cast<neoastra_download_t*>(data),error&&g_error_matches(error,G_IO_ERROR,G_IO_ERROR_CANCELLED)?NEOASTRA_DOWNLOAD_CANCELED:NEOASTRA_DOWNLOAD_FAILED,error);}
-void download_started(WebKitNetworkSession*,WebKitDownload* native,void*) noexcept {auto* webview=webkit_download_get_web_view(native);auto* view=webview?static_cast<neoastra_view_t*>(g_object_get_data(G_OBJECT(webview),"neoastra.native-view")):nullptr;if(!view){webkit_download_cancel(native);return;}try{auto download=std::make_unique<neoastra_download>(view);auto state=std::make_unique<gtk_download>();download->platform=state.release();download->command=gtk_download_command;download->platform_destroy=destroy_gtk_download;auto* platform=static_cast<gtk_download*>(download->platform);platform->value=WEBKIT_DOWNLOAD(g_object_ref(native));auto* request=webkit_download_get_request(native);download->source_uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";platform->destination=g_signal_connect(native,"decide-destination",G_CALLBACK(download_decide_destination),download.get());platform->received=g_signal_connect(native,"received-data",G_CALLBACK(download_received),download.get());platform->finished=g_signal_connect(native,"finished",G_CALLBACK(download_finished),download.get());platform->failed=g_signal_connect(native,"failed",G_CALLBACK(download_failed),download.get());if(!platform->destination||!platform->received||!platform->finished||!platform->failed){download.reset();webkit_download_cancel(native);return;}download.release();}catch(...){webkit_download_cancel(native);}}
+void download_failed(WebKitDownload*,GError* error,void* data){finish_gtk_download(static_cast<neoastra_download_t*>(data),error&&g_error_matches(error,WEBKIT_DOWNLOAD_ERROR,WEBKIT_DOWNLOAD_ERROR_CANCELLED_BY_USER)?NEOASTRA_DOWNLOAD_CANCELED:NEOASTRA_DOWNLOAD_FAILED,error);}
+void download_started(WebKitNetworkSession*,WebKitDownload* native,void*) noexcept {
+    // Several environments can share one session, each with a download-started handler. There is still only one policy
+    // and one tracked lifecycle for a native download. This boolean tag owns no NeoAstra pointer and cannot become stale.
+    constexpr const char* tracked_key="neoastra.download-tracked";
+    if(g_object_get_data(G_OBJECT(native),tracked_key))return;
+    g_object_set_data(G_OBJECT(native),tracked_key,GINT_TO_POINTER(1));
+    g_object_ptr<WebKitDownload> native_owner(WEBKIT_DOWNLOAD(g_object_ref(native)));
+    auto* webview=webkit_download_get_web_view(native);
+    auto* view=webview?static_cast<neoastra_view_t*>(g_object_get_data(G_OBJECT(webview),"neoastra.native-view")):nullptr;
+    neo_retain_guard view_owner(view);
+    if(!view_owner){webkit_download_cancel(native);return;}
+    try{
+        auto download=std::make_unique<neoastra_download>(view);
+        auto state=std::make_unique<gtk_download>();
+        download->platform=state.release();download->command=gtk_download_command;download->platform_destroy=destroy_gtk_download;
+        auto* platform=static_cast<gtk_download*>(download->platform);
+        platform->value=WEBKIT_DOWNLOAD(g_object_ref(native));
+        auto* request=webkit_download_get_request(native);
+        download->source_uri=request&&webkit_uri_request_get_uri(request)?webkit_uri_request_get_uri(request):"";
+        platform->destination=g_signal_connect(native,"decide-destination",G_CALLBACK(download_decide_destination),download.get());
+        platform->received=g_signal_connect(native,"received-data",G_CALLBACK(download_received),download.get());
+        platform->finished=g_signal_connect(native,"finished",G_CALLBACK(download_finished),download.get());
+        platform->failed=g_signal_connect(native,"failed",G_CALLBACK(download_failed),download.get());
+        if(!platform->destination||!platform->received||!platform->finished||!platform->failed){download.reset();webkit_download_cancel(native);return;}
+        download.release();
+    }catch(...){webkit_download_cancel(native);}
+}
 // Reports which directions of the history have an entry to go to, one bit for each, when that has changed.
-void report_history(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return;auto* web=WEBKIT_WEB_VIEW(state->widget);const uint64_t history=neo_history_directions(view,webkit_web_view_can_go_back(web),webkit_web_view_can_go_forward(web));if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
+void report_history(neoastra_view_t* view) noexcept {neo_retain_guard owner(view);if(!owner)return;auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return;auto* web=WEBKIT_WEB_VIEW(state->widget);const uint64_t history=neo_history_directions(view,webkit_web_view_can_go_back(web),webkit_web_view_can_go_forward(web));if(state->history==history)return;state->history=history;neo_emit_view(view,NEOASTRA_EVENT_HISTORY_CHANGED,0,nullptr,nullptr,history);}
 void history_changed(WebKitBackForwardList*,WebKitBackForwardListItem*,gpointer,void* data) {report_history(static_cast<neoastra_view_t*>(data));}
 // The history is also read as a document commits and before its load is reported as finished, so that a handler of the completed navigation sees the directions it can go in.
-void load_changed(WebKitWebView* webview, WebKitLoadEvent event, void* data) { auto* view=static_cast<neoastra_view_t*>(data);const char* raw=webkit_web_view_get_uri(webview);std::string uri=raw?raw:"";if(event==WEBKIT_LOAD_STARTED)neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_STARTED,0,nullptr,&uri,1);else if(event==WEBKIT_LOAD_COMMITTED)report_history(view);else if(event==WEBKIT_LOAD_FINISHED){report_history(view);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_COMPLETED,0,nullptr,&uri);} }
-gboolean load_failed(WebKitWebView*, WebKitLoadEvent, const char* uri, GError* error, void* data) { auto* view=static_cast<neoastra_view_t*>(data);std::string value=uri?uri:"";neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_FAILED,0,nullptr,&value,NEOASTRA_ERROR_NATIVE_FAILURE,error?error->code:0);return FALSE; }
-void title_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neoastra_view_t*>(data);const auto* value=webkit_web_view_get_title(WEBKIT_WEB_VIEW(object));view->title=value?value:"";neo_emit_view(view,NEOASTRA_EVENT_TITLE_CHANGED,0,&view->title);}
-void uri_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neoastra_view_t*>(data);const auto* value=webkit_web_view_get_uri(WEBKIT_WEB_VIEW(object));view->source=value?value:"";neo_emit_view(view,NEOASTRA_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);}
-void message_received(WebKitUserContentManager*,JSCValue* value,void* data) noexcept {auto* view=static_cast<neoastra_view_t*>(data);char* json{};try{json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);json=nullptr;const std::string origin;neo_emit_bridge_message(view,message,origin,false);}catch(...){g_free(json);if(view)neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WebKitGTK web-message handling failed");}}
-void web_process_terminated(WebKitWebView*,WebKitWebProcessTerminationReason reason,void* data){auto* view=static_cast<neoastra_view_t*>(data);uint64_t value=NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;if(reason==WEBKIT_WEB_PROCESS_CRASHED||reason==WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT)value|=NEOASTRA_PROCESS_FAILURE_CRASHED;neo_emit_view(view,NEOASTRA_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,value,static_cast<int64_t>(reason));}
+void load_changed(WebKitWebView* webview, WebKitLoadEvent event, void* data) { auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return;const char* raw=webkit_web_view_get_uri(webview);std::string uri=raw?raw:"";if(event==WEBKIT_LOAD_STARTED)neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_STARTED,0,nullptr,&uri,1);else if(event==WEBKIT_LOAD_COMMITTED)report_history(view);else if(event==WEBKIT_LOAD_FINISHED){report_history(view);neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_COMPLETED,0,nullptr,&uri);} }
+gboolean load_failed(WebKitWebView*, WebKitLoadEvent, const char* uri, GError* error, void* data) { auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;std::string value=uri?uri:"";neo_emit_view(view,NEOASTRA_EVENT_NAVIGATION_FAILED,0,nullptr,&value,NEOASTRA_ERROR_NATIVE_FAILURE,error?error->code:0);return FALSE; }
+void title_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return;const auto* value=webkit_web_view_get_title(WEBKIT_WEB_VIEW(object));view->title=value?value:"";neo_emit_view(view,NEOASTRA_EVENT_TITLE_CHANGED,0,&view->title);}
+void uri_changed(GObject* object,GParamSpec*,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return;const auto* value=webkit_web_view_get_uri(WEBKIT_WEB_VIEW(object));view->source=value?value:"";neo_emit_view(view,NEOASTRA_EVENT_SOURCE_CHANGED,0,nullptr,&view->source);}
+void message_received(WebKitUserContentManager*,JSCValue* value,void* data) noexcept {auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return;char* json{};try{json=jsc_value_to_json(value,0);std::string message=json?json:"null";g_free(json);json=nullptr;const std::string origin;neo_emit_bridge_message(view,message,origin,false);}catch(...){g_free(json);neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WebKitGTK web-message handling failed");}}
+void web_process_terminated(WebKitWebView*,WebKitWebProcessTerminationReason reason,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return;uint64_t value=NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED|NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;if(reason==WEBKIT_WEB_PROCESS_CRASHED||reason==WEBKIT_WEB_PROCESS_EXCEEDED_MEMORY_LIMIT)value|=NEOASTRA_PROCESS_FAILURE_CRASHED;neo_emit_view(view,NEOASTRA_EVENT_WEB_PROCESS_TERMINATED,0,nullptr,nullptr,value,static_cast<int64_t>(reason));}
 
 struct script_context { neoastra_view_t* view{};neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{}; };
 void script_finished(GObject* object,GAsyncResult* result,void* data){std::unique_ptr<script_context> context(static_cast<script_context*>(data));GError* error{};auto* value=webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(object),result,&error);std::string output;neoastra_error_t* native_error{};auto requested=NEOASTRA_OK;if(error){requested=NEOASTRA_ERROR_NATIVE_FAILURE;native_error=make_error(requested,error->message,error->code);g_error_free(error);}else if(value){char* json=jsc_value_to_json(value,0);output=json?json:"null";g_free(json);g_object_unref(value);}neoastra_result_t actual{};if(context->operation->try_complete(requested,actual))context->callback(context->context,actual,actual==NEOASTRA_OK?neo_string_view(output):neoastra_string_view_t{},native_error);if(native_error)native_error->release();context->operation->release();}
@@ -574,11 +735,11 @@ void apply_title_bar(neoastra_window_t* window,gtk_window* state) noexcept {
     gtk_window_set_titlebar(value,bar);
 }
 }
-bool neo_platform_window_create(neoastra_window_t* window,const neoastra_window_options_t* options,neoastra_error_t**) noexcept {auto* state=new(std::nothrow) gtk_window;if(!state)return false;state->widget=gtk_window_new();window->platform=state;auto* value=GTK_WINDOW(state->widget);gtk_window_set_title(value,window->title.c_str());gtk_window_set_default_size(value,window->bounds.width,window->bounds.height);neo_platform_window_set_size_constraints(window);gtk_window_set_resizable(value,(options->flags&1u)!=0);gtk_window_set_decorated(value,(options->flags&2u)!=0);apply_title_bar(window,state);if(window->owner){auto* owner=static_cast<gtk_window*>(window->owner->platform);if(owner&&owner->widget)gtk_window_set_transient_for(value,GTK_WINDOW(owner->widget));}gtk_window_set_modal(value,(options->flags&128u)!=0);g_signal_connect(state->widget,"close-request",G_CALLBACK(window_close_requested),window);g_signal_connect(state->widget,"realize",G_CALLBACK(window_realized),window);g_signal_connect(state->widget,"notify::scale-factor",G_CALLBACK(window_scale_changed),window);neo_window_set_scale_factor(window,gtk_widget_get_scale_factor(state->widget),false);g_signal_connect(state->widget,"notify::is-active",G_CALLBACK(window_focus_changed),window);g_signal_connect(state->widget,"notify::maximized",G_CALLBACK(window_state_changed),window);g_signal_connect(state->widget,"notify::fullscreened",G_CALLBACK(window_state_changed),window);g_signal_connect(state->widget,"notify::suspended",G_CALLBACK(window_state_changed),window);if(options->flags&4u){gtk_window_present(value);neo_platform_window_set_state(window);}return true;}
-void neo_platform_window_destroy(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state)return;unwatch_window_size(state);if(state->widget)gtk_window_destroy(GTK_WINDOW(state->widget));delete state;window->platform=nullptr;}
+bool neo_platform_window_create(neoastra_window_t* window,const neoastra_window_options_t* options,neoastra_error_t**) noexcept {auto* state=new(std::nothrow) gtk_window;if(!state)return false;state->widget=gtk_window_new();g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));window->platform=state;auto* value=GTK_WINDOW(state->widget);gtk_window_set_title(value,window->title.c_str());gtk_window_set_default_size(value,window->bounds.width,window->bounds.height);neo_platform_window_set_size_constraints(window);gtk_window_set_resizable(value,(options->flags&1u)!=0);gtk_window_set_decorated(value,(options->flags&2u)!=0);apply_title_bar(window,state);if(window->owner){auto* owner=static_cast<gtk_window*>(window->owner->platform);if(owner&&owner->widget)gtk_window_set_transient_for(value,GTK_WINDOW(owner->widget));}gtk_window_set_modal(value,(options->flags&128u)!=0);g_signal_connect(state->widget,"close-request",G_CALLBACK(window_close_requested),window);g_signal_connect(state->widget,"realize",G_CALLBACK(window_realized),window);g_signal_connect(state->widget,"notify::scale-factor",G_CALLBACK(window_scale_changed),window);neo_window_set_scale_factor(window,gtk_widget_get_scale_factor(state->widget),false);g_signal_connect(state->widget,"notify::is-active",G_CALLBACK(window_focus_changed),window);g_signal_connect(state->widget,"notify::maximized",G_CALLBACK(window_state_changed),window);g_signal_connect(state->widget,"notify::fullscreened",G_CALLBACK(window_state_changed),window);g_signal_connect(state->widget,"notify::suspended",G_CALLBACK(window_state_changed),window);if(options->flags&4u){gtk_window_present(value);neo_platform_window_set_state(window);}return true;}
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state)return;unwatch_window_size(state);if(state->widget){auto* widget=state->widget;g_signal_handlers_disconnect_by_data(widget,window);g_object_remove_weak_pointer(G_OBJECT(widget),reinterpret_cast<void**>(&state->widget));state->widget=nullptr;gtk_window_destroy(GTK_WINDOW(widget));}delete state;window->platform=nullptr;}
 neoastra_result_t neo_platform_window_show(neoastra_window_t* window,bool visible) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;if(!visible){gtk_widget_set_visible(state->widget,FALSE);return NEOASTRA_OK;}neoastra_window_state_t desired{};{std::lock_guard lock(window->state_mutex);desired=window->state;}gtk_window_present(GTK_WINDOW(state->widget));{std::lock_guard lock(window->state_mutex);window->state=desired;}return neo_platform_window_set_state(window);}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;gtk_window_present(GTK_WINDOW(state->widget));return NEOASTRA_OK;}
-neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;auto* widget=state->widget;unwatch_window_size(state);state->widget=nullptr;gtk_window_destroy(GTK_WINDOW(widget));neo_window_closed(window);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_force_close(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;auto* widget=state->widget;unwatch_window_size(state);g_object_remove_weak_pointer(G_OBJECT(widget),reinterpret_cast<void**>(&state->widget));state->widget=nullptr;g_signal_handlers_disconnect_by_data(widget,window);gtk_window_destroy(GTK_WINDOW(widget));neo_window_closed(window);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;gtk_window_set_title(GTK_WINDOW(state->widget),window->title.c_str());return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;gtk_window_set_default_size(GTK_WINDOW(state->widget),window->bounds.width,window->bounds.height);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;gtk_widget_set_size_request(state->widget,window->minimum_size.width>0?window->minimum_size.width:-1,window->minimum_size.height>0?window->minimum_size.height:-1);return NEOASTRA_OK;}
@@ -636,8 +797,8 @@ WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,n
 }
 }
 
-bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error);environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;if(error&&!*error)neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create its web context or network session",0,"webkitgtk");return false;}if(!register_custom_schemes(environment,state->context,error)){g_object_unref(state->session);g_object_unref(state->context);delete state;environment->platform=nullptr;return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
-void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {auto* state=static_cast<gtk_environment*>(environment->platform);if(!state)return;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}if(state->context)g_object_unref(state->context);delete state;environment->platform=nullptr;}
+bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error);environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;if(error&&!*error)neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create its web context or network session",0,"webkitgtk");return false;}if(!register_custom_schemes(environment,state->context,error)){neo_platform_environment_destroy(environment);return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
+void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {auto* state=static_cast<gtk_environment*>(environment->platform);if(!state)return;for(auto* registration:state->schemes)registration->environment=nullptr;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}if(state->context)g_object_unref(state->context);delete state;environment->platform=nullptr;}
 bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_profile;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile allocation failed");return false;}auto* environment=static_cast<gtk_environment*>(profile->environment->platform);state->session=profile->ephemeral?webkit_network_session_new_ephemeral():environment&&environment->session?WEBKIT_NETWORK_SESSION(g_object_ref(environment->session)):nullptr;if(!state->session){delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile network-session creation failed");return false;}if(profile->ephemeral)state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);profile->platform=state;return true;}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state)return;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}delete state;profile->platform=nullptr;}
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t* profile,const std::string& uri,neoastra_buffer_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state||!state->session)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebKitGTK profile is not initialized");auto* completion=new(std::nothrow) cookie_context{callback,context,operation};if(!completion)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK cookie operation allocation failed");webkit_cookie_manager_get_cookies(webkit_network_session_get_cookie_manager(state->session),uri.c_str(),nullptr,cookies_finished,completion);return NEOASTRA_OK;}
@@ -646,10 +807,10 @@ neoastra_result_t neo_platform_profile_delete_cookie(neoastra_profile_t* profile
 neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile,neoastra_data_kind_t kinds,int64_t start,int64_t end,neoastra_completion_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state||!state->session)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebKitGTK profile is not initialized");if(end!=INT64_MAX||(kinds!=NEOASTRA_DATA_ALL&&(kinds&(NEOASTRA_DATA_PERMISSIONS|NEOASTRA_DATA_DOWNLOAD_HISTORY))))return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK cannot clear the selected data kinds or bounded end time");WebKitWebsiteDataTypes types=static_cast<WebKitWebsiteDataTypes>(0);if(kinds==NEOASTRA_DATA_ALL)types=WEBKIT_WEBSITE_DATA_ALL;else{if(kinds&NEOASTRA_DATA_COOKIES)types=static_cast<WebKitWebsiteDataTypes>(types|WEBKIT_WEBSITE_DATA_COOKIES);if(kinds&NEOASTRA_DATA_CACHE)types=static_cast<WebKitWebsiteDataTypes>(types|WEBKIT_WEBSITE_DATA_MEMORY_CACHE|WEBKIT_WEBSITE_DATA_DISK_CACHE|WEBKIT_WEBSITE_DATA_DOM_CACHE);if(kinds&NEOASTRA_DATA_LOCAL_STORAGE)types=static_cast<WebKitWebsiteDataTypes>(types|WEBKIT_WEBSITE_DATA_LOCAL_STORAGE);if(kinds&NEOASTRA_DATA_INDEXED_DB)types=static_cast<WebKitWebsiteDataTypes>(types|WEBKIT_WEBSITE_DATA_INDEXEDDB_DATABASES);if(kinds&NEOASTRA_DATA_SERVICE_WORKERS)types=static_cast<WebKitWebsiteDataTypes>(types|WEBKIT_WEBSITE_DATA_SERVICE_WORKER_REGISTRATIONS);}const auto now=g_get_real_time()/1000;const auto timespan=start==INT64_MIN?0:std::max<int64_t>(0,now-start)*1000;auto* completion=new(std::nothrow) clear_context{callback,context,operation};if(!completion)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK clear-data allocation failed");auto* manager=webkit_network_session_get_website_data_manager(state->session);webkit_website_data_manager_clear(manager,types,timespan,nullptr,clear_finished,completion);return NEOASTRA_OK;} // NOLINT(clang-analyzer-optin.core.EnumCastOutOfRange) WebKit data types are bit flags.
 namespace {
 // Suppresses WebKit's default menu when the host turned it off; page-level contextmenu handlers have already run.
-gboolean context_menu(WebKitWebView*,WebKitContextMenu*,WebKitHitTestResult*,void* data){auto* view=static_cast<neoastra_view_t*>(data);auto* state=view?static_cast<gtk_view*>(view->platform):nullptr;return state&&state->context_menus_disabled?TRUE:FALSE;}
+gboolean context_menu(WebKitWebView*,WebKitContextMenu*,WebKitHitTestResult*,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return TRUE;auto* state=static_cast<gtk_view*>(view->platform);return state&&state->context_menus_disabled?TRUE:FALSE;}
 // WebKitGTK has no DevTools shortcut of its own, so F12 opens the inspector whenever developer extras are enabled.
 gboolean devtools_key_pressed(GtkEventControllerKey*,guint keyval,guint,GdkModifierType modifiers,void* data){
-    auto* view=static_cast<neoastra_view_t*>(data);auto* state=view?static_cast<gtk_view*>(view->platform):nullptr;
+    auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;auto* state=static_cast<gtk_view*>(view->platform);
     if(!state||!state->widget||keyval!=GDK_KEY_F12||(modifiers&(GDK_CONTROL_MASK|GDK_SHIFT_MASK|GDK_ALT_MASK))!=0)return FALSE;
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);
     if(!webkit_settings_get_enable_developer_extras(webkit_web_view_get_settings(web_view)))return FALSE;
@@ -660,9 +821,42 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     // WebKitGTK before 2.46 gives a page no microphone or camera to ask for unless the setting is on. A page asks as it does in
     // the other backends whatever the version, and its request is refused unless the host allows it.
     webkit_settings_set_enable_media_stream(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),TRUE);
-    g_object_set_data(G_OBJECT(state->widget),"neoastra.native-view",view);g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->load_changed=g_signal_connect(state->widget,"load-changed",G_CALLBACK(load_changed),view);state->load_failed=g_signal_connect(state->widget,"load-failed",G_CALLBACK(load_failed),view);g_signal_connect(state->widget,"decide-policy",G_CALLBACK(decide_policy),view);g_signal_connect(state->widget,"permission-request",G_CALLBACK(permission_requested),view);g_signal_connect(state->widget,"create",G_CALLBACK(create_web_view),view);g_signal_connect(state->widget,"script-dialog",G_CALLBACK(script_dialog),view);g_signal_connect(state->widget,"run-file-chooser",G_CALLBACK(run_file_chooser),view);g_signal_connect(state->widget,"authenticate",G_CALLBACK(authenticate),view);g_signal_connect(state->widget,"enter-fullscreen",G_CALLBACK(enter_fullscreen),view);state->title_changed=g_signal_connect(state->widget,"notify::title",G_CALLBACK(title_changed),view);state->uri_changed=g_signal_connect(state->widget,"notify::uri",G_CALLBACK(uri_changed),view);state->history_changed=g_signal_connect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),"changed",G_CALLBACK(history_changed),view);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)state->message_received=g_signal_connect(state->content,"script-message-received::_neoastra_transport_v1",G_CALLBACK(message_received),view);state->process_terminated=g_signal_connect(state->widget,"web-process-terminated",G_CALLBACK(web_process_terminated),view);g_signal_connect(state->widget,"context-menu",G_CALLBACK(context_menu),view);{auto* keys=gtk_event_controller_key_new();gtk_event_controller_set_propagation_phase(keys,GTK_PHASE_CAPTURE);g_signal_connect(keys,"key-pressed",G_CALLBACK(devtools_key_pressed),view);gtk_widget_add_controller(state->widget,keys);}state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(state->drop_target));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);gtk_overlay_set_measure_overlay(GTK_OVERLAY(stack),state->widget,TRUE);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
+    state->history_list=WEBKIT_BACK_FORWARD_LIST(g_object_ref(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget))));
+    g_object_set_data(G_OBJECT(state->widget),"neoastra.native-view",view);g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->load_changed=g_signal_connect(state->widget,"load-changed",G_CALLBACK(load_changed),view);state->load_failed=g_signal_connect(state->widget,"load-failed",G_CALLBACK(load_failed),view);g_signal_connect(state->widget,"decide-policy",G_CALLBACK(decide_policy),view);g_signal_connect(state->widget,"permission-request",G_CALLBACK(permission_requested),view);g_signal_connect(state->widget,"create",G_CALLBACK(create_web_view),view);g_signal_connect(state->widget,"script-dialog",G_CALLBACK(script_dialog),view);g_signal_connect(state->widget,"run-file-chooser",G_CALLBACK(run_file_chooser),view);g_signal_connect(state->widget,"authenticate",G_CALLBACK(authenticate),view);g_signal_connect(state->widget,"enter-fullscreen",G_CALLBACK(enter_fullscreen),view);state->title_changed=g_signal_connect(state->widget,"notify::title",G_CALLBACK(title_changed),view);state->uri_changed=g_signal_connect(state->widget,"notify::uri",G_CALLBACK(uri_changed),view);state->history_changed=g_signal_connect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),"changed",G_CALLBACK(history_changed),view);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)state->message_received=g_signal_connect(state->content,"script-message-received::_neoastra_transport_v1",G_CALLBACK(message_received),view);state->process_terminated=g_signal_connect(state->widget,"web-process-terminated",G_CALLBACK(web_process_terminated),view);g_signal_connect(state->widget,"context-menu",G_CALLBACK(context_menu),view);
+    // Keep our own controller references so that even a host that removes and retains a controller cannot leave stale userdata.
+    state->keys=gtk_event_controller_key_new();gtk_event_controller_set_propagation_phase(state->keys,GTK_PHASE_CAPTURE);g_signal_connect(state->keys,"key-pressed",G_CALLBACK(devtools_key_pressed),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->keys)));
+    state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);gtk_overlay_set_measure_overlay(GTK_OVERLAY(stack),state->widget,TRUE);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
 // A window keeps its own pointer to its child, which only gtk_window_set_child clears: unparenting a hosted view directly would leave the window a freed child.
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state)return;for(auto& entry:state->scripts)webkit_user_script_unref(entry.second);if(state->widget){if(state->history_changed)g_signal_handler_disconnect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),state->history_changed);g_object_remove_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));auto* parent=gtk_widget_get_parent(state->widget);if(is_view_stack(parent))gtk_overlay_remove_overlay(GTK_OVERLAY(parent),state->widget);else if(GTK_IS_WINDOW(parent)&&gtk_window_get_child(GTK_WINDOW(parent))==state->widget)gtk_window_set_child(GTK_WINDOW(parent),nullptr);else gtk_widget_unparent(state->widget);state->widget=nullptr;}if(state->content){if(state->message_received)g_signal_handler_disconnect(state->content,state->message_received);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)webkit_user_content_manager_unregister_script_message_handler(state->content,"_neoastra_transport_v1",nullptr);g_object_unref(state->content);}delete state;view->platform=nullptr;}
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
+    auto* state=static_cast<gtk_view*>(view->platform);if(!state)return;
+    view->platform=nullptr;
+    for(auto& entry:state->scripts)webkit_user_script_unref(entry.second);
+    if(state->history_list)g_signal_handlers_disconnect_by_data(state->history_list,view);
+    if(state->drop_target)g_signal_handlers_disconnect_by_data(state->drop_target,view);
+    if(state->keys)g_signal_handlers_disconnect_by_data(state->keys,view);
+    if(state->content)g_signal_handlers_disconnect_by_data(state->content,view);
+    if(state->widget){
+        g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
+        g_object_set_data(G_OBJECT(widget.get()),"neoastra.native-view",nullptr);
+        g_signal_handlers_disconnect_by_data(widget.get(),view);
+        if(state->drop_target&&gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(state->drop_target))==widget.get())gtk_widget_remove_controller(widget.get(),GTK_EVENT_CONTROLLER(state->drop_target));
+        if(state->keys&&gtk_event_controller_get_widget(state->keys)==widget.get())gtk_widget_remove_controller(widget.get(),state->keys);
+        g_object_remove_weak_pointer(G_OBJECT(widget.get()),reinterpret_cast<void**>(&state->widget));
+        auto* parent=gtk_widget_get_parent(widget.get());
+        if(is_view_stack(parent))gtk_overlay_remove_overlay(GTK_OVERLAY(parent),widget.get());
+        else if(GTK_IS_WINDOW(parent)&&gtk_window_get_child(GTK_WINDOW(parent))==widget.get())gtk_window_set_child(GTK_WINDOW(parent),nullptr);
+        else if(parent)gtk_widget_unparent(widget.get());
+        state->widget=nullptr;
+    }
+    if(state->history_list)g_object_unref(state->history_list);
+    if(state->drop_target)g_object_unref(state->drop_target);
+    if(state->keys)g_object_unref(state->keys);
+    if(state->content){
+        if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)webkit_user_content_manager_unregister_script_message_handler(state->content,"_neoastra_transport_v1",nullptr);
+        g_object_unref(state->content);
+    }
+    delete state;
+}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;gtk_widget_set_size_request(state->widget,view->fill_parent?-1:view->bounds.width,view->fill_parent?-1:view->bounds.height);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;webkit_web_view_load_uri(WEBKIT_WEB_VIEW(state->widget),uri.c_str());return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t*,uint64_t body_length,neoastra_error_t** error) noexcept {if(method=="GET"&&headers.empty()&&body_length==0)return neo_platform_view_navigate(view,uri,error);return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK 6.0 does not expose arbitrary-method top-level navigation");}

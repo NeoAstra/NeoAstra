@@ -25,6 +25,9 @@ Large UI/.NET transfers use runtime-sized payload budgets by default, with confi
 Native operation cancellation and shutdown ownership are described in the
 [lifecycle guide](doc/application-lifecycle-and-hosting.md#native-asynchronous-completion-ownership).
 
+Download policies can choose a destination asynchronously, including on Linux; timeouts and failed
+handlers safely cancel the request. See the [platform notes](doc/known-limitations.md#download-policies-on-linux).
+
 ## 🪪 License
 
 This software is released under the [BSD-2-Clause license](https://opensource.org/licenses/BSD-2-Clause).

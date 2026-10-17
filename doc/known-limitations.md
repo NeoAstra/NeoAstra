@@ -252,6 +252,22 @@ on screen takes a size when it is laid out next: `ClientSize` returns the assign
 and the size that the window has from then on, and `ClientSizeChanged` reports a size that the
 screen, a size limit, the state of the window, or the user gave it.
 
+## Download policies on Linux
+
+`DownloadRequested` supports asynchronous destination policies on WebKitGTK 6.0. The engine waits
+without writing the destination file until the policy chooses a destination or cancels. Use
+`NeoDownloadDecision.Accept` with an **absolute filesystem path**, not a `file://` URI. An explicit
+`Default` uses WebKit's usual Downloads directory (the home directory when XDG has no Downloads
+directory) and suggested filename; existing files are not overwritten by default.
+
+An absent, failed, canceled, or timed-out policy cancels the request. `NeoDownload.Cancel()` and view
+teardown also settle a pending destination, so a late response cannot restart the download. Started
+is reported only after acceptance, and completion is reported once; canceled downloads have the
+`Canceled` state. Native clients that retain the decision may safely complete or release their own
+reference after the destination signal returns. Once cancellation, timeout, or view teardown has
+settled the native decision, a late completion returns `NEOASTRA_ERROR_INVALID_STATE`; retaining a
+handle does not extend its deadline.
+
 ## Permission requests and capture
 
 A page asks the browser for a microphone or a camera with `navigator.mediaDevices.getUserMedia`, and

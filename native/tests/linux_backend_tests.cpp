@@ -185,6 +185,183 @@ void test_view_leaves_its_window(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+struct releasing_drop_events { neoastra_view_t* view{}; unsigned messages{}; };
+void NEOASTRA_CALL release_view_from_drop(void* context, const neoastra_event_t* event) {
+    auto* events = static_cast<releasing_drop_events*>(context);
+    if (event->header.type != NEOASTRA_EVENT_MESSAGE_RECEIVED) return;
+    ++events->messages;
+    if (auto* view = std::exchange(events->view, nullptr)) neoastra_view_release(view);
+}
+
+// One native drop reports its paths and its links separately. Releasing the caller's last view reference in the first
+// notification must not free the view before the native handler reports the second one and finishes its cleanup.
+void test_view_can_be_released_from_a_multi_event_drop(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* native = WEBKIT_WEB_VIEW(g_object_ref(web_view(view)));
+    auto* controllers = gtk_widget_observe_controllers(GTK_WIDGET(native));
+    GtkDropTarget* target{};
+    for (guint index = 0; index < g_list_model_get_n_items(controllers); ++index) {
+        auto* controller = g_list_model_get_item(controllers, index);
+        if (GTK_IS_DROP_TARGET(controller) && g_signal_handler_find(controller, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view)) target = GTK_DROP_TARGET(controller);
+        else g_object_unref(controller);
+    }
+    g_object_unref(controllers);
+    assert(target);
+    releasing_drop_events events{view};
+    assert(neoastra_view_set_event_callback(view, release_view_from_drop, &events) == NEOASTRA_OK);
+    GFile* files[] = {g_file_new_for_path("/tmp/neoastra-drop-test.txt"), g_file_new_for_uri("https://neoastra.test/drop")};
+    GValue value = G_VALUE_INIT;
+    g_value_init(&value, GDK_TYPE_FILE_LIST);
+    g_value_take_boxed(&value, gdk_file_list_new_from_array(files, 2));
+    for (auto* file : files) g_object_unref(file);
+    gboolean handled{};
+    g_signal_emit_by_name(target, "drop", &value, 0.0, 0.0, &handled);
+    assert(handled && events.view == nullptr && events.messages == 2);
+    assert(g_object_get_data(G_OBJECT(native), "neoastra.native-view") == nullptr);
+    g_value_unset(&value);
+    g_object_unref(target);
+    g_object_unref(native);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+// Native handles are borrowed but a host may retain the GTK objects. Every signal and controller carrying a weak NeoAstra
+// userdata pointer must be detached before the corresponding view is freed, even if a controller was removed by the host.
+void test_retained_native_widgets_do_not_keep_freed_view_userdata(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* native = WEBKIT_WEB_VIEW(g_object_ref(web_view(view)));
+    auto* observed = gtk_widget_observe_controllers(GTK_WIDGET(native));
+    std::vector<GtkEventController*> controllers;
+    for (guint index = 0; index < g_list_model_get_n_items(observed); ++index) {
+        auto* controller = GTK_EVENT_CONTROLLER(g_list_model_get_item(observed, index));
+        if (g_signal_handler_find(controller, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view)) {
+            controllers.push_back(controller);
+        } else g_object_unref(controller);
+    }
+    g_object_unref(observed);
+    assert(controllers.size() == 2);
+    for (auto* controller : controllers) gtk_widget_remove_controller(GTK_WIDGET(native), controller);
+    neoastra_view_release(view);
+    assert(g_object_get_data(G_OBJECT(native), "neoastra.native-view") == nullptr);
+    assert(!g_signal_handler_find(native, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view));
+    assert(!g_signal_handler_find(webkit_web_view_get_back_forward_list(native), G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view));
+    assert(!g_signal_handler_find(webkit_web_view_get_user_content_manager(native), G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view));
+    for (auto* controller : controllers) {
+        assert(!g_signal_handler_find(controller, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view));
+        g_object_unref(controller);
+    }
+    // Emissions on a retained widget no longer enter callbacks with freed userdata.
+    g_object_notify(G_OBJECT(native), "title");
+    g_signal_emit_by_name(native, "load-changed", WEBKIT_LOAD_FINISHED);
+    g_object_unref(native);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+void test_retained_history_list_detaches_when_the_widget_dies_first(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* native = web_view(view);
+    auto* history = WEBKIT_BACK_FORWARD_LIST(g_object_ref(webkit_web_view_get_back_forward_list(native)));
+    auto* parent = gtk_widget_get_parent(GTK_WIDGET(native));
+    assert(GTK_IS_OVERLAY(parent));
+    gtk_overlay_remove_overlay(GTK_OVERLAY(parent), GTK_WIDGET(native));
+    // The host removed the only widget reference; the backend's weak pointer is now null, but the history list still exists.
+    neoastra_view_release(view);
+    assert(!g_signal_handler_find(history, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, view));
+    g_signal_emit_by_name(history, "changed", nullptr, nullptr);
+    g_object_unref(history);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+void test_retained_closed_window_does_not_write_to_freed_backend_state(neoastra_app_t* app) {
+    auto* window = create_window(app);
+    auto* native = GTK_WINDOW(g_object_ref(gtk_window(window)));
+    assert(neoastra_window_close(window) == NEOASTRA_OK);
+    assert(!g_signal_handler_find(native, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, window));
+    neoastra_window_release(window);
+    // Weak pointers must be unregistered before freeing gtk_window, even if a host retains the closed native window.
+    g_object_unref(native);
+}
+
+struct releasing_resource {
+    neoastra_view_t* view{};
+    neoastra_environment_t* environment{};
+    unsigned requests{}, releases{}, failures{};
+    bool finished{};
+};
+void NEOASTRA_CALL release_resource_response(void* context) { ++static_cast<releasing_resource*>(context)->releases; }
+neoastra_result_t NEOASTRA_CALL resource_disposes_owners(void* context, const neoastra_resource_request_t*, neoastra_resource_response_t* response) {
+    auto* resource = static_cast<releasing_resource*>(context);
+    ++resource->requests;
+    static const std::string body = "<!doctype html><title>Retained request</title>";
+    static const std::string mime = "text/html";
+    response->status_code = 200;
+    response->body_kind = NEOASTRA_RESOURCE_BODY_BYTES;
+    response->bytes = reinterpret_cast<const uint8_t*>(body.data());
+    response->byte_length = body.size();
+    response->content_length = body.size();
+    response->mime_type = string_view(mime);
+    response->release = release_resource_response;
+    response->release_context = resource;
+    neoastra_view_release(std::exchange(resource->view, nullptr));
+    neoastra_environment_release(std::exchange(resource->environment, nullptr));
+    return NEOASTRA_OK;
+}
+
+// A provider may drop the last public references while its native request and response-release callback are still in use.
+// A retained WebKit widget/context must also stop calling that provider once its NeoAstra environment is gone.
+void test_resource_callback_can_release_its_view_and_environment(neoastra_app_t* app) {
+    releasing_resource resource;
+    const std::string name = "callback";
+    neoastra_custom_scheme_t scheme{};
+    scheme.size = sizeof(scheme);
+    scheme.version = 1;
+    scheme.name = string_view(name);
+    scheme.flags = NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY | NEOASTRA_CUSTOM_SCHEME_SECURE;
+    scheme.resource_provider = resource_disposes_owners;
+    scheme.resource_provider_context = &resource;
+    neoastra_environment_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.private_mode = 1;
+    options.custom_scheme_count = 1;
+    options.custom_schemes = &scheme;
+    options.custom_scheme_stride = sizeof(scheme);
+    completion created;
+    assert(neoastra_environment_create_async(app, &options, environment_created, &created, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(created);
+    assert(created.result == NEOASTRA_OK && created.value);
+    resource.environment = static_cast<neoastra_environment_t*>(created.value);
+    auto* window = create_window(app);
+    resource.view = create_view(resource.environment, window);
+    auto* native = WEBKIT_WEB_VIEW(g_object_ref(web_view(resource.view)));
+    g_signal_connect(native, "load-changed", G_CALLBACK(+[](WebKitWebView*, WebKitLoadEvent event, void* context) {
+        if (event == WEBKIT_LOAD_FINISHED) static_cast<releasing_resource*>(context)->finished = true;
+    }), &resource);
+    g_signal_connect(native, "load-failed", G_CALLBACK(+[](WebKitWebView*, WebKitLoadEvent, const char*, GError*, void* context) -> gboolean {
+        ++static_cast<releasing_resource*>(context)->failures;
+        return TRUE;
+    }), &resource);
+    webkit_web_view_load_uri(native, "callback://neoastra/first");
+    wait_until([&] { return resource.finished && resource.releases != 0; });
+    assert(resource.requests == 1 && resource.releases == 1 && resource.failures == 0);
+    assert(!resource.view && !resource.environment);
+    assert(g_object_get_data(G_OBJECT(native), "neoastra.native-view") == nullptr);
+    webkit_web_view_load_uri(native, "callback://neoastra/after-disposal");
+    wait_until([&] { return resource.failures != 0; });
+    assert(resource.requests == 1 && resource.releases == 1);
+    g_signal_handlers_disconnect_by_data(native, &resource);
+    g_object_unref(native);
+    neoastra_window_release(window);
+}
+
 // WebKitGTK stops on links with the Tab key unless it is told otherwise, and the setting of a view reaches its settings.
 void test_tab_key_setting_reaches_the_view(neoastra_app_t* app) {
     auto* environment = create_environment(app, "", true);
@@ -569,6 +746,11 @@ int main() {
 
     test_window_reports_the_size_it_has(app);
     test_view_leaves_its_window(app);
+    test_view_can_be_released_from_a_multi_event_drop(app);
+    test_retained_native_widgets_do_not_keep_freed_view_userdata(app);
+    test_retained_history_list_detaches_when_the_widget_dies_first(app);
+    test_retained_closed_window_does_not_write_to_freed_backend_state(app);
+    test_resource_callback_can_release_its_view_and_environment(app);
     test_views_share_their_window(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);

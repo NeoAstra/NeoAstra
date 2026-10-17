@@ -222,6 +222,10 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_linux_backend_tests PRIVATE
       neoastra_native neoastra_sanitizers PkgConfig::GTK PkgConfig::WEBKIT)
     add_test(NAME neoastra_linux_backend_tests COMMAND neoastra_linux_backend_tests)
+    add_executable(neoastra_linux_download_tests native/tests/linux_download_tests.cpp)
+    target_link_libraries(neoastra_linux_download_tests PRIVATE
+      neoastra_native neoastra_sanitizers PkgConfig::GTK PkgConfig::WEBKIT)
+    add_test(NAME neoastra_linux_download_tests COMMAND neoastra_linux_download_tests)
   endif()
 endif()
 
