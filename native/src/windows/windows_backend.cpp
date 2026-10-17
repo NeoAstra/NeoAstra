@@ -1,4 +1,5 @@
 #include "../common/native_internal.hpp"
+#include "../common/script_completion.hpp"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -1636,15 +1637,6 @@ ATOM register_class(const wchar_t* name, WNDPROC procedure) {
     return atom ? atom : (GetLastError() == ERROR_CLASS_ALREADY_EXISTS ? 1 : 0);
 }
 
-struct script_completion {
-    neoastra_string_callback_t callback{};
-    void* context{};
-    neoastra_operation_t* operation{};
-    std::string result;
-    neoastra_result_t requested{};
-    neoastra_error_t* error{};
-};
-
 struct profile_completion {
     neoastra_completion_callback_t callback{};
     void* context{};
@@ -1752,16 +1744,6 @@ HRESULT begin_cookie_delete_query(const std::shared_ptr<cookie_delete_state>& st
             }
             return S_OK;
         }).Get());
-}
-
-void NEOASTRA_CALL finish_script(void* pointer) {
-    std::unique_ptr<script_completion> completion(static_cast<script_completion*>(pointer));
-    neoastra_result_t result{};
-    if (completion->operation->try_complete(completion->requested, result)) {
-        completion->callback(completion->context, result, result == NEOASTRA_OK ? neo_string_view(completion->result) : neoastra_string_view_t{}, completion->error);
-    }
-    if (completion->error) completion->error->release();
-    completion->operation->release();
 }
 
 } // namespace
@@ -2760,8 +2742,55 @@ neoastra_result_t neo_platform_view_command(neoastra_view_t* view,uint32_t comma
     result=state->core->CallDevToolsProtocolMethod(L"Page.reload",L"{\"ignoreCache\":true}",Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([](HRESULT,LPCWSTR)->HRESULT{return S_OK;}).Get());
     if(FAILED(result))result=state->core->Reload();
     break;case 3:result=state->core->GoBack();break;case 4:result=state->core->GoForward();break;}return SUCCEEDED(result)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
-neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view,const std::string& script,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(script);const auto result=state->core->ExecuteScript(value.c_str(),Callback<ICoreWebView2ExecuteScriptCompletedHandler>([view,callback,context,operation](HRESULT result,LPCWSTR value)->HRESULT{auto* completion=new script_completion{callback,context,operation,narrow(value),SUCCEEDED(result)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE,nullptr};if(FAILED(result))completion->error=make_error(NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 script evaluation failed",result);if(neoastra_app_dispatch(view->environment->app,finish_script,completion)!=NEOASTRA_OK){if(completion->error)completion->error->release();operation->release();delete completion;}return S_OK;}).Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 script evaluation could not be started",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
-neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::string& script,const neoastra_script_options_t* options,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(options->injection_time!=NEOASTRA_SCRIPT_DOCUMENT_START||options->main_frame_only||options->isolated_world)return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebView2 supports document-start scripts in the default world for all frames");const auto value=widen(script);const auto result=state->core->AddScriptToExecuteOnDocumentCreated(value.c_str(),Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>([view,callback,context,operation](HRESULT result,LPCWSTR identifier)->HRESULT{auto* completion=new script_completion{callback,context,operation,narrow(identifier),SUCCEEDED(result)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE,nullptr};if(FAILED(result))completion->error=make_error(NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 persistent script registration failed",result);if(neoastra_app_dispatch(view->environment->app,finish_script,completion)!=NEOASTRA_OK){if(completion->error)completion->error->release();operation->release();delete completion;}return S_OK;}).Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 persistent script registration could not be started",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
+neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::string& script, neoastra_string_callback_t callback,
+                                           void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
+    try {
+        auto* state = static_cast<windows_view*>(view->platform);
+        if (!state || !state->core) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "WebView2 view is not initialized");
+        if (view->environment->app->stopping.load(std::memory_order_acquire)) return neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Application shutdown has begun");
+        const auto value = widen(script);
+        auto source = std::make_shared<neo_script_source>(view->environment->app, callback, context, operation);
+        const auto result = state->core->ExecuteScript(value.c_str(),
+            Callback<ICoreWebView2ExecuteScriptCompletedHandler>([source](HRESULT result, LPCWSTR value) -> HRESULT {
+                auto* completion = source->completion;
+                try {
+                    completion->result = narrow(value);
+                    completion->requested = SUCCEEDED(result) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
+                    if (FAILED(result)) completion->error = make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 script evaluation failed", result);
+                } catch (...) { completion->requested = NEOASTRA_ERROR_NATIVE_FAILURE; }
+                completion->submit();
+                return S_OK;
+            }).Get());
+        source->accepted = SUCCEEDED(result);
+        return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 script evaluation could not be started", result, "webview2");
+    } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
+}
+neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options,
+                                             neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation,
+                                             neoastra_error_t** error) noexcept {
+    try {
+        auto* state = static_cast<windows_view*>(view->platform);
+        if (!state || !state->core) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "WebView2 view is not initialized");
+        if (view->environment->app->stopping.load(std::memory_order_acquire)) return neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Application shutdown has begun");
+        if (options->injection_time != NEOASTRA_SCRIPT_DOCUMENT_START || options->main_frame_only || options->isolated_world)
+            return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "WebView2 supports document-start scripts in the default world for all frames");
+        const auto value = widen(script);
+        auto source = std::make_shared<neo_script_source>(view->environment->app, callback, context, operation);
+        const auto result = state->core->AddScriptToExecuteOnDocumentCreated(value.c_str(),
+            Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>([source](HRESULT result, LPCWSTR identifier) -> HRESULT {
+                auto* completion = source->completion;
+                try {
+                    completion->result = narrow(identifier);
+                    completion->requested = SUCCEEDED(result) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
+                    if (FAILED(result)) completion->error = make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 persistent script registration failed", result);
+                } catch (...) { completion->requested = NEOASTRA_ERROR_NATIVE_FAILURE; }
+                completion->submit();
+                return S_OK;
+            }).Get());
+        source->accepted = SUCCEEDED(result);
+        return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 persistent script registration could not be started", result, "webview2");
+    } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
+}
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view,double* factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->get_ZoomFactor(factor))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}

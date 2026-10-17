@@ -22,6 +22,8 @@ See the [documentation](doc/readme.md) for getting started, samples, platform su
 
 Large UI/.NET transfers use runtime-sized payload budgets by default, with configurable smaller
 [transport and RPC limits](doc/frontend-transport.md#lifecycle-and-limits).
+Native operation cancellation and shutdown ownership are described in the
+[lifecycle guide](doc/application-lifecycle-and-hosting.md#native-asynchronous-completion-ownership).
 
 ## 🪪 License
 

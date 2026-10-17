@@ -162,6 +162,20 @@ if(NEOASTRA_BUILD_TESTS)
   target_include_directories(neoastra_common_tests PRIVATE native/include native/src/common)
   target_link_libraries(neoastra_common_tests PRIVATE neoastra_native neoastra_sanitizers)
   add_test(NAME neoastra_common_tests COMMAND neoastra_common_tests)
+  # Exercise completion rejection/shutdown without a browser runtime or GUI loop.
+  add_executable(neoastra_completion_tests
+    native/tests/completion_tests.cpp
+    native/tests/completion_test_backend.cpp
+    native/src/common/neoastra.cpp)
+  target_include_directories(neoastra_completion_tests PRIVATE native/include native/src/common)
+  target_compile_definitions(neoastra_completion_tests PRIVATE NEOASTRA_BUILD=1)
+  if(MSVC)
+    target_compile_options(neoastra_completion_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+  else()
+    target_compile_options(neoastra_completion_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_link_libraries(neoastra_completion_tests PRIVATE neoastra_sanitizers)
+  add_test(NAME neoastra_completion_tests COMMAND neoastra_completion_tests)
   add_executable(neoastra_stress_tests native/tests/stress_tests.cpp)
   target_include_directories(neoastra_stress_tests PRIVATE native/include native/src/common)
   target_link_libraries(neoastra_stress_tests PRIVATE neoastra_native neoastra_sanitizers)

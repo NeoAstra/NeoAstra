@@ -249,6 +249,7 @@ struct neo_dispatch_item {
 enum class neo_app_state : uint32_t { created, running, stopping, stopped };
 
 struct neo_ui_ref_counted;
+struct neo_operation_completion;
 
 struct neoastra_app final : neo_ref_counted {
     bool embedded{};
@@ -263,6 +264,9 @@ struct neoastra_app final : neo_ref_counted {
     uint32_t dispatch_limit{65536};
     std::mutex dispatch_mutex;
     std::deque<neo_dispatch_item> dispatches;
+    neo_operation_completion* pending_completions{};
+    neo_operation_completion* ready_completions{};
+    neo_operation_completion* ready_completions_tail{};
     std::mutex platform_mutex;
     std::mutex decisions_mutex;
     neoastra_decision_t* decisions{};
