@@ -10,6 +10,7 @@
 #include "../common/native_internal.hpp"
 
 #import <CommonCrypto/CommonDigest.h>
+#import <objc/runtime.h>
 
 // Module imports make the object file name the frameworks it uses, which the linker of an application honors.
 @import Foundation;
@@ -301,6 +302,65 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
     if (view->fill_parent) return parent.bounds;
     return CGRectMake(view->bounds.x, view->bounds.y, std::max(view->bounds.width, 1), std::max(view->bounds.height, 1));
 }
+
+// The keyboard behaves like the one of a native application when the Info.plist of the application asks for it (the MSBuild
+// properties NeoAstraIOSHideFormAccessoryBar, NeoAstraIOSKeyboardWithoutUserAction, and NeoAstraIOSKeyboardOverlay merge the
+// keys). WebKit has no public switch for any of the three, so they reach into WKContentView, the view that WKWebView puts in
+// its scroll view, the way the keyboard plugins of Cordova and Capacitor do; when WebKit changes, a switch does nothing.
+NSString* const hide_form_accessory_bar_key = @"com.neoastra.webview.hideFormAccessoryBar";
+NSString* const keyboard_without_user_action_key = @"com.neoastra.webview.keyboardWithoutUserAction";
+NSString* const keyboard_overlay_key = @"com.neoastra.webview.keyboardOverlay";
+
+bool info_flag(NSString* key) {
+    id value = [NSBundle.mainBundle objectForInfoDictionaryKey:key];
+    return [value respondsToSelector:@selector(boolValue)] && [value boolValue];
+}
+
+// The bar with the previous, next, and done buttons above the keyboard is the input accessory view of WKContentView: the
+// content view of this web view becomes an instance of a subclass that has none.
+void hide_form_accessory_bar(WKWebView* webview) {
+    UIView* content = nil;
+    for (UIView* subview in webview.scrollView.subviews)
+        if ([NSStringFromClass(subview.class) hasPrefix:@"WKContent"]) { content = subview; break; }
+    if (!content) return;
+    NSString* name = [NSStringFromClass(content.class) stringByAppendingString:@"_NeoAstraNoFormAccessoryBar"];
+    Class subclass = NSClassFromString(name);
+    if (!subclass) {
+        subclass = objc_allocateClassPair(content.class, name.UTF8String, 0);
+        if (!subclass) return;
+        class_addMethod(subclass, @selector(inputAccessoryView), imp_implementationWithBlock(^id(id) { return nil; }), "@@:");
+        objc_registerClassPair(subclass);
+    }
+    object_setClass(content, subclass);
+}
+
+// WebKit opens the keyboard for focus() only while the user interacts with the page (keyboardDisplayRequiresUserAction of
+// UIWebView, which WKWebView does not offer): the content view hears of every focused element as if the user had tapped it.
+// This changes WKContentView for the whole process, once.
+void allow_keyboard_without_user_action() {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class content = NSClassFromString(@"WKContentView");
+        SEL selector = sel_getUid("_elementDidFocus:userIsInteracting:blurPreviousNode:activityStateChanges:userObject:");
+        Method method = content ? class_getInstanceMethod(content, selector) : nullptr;
+        if (!method) return;
+        // The activity state changes are an option set, passed on whole in its register.
+        using element_did_focus = void (*)(id, SEL, void*, BOOL, BOOL, uintptr_t, id);
+        auto original = reinterpret_cast<element_did_focus>(method_getImplementation(method));
+        method_setImplementation(method, imp_implementationWithBlock(^(id self, void* information, BOOL, BOOL blur, uintptr_t changes, id user) {
+            original(self, selector, information, YES, blur, changes, user);
+        }));
+    });
+}
+
+// WKWebView answers the keyboard notifications itself: it insets its scroll view and scrolls the focused element into view,
+// which moves the whole page. Without its observers the keyboard lies over the page, which keeps its layout and learns the
+// height of the keyboard instead (NeoAstraDelegate keyboardWillChangeFrame:).
+void stop_webkit_keyboard_avoidance(WKWebView* webview) {
+    for (NSNotificationName name in @[UIKeyboardWillShowNotification, UIKeyboardDidShowNotification, UIKeyboardWillHideNotification,
+                                      UIKeyboardDidHideNotification, UIKeyboardWillChangeFrameNotification, UIKeyboardDidChangeFrameNotification])
+        [NSNotificationCenter.defaultCenter removeObserver:webview name:name object:nil];
+}
 }  // namespace
 
 @implementation NeoURLSchemeHandler
@@ -534,6 +594,23 @@ CGRect view_frame(neoastra_view_t* view, UIView* parent) {
         view->source = utf8(webview.URL.absoluteString);
         neo_emit_view(view, NEOASTRA_EVENT_SOURCE_CHANGED, 0, nullptr, &view->source);
     } else if ([keyPath isEqualToString:@"canGoBack"] || [keyPath isEqualToString:@"canGoForward"]) report_history(view, webview);
+}
+// With the keyboard over the page, the page learns how much of the view it covers: the CSS variable
+// --neoastra-keyboard-height on the root element and a neoastrakeyboard event with the height and the duration of the
+// animation of the keyboard, in seconds. A hidden keyboard covers 0.
+- (void)keyboardWillChangeFrame:(NSNotification*)notification {
+    auto* view = self.nativeView;
+    auto* state = view ? static_cast<uikit_view*>(view->platform) : nullptr;
+    WKWebView* webview = state ? state->webview : nil;
+    UIScreen* screen = webview.window.windowScene.screen;
+    if (!webview || !screen) return;
+    const CGRect keyboard = [webview convertRect:[notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue] fromCoordinateSpace:screen.coordinateSpace];
+    const CGRect covered = CGRectIntersection(webview.bounds, keyboard);
+    const double height = CGRectIsEmpty(covered) ? 0 : std::round(CGRectGetMaxY(webview.bounds) - CGRectGetMinY(covered));
+    const double duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    NSString* script = [NSString stringWithFormat:@"document.documentElement.style.setProperty('--neoastra-keyboard-height','%gpx');"
+                                                   "window.dispatchEvent(new CustomEvent('neoastrakeyboard',{detail:{height:%g,duration:%g}}));", height, height, duration];
+    [webview evaluateJavaScript:script completionHandler:nil];
 }
 @end
 
@@ -772,6 +849,12 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:nullptr];
+                if (info_flag(hide_form_accessory_bar_key)) hide_form_accessory_bar(state->webview);
+                if (info_flag(keyboard_without_user_action_key)) allow_keyboard_without_user_action();
+                if (info_flag(keyboard_overlay_key)) {
+                    stop_webkit_keyboard_avoidance(state->webview);
+                    [NSNotificationCenter.defaultCenter addObserver:state->delegate selector:@selector(keyboardWillChangeFrame:) name:UIKeyboardWillChangeFrameNotification object:nil];
+                }
                 [parent addSubview:state->webview];
                 view->platform = state.release();
                 callback(context, nullptr);
@@ -796,6 +879,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
             [state->webview removeObserver:state->delegate forKeyPath:@"canGoBack"];
             [state->webview removeObserver:state->delegate forKeyPath:@"canGoForward"];
         } @catch (NSException*) { }
+        [NSNotificationCenter.defaultCenter removeObserver:state->delegate name:UIKeyboardWillChangeFrameNotification object:nil];
         state->delegate.nativeView = nullptr;
         state->webview.navigationDelegate = nil;
         state->webview.UIDelegate = nil;

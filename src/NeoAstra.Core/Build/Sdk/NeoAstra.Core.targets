@@ -12,6 +12,9 @@
     <!-- The package keeps the Java side beside its build files; a project reference finds it in the native sources. -->
     <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraAndroidJavaDirectory>
     <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../../../../native/src/android/java/</NeoAstraAndroidJavaDirectory>
+    <!-- The same for the Info.plist entries of the iOS switches. -->
+    <NeoAstraIOSManifestDirectory Condition="'$(NeoAstraIOSManifestDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../ios/')">$(MSBuildThisFileDirectory)../ios/</NeoAstraIOSManifestDirectory>
+    <NeoAstraIOSManifestDirectory Condition="'$(NeoAstraIOSManifestDirectory)' == ''">$(MSBuildThisFileDirectory)../../../../native/src/ios/manifest/</NeoAstraIOSManifestDirectory>
   </PropertyGroup>
 
   <Import Project="$(MSBuildThisFileDirectory)NeoAstra.Core.NativeSymbols.props" Condition="'$(_NeoAstraTargetPlatform)' == 'ios'" />
@@ -43,6 +46,16 @@
        does on iOS, draws under them with NeoAstraAndroidEdgeToEdge=true. -->
   <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidEdgeToEdge)' == 'true'">
     <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)edgetoedge/AndroidManifest.xml" />
+  </ItemGroup>
+
+  <!-- The keyboard of a WKWebView differs from the one of a native application. Each switch merges an Info.plist entry that the
+       view reads when it is created: NeoAstraIOSHideFormAccessoryBar=true drops the bar with the previous, next, and done
+       buttons; NeoAstraIOSKeyboardWithoutUserAction=true lets focus() open the keyboard without a tap; NeoAstraIOSKeyboardOverlay=true
+       keeps WebKit from moving the page and tells the page the height of the keyboard instead. -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'ios'">
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)hide-form-accessory-bar.plist" Condition="'$(NeoAstraIOSHideFormAccessoryBar)' == 'true'" />
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)keyboard-without-user-action.plist" Condition="'$(NeoAstraIOSKeyboardWithoutUserAction)' == 'true'" />
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)keyboard-overlay.plist" Condition="'$(NeoAstraIOSKeyboardOverlay)' == 'true'" />
   </ItemGroup>
 
   <!-- A missing library would otherwise surface as an unresolved import when the application runs. -->

@@ -257,6 +257,29 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    [DataRow("NeoAstraIOSHideFormAccessoryBar", "hide-form-accessory-bar.plist", "com.neoastra.webview.hideFormAccessoryBar")]
+    [DataRow("NeoAstraIOSKeyboardWithoutUserAction", "keyboard-without-user-action.plist", "com.neoastra.webview.keyboardWithoutUserAction")]
+    [DataRow("NeoAstraIOSKeyboardOverlay", "keyboard-overlay.plist", "com.neoastra.webview.keyboardOverlay")]
+    public void IOSKeyboardSwitch_IsAnOptInThatTheTargetsMergeIntoTheInfoPlist(string property, string file, string key)
+    {
+        // Each switch merges an Info.plist entry, which the iOS backend reads when it creates a view; without it the keyboard of
+        // the WKWebView behaves as before. The package carries the entries beside its build files.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var manifest = targets.Descendants("PartialAppManifest").Single(item => ((string)item.Attribute("Include")!).EndsWith(file, StringComparison.Ordinal));
+        Assert.AreEqual($"'$({property})' == 'true'", (string?)manifest.Attribute("Condition"));
+        StringAssert.Contains((string?)manifest.Parent!.Attribute("Condition"), "'$(_NeoAstraTargetPlatform)' == 'ios'");
+
+        var plist = File.ReadAllText(Path.Combine(root, "native", "src", "ios", "manifest", file));
+        StringAssert.Contains(plist, $"<key>{key}</key>");
+        StringAssert.Contains(plist, "<true/>");
+        var backend = File.ReadAllText(Path.Combine(root, "native", "src", "ios", "uikit_backend.mm"));
+        StringAssert.Contains(backend, $"@\"{key}\"");
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "NeoAstra.Core.csproj"));
+        Assert.IsTrue(project.Descendants("None").Any(static item => (string?)item.Attribute("PackagePath") == "ios/%(Filename)%(Extension)"));
+    }
+
+    [TestMethod]
     public void PackagedToolReference_DoesNotTakeTheRuntimeIdentifierOfTheApplication()
     {
         // An application built for a runtime identifier without an apphost, such as iossimulator-arm64, passes it as a global
