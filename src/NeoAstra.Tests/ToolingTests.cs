@@ -257,6 +257,30 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void AndroidKeyboardOverlay_IsAnOptInThatTheTargetsMergeIntoTheManifest()
+    {
+        // NeoAstraAndroidKeyboardOverlay=true merges an application meta-data entry, which a view reads to keep the window from
+        // panning and to tell the page the height of the keyboard; without it Android pans the window, as before.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var overlay = targets.Descendants("AndroidManifestOverlay").Single(static item => ((string)item.Attribute("Include")!).Contains("keyboardoverlay/AndroidManifest.xml", StringComparison.Ordinal));
+        StringAssert.Contains((string?)overlay.Parent!.Attribute("Condition"), "'$(NeoAstraAndroidKeyboardOverlay)' == 'true'");
+
+        const string Key = "com.neoastra.webview.keyboardOverlay";
+        var manifestPath = Path.Combine(root, "native", "src", "android", "java", "keyboardoverlay", "AndroidManifest.xml");
+        System.Xml.Linq.XDocument.Load(manifestPath); // The manifest merger rejects a file that is not XML, such as "--" in a comment.
+        var manifest = File.ReadAllText(manifestPath);
+        StringAssert.Contains(manifest, $"android:name=\"{Key}\"");
+        StringAssert.Contains(manifest, "android:value=\"true\"");
+        var keyboard = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraKeyboard.java"));
+        StringAssert.Contains(keyboard, $"\"{Key}\"");
+        StringAssert.Contains(keyboard, "SOFT_INPUT_ADJUST_NOTHING");
+        StringAssert.Contains(keyboard, "--neoastra-keyboard-height");
+        StringAssert.Contains(keyboard, "navigator.virtualKeyboard.overlaysContent=true");
+        StringAssert.Contains(File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWebHost.java")), "NeoAstraKeyboard.attach(");
+    }
+
+    [TestMethod]
     [DataRow("NeoAstraIOSHideFormAccessoryBar", "hide-form-accessory-bar.plist", "com.neoastra.webview.hideFormAccessoryBar")]
     [DataRow("NeoAstraIOSKeyboardWithoutUserAction", "keyboard-without-user-action.plist", "com.neoastra.webview.keyboardWithoutUserAction")]
     [DataRow("NeoAstraIOSKeyboardOverlay", "keyboard-overlay.plist", "com.neoastra.webview.keyboardOverlay")]

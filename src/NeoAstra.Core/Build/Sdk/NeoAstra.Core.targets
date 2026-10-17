@@ -48,6 +48,12 @@
     <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)edgetoedge/AndroidManifest.xml" />
   </ItemGroup>
 
+  <!-- Android pans an edge-to-edge window to show a focused field, which moves the whole page. With
+       NeoAstraAndroidKeyboardOverlay=true the keyboard lies over the page instead, which learns its height as on iOS. -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidKeyboardOverlay)' == 'true'">
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)keyboardoverlay/AndroidManifest.xml" />
+  </ItemGroup>
+
   <!-- The keyboard of a WKWebView differs from the one of a native application. Each switch merges an Info.plist entry that the
        view reads when it is created: NeoAstraIOSHideFormAccessoryBar=true drops the bar with the previous, next, and done
        buttons; NeoAstraIOSKeyboardWithoutUserAction=true lets focus() open the keyboard without a tap; NeoAstraIOSKeyboardOverlay=true

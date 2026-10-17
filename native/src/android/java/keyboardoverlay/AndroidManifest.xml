@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of an application built with NeoAstraAndroidKeyboardOverlay=true: the keyboard lies over the page,
+     which learns its height from a CSS variable and the neoastrakeyboard event, as on iOS. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <meta-data android:name="com.neoastra.webview.keyboardOverlay" android:value="true" />
+  </application>
+</manifest>

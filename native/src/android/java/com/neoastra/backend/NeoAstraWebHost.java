@@ -95,6 +95,7 @@ public final class NeoAstraWebHost {
     private volatile JavaScriptReplyProxy reply;
     private int nextScript = 1;
     private volatile boolean engineDialogs = true;
+    private final NeoAstraKeyboard keyboard;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
     public static void load() { }
@@ -141,6 +142,7 @@ public final class NeoAstraWebHost {
             });
         }
         parent.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        keyboard = NeoAstraKeyboard.attach(webView, parent);
     }
 
     public void setBounds(int x, int y, int width, int height, boolean fill) {
@@ -252,6 +254,7 @@ public final class NeoAstraWebHost {
         reply = null;
         for (ScriptHandler handler : scripts.values()) handler.remove();
         scripts.clear();
+        if (keyboard != null) keyboard.detach();
         parent.removeView(webView);
         webView.destroy();
     }
