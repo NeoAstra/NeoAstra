@@ -10,9 +10,9 @@ This guide covers development from a source checkout. For package-based applicat
   Normal source builds perform an incremental locked npm restore when required.
 - A graphical desktop and the [platform runtime dependencies](platform-support.md#runtime-requirements)
   to run samples or browser checks.
-- Python for the engineering tests and native build helper; CMake, Clang, and the platform development
-  dependencies when rebuilding native code. See the [native workflow](../.github/workflows/native.yml)
-  for host-specific setup.
+- Python 3.12 (the CI version) for the engineering tests and native build helper; CMake, Clang, and
+  the platform development dependencies when rebuilding native code. See the
+  [native workflow](../.github/workflows/native.yml) for host-specific setup.
 
 ## Managed build and tests
 
@@ -85,6 +85,17 @@ ctest --preset windows-x64-debug -R '^neoastra_windows_callback_tests$'
 ```
 
 This focused test needs no browser view; it does not cover WebView2 event, download, or OLE drag callbacks. Those paths still require Windows/WebView2 runtime validation; a passing macOS or Linux common-ownership test does not exercise the Windows backend.
+
+The source-backed deferred-download regression can run on any host with Clang:
+
+```sh
+python3 -m unittest eng.tests.test_windows_download_lifetime -v
+```
+
+It compiles the production download decision context, completion, construction, and retain guard
+against portable COM/teardown stand-ins. It checks that a deferred decision keeps its download alive
+through lifecycle teardown and COM cleanup without a client retain. This is not Windows backend
+compilation, WebView2 execution, or a real application-detach test.
 
 ## Frontend checks
 
