@@ -49,6 +49,20 @@ it from lookup and window counts before destruction, including when a worker-thr
 platform teardown on the UI thread. Application shutdown also unregisters windows whose handles are
 still retained; retaining a handle does not keep its platform window available after shutdown.
 
+## Reentrant native callbacks
+
+Event handlers may unsubscribe and dispose their view or window synchronously. Native event delivery
+and the surrounding platform operation retain their owners until callback bookkeeping and any
+post-event work have finished. This also applies to application launch delivery and download events;
+a download's view is otherwise a non-owning reference. Explicit application detach can still destroy
+platform resources immediately, so operations that resume after a callback revalidate those resources.
+
+Native event strings are immutable snapshots valid until that callback returns, even when a nested
+navigation or title event changes the view. Event handles remain borrowed: retain a decision or
+download explicitly if it must outlive delivery. A deferred download remains requested until its
+destination policy accepts it; canceling or disposing its view settles the pending destination without
+publishing a premature started event.
+
 ## Launch events and single instance
 
 `NeoLaunchEvent` is immutable and bounded: at most 256 arguments/files/URLs, 4 KiB per value, 32 metadata entries, and no environment block. Paths must be absolute and URLs must be absolute non-file URIs. Initial process activation is queued once by managed core. macOS reopen/open-file/open-URL and Windows session end enter the same queue. Linux desktop activation varies by launcher and is normally supplied by the single-instance endpoint. Before `Ready`, at most `MaximumPendingLaunchEvents` (128 by default) are retained. Overflow returns `false`, raises `LaunchQueueOverflow`, and is never silent. Ready delivery is one event at a time in monotonic `Order`.

@@ -279,6 +279,35 @@ void test_window_registry_rejects_zero_reference_entry() {
     neoastra_app_release(app);
 }
 
+#if defined(_WIN32)
+void NEOASTRA_CALL assert_last_window_quit(void* context) {
+    assert(static_cast<neoastra_app_t*>(context)->quit_requested.load());
+}
+
+void test_final_window_release_preserves_shutdown_policy() {
+    for (const bool worker_release : {false, true}) {
+        auto* app = create_test_app();
+        app->shutdown_mode = NEOASTRA_APP_SHUTDOWN_ON_LAST_WINDOW_CLOSED;
+        auto* first = create_test_window(app);
+        auto* last = create_test_window(app);
+        neoastra_window_release(first);
+        assert(!app->quit_requested.load());
+        if (worker_release) {
+            std::thread worker([last] { neoastra_window_release(last); });
+            worker.join();
+            // UI destruction precedes public dispatch delivery in the run loop.
+            assert(neoastra_app_dispatch(app, assert_last_window_quit, app) == NEOASTRA_OK);
+            assert(neoastra_app_run(app) == 0);
+        } else {
+            neoastra_window_release(last);
+            assert(app->quit_requested.load());
+            assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+        }
+        neoastra_app_release(app);
+    }
+}
+#endif
+
 void test_ui_destruction_from_worker() {
     auto* app = create_test_app();
     std::atomic<int> teardown_count{};
@@ -969,6 +998,9 @@ int main() {
     test_reference_counting_threads();
     test_window_registry_final_release();
     test_window_registry_rejects_zero_reference_entry();
+#if defined(_WIN32)
+    test_final_window_release_preserves_shutdown_policy();
+#endif
     test_ui_destruction_from_worker();
     test_ui_destruction_after_shutdown();
     test_worker_release_while_shutdown_is_draining();

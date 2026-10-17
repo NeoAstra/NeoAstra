@@ -333,19 +333,28 @@ bool accepts_ui_objects(const neoastra_app_t* app) noexcept {
     return state == neo_app_state::created || state == neo_app_state::running;
 }
 
-void initialize_event(neoastra_app_t* app, neoastra_event_t& event, neoastra_event_type_t type, uint64_t object_id,
+struct event_strings {
+    std::string text;
+    std::string uri;
+    std::string text2;
+    std::string text3;
+};
+
+void initialize_event(neoastra_app_t* app, neoastra_event_t& event, event_strings& strings, neoastra_event_type_t type, uint64_t object_id,
                       const std::string* text, const std::string* uri, uint64_t value, int64_t native_code,
-                      neoastra_decision_t* decision, const neo_event_details* details = nullptr) noexcept {
+                      neoastra_decision_t* decision, const neo_event_details* details = nullptr) {
     event.header = {sizeof(event), 1, type, app ? app->next_sequence.fetch_add(1, std::memory_order_relaxed) : 0, neo_timestamp_ns()};
     event.object_id = object_id;
-    if (text) event.text = neo_string_view(*text);
-    if (uri) event.uri = neo_string_view(*uri);
+    // A handler can synchronously navigate or trigger another event that changes
+    // the owner's strings. Keep this event's borrowed bytes stable until return.
+    if (text) { strings.text = *text; event.text = neo_string_view(strings.text); }
+    if (uri) { strings.uri = *uri; event.uri = neo_string_view(strings.uri); }
     event.value = value;
     event.native_code = native_code;
     event.decision = decision;
     if (details) {
-        if (details->text2) event.text2 = neo_string_view(*details->text2);
-        if (details->text3) event.text3 = neo_string_view(*details->text3);
+        if (details->text2) { strings.text2 = *details->text2; event.text2 = neo_string_view(strings.text2); }
+        if (details->text3) { strings.text3 = *details->text3; event.text3 = neo_string_view(strings.text3); }
         event.value2 = details->value2;
         event.bounds = details->bounds;
         event.download = details->download;
@@ -471,10 +480,15 @@ neoastra_result_t start_profile_operation(neoastra_profile_t* profile, neoastra_
 
 void neo_emit_app(neoastra_app_t* app, neoastra_event_type_t type, uint64_t object_id, const std::string* text,
                   const std::string* uri, uint64_t value, int64_t native_code, neoastra_decision_t* decision) noexcept {
-    if (!app) return;
-    neoastra_event_t event{};
-    initialize_event(app, event, type, object_id, text, uri, value, native_code, decision);
-    app->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    neo_retain_guard owner(app);
+    neo_retain_guard decision_owner(decision);
+    if (!owner || (decision && !decision_owner)) return;
+    try {
+        neoastra_event_t event{};
+        event_strings strings;
+        initialize_event(app, event, strings, type, object_id, text, uri, value, native_code, decision);
+        app->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
 }
 
 void neo_log(neoastra_app_t* app, neoastra_log_level_t level, std::string_view category, std::string_view message,
@@ -499,19 +513,31 @@ void neo_log(neoastra_app_t* app, neoastra_log_level_t level, std::string_view c
 
 void neo_emit_view(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id, const std::string* text,
                    const std::string* uri, uint64_t value, int64_t native_code, neoastra_decision_t* decision) noexcept {
-    if (!view || view->ui_destroyed.load(std::memory_order_acquire)) return;
-    neoastra_event_t event{};
-    initialize_event(view->environment->app, event, type, object_id, text, uri, value, native_code, decision);
-    view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    neo_retain_guard owner(view);
+    neo_retain_guard decision_owner(decision);
+    if (!owner || view->ui_destroyed.load(std::memory_order_acquire) || (decision && !decision_owner)) return;
+    try {
+        neoastra_event_t event{};
+        event_strings strings;
+        initialize_event(view->environment->app, event, strings, type, object_id, text, uri, value, native_code, decision);
+        view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
 }
 
 void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id, const std::string* text,
                             const std::string* uri, uint64_t value, int64_t native_code, neoastra_decision_t* decision,
                             const neo_event_details& details) noexcept {
-    if (!view || view->ui_destroyed.load(std::memory_order_acquire)) return;
-    neoastra_event_t event{};
-    initialize_event(view->environment->app, event, type, object_id, text, uri, value, native_code, decision, &details);
-    view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    neo_retain_guard owner(view);
+    neo_retain_guard decision_owner(decision);
+    neo_retain_guard download_owner(details.download);
+    if (!owner || view->ui_destroyed.load(std::memory_order_acquire) ||
+        (decision && !decision_owner) || (details.download && !download_owner)) return;
+    try {
+        neoastra_event_t event{};
+        event_strings strings;
+        initialize_event(view->environment->app, event, strings, type, object_id, text, uri, value, native_code, decision, &details);
+        view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
 }
 
 // Sends the address of a decision outside the view when it is a web address, and tells the view what became of it.
@@ -526,7 +552,10 @@ static void open_external(neoastra_view_t* view, const std::string& uri) noexcep
 }
 
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept {
-    if (!download || !download->view || !download->event_published) return;
+    neo_retain_guard owner(download);
+    if (!owner || !download->view || !download->event_published) return;
+    neo_retain_guard view_owner(download->view);
+    if (!view_owner) return;
     neo_event_details details{};
     details.value2 = download->total_bytes.load(std::memory_order_acquire);
     details.download = download;
@@ -647,17 +676,22 @@ void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept {
 void neo_window_closed(neoastra_window_t* window) noexcept {
     if (!window || window->closed.exchange(true, std::memory_order_acq_rel)) return;
     auto* app = window->app;
+    neo_retain_guard app_owner(app);
+    if (!app_owner) return;
+    const auto id = window->id;
     bool should_quit{};
     {
         std::lock_guard lock(app->windows_mutex);
         auto found = app->windows.find(window->id);
         if (found != app->windows.end()) {
             app->windows.erase(found);
+        }
+        if (window->was_registered) {
             should_quit = (app->shutdown_mode == NEOASTRA_APP_SHUTDOWN_ON_LAST_WINDOW_CLOSED && app->windows.empty()) ||
                           (app->shutdown_mode == NEOASTRA_APP_SHUTDOWN_ON_MAIN_WINDOW_CLOSED && app->main_window_id == window->id);
         }
     }
-    neo_emit_app(app, NEOASTRA_EVENT_WINDOW_CLOSED, window->id);
+    neo_emit_app(app, NEOASTRA_EVENT_WINDOW_CLOSED, id);
     if (should_quit) neoastra_app_quit(app, 0);
 }
 
@@ -701,7 +735,8 @@ void complete_window_close(void* context, const neoastra_decision_response_t* re
 
 void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,
                               bool cancellation_permitted) noexcept {
-    if (!window || window->closed.load(std::memory_order_acquire) || window->pending_close) return;
+    neo_retain_guard owner(window);
+    if (!owner || window->closed.load(std::memory_order_acquire) || window->pending_close) return;
     auto* decision = new(std::nothrow) neoastra_decision_t;
     if (!decision) {
         neo_log(window->app, NEOASTRA_LOG_ERROR, "window.close", "Unable to allocate a close decision; close was canceled", 0, window->id);
@@ -771,6 +806,8 @@ void NEOASTRA_CALL neoastra_operation_cancel(neoastra_operation_t* value) { if (
 
 neoastra_result_t NEOASTRA_CALL neoastra_decision_defer(neoastra_decision_t* value) {
     if (!value) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    neo_retain_guard owner(value);
+    if (!owner) return NEOASTRA_ERROR_DISPOSED;
     const auto initial_state=value->state.load(std::memory_order_acquire);
     if(initial_state==neo_decision_state::timed_out)return NEOASTRA_ERROR_TIMED_OUT;
     if(initial_state!=neo_decision_state::pending)return NEOASTRA_ERROR_INVALID_STATE;
@@ -784,6 +821,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_decision_defer(neoastra_decision_t* val
 }
 neoastra_result_t NEOASTRA_CALL neoastra_decision_complete(neoastra_decision_t* value, const neoastra_decision_response_t* response, neoastra_error_t** error) {
     if (!value || !valid_struct(response, response ? response->size : 0, sizeof(*response)) || !valid_decision_action(response->action)) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "invalid decision response");
+    neo_retain_guard owner(value);
+    if (!owner) return neo_fail(error, NEOASTRA_ERROR_DISPOSED, "decision is disposed");
     const auto initial_state=value->state.load(std::memory_order_acquire);
     if(initial_state!=neo_decision_state::pending&&initial_state!=neo_decision_state::deferred) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "decision is already complete");
     if(value->completion_thread!=std::thread::id{}&&value->completion_thread!=std::this_thread::get_id()) return neo_fail(error, NEOASTRA_ERROR_WRONG_THREAD, "decision completion must run on the UI thread");
@@ -822,7 +861,10 @@ neoastra_result_t NEOASTRA_CALL neoastra_download_get_info(const neoastra_downlo
     info->failure_reason=neo_string_view(value->failure_reason);return NEOASTRA_OK;
 }
 static neoastra_result_t download_command(neoastra_download_t* value,uint32_t command) {
+    neo_retain_guard owner(value);
+    if(value&&!owner)return NEOASTRA_ERROR_DISPOSED;
     if(!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(value->destruction_app))return NEOASTRA_ERROR_WRONG_THREAD;
+    neo_retain_guard view_owner(value->view);
     const auto state=value->state.load(std::memory_order_acquire);if(state==NEOASTRA_DOWNLOAD_COMPLETED||state==NEOASTRA_DOWNLOAD_CANCELED||state==NEOASTRA_DOWNLOAD_FAILED)return NEOASTRA_ERROR_INVALID_STATE;
     if(!value->command)return NEOASTRA_ERROR_NOT_SUPPORTED;return value->command(value,command);
 }
@@ -896,6 +938,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t* app, neoas
 neoastra_result_t NEOASTRA_CALL neoastra_app_set_event_callback(neoastra_app_t* app, neoastra_event_callback_t callback, void* context){if(!app)return NEOASTRA_ERROR_INVALID_ARGUMENT;app->events.set(callback,context);return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t* app,const neoastra_window_options_t* options,neoastra_window_t** output,neoastra_error_t** error){
     if(output)*output=nullptr;
+    neo_retain_guard owner(app);
+    if(app&&!owner)return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application is disposed");
     if(!app||!output||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->title)||options->bounds.width<=0||options->bounds.height<=0||options->minimum_size.width<0||options->minimum_size.height<0||options->maximum_size.width<0||options->maximum_size.height<0||options->state>NEOASTRA_WINDOW_FULLSCREEN||(options->maximum_size.width>0&&options->minimum_size.width>options->maximum_size.width)||(options->maximum_size.height>0&&options->minimum_size.height>options->maximum_size.height))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid window arguments");
     if(!check_ui(app))return neo_fail(error,NEOASTRA_ERROR_WRONG_THREAD,"window creation must run on the UI thread");
     if(!accepts_ui_objects(app))return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application shutdown has begun");
@@ -903,7 +947,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t* app,c
         auto* window=new neoastra_window(app);window->id=app->next_id.fetch_add(1);window->title=neo_string(options->title);window->bounds=options->bounds;window->minimum_size=options->minimum_size;window->maximum_size=options->maximum_size;window->state=options->state;window->attributes=(options->flags&3u)|((options->flags&8u)>>1)|((options->flags&16u)>>1);window->title_bar.size=sizeof(neoastra_title_bar_t);window->title_bar.version=1;window->title_bar.style=(options->flags&256u)==0?NEOASTRA_TITLE_BAR_DEFAULT:(options->flags&512u)?NEOASTRA_TITLE_BAR_HIDDEN:NEOASTRA_TITLE_BAR_OVERLAY;window->background_color=options->background_color;
         if(options->owner){window->owner=options->owner;window->owner->retain();}
         if(!neo_platform_window_create(window,options,error)){window->release();return error&&*error?(*error)->code:NEOASTRA_ERROR_NATIVE_FAILURE;}
-        {std::lock_guard lock(app->windows_mutex);app->windows.emplace(window->id,window);if(!app->main_window_id)app->main_window_id=window->id;}
+        {std::lock_guard lock(app->windows_mutex);app->windows.emplace(window->id,window);window->was_registered=true;if(!app->main_window_id)app->main_window_id=window->id;}
         *output=window;return NEOASTRA_OK;
     }catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}
 }
@@ -912,29 +956,29 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_app_t* app,uint
 
 uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t* w){return w?w->id:0;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t* w,neoastra_rect_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->bounds;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_bounds(neoastra_window_t* w,neoastra_rect_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<=0||value.height<=0)return NEOASTRA_ERROR_INVALID_ARGUMENT;{std::lock_guard lock(w->state_mutex);w->bounds=value;}return neo_platform_window_set_bounds(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_bounds(neoastra_window_t* w,neoastra_rect_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<=0||value.height<=0)return NEOASTRA_ERROR_INVALID_ARGUMENT;{std::lock_guard lock(w->state_mutex);w->bounds=value;}return neo_platform_window_set_bounds(w);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_frame(neoastra_window_t* w,neoastra_rect_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;{std::lock_guard lock(w->state_mutex);*value=w->bounds;}return neo_platform_window_get_frame(w,value);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_scale_factor(const neoastra_window_t* w,double* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->scale_factor;return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_minimum_size(const neoastra_window_t* w,neoastra_size_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->minimum_size;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_minimum_size(neoastra_window_t* w,neoastra_size_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((w->maximum_size.width>0&&value.width>w->maximum_size.width)||(w->maximum_size.height>0&&value.height>w->maximum_size.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->minimum_size;w->minimum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->minimum_size=previous;}return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_minimum_size(neoastra_window_t* w,neoastra_size_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((w->maximum_size.width>0&&value.width>w->maximum_size.width)||(w->maximum_size.height>0&&value.height>w->maximum_size.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->minimum_size;w->minimum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->minimum_size=previous;}return result;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_maximum_size(const neoastra_window_t* w,neoastra_size_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->maximum_size;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_maximum_size(neoastra_window_t* w,neoastra_size_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((value.width>0&&w->minimum_size.width>value.width)||(value.height>0&&w->minimum_size.height>value.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->maximum_size;w->maximum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->maximum_size=previous;}return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_maximum_size(neoastra_window_t* w,neoastra_size_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((value.width>0&&w->minimum_size.width>value.width)||(value.height>0&&w->minimum_size.height>value.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->maximum_size;w->maximum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->maximum_size=previous;}return result;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_state(const neoastra_window_t* w,neoastra_window_state_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->state;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_state(neoastra_window_t* w,neoastra_window_state_t value){if(!w||value>NEOASTRA_WINDOW_FULLSCREEN)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neoastra_window_state_t previous{};{std::lock_guard lock(w->state_mutex);previous=w->state;w->state=value;}const auto result=neo_platform_window_set_state(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->state=previous;}return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_state(neoastra_window_t* w,neoastra_window_state_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||value>NEOASTRA_WINDOW_FULLSCREEN)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neoastra_window_state_t previous{};{std::lock_guard lock(w->state_mutex);previous=w->state;w->state=value;}const auto result=neo_platform_window_set_state(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->state=previous;}return result;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_attribute(const neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t* value){if(!w||!value||attribute>NEOASTRA_WINDOW_SHOW_IN_TASKBAR)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=(w->attributes&(1u<<attribute))!=0;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t enabled){if(!w||attribute>NEOASTRA_WINDOW_SHOW_IN_TASKBAR||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;{std::lock_guard lock(w->state_mutex);if(((w->attributes&(1u<<attribute))!=0)==(enabled!=0))return NEOASTRA_OK;}const auto result=neo_platform_window_set_attribute(w,attribute,enabled!=0);if(result==NEOASTRA_OK){std::lock_guard lock(w->state_mutex);if(enabled)w->attributes|=1u<<attribute;else w->attributes&=~(1u<<attribute);}return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t enabled){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||attribute>NEOASTRA_WINDOW_SHOW_IN_TASKBAR||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;{std::lock_guard lock(w->state_mutex);if(((w->attributes&(1u<<attribute))!=0)==(enabled!=0))return NEOASTRA_OK;}const auto result=neo_platform_window_set_attribute(w,attribute,enabled!=0);if(result==NEOASTRA_OK){std::lock_guard lock(w->state_mutex);if(enabled)w->attributes|=1u<<attribute;else w->attributes&=~(1u<<attribute);}return result;}
 neoastra_string_view_t NEOASTRA_CALL neoastra_window_get_title(const neoastra_window_t* w){if(!w)return {};std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);return neo_string_view(w->title);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_title(neoastra_window_t* w,neoastra_string_view_t value){if(!w||!neo_valid_utf8(value))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;try{{std::lock_guard lock(w->state_mutex);w->title=neo_string(value);}return neo_platform_window_set_title(w);}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
-neoastra_result_t NEOASTRA_CALL neoastra_window_show(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,true);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_hide(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,false);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_activate(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_activate(w);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_begin_drag(neoastra_window_t* w){return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_begin_drag(w);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_begin_resize(neoastra_window_t* w,neoastra_window_resize_edge_t edge){return !w||edge>NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_begin_resize(w,edge);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_title(neoastra_window_t* w,neoastra_string_view_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||!neo_valid_utf8(value))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;try{{std::lock_guard lock(w->state_mutex);w->title=neo_string(value);}return neo_platform_window_set_title(w);}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
+neoastra_result_t NEOASTRA_CALL neoastra_window_show(neoastra_window_t* w){neo_retain_guard owner(w);return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,true);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_hide(neoastra_window_t* w){neo_retain_guard owner(w);return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,false);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_activate(neoastra_window_t* w){neo_retain_guard owner(w);return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_activate(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_begin_drag(neoastra_window_t* w){neo_retain_guard owner(w);return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_begin_drag(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_begin_resize(neoastra_window_t* w,neoastra_window_resize_edge_t edge){neo_retain_guard owner(w);return !w||edge>NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_begin_resize(w,edge);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_title_bar(neoastra_window_t* w,neoastra_title_bar_t* value){if(!w||!valid_struct(value,value?value->size:0,sizeof(*value)))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;*value=w->title_bar;value->left_inset=0;value->right_inset=0;return neo_platform_window_get_title_bar(w,value);}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_title_bar(neoastra_window_t* w,const neoastra_title_bar_t* value){if(!w||!valid_struct(value,value?value->size:0,sizeof(*value))||value->style>NEOASTRA_TITLE_BAR_HIDDEN||value->height<0||value->height>512)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;const auto previous=w->title_bar;w->title_bar.style=value->style;w->title_bar.height=value->height;w->title_bar.symbol_color=value->symbol_color;w->title_bar.background_color=value->background_color;const auto result=neo_platform_window_set_title_bar(w);if(result!=NEOASTRA_OK)w->title_bar=previous;return result;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_background_color(neoastra_window_t* w,neoastra_color_t value){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;const auto previous=w->background_color;w->background_color=value;const auto result=neo_platform_window_set_background_color(w);if(result!=NEOASTRA_OK)w->background_color=previous;return result;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t* w){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neo_window_request_close(w,NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC,true);return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t* w){if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;w->force_closing=true;return neo_platform_window_force_close(w);}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_title_bar(neoastra_window_t* w,const neoastra_title_bar_t* value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||!valid_struct(value,value?value->size:0,sizeof(*value))||value->style>NEOASTRA_TITLE_BAR_HIDDEN||value->height<0||value->height>512)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;const auto previous=w->title_bar;w->title_bar.style=value->style;w->title_bar.height=value->height;w->title_bar.symbol_color=value->symbol_color;w->title_bar.background_color=value->background_color;const auto result=neo_platform_window_set_title_bar(w);if(result!=NEOASTRA_OK)w->title_bar=previous;return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_background_color(neoastra_window_t* w,neoastra_color_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;const auto previous=w->background_color;w->background_color=value;const auto result=neo_platform_window_set_background_color(w);if(result!=NEOASTRA_OK)w->background_color=previous;return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t* w){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neo_window_request_close(w,NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC,true);return NEOASTRA_OK;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t* w){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;w->force_closing=true;return neo_platform_window_force_close(w);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_native_handle(neoastra_window_t* w,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h){if(!w||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEOASTRA_ERROR_INVALID_ARGUMENT;return neo_platform_window_get_handle(w,kind,h);}
 
 neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t* app,const neoastra_environment_options_t* options,neoastra_environment_created_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){
@@ -1056,20 +1100,22 @@ neoastra_result_t NEOASTRA_CALL neoastra_profile_delete_cookie_async(neoastra_pr
 neoastra_result_t NEOASTRA_CALL neoastra_profile_clear_data_async(neoastra_profile_t* p,neoastra_data_kind_t kinds,int64_t start,int64_t end,neoastra_completion_callback_t cb,void* ctx,neoastra_operation_t** op,neoastra_error_t** e){constexpr auto known=NEOASTRA_DATA_COOKIES|NEOASTRA_DATA_CACHE|NEOASTRA_DATA_LOCAL_STORAGE|NEOASTRA_DATA_INDEXED_DB|NEOASTRA_DATA_SERVICE_WORKERS|NEOASTRA_DATA_PERMISSIONS|NEOASTRA_DATA_DOWNLOAD_HISTORY;if(kinds==0||(kinds!=NEOASTRA_DATA_ALL&&(kinds&~known)!=0)||start>end)return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid data range");return start_profile_operation(p,cb,op,e,[&](auto* operation){return neo_platform_profile_clear_data(p,kinds,start,end,cb,ctx,operation,e);});}
 
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_event_callback(neoastra_view_t* v,neoastra_event_callback_t cb,void* ctx){if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;v->events.set(cb,ctx);return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t* v,neoastra_rect_t bounds,uint32_t fill){if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;v->bounds=bounds;v->fill_parent=fill!=0;return neo_platform_view_set_bounds(v);}
-neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_error_t** e){if(!v||!neo_valid_utf8(uri))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid view or URI");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);return neo_platform_view_navigate(v,v->source,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid URI");}}
-neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_string_view_t method,neoastra_string_view_t headers,const uint8_t* body,uint64_t length,neoastra_error_t** e){if(!v||!neo_valid_utf8(uri)||!neo_valid_utf8(method)||!neo_valid_utf8(headers)||(length&&!body))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);return neo_platform_view_navigate_request(v,v->source,neo_string(method),neo_string(headers),body,length,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");}}
-neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t* v,neoastra_string_view_t html,neoastra_string_view_t base,neoastra_error_t** e){if(!v||!neo_valid_utf8(html)||!neo_valid_utf8(base))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid HTML arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"HTML loading must run on the UI thread");try{return neo_platform_view_load_html(v,neo_string(html),neo_string(base),e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid HTML");}}
-neoastra_result_t NEOASTRA_CALL neoastra_view_stop(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_command(v,0);}
-neoastra_result_t NEOASTRA_CALL neoastra_view_reload(neoastra_view_t* v,uint32_t ignore){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_command(v,ignore?2:1);}
-neoastra_result_t NEOASTRA_CALL neoastra_view_go_back(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,3);}
-neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,4);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t* v,neoastra_rect_t bounds,uint32_t fill){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;v->bounds=bounds;v->fill_parent=fill!=0;return neo_platform_view_set_bounds(v);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid view or URI");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate(v,native_uri,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid URI");}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_string_view_t method,neoastra_string_view_t headers,const uint8_t* body,uint64_t length,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri)||!neo_valid_utf8(method)||!neo_valid_utf8(headers)||(length&&!body))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate_request(v,native_uri,neo_string(method),neo_string(headers),body,length,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t* v,neoastra_string_view_t html,neoastra_string_view_t base,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(html)||!neo_valid_utf8(base))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid HTML arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"HTML loading must run on the UI thread");try{return neo_platform_view_load_html(v,neo_string(html),neo_string(base),e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid HTML");}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_stop(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_command(v,0);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_reload(neoastra_view_t* v,uint32_t ignore){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_command(v,ignore?2:1);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_go_back(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,3);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,4);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t* v,neoastra_string_view_t script,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script evaluation must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_evaluate(v,neo_string(script),cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t* v,neoastra_string_view_t script,const neoastra_script_options_t* options,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script)||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->world_name))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script injection must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_add_script(v,neo_string(script),options,cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t* v,neoastra_string_view_t identifier){if(!v||!neo_valid_utf8(identifier))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;try{return neo_platform_view_remove_script(v,neo_string(identifier));}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
-neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t* v,neoastra_string_view_t msg,uint32_t json,neoastra_error_t** e){if(!v||!neo_valid_utf8(msg))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"message posting must run on the UI thread");if(!neo_bridge_access_allowed(v,v->source))return neo_fail(e,NEOASTRA_ERROR_SECURITY,"Web messaging is blocked by the configured bridge policy",0,"bridge");try{return neo_platform_view_post_message(v,neo_string(msg),json!=0,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t* v,neoastra_string_view_t msg,uint32_t json,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(msg))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"message posting must run on the UI thread");if(!neo_bridge_access_allowed(v,v->source))return neo_fail(e,NEOASTRA_ERROR_SECURITY,"Web messaging is blocked by the configured bridge policy",0,"bridge");try{return neo_platform_view_post_message(v,neo_string(msg),json!=0,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t* v,double* factor){if(!v||!factor)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_get_zoom_factor(v,factor);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neoastra_view_setting_t setting,uint32_t enabled){
+    neo_retain_guard owner(v);
+    if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;
     if(!v||setting>NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;
     if(setting!=NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION)return neo_platform_view_set_setting(v,setting,enabled!=0);
     // The view refuses the requests and the commands itself. The backend switches the swipe of its engine and reports the
@@ -1079,8 +1125,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neo
     if(result!=NEOASTRA_OK)v->history_navigation_disabled=previous;
     return result;
 }
-neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t* v,double x,double y){return !v||!std::isfinite(x)||!std::isfinite(y)?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_move_pointer(v,x,y);}
-neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t* v){return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_open_devtools(v);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t* v,double x,double y){neo_retain_guard owner(v);return !v||!std::isfinite(x)||!std::isfinite(y)?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_move_pointer(v,x,y);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_open_devtools(v);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t* v,const neoastra_capture_options_t* options,neoastra_buffer_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){
     if(outop)*outop=nullptr;
     if(!v||!cb||!valid_struct(options,options?options->size:0,sizeof(*options))||options->format>NEOASTRA_CAPTURE_FORMAT_JPEG||options->quality>100||options->full_page>1||options->region.width<0||options->region.height<0)return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid capture arguments");
@@ -1089,7 +1135,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t* v,c
     try{op=make_operation(outop);const auto result=neo_platform_view_capture(v,*options,cb,ctx,op,e);if(result!=NEOASTRA_OK){op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}}return result;}
     catch(...){if(op)op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}return neo_fail(e,NEOASTRA_ERROR_NATIVE_FAILURE,"capture could not be started");}
 }
-neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t* v,double factor){if(!v||!std::isfinite(factor)||factor<0.25||factor>5.0)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_set_zoom_factor(v,factor);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t* v,double factor){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v||!std::isfinite(factor)||factor<0.25||factor>5.0)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_set_zoom_factor(v,factor);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_get_native_handle(neoastra_view_t* v,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h){if(!v||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEOASTRA_ERROR_INVALID_ARGUMENT;return neo_platform_view_get_handle(v,kind,h);}
 neoastra_result_t NEOASTRA_CALL neoastra_query_extension(const void*,neoastra_string_view_t name,uint32_t,const void** table){if(table)*table=nullptr;if(!table||!neo_valid_utf8(name))return NEOASTRA_ERROR_INVALID_ARGUMENT;return NEOASTRA_ERROR_NOT_SUPPORTED;}
 

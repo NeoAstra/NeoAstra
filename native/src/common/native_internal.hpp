@@ -428,6 +428,7 @@ struct neoastra_window final : neo_ui_ref_counted {
     neoastra_title_bar_t title_bar{}; // UI-thread-only requested style, height, and colors.
     neoastra_color_t background_color{255, 255, 255, 255}; // UI-thread-only; shown before and behind the content.
     std::atomic<bool> closed{false};
+    bool was_registered{}; // Set before publication; preserves close policy after weak-entry removal.
     neoastra_decision_t* pending_close{}; // UI-thread-only retained decision.
     bool force_closing{}; // UI-thread-only; permits one platform close without renegotiation.
     std::vector<neoastra_view_t*> views; // UI-thread-only weak references.
