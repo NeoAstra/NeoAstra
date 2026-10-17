@@ -237,6 +237,43 @@ void test_zero_reference_app_native_cleanup() {
     assert(!IsWindow(dispatcher));
 }
 
+neoastra_window_t* create_modal_window(neoastra_app_t* app, neoastra_window_t* owner) {
+    neoastra_window_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.bounds = {120, 120, 240, 160};
+    options.owner = owner;
+    options.flags = 3u | 4u | 128u; // Resizable, decorated, shown, modal.
+    neoastra_window_t* window{};
+    assert(neoastra_app_create_window(app, &options, &window, nullptr) == NEOASTRA_OK);
+    return window;
+}
+
+void test_modal_sibling_final_release(bool shutdown) {
+    auto* app = create_app();
+    auto* owner = create_window(app);
+    const auto owner_hwnd = window_handle(owner);
+    auto* first = create_modal_window(app, owner);
+    auto* second = create_modal_window(app, owner);
+    const auto second_hwnd = window_handle(second);
+    assert(!IsWindowEnabled(owner_hwnd));
+    // Final release calls native teardown and WM_DESTROY synchronously. Those
+    // paths must consume the modal activation once, not once each.
+    neoastra_window_release(first);
+    assert(!IsWindowEnabled(owner_hwnd));
+    if (shutdown) {
+        assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+        assert(!IsWindow(owner_hwnd) && !IsWindow(second_hwnd));
+        neoastra_window_release(second);
+    } else {
+        neoastra_window_release(second);
+        assert(IsWindowEnabled(owner_hwnd));
+        assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    }
+    neoastra_window_release(owner);
+    neoastra_app_release(app);
+}
+
 } // namespace
 
 int main() {
@@ -249,5 +286,7 @@ int main() {
     test_window_session_callback_detach();
     test_dispatcher_callback_release();
     test_zero_reference_app_native_cleanup();
+    test_modal_sibling_final_release(false);
+    test_modal_sibling_final_release(true);
     return 0;
 }

@@ -1656,7 +1656,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                 state->hwnd = nullptr;
                 // Enabling/activating the owner can reenter and detach the app,
                 // deleting platform state even though the window is retained.
-                if (reactivate) { EnableWindow(reactivate, TRUE); SetActiveWindow(reactivate); }
+                if (reactivate) {
+                    EnableWindow(reactivate, TRUE);
+                    const auto* native_owner = window->owner ? static_cast<windows_window*>(window->owner->platform) : nullptr;
+                    if (native_owner && native_owner->hwnd == reactivate) SetActiveWindow(reactivate);
+                }
             }
             if (owner) neo_window_closed(window);
             else window->closed.store(true, std::memory_order_release);
@@ -1937,7 +1941,26 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         return true;
     } catch(const std::exception& ex){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());return false;}
 }
-void neo_platform_window_destroy(neoastra_window_t* window) noexcept { auto* state=static_cast<windows_window*>(window->platform);if(!state)return;if(state->modal_active&&window->owner){auto* owner=static_cast<windows_window*>(window->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd){EnableWindow(owner->hwnd,TRUE);SetActiveWindow(owner->hwnd);}}if(state->hwnd&&IsWindow(state->hwnd))DestroyWindow(state->hwnd);delete state;window->platform=nullptr; }
+void neo_platform_window_destroy(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<windows_window*>(window->platform);
+    if (!state) return;
+    HWND reactivate{};
+    if (state->modal_active && window->owner) {
+        auto* owner = static_cast<windows_window*>(window->owner->platform);
+        if (owner && owner->modal_children && --owner->modal_children == 0) reactivate = owner->hwnd;
+    }
+    // DestroyWindow synchronously sends WM_DESTROY, whose teardown must not
+    // consume the same modal activation (and enable an owner with modal siblings).
+    state->modal_active = false;
+    if (reactivate) {
+        EnableWindow(reactivate, TRUE);
+        const auto* owner = window->owner ? static_cast<windows_window*>(window->owner->platform) : nullptr;
+        if (owner && owner->hwnd == reactivate) SetActiveWindow(reactivate);
+    }
+    if (state->hwnd && IsWindow(state->hwnd)) DestroyWindow(state->hwnd);
+    delete state;
+    window->platform = nullptr;
+}
 neoastra_result_t neo_platform_window_show(neoastra_window_t* w,bool visible) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;if(!visible){sync_window_view_visibility(w,false);ShowWindow(s->hwnd,SW_HIDE);if(s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->modal_children&&--owner->modal_children==0&&owner->hwnd)EnableWindow(owner->hwnd,TRUE);s->modal_active=false;}return NEOASTRA_OK;}if(s->modal&&!s->modal_active&&w->owner){auto* owner=static_cast<windows_window*>(w->owner->platform);if(owner&&owner->hwnd){if(owner->modal_children++==0)EnableWindow(owner->hwnd,FALSE);s->modal_active=true;}}neoastra_window_state_t desired{};{std::lock_guard lock(w->state_mutex);desired=w->state;}const auto command=desired==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:desired==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(s->hwnd,command);sync_window_view_visibility(w,true);layout_title_bar(w);if(desired==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(w->state_mutex);w->state=desired;}return neo_platform_window_set_state(w);}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_activate(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;SetForegroundWindow(s->hwnd);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept {auto* s=static_cast<windows_window*>(w->platform);return s&&s->hwnd&&PostMessageW(s->hwnd,WM_CLOSE,0,0)?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}
