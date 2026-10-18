@@ -99,6 +99,31 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   compiled or run on the macOS development host; run the Linux native tests before treating the fix as
   runtime-qualified. Downloads from views that NeoAstra does not own are still canceled while an
   environment uses that session.
+- **Linux: script, cookie, and clear-data operations do not reserve their completion.** Since
+  2026-10-17, environment and view creation and the Windows script operations reserve their terminal
+  completion when they start, so shutdown cancels them on the UI thread (see
+  [application lifecycle](application-lifecycle-and-hosting.md#native-asynchronous-completion-ownership)).
+  The GTK backend still completes `script_finished`, `script_added` (posted with `g_idle_add`),
+  `cookies_finished`, `cookie_changed`, and `clear_finished` directly through `try_complete`
+  (`native/src/linux/gtk_backend.cpp`). An operation accepted just before the application shuts down
+  is expected to get no terminal callback once the main loop stops, so its operation and its managed
+  callback context (a `GCHandle`) stay allocated. This follows from the source and was not
+  reproduced. To do: start these operations through `neo_operation_completion`, as
+  `native/src/common/script_completion.hpp` does for WebView2, with a GTK test that shuts down with
+  one of each pending.
+- **Windows: a pending script handler keeps the application referenced.** The completion that a
+  WebView2 script operation reserves retains the application until WebView2 releases its handler
+  (`native/src/common/script_completion.hpp`, `operation_completion.hpp`). If WebView2 releases that
+  handler only after the last application handle is gone, the final application release, and so
+  `neo_complete_app_shutdown`, runs inside WebView2's release of the handler; if WebView2 keeps the
+  handler after `ICoreWebView2Controller::Close`, the application is never freed. Not observed: check
+  on Windows whether `Close` releases pending script handlers synchronously.
+- **Every native event copies its strings.** `initialize_event` in `native/src/common/neoastra.cpp`
+  copies the text, address, and both extra strings of every event so that a handler that changes the
+  view cannot change them under it. A bridge message is copied too, so a message near
+  `maximum_message_size` needs twice its size, and a failed allocation drops the event in the
+  `catch (...)` of the emitter. To do: copy only where the strings belong to the owner (the source and
+  title of a view, the paths and address of a download), and pass the caller's own strings as they are.
 - **Linux: applications without a root share one default session.** A NeoAstra host has no GLib
   program name, so WebKitGTK keeps the default session of every such application in the same
   `webkitgtk` directories and keeps its cookies in memory; see
