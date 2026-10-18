@@ -197,6 +197,60 @@ void test_script_queue_rejection() {
     neoastra_app_release(app);
 }
 
+void NEOASTRA_CALL reject_profile(void*, neoastra_result_t, neoastra_profile_t*, const neoastra_error_t*) { assert(false); }
+
+void test_profile_queue_rejection_releases_operation() {
+    auto* app = create_app();
+    captured_completion environment_result;
+    auto* environment_operation = start_environment(app, environment_result);
+    finish_environment_on_worker();
+    neo_drain_dispatch(app);
+    auto* environment = static_cast<neoastra_environment_t*>(environment_result.value);
+    assert_saturated(app);
+    neoastra_profile_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    neoastra_operation_t* operation{};
+    neoastra_error_t* error{};
+    // Profile creation still completes through the bounded queue: a rejected start must not hand out an operation.
+    assert(neoastra_environment_create_profile_async(environment, &options, reject_profile, nullptr, &operation, &error) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(operation == nullptr);
+    neoastra_error_release(error);
+    neo_drain_dispatch(app);
+    neoastra_environment_release(environment);
+    neoastra_operation_release(environment_operation);
+    assert(app->ui_objects == nullptr && app->references.load() == 1);
+    neoastra_app_release(app);
+}
+
+void test_view_teardown_detaches_zero_reference_download() {
+    auto* app = create_app();
+    captured_completion environment_result;
+    auto* environment_operation = start_environment(app, environment_result);
+    finish_environment_on_worker();
+    neo_drain_dispatch(app);
+    auto* environment = static_cast<neoastra_environment_t*>(environment_result.value);
+    captured_completion view_result;
+    auto* view_operation = start_view(environment, view_result);
+    finish_view_on_worker();
+    neo_drain_dispatch(app);
+    auto* view = static_cast<neoastra_view_t*>(view_result.value);
+    auto* download = new neoastra_download(view);
+    download->lifecycle_released.store(true);
+    // A finalizer releases the download off the UI thread: its destruction waits for the UI queue.
+    std::thread worker([download] { neoastra_download_release(download); });
+    worker.join();
+    neoastra_view_release(view);
+    // The view is gone before the queued download destruction runs; that destruction must not reach it.
+    assert(download->view == nullptr);
+    neo_drain_dispatch(app);
+    neoastra_environment_release(environment);
+    neoastra_operation_release(environment_operation);
+    neoastra_operation_release(view_operation);
+    assert(app->ui_objects == nullptr && app->references.load() == 1);
+    neoastra_app_release(app);
+}
+
 void test_view_shutdown_and_late_success() {
     auto* app = create_app();
     captured_completion environment_result;
@@ -432,6 +486,8 @@ int main() {
     test_creation_queue_rejection();
     test_creation_shutdown_rejection();
     test_script_queue_rejection();
+    test_profile_queue_rejection_releases_operation();
+    test_view_teardown_detaches_zero_reference_download();
     test_view_shutdown_and_late_success();
     test_creation_cancellation_and_failure_cleanup();
     test_popup_inline_completion_does_not_deliver_other_operations();
