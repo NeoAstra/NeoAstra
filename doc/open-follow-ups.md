@@ -162,6 +162,18 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   where it is after a refused history navigation (`native/tests/macos_history_tests.mm` asks for it on
   macOS, nothing does on Linux), and the navigation type of a history navigation that WebKit serves
   from its page cache.
+- **Windows CI: the browser-forward command of a keyboard no longer navigates in WebView2 154.**
+  `HistoryNavigationTests.ANavigationRequestTellsItsKind` times out at "the browser-forward command of
+  a keyboard" on every Windows CI run since 2026-10-18 (`d5052bf` and later, attempts repeated). The
+  last green run (`ac30dda`, 2026-10-15) had the same native runtimes, and the managed changes in between
+  only touch the tray and menu presenters; the runner image changed from `win25-vs2026/20260925.250`
+  (Microsoft Edge 153.0.4234.48) to `20261007.264` (Edge 154.0.4258.62). The mouse back and forward
+  buttons in the same test still navigate. Suspected: WebView2 154 no longer acts on a
+  `WM_APPCOMMAND` posted to its `Chrome_WidgetWin_1` window (`BrowserInput.PostBrowserCommand` in
+  `src/NeoAstra.Tests/HistoryNavigationTests.cs`). Not reproduced on a Windows machine. To do: check
+  with WebView2 154 whether a real keyboard key (`VK_BROWSER_FORWARD` through `SendInput`) or a
+  `WM_APPCOMMAND` sent to another window (the controller's parent) still navigates, then fix the test
+  or the backend.
 - **History navigation: what stays possible with the switch off.** A history navigation is refused
   where the engine asks about it. It does not ask for a move within a document, so the entries that a
   page adds with `history.pushState` or a fragment are still walked by the back button of a mouse; that
