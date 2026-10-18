@@ -60,7 +60,7 @@ internal static class LiveBrowser
                             // holds for the arguments of that process.
                             UserDataRoot = perMonitorDpiAware ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "per-monitor-dpi-aware")
                                 : browserArguments is not null ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "browser-arguments-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(browserArguments)))[..12])
-                                : null,
+                                : TestUserData.Shared,
                             BrowserArguments = browserArguments,
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions ?? new NeoAstraOptions { ViewLabel = "main" });

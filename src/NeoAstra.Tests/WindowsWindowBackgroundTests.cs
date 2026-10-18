@@ -41,6 +41,7 @@ public sealed class WindowsWindowBackgroundTests
                         stage = "browser created with the window color";
                         await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                         {
+                            UserDataRoot = TestUserData.Shared,
                             CustomSchemes = [NeoCustomScheme.Application("app", new BlankProvider())],
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "background-view" });

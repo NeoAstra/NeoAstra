@@ -703,7 +703,7 @@ public sealed class DesktopServicesTests
                     registration.Register(builder);
                     await using var rpc = builder.Build();
                     var window = application.CreateWindow(new NeoWindowOptions { Label = "drop-window", Title = "Drop", Width = 320, Height = 200 });
-                    await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { CustomSchemes = [NeoCustomScheme.Application("app", new DragResourceProvider())] });
+                    await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { UserDataRoot = TestUserData.Shared, CustomSchemes = [NeoCustomScheme.Application("app", new DragResourceProvider())] });
                     await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "drop-view", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = ["app://neoastra"] });
                     var parent = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
                     var webViewWindow = FindWindowEx(parent, 0, "Chrome_WidgetWin_0", null);
@@ -783,7 +783,7 @@ public sealed class DesktopServicesTests
                     builder.AddNeoAstraDesktopHandlers(services, new NeoDesktopRendererOptions());
                     await using var rpc = builder.Build();
                     var window = application.CreateWindow(new NeoWindowOptions { Label = "drag-window", Title = "Drag", Width = 320, Height = 200 });
-                    await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { CustomSchemes = [NeoCustomScheme.Application("app", new DragResourceProvider())] });
+                    await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { UserDataRoot = TestUserData.Shared, CustomSchemes = [NeoCustomScheme.Application("app", new DragResourceProvider())] });
                     await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "drag-view", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = ["app://neoastra"] });
                     presenter.ObserveNavigation(view);
                     var documentSessionId = await NavigateAndGetSessionAsync(view, new Uri("app://neoastra/drag-first.html"));

@@ -45,6 +45,7 @@ public sealed class WindowsDropTargetTests
                         stage = "browser creation";
                         await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                         {
+                            UserDataRoot = TestUserData.Shared,
                             CustomSchemes = [NeoCustomScheme.Application("app", new DropPageProvider())],
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "drop-view" });

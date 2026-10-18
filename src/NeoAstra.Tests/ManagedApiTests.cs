@@ -890,6 +890,7 @@ public sealed class ManagedApiTests
                     var resources = new SmokeResourceProvider();
                     await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                     {
+                        UserDataRoot = TestUserData.Shared,
                         CustomSchemes = [NeoCustomScheme.Application("app", resources)],
                     });
                     Assert.AreEqual("windows", environment.RuntimeInfo.OperatingSystem);

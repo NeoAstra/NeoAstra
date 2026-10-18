@@ -35,6 +35,7 @@ public sealed class WindowsWindowFocusTests
                         // The same custom scheme as the other WebView2 tests, which share a browser of the same options.
                         await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                         {
+                            UserDataRoot = TestUserData.Shared,
                             CustomSchemes = [NeoCustomScheme.Application("app", new FocusPageProvider())],
                         });
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "focus-view" });
