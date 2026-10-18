@@ -2,6 +2,7 @@ package com.neoastra.backend;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -224,7 +225,16 @@ public final class NeoAstraWebHost {
         try { intent = parameters.createIntent(); }
         catch (RuntimeException exception) { callback.onReceiveValue(null); return; }
         Context context = webView.getContext();
-        NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> callback.onReceiveValue(copyChosen(context, WebChromeClient.FileChooserParams.parseResult(resultCode, data))));
+        NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> callback.onReceiveValue(copyChosen(context, parseChosen(resultCode, data))));
+    }
+
+    // FileChooserParams.parseResult reads only the single data URI; a multiple choice of the picker comes as clip data instead.
+    private static Uri[] parseChosen(int resultCode, Intent data) {
+        ClipData clip = resultCode == Activity.RESULT_OK && data != null ? data.getClipData() : null;
+        if (clip == null || clip.getItemCount() == 0) return WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+        Uri[] chosen = new Uri[clip.getItemCount()];
+        for (int index = 0; index < chosen.length; index++) chosen[index] = clip.getItemAt(index).getUri();
+        return chosen;
     }
 
     // The read permission of a chosen document belongs to the result activity, which finishes at once, while the WebView reads
