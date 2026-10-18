@@ -232,7 +232,8 @@ continues to throw `NotSupportedException` on macOS; use the context menu or Saf
 
 A view keeps a history of the documents it has shown, and the engine walks it without the host. On
 Windows these all load the previous document again: the back button of a mouse, the browser-back key
-of a keyboard, `Alt+Left` while the accelerator keys are on, a swipe on a touch screen,
+of a keyboard (unless an experiment of Edge has turned it off, see
+[known limitations](known-limitations.md)), `Alt+Left` while the accelerator keys are on, a swipe on a touch screen,
 `history.back()` and `history.go(n)` of a page, and `NeoAstra.GoBack()`, which the automation tool
 `navigate_page` calls. An application that shows a start-up screen and then its main
 document in the same view has both in that history, so "back" returns to the start-up screen, which

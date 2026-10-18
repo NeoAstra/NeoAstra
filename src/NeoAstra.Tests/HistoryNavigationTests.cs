@@ -65,8 +65,7 @@ public sealed class HistoryNavigationTests
             await ExpectAsync("history.go(-1)", () => session.RunAsync("history.go(-1); true"), "first.html", NeoNavigationKind.BackForward);
             await ExpectAsync("the forward button of a mouse", () => Run(() => BrowserInput.PostMouseButton(session.Window, forward: true)), "second.html", NeoNavigationKind.BackForward);
             await ExpectAsync("the back button of a mouse", () => Run(() => BrowserInput.PostMouseButton(session.Window, forward: false)), "first.html", NeoNavigationKind.BackForward);
-            await ExpectAsync("the browser-forward command of a keyboard", () => Run(() => BrowserInput.PostBrowserCommand(session.Window, forward: true)), "second.html", NeoNavigationKind.BackForward);
-            await ExpectAsync("the browser-back command of a keyboard", () => Run(() => BrowserInput.PostBrowserCommand(session.Window, forward: false)), "first.html", NeoNavigationKind.BackForward);
+            // The Browser Back and Forward keys are not asked for: an experiment of Edge turns them off in WebView2 views.
             await ExpectAsync("history.go(1)", () => session.RunAsync("history.go(1); true"), "second.html", NeoNavigationKind.BackForward);
 
             await ExpectAsync("Reload", () => Run(view.Reload), "second.html", NeoNavigationKind.Reload);
@@ -148,7 +147,6 @@ public sealed class HistoryNavigationTests
             await ShowAsync("first.html");
             await ShowAsync("second.html");
             await StaysAsync("the back button of a mouse", () => BrowserInput.PostMouseButton(session.Window, forward: false), "second.html");
-            await StaysAsync("the browser-back command of a keyboard", () => BrowserInput.PostBrowserCommand(session.Window, forward: false), "second.html");
             await StaysAsync("history.back()", () => Script("history.back(); true"), "second.html");
             await StaysAsync("history.go(-1)", () => Script("history.go(-1); true"), "second.html");
             Assert.IsFalse(view.CanGoBack);
@@ -236,7 +234,6 @@ public sealed class HistoryNavigationTests
     {
         private const uint WM_XBUTTONDOWN = 0x020B;
         private const uint WM_XBUTTONUP = 0x020C;
-        private const uint WM_APPCOMMAND = 0x0319;
 
         /// <summary>Presses and releases the back or the forward button of a mouse over the view.</summary>
         internal static void PostMouseButton(NeoWindow window, bool forward)
@@ -246,13 +243,6 @@ public sealed class HistoryNavigationTests
             // The low word of the first parameter holds the buttons that are down (MK_XBUTTON1 or MK_XBUTTON2), the high word the button.
             Assert.IsTrue(PostMessage(target, WM_XBUTTONDOWN, (button << 16) | (forward ? 0x40 : 0x20), (20 << 16) | 20));
             Assert.IsTrue(PostMessage(target, WM_XBUTTONUP, button << 16, (20 << 16) | 20));
-        }
-
-        /// <summary>Sends the browser-back or the browser-forward command of a keyboard (APPCOMMAND_BROWSER_BACKWARD, APPCOMMAND_BROWSER_FORWARD).</summary>
-        internal static void PostBrowserCommand(NeoWindow window, bool forward)
-        {
-            var target = FindBrowserWindow(window);
-            Assert.IsTrue(PostMessage(target, WM_APPCOMMAND, target, (forward ? 2 : 1) << 16));
         }
 
         // The window of the browser that takes the input of a view: a descendant of the window of the host.

@@ -104,7 +104,15 @@ of a link, or of a script is a `NewDocument`. A move to an entry that the page a
 `history.pushState` raises nothing. With `NeoBrowserFeatures.HistoryNavigation` off, none of those
 history navigations loads a document or reaches `NavigationRequested`, in the top-level document or in
 a frame, a reload that follows at once still loads the document, and the back button of a mouse still
-walks the entries that the page added for itself. [History navigation](chromeless-windows.md#history-navigation)
+walks the entries that the page added for itself.
+
+The Browser Back and Forward keys of a keyboard no longer walk the history of a WebView2 view once
+Edge applies one of its experiments, which it downloads into the user-data folder and applies from the
+next start of the browser. This was observed on 2026-10-18 with the WebView2 Runtimes 154 and 155: in
+such a folder neither a real key nor its `WM_APPCOMMAND` navigates, while a folder without the
+download navigates for both, and the buttons of a mouse navigate in both. NeoAstra neither handles
+these keys nor turns the experiment off, and its tests no longer ask for them.
+[History navigation](chromeless-windows.md#history-navigation)
 describes the switch. On macOS and Linux the kind is the navigation type that WKWebView and WebKitGTK
 report, where a reload and a history navigation of a document that came from a form submission share
 one type (`WKNavigationTypeFormResubmitted`, `WEBKIT_NAVIGATION_TYPE_FORM_RESUBMITTED`): its kind is

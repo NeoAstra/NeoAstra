@@ -162,29 +162,6 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   where it is after a refused history navigation (`native/tests/macos_history_tests.mm` asks for it on
   macOS, nothing does on Linux), and the navigation type of a history navigation that WebKit serves
   from its page cache.
-- **Windows CI: the browser-forward command of a keyboard no longer navigates in WebView2 154.**
-  `HistoryNavigationTests.ANavigationRequestTellsItsKind` times out at "the browser-forward command of
-  a keyboard" on every Windows CI run since 2026-10-18 (`d5052bf` and later, attempts repeated). The
-  last green run (`ac30dda`, 2026-10-15) had the same native runtimes, and the managed changes in between
-  only touch the tray and menu presenters; the runner image changed from `win25-vs2026/20260925.250`
-  (Microsoft Edge 153.0.4234.48) to `20261007.264` (Edge 154.0.4258.62). The mouse back and forward
-  buttons in the same test still navigate. Reproduced on 2026-10-18 on Windows 11 on Arm (a Parallels
-  machine) with the WebView2 Runtime 155.0.4283.60: it depends on the user-data folder, not on the
-  test. A folder whose browser fetched the variations seed of Edge (`variations_seed_etag` and
-  `variations_config_ids` in its `Local State`) loses the keyboard browser commands from the next
-  start of its browser: neither a `WM_APPCOMMAND` posted to `Chrome_WidgetWin_1` or
-  `Chrome_RenderWidgetHostHWND` nor a real `VK_BROWSER_FORWARD` key through `SendInput` navigates,
-  while the mouse back and forward buttons still do. A new folder whose browser has no seed navigates
-  for all of them, through restarts. The tests share one folder, so the seed that an early test fetches
-  applies to this one; the CI runner starts with no seed. So an Edge experiment, not NeoAstra or the
-  way the test posts the command, takes the Browser Back and Forward keys away from WebView2 views,
-  and the applications are affected as well. Which feature it is was not found (the
-  `edge://version/?show-variations-cmd` page could not be read from a view). To decide: whether the
-  backend handles the Browser Back and Forward keys itself (for example in `AcceleratorKeyPressed`,
-  if it still receives them under the experiment, which was not checked), or whether the test stops
-  asking the engine for them and the limitation is documented.
-  `AViewWithoutHistoryNavigationStaysOnItsDocument` still passes its keyboard stage, but under the
-  experiment it no longer shows that the switch refuses that command.
 - **History navigation: what stays possible with the switch off.** A history navigation is refused
   where the engine asks about it. It does not ask for a move within a document, so the entries that a
   page adds with `history.pushState` or a fragment are still walked by the back button of a mouse; that
