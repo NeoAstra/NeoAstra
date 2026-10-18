@@ -66,7 +66,7 @@ struct window_callback_context {
 void NEOASTRA_CALL release_window_on_resize(void* pointer, const neoastra_event_t* event) {
     auto* context = static_cast<window_callback_context*>(pointer);
     if (event->object_id != context->id) return;
-    if (event->type == NEOASTRA_EVENT_WINDOW_RESIZED) {
+    if (event->header.type == NEOASTRA_EVENT_WINDOW_RESIZED) {
         ++context->resized;
         auto* window = context->window;
         context->window = nullptr;
@@ -75,12 +75,12 @@ void NEOASTRA_CALL release_window_on_resize(void* pointer, const neoastra_event_
         // The window procedure, not just the event emitter, owns the callback's
         // lifetime. The next state event still belongs to the same native window.
         if (!context->detach) assert(IsWindow(context->hwnd));
-    } else if (event->type == NEOASTRA_EVENT_WINDOW_STATE_CHANGED) {
+    } else if (event->header.type == NEOASTRA_EVENT_WINDOW_STATE_CHANGED) {
         ++context->state_changed;
         assert(event->value == NEOASTRA_WINDOW_MINIMIZED);
         assert(IsWindow(context->hwnd));
-    } else if (event->type == NEOASTRA_EVENT_WINDOW_CLOSED) ++context->closed;
-    else if (event->type == NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED) {
+    } else if (event->header.type == NEOASTRA_EVENT_WINDOW_CLOSED) ++context->closed;
+    else if (event->header.type == NEOASTRA_EVENT_WINDOW_SCALE_FACTOR_CHANGED) {
         ++context->scale_changed;
         assert(event->value == context->expected_scale && IsWindow(context->hwnd));
     }
@@ -131,7 +131,7 @@ void test_dpi_callback_release() {
 
 void NEOASTRA_CALL release_window_on_close(void* pointer, const neoastra_event_t* event) {
     auto* context = static_cast<window_callback_context*>(pointer);
-    if (event->type != NEOASTRA_EVENT_WINDOW_CLOSED || event->object_id != context->id) return;
+    if (event->header.type != NEOASTRA_EVENT_WINDOW_CLOSED || event->object_id != context->id) return;
     ++context->closed;
     neoastra_window_release(context->window);
     context->window = nullptr;
@@ -174,7 +174,7 @@ struct session_callback_context {
 };
 
 void NEOASTRA_CALL release_app_on_session_end(void* pointer, const neoastra_event_t* event) {
-    if (event->type != NEOASTRA_EVENT_APPLICATION_SESSION_END) return;
+    if (event->header.type != NEOASTRA_EVENT_APPLICATION_SESSION_END) return;
     auto* context = static_cast<session_callback_context*>(pointer);
     ++context->calls;
     neoastra_app_release(context->app);
@@ -191,7 +191,7 @@ void test_session_callback_release() {
 }
 
 void NEOASTRA_CALL detach_on_window_session_end(void* pointer, const neoastra_event_t* event) {
-    if (event->type != NEOASTRA_EVENT_APPLICATION_SESSION_END) return;
+    if (event->header.type != NEOASTRA_EVENT_APPLICATION_SESSION_END) return;
     auto* context = static_cast<window_callback_context*>(pointer);
     assert(neoastra_app_detach(context->app, nullptr) == NEOASTRA_OK);
     neoastra_window_release(context->window);
@@ -282,7 +282,7 @@ struct detaching_window_context {
 
 void NEOASTRA_CALL detach_on_resize(void* pointer, const neoastra_event_t* event) {
     auto* context = static_cast<detaching_window_context*>(pointer);
-    if (event->type != NEOASTRA_EVENT_WINDOW_RESIZED || (context->id && event->object_id != context->id)) return;
+    if (event->header.type != NEOASTRA_EVENT_WINDOW_RESIZED || (context->id && event->object_id != context->id)) return;
     ++context->calls;
     assert(neoastra_app_detach(context->app, nullptr) == NEOASTRA_OK);
 }

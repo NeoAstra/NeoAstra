@@ -94,7 +94,8 @@ checks that have not been run. Remove an entry when it is done. What an applicat
 - **Linux: shared-session download tracking needs target-host validation.** The 2026-10-17 source
   change tags each native download before creating its tracked lifecycle, so handlers of environments
   that share a network session cannot publish it more than once. `native/tests/linux_download_tests.cpp`
-  includes two environments on one root and one download. The GTK backend and this regression were not
+  covers two environments without a root, which share WebKit's default session, and one download; two
+  environments on the same `UserDataRoot` are not covered. The GTK backend and this regression were not
   compiled or run on the macOS development host; run the Linux native tests before treating the fix as
   runtime-qualified. Downloads from views that NeoAstra does not own are still canceled while an
   environment uses that session.

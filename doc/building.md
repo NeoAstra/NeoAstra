@@ -10,9 +10,9 @@ This guide covers development from a source checkout. For package-based applicat
   Normal source builds perform an incremental locked npm restore when required.
 - A graphical desktop and the [platform runtime dependencies](platform-support.md#runtime-requirements)
   to run samples or browser checks.
-- Python 3.12 (the CI version) for the engineering tests and native build helper; CMake, Clang, and
-  the platform development dependencies when rebuilding native code. See the
-  [native workflow](../.github/workflows/native.yml) for host-specific setup.
+- Python 3.13 for the engineering tests and Python 3.12 for the native build helper (the CI
+  versions); CMake, Clang, and the platform development dependencies when rebuilding native code.
+  See the [native workflow](../.github/workflows/native.yml) for host-specific setup.
 
 ## Managed build and tests
 

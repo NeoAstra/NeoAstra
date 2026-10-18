@@ -82,24 +82,27 @@ internal sealed unsafe partial class MacTrayPresenter(NeoCommandService commands
     private void StatusActivated(nint sender)
     {
         if (_disposed || !_buttons.TryGetValue(sender, out var id) || !_entries.TryGetValue(id, out var entry)) return;
-        var app = Native.Send(Native.GetClass("NSApplication"), Native.GetSelector("sharedApplication"));
-        var currentEvent = Native.Send(app, Native.GetSelector("currentEvent"));
-        var secondary = currentEvent != 0 && Native.SendLong(currentEvent, Native.GetSelector("buttonNumber")) == 1;
-        try { Activated?.Invoke(id, secondary); } catch { }
-        // A synchronous handler may retire this entry, even by recreating the same ID.
-        if (_disposed || !_entries.TryGetValue(id, out var current) || !ReferenceEquals(current, entry) || entry.Menu == 0) return;
 
-        // AppKit tracks the popup in a nested loop. Keep the native objects alive if that loop removes,
-        // replaces, or disposes the entry; retaining the managed Entry alone does not retain its pointers.
+        // The handler and AppKit's nested popup loop may remove, replace, or dispose the entry while AppKit still
+        // dispatches from its button to the target. Retaining the managed Entry alone does not retain its pointers.
         var target = _target;
         Native.SendVoid(entry.Item, Native.GetSelector("retain"));
-        Native.SendVoid(entry.Menu, Native.GetSelector("retain"));
+        if (entry.Menu != 0) Native.SendVoid(entry.Menu, Native.GetSelector("retain"));
         Native.SendVoid(target, Native.GetSelector("retain"));
-        try { Native.SendVoidArg(entry.Item, Native.GetSelector("popUpStatusItemMenu:"), entry.Menu); }
+        try
+        {
+            var app = Native.Send(Native.GetClass("NSApplication"), Native.GetSelector("sharedApplication"));
+            var currentEvent = Native.Send(app, Native.GetSelector("currentEvent"));
+            var secondary = currentEvent != 0 && Native.SendLong(currentEvent, Native.GetSelector("buttonNumber")) == 1;
+            try { Activated?.Invoke(id, secondary); } catch { }
+            // A synchronous handler may retire this entry, even by recreating the same ID.
+            if (_disposed || !_entries.TryGetValue(id, out var current) || !ReferenceEquals(current, entry) || entry.Menu == 0) return;
+            Native.SendVoidArg(entry.Item, Native.GetSelector("popUpStatusItemMenu:"), entry.Menu);
+        }
         finally
         {
             Native.SendVoid(entry.Item, Native.GetSelector("release"));
-            Native.SendVoid(entry.Menu, Native.GetSelector("release"));
+            if (entry.Menu != 0) Native.SendVoid(entry.Menu, Native.GetSelector("release"));
             Native.SendVoid(target, Native.GetSelector("release"));
         }
     }

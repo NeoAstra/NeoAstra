@@ -105,6 +105,9 @@ void test_deferred_download(neoastra_environment_t* environment, neoastra_window
     auto* native = webkit_web_view_download_uri(WEBKIT_WEB_VIEW(handle.value), uri.c_str());
     assert(native);
     wait_until([&] { return events.decision; });
+    // One lifecycle wrapper, even when the download-started handlers of several environments see this download: the
+    // first returns TRUE from decide-destination, so the event count alone cannot tell a second wrapper apart.
+    assert(view->downloads.size() == 1);
 
     // Returning from decide-destination must neither force cancellation nor delete a retained decision.
     assert(events.decision_destroyed == 0);

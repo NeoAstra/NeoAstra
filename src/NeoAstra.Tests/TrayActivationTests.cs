@@ -44,6 +44,36 @@ public sealed class TrayActivationTests
     }
 
     [TestMethod]
+    [DataRow("remove")]
+    [DataRow("replace")]
+    [DataRow("recreate")]
+    [DataRow("dispose")]
+    public async Task MacHandlerRetiringTheEntryKeepsTheDispatchingButtonAndTargetAlive(string mutation)
+    {
+        await using var fixture = new TrayPresenterFixture(mac: true);
+        fixture.Service.Set(Options);
+        var button = fixture.Button;
+        var target = fixture.Target;
+        bool? buttonLive = null, targetLive = null;
+        fixture.Service.Activated += (_, _) =>
+        {
+            Mutate(fixture.Service, mutation);
+            buttonLive = fixture.IsLive(button);
+            targetLive = fixture.IsLive(target);
+        };
+
+        fixture.Activate();
+
+        // AppKit is still dispatching the button's action to the target when the handler returns.
+        Assert.IsTrue(buttonLive, "A handler that retires the entry cannot free the button that sent the action.");
+        Assert.IsTrue(targetLive, "A handler that disposes the service cannot free the action target.");
+        Assert.IsEmpty(fixture.Violations);
+        await fixture.DisposeAsync();
+        Assert.AreEqual(0, fixture.LiveResources);
+        Assert.IsEmpty(fixture.Violations);
+    }
+
+    [TestMethod]
     [DataRow(true, "remove")]
     [DataRow(true, "replace")]
     [DataRow(true, "recreate")]

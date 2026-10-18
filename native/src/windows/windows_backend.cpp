@@ -790,8 +790,10 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     state->events_registered = true;
     HRESULT result = state->core->add_NavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+            // A released or torn-down view settles a decision as NeoAstra's default would: returning with
+            // the arguments untouched would let WebView2 apply its own (popup, download UI, prompt, dialog).
             neo_retain_guard owner(view);
-            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Cancel(TRUE); return S_OK; }
             LPWSTR raw_uri{};
             BOOL user_initiated{};
             BOOL redirected{};
@@ -839,7 +841,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     result = state->core->add_FrameNavigationStarting(
         Callback<ICoreWebView2NavigationStartingEventHandler>([view](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
             neo_retain_guard owner(view);
-            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Cancel(TRUE); return S_OK; }
             if (neo_refuses_navigation(view, navigation_kind(args))) args->put_Cancel(TRUE);
             return S_OK;
         }).Get(), &state->frame_navigation_starting);
@@ -1045,7 +1047,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     result = state->core->add_PermissionRequested(
         Callback<ICoreWebView2PermissionRequestedEventHandler>([view](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT {
             neo_retain_guard owner(view);
-            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY); return S_OK; }
             LPWSTR raw_uri{};
             COREWEBVIEW2_PERMISSION_KIND kind{};
             BOOL user_initiated{};
@@ -1086,7 +1088,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     result = state->core->add_NewWindowRequested(
         Callback<ICoreWebView2NewWindowRequestedEventHandler>([view](ICoreWebView2* core, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
             neo_retain_guard owner(view);
-            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Handled(TRUE); return S_OK; }
             LPWSTR raw_uri{};
             LPWSTR raw_name{};
             BOOL user_initiated{};
@@ -1132,7 +1134,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     if (SUCCEEDED(state->core.As(&core4))) {
         result=core4->add_DownloadStarting(Callback<ICoreWebView2DownloadStartingEventHandler>([view](ICoreWebView2*,ICoreWebView2DownloadStartingEventArgs* args)->HRESULT{
             neo_retain_guard owner(view);
-            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Cancel(TRUE); return S_OK; }
             ComPtr<ICoreWebView2DownloadOperation> operation;ComPtr<ICoreWebView2Deferral> deferral;LPWSTR raw_path{};
             auto hr=args->get_DownloadOperation(&operation);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(SUCCEEDED(hr))args->get_ResultFilePath(&raw_path);
             if(FAILED(hr)){CoTaskMemFree(raw_path);args->put_Cancel(TRUE);return S_OK;}
@@ -1154,7 +1156,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     ComPtr<ICoreWebView2_10> core10;
     if(SUCCEEDED(state->core.As(&core10))){result=core10->add_BasicAuthenticationRequested(Callback<ICoreWebView2BasicAuthenticationRequestedEventHandler>([view](ICoreWebView2*,ICoreWebView2BasicAuthenticationRequestedEventArgs* args)->HRESULT{
         neo_retain_guard owner(view);
-        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Cancel(TRUE); return S_OK; }
         LPWSTR raw_uri{},raw_challenge{};ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_Uri(&raw_uri);if(SUCCEEDED(hr))hr=args->get_Challenge(&raw_challenge);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_uri);CoTaskMemFree(raw_challenge);args->put_Cancel(TRUE);return S_OK;}
         try{auto uri=take_string(raw_uri);auto challenge=take_string(raw_challenge);auto context=std::make_unique<basic_auth_context>();context->args=args;context->deferral=deferral;auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_AUTHENTICATION,NEOASTRA_DECISION_DEFAULT);decision->completion=basic_auth_decided;decision->completion_context=context.release();neo_event_details details{};details.text2=&challenge;
             neo_emit_view_detailed(view,NEOASTRA_EVENT_AUTHENTICATION_REQUESTED,0,nullptr,&uri,0,0,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Cancel(TRUE);deferral->Complete();return S_OK;}
@@ -1163,7 +1165,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     ComPtr<ICoreWebView2_5> core5;
     if(SUCCEEDED(state->core.As(&core5))){result=core5->add_ClientCertificateRequested(Callback<ICoreWebView2ClientCertificateRequestedEventHandler>([view](ICoreWebView2*,ICoreWebView2ClientCertificateRequestedEventArgs* args)->HRESULT{
         neo_retain_guard owner(view);
-        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Cancel(TRUE); args->put_Handled(TRUE); return S_OK; }
         LPWSTR raw_host{};int port{};BOOL proxy{};ComPtr<ICoreWebView2ClientCertificateCollection> certificates;ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_Host(&raw_host);if(SUCCEEDED(hr))hr=args->get_Port(&port);if(SUCCEEDED(hr))hr=args->get_IsProxy(&proxy);if(SUCCEEDED(hr))hr=args->get_MutuallyTrustedCertificates(&certificates);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_host);args->put_Cancel(TRUE);return S_OK;}
         try{auto host=take_string(raw_host);UINT count{};certificates->get_Count(&count);auto context=std::make_unique<client_cert_context>();context->args=args;context->certificates=certificates;context->deferral=deferral;auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_CLIENT_CERTIFICATE,NEOASTRA_DECISION_DEFAULT);decision->completion=client_cert_decided;decision->completion_context=context.release();neo_event_details details{};details.value2=proxy?1u:0u;
             neo_emit_view_detailed(view,NEOASTRA_EVENT_CLIENT_CERTIFICATE_REQUESTED,0,&host,nullptr,count,port,decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Cancel(TRUE);deferral->Complete();return S_OK;}
@@ -1172,7 +1174,7 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
     ComPtr<ICoreWebView2_14> core14;
     if(SUCCEEDED(state->core.As(&core14))){result=core14->add_ServerCertificateErrorDetected(Callback<ICoreWebView2ServerCertificateErrorDetectedEventHandler>([view](ICoreWebView2*,ICoreWebView2ServerCertificateErrorDetectedEventArgs* args)->HRESULT{
         neo_retain_guard owner(view);
-        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+        if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { args->put_Action(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL); return S_OK; }
         LPWSTR raw_uri{};COREWEBVIEW2_WEB_ERROR_STATUS status{};ComPtr<ICoreWebView2Certificate> certificate;ComPtr<ICoreWebView2Deferral> deferral;auto hr=args->get_RequestUri(&raw_uri);if(SUCCEEDED(hr))hr=args->get_ErrorStatus(&status);if(SUCCEEDED(hr))hr=args->get_ServerCertificate(&certificate);if(SUCCEEDED(hr))hr=args->GetDeferral(&deferral);if(FAILED(hr)){CoTaskMemFree(raw_uri);args->put_Action(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);return S_OK;}
         try{auto uri=take_string(raw_uri);LPWSTR raw_subject{};certificate->get_Subject(&raw_subject);auto subject=take_string(raw_subject);auto context=std::make_unique<tls_context>();context->args=args;context->deferral=deferral;auto* decision=new neoastra_decision;neo_configure_decision(decision,view,NEOASTRA_DECISION_CERTIFICATE_ERROR,NEOASTRA_DECISION_DENY);decision->completion=tls_decided;decision->completion_context=context.release();neo_event_details details{};details.text2=&subject;
             neo_emit_view_detailed(view,NEOASTRA_EVENT_CERTIFICATE_ERROR,0,nullptr,&uri,0,static_cast<int64_t>(status),decision,details);neo_finish_decision_event(view,decision);decision->release();return S_OK;}catch(...){args->put_Action(COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);deferral->Complete();return S_OK;}
@@ -1680,8 +1682,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
                     if (native_owner && native_owner->hwnd == reactivate) SetActiveWindow(reactivate);
                 }
             }
-            if (owner) neo_window_closed(window);
-            else window->closed.store(true, std::memory_order_release);
+            // A zero-reference window publishes no event, but its release still applies the shutdown policy.
+            neo_window_closed(window, static_cast<bool>(owner));
             return 0;
         case WM_MOVE:
             // The message carries the client origin, which is not where a position request places the window.
@@ -2905,6 +2907,8 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
             // WebView2 never observes the visibility transition when its parent is first shown
             // and can leave the controller's composition surface blank.
             if (SUCCEEDED(result) && view->window) result = controller->put_IsVisible(IsWindowVisible(view_parent(view)));
+            // Bounds and visibility changes can reach the host synchronously; an explicit detach there frees `state`.
+            if (view->platform != state) { callback(context, make_error(NEOASTRA_ERROR_DISPOSED, "Application shutdown interrupted WebView2 view creation", E_ABORT)); return S_OK; }
             ComPtr<ICoreWebView2Controller4> controller4;
             if (SUCCEEDED(result)) result=state->controller.As(&controller4);
             if (SUCCEEDED(result)) result=controller4->put_AllowExternalDrop(FALSE);

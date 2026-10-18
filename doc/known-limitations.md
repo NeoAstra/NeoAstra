@@ -265,8 +265,9 @@ teardown also settle a pending destination, so a late response cannot restart th
 is reported only after acceptance, and completion is reported once; canceled downloads have the
 `Canceled` state. Native clients that retain the decision may safely complete or release their own
 reference after the destination signal returns. Once cancellation, timeout, or view teardown has
-settled the native decision, a late completion returns `NEOASTRA_ERROR_INVALID_STATE`; retaining a
-handle does not extend its deadline.
+settled the native decision, a late completion returns `NEOASTRA_ERROR_INVALID_STATE`. A completion
+after the deadline but before the timeout has run returns `NEOASTRA_ERROR_TIMED_OUT` and settles the
+decision as timed out; retaining a handle does not extend its deadline.
 
 ## Permission requests and capture
 

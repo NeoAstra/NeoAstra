@@ -93,6 +93,22 @@ public sealed class ContextMenuActivationTests
         Assert.IsEmpty(fixture.Violations);
     }
 
+    [TestMethod]
+    public async Task WindowsMenuDisposalDetachesTheWindowMenuBeforeDestroyingIt()
+    {
+        await using var fixture = new WindowsContextMenuFixture();
+        await fixture.Service.SetMenuAsync("window:main", Items);
+        var attached = fixture.AttachedMenu;
+        Assert.AreNotEqual((nint)0, attached);
+
+        // NeoMenuService removes its menus first; the presenter must still detach the ones left when it is disposed itself.
+        await fixture.Presenter.DisposeAsync();
+
+        Assert.IsFalse(fixture.IsLive(attached));
+        Assert.AreEqual((nint)0, fixture.AttachedMenu, "Disposal cannot leave a destroyed HMENU attached to a live window.");
+        Assert.IsEmpty(fixture.Violations);
+    }
+
     private static void Mutate(WindowsContextMenuFixture fixture, string mutation)
     {
         switch (mutation)

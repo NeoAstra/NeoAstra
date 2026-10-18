@@ -219,7 +219,8 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
     private static nint WindowHandle(NeoWindow window) => window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
     private void EnsureAccess() { var value = _dispatcher ?? throw new InvalidOperationException("The native menu presenter is not bound to a UI dispatcher."); if (!value.CheckAccess()) throw new InvalidOperationException("Native menu presenter mutations require the NeoAstra UI dispatcher."); }
     private void OwnerDestroyed(nint window) { _windows.Remove(window); foreach (var id in _entries.Where(pair => pair.Value.Target.Window == window).Select(static pair => pair.Key).ToArray()) { if (_entries.Remove(id, out var entry)) DestroyMenu(entry.Menu); } if (_windows.Count == 0 && _subclassId != 0) { Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); } }
-    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; foreach (var entry in _entries.Values.ToArray()) Destroy(entry, true); _entries.Clear(); foreach (var window in _windows.Keys.ToArray()) ReleaseWindow(window); if (_subclassId != 0) Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); }
+    // Remove each entry before detaching it: ApplyPreferred would otherwise reattach the menu about to be destroyed.
+    private void DisposeOnDispatcher() { if (_disposed) return; _disposed = true; foreach (var id in _entries.Keys.ToArray()) { if (_entries.Remove(id, out var entry)) Destroy(entry, true); } foreach (var window in _windows.Keys.ToArray()) ReleaseWindow(window); if (_subclassId != 0) Presenters.TryRemove(_subclassId, out _); _subclassId = 0; ReleaseKeyboardHook(); }
 
     private void EnsureKeyboardHook()
     {

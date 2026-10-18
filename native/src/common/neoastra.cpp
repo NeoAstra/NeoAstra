@@ -680,7 +680,7 @@ void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept {
     delete app;
 }
 
-void neo_window_closed(neoastra_window_t* window) noexcept {
+void neo_window_closed(neoastra_window_t* window, bool publish) noexcept {
     if (!window || window->closed.exchange(true, std::memory_order_acq_rel)) return;
     auto* app = window->app;
     neo_retain_guard app_owner(app);
@@ -698,7 +698,7 @@ void neo_window_closed(neoastra_window_t* window) noexcept {
                           (app->shutdown_mode == NEOASTRA_APP_SHUTDOWN_ON_MAIN_WINDOW_CLOSED && app->main_window_id == window->id);
         }
     }
-    neo_emit_app(app, NEOASTRA_EVENT_WINDOW_CLOSED, id);
+    if (publish) neo_emit_app(app, NEOASTRA_EVENT_WINDOW_CLOSED, id);
     if (should_quit) neoastra_app_quit(app, 0);
 }
 

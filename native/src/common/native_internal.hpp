@@ -836,7 +836,8 @@ void neo_drain_dispatch(neoastra_app_t* app) noexcept;
 void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept;
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept;
 void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept;
-void neo_window_closed(neoastra_window_t* window) noexcept;
+// Applies the shutdown policy of a closed window; `publish` is false for a window released to zero references.
+void neo_window_closed(neoastra_window_t* window, bool publish = true) noexcept;
 // Records the scale of the display a window is on. A change is reported unless the window is still being created.
 void neo_window_set_scale_factor(neoastra_window_t* window, double scale_factor, bool report = true) noexcept;
 void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,

@@ -51,6 +51,9 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
         => Presenter.GetType().GetMethod("MenuActivated", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(Presenter, [sender]);
 
     internal nint MenuItem => (nint)Get("MenuItem");
+    internal nint Button => (nint)Get("Button");
+    internal nint Target => (nint)_native.GetProperty("Target")!.GetValue(null)!;
+    internal bool IsLive(nint value) => ((Dictionary<nint, int>)Get("References")).GetValueOrDefault(value) > 0;
 
     public async ValueTask DisposeAsync()
     {
@@ -77,7 +80,7 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
             {
                 // HWND discovery belongs to NeoWindow/native core, not the menu lifetime under test.
                 var resolve = root.DescendantNodes().OfType<MethodDeclarationSyntax>().Single(static node => node.Identifier.ValueText == "ResolveTarget");
-                root = root.ReplaceNode(resolve, resolve.WithBody((BlockSyntax)SyntaxFactory.ParseStatement("{ return new(id, TargetKind.Context, global::NeoAstra.Desktop.Tray.TrayTestNative.ContextWindow); }")));
+                root = root.ReplaceNode(resolve, resolve.WithBody((BlockSyntax)SyntaxFactory.ParseStatement("{ return new(id, id.StartsWith(\"window:\", StringComparison.Ordinal) ? TargetKind.Window : TargetKind.Context, global::NeoAstra.Desktop.Tray.TrayTestNative.ContextWindow); }")));
             }
             var native = root.DescendantNodes().OfType<ClassDeclarationSyntax>().Single(static node => node.Identifier.ValueText == "Native");
             var replacement = native.WithMembers(SyntaxFactory.List<MemberDeclarationSyntax>(native.Members.OfType<MethodDeclarationSyntax>().Select(method =>
@@ -115,7 +118,11 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
         ("Mac", "SendVoid") => "{ TrayTestNative.SendVoid(target, selector); }",
         ("Mac", "SendVoidArg") => "{ TrayTestNative.SendVoidArg(target, selector, value); }",
         ("Mac", "SendVoidBool" or "SendVoidLong" or "SendVoidULong") => "{ }",
-        ("Windows", "CreateWindowEx" or "CreatePopupMenu") => "{ return TrayTestNative.Allocate(1); }",
+        ("Windows", "CreateWindowEx" or "CreatePopupMenu" or "CreateMenu") => "{ return TrayTestNative.Allocate(1); }",
+        ("Windows", "SetMenu") => "{ TrayTestNative.Check(menu); TrayTestNative.WindowMenus[window] = menu; return true; }",
+        ("Windows", "DrawMenuBar" or "SetWindowSubclass" or "RemoveWindowSubclass" or "UnhookWindowsHookEx") => "{ return true; }",
+        ("Windows", "GetCurrentThreadId") => "{ return 1; }",
+        ("Windows", "SetWindowsHookEx") => "{ return 1; }",
         ("Windows", "SetWindowLongPtr") => "{ return 1; }",
         ("Windows", "LoadIcon") => "{ return 1; }",
         ("Windows", "ShellNotifyIcon") => "{ TrayTestNative.NativeId = data->Id; return true; }",
@@ -134,12 +141,14 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
         public static class TrayTestNative
         {
             public static readonly Dictionary<nint, int> References = [];
+            public static readonly Dictionary<nint, nint> WindowMenus = [];
             public static readonly List<string> Violations = [];
             private static readonly Dictionary<string, nint> Names = [];
             private static readonly Dictionary<nint, List<nint>> Children = [];
             private static nint _next;
             private static nint _target;
             public static nint Button, MenuItem, ContextWindow;
+            public static nint Target => _target;
             public static uint NativeId;
             public static bool Secondary;
             public static bool OwnerCanClose;
@@ -148,7 +157,7 @@ internal sealed class TrayPresenterFixture : IAsyncDisposable
 
             public static void Reset()
             {
-                References.Clear(); Violations.Clear(); Names.Clear(); Children.Clear();
+                References.Clear(); WindowMenus.Clear(); Violations.Clear(); Names.Clear(); Children.Clear();
                 _next = 100; _target = Button = MenuItem = ContextWindow = 0; NativeId = 0; Secondary = true; OwnerCanClose = false; PopupCount = 0; DuringPopup = null;
             }
             public static nint Name(string name)

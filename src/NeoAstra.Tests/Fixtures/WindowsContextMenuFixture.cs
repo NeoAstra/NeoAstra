@@ -36,6 +36,8 @@ internal sealed class WindowsContextMenuFixture : IAsyncDisposable
     internal int PopupCount => (int)Get("PopupCount");
     internal int LiveResources => ((Dictionary<nint, int>)Get("References")).Count(static pair => pair.Value > 0);
     internal Action? DuringPopup { set => _native.GetField("DuringPopup")!.SetValue(null, value); }
+    internal nint AttachedMenu => ((Dictionary<nint, nint>)Get("WindowMenus")).GetValueOrDefault(_window);
+    internal bool IsLive(nint value) => ((Dictionary<nint, int>)Get("References")).GetValueOrDefault(value) > 0;
 
     internal NeoDesktopStatus Show() => Service.ShowContextMenuAsync(TargetId, new NeoPoint(10, 20)).GetAwaiter().GetResult();
 
