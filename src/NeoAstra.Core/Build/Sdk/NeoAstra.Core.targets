@@ -29,6 +29,7 @@
     <AndroidJavaSource Include="$(NeoAstraAndroidJavaDirectory)com/neoastra/backend/*.java" />
     <ProguardConfiguration Include="$(NeoAstraAndroidJavaDirectory)proguard-rules.pro" />
     <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)AndroidManifest.xml" />
+    <AndroidResource Include="$(NeoAstraAndroidJavaDirectory)xml/neoastra_file_paths.xml" Link="Resources/xml/neoastra_file_paths.xml" />
   </ItemGroup>
 
   <!-- A debug build reaches the development server of `dotnet neoastra dev`, which serves plain HTTP on 127.0.0.1, and Android

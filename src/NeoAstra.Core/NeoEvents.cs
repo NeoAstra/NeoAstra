@@ -489,6 +489,11 @@ public readonly record struct NeoFileChooserDecision(NeoDecisionAction Action, I
 {
     /// <summary>Cancels the chooser.</summary>
     public static NeoFileChooserDecision Cancel => new(NeoDecisionAction.Cancel);
+    /// <summary>
+    /// Lets the platform answer: Android shows the picker of the system, or the camera for an image input with the
+    /// <c>capture</c> attribute; a platform without a picker of its own cancels.
+    /// </summary>
+    public static NeoFileChooserDecision Default => new(NeoDecisionAction.Default);
     /// <summary>Selects one or more local paths.</summary>
     public static NeoFileChooserDecision Select(params string[] paths)
     {

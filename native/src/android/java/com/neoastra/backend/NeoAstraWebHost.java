@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Message;
+import android.provider.MediaStore;
 import android.view.ViewGroup;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
@@ -22,6 +23,7 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.FileProvider;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebMessageCompat;
@@ -212,12 +214,110 @@ public final class NeoAstraWebHost {
         callback.onReceiveValue(files);
     }
 
-    /** Shows the picker of the system, which the host asked for with its default answer. */
+    /**
+     * Shows the picker of the system, which the host asked for with its default answer; an image input with the capture attribute
+     * opens the camera instead, which writes the photo to a file of NeoAstra's file provider that the page then receives.
+     */
     public void chooseWithSystem(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams parameters) {
+        if (parameters.isCaptureEnabled() && acceptsImages(parameters.getAcceptTypes())) { takePhoto(callback); return; }
         Intent intent;
         try { intent = parameters.createIntent(); }
         catch (RuntimeException exception) { callback.onReceiveValue(null); return; }
-        NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> callback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data)));
+        Context context = webView.getContext();
+        NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> callback.onReceiveValue(copyChosen(context, WebChromeClient.FileChooserParams.parseResult(resultCode, data))));
+    }
+
+    // The read permission of a chosen document belongs to the result activity, which finishes at once, while the WebView reads
+    // the file later: the files are copied into the cache folder neoastra-chooser while the permission holds, and the page gets
+    // the copies. The folder keeps only the latest choice.
+    private static Uri[] copyChosen(Context context, Uri[] chosen) {
+        if (chosen == null || chosen.length == 0) return chosen;
+        File directory = new File(context.getCacheDir(), "neoastra-chooser");
+        File[] previous = directory.listFiles();
+        if (previous != null) for (File file : previous) file.delete();
+        if (!directory.isDirectory() && !directory.mkdirs()) return null;
+        List<Uri> copies = new ArrayList<>();
+        for (int index = 0; index < chosen.length; index++) {
+            Uri source = chosen[index];
+            if (source == null) continue;
+            File target = new File(directory, index + "-" + displayName(context, source));
+            try (InputStream input = context.getContentResolver().openInputStream(source); java.io.OutputStream output = new java.io.FileOutputStream(target)) {
+                if (input == null) continue;
+                byte[] buffer = new byte[64 * 1024];
+                for (int read; (read = input.read(buffer)) > 0;) output.write(buffer, 0, read);
+                copies.add(Uri.fromFile(target));
+            } catch (IOException | SecurityException exception) {
+                target.delete();
+            }
+        }
+        return copies.isEmpty() ? null : copies.toArray(new Uri[0]);
+    }
+
+    private static String displayName(Context context, Uri uri) {
+        String name = null;
+        try (android.database.Cursor cursor = context.getContentResolver().query(uri, new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
+        } catch (RuntimeException exception) {
+            name = null;
+        }
+        if (name == null || name.isEmpty()) name = uri.getLastPathSegment();
+        if (name == null || name.isEmpty()) name = "file";
+        return name.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+
+    private static boolean acceptsImages(String[] types) {
+        if (types == null || types.length == 0) return false;
+        for (String type : types) if (type != null && (type.startsWith("image/") || type.isEmpty())) return true;
+        return false;
+    }
+
+    // An application that declares the camera permission (for getUserMedia) must hold it before another application takes the
+    // photo for it; one that does not declare it needs none.
+    private void takePhoto(ValueCallback<Uri[]> callback) {
+        Context context = webView.getContext();
+        if (declaresCamera(context) && context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            NeoAstraResultActivity.requestPermissions(new String[] { Manifest.permission.CAMERA }, (resultCode, data, grants) -> {
+                if (context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera(context, callback);
+                else callback.onReceiveValue(null);
+            });
+            return;
+        }
+        launchCamera(context, callback);
+    }
+
+    private static boolean declaresCamera(Context context) {
+        try {
+            String[] requested = context.getPackageManager().getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
+            return requested != null && Arrays.asList(requested).contains(Manifest.permission.CAMERA);
+        } catch (PackageManager.NameNotFoundException exception) {
+            return false;
+        }
+    }
+
+    private static void launchCamera(Context context, ValueCallback<Uri[]> callback) {
+        File photo;
+        Uri output;
+        try {
+            File directory = new File(context.getCacheDir(), "neoastra-camera");
+            if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("The camera directory cannot be created.");
+            photo = File.createTempFile("photo-", ".jpg", directory);
+            output = FileProvider.getUriForFile(context, context.getPackageName() + ".neoastra.files", photo);
+        } catch (IOException | IllegalArgumentException exception) {
+            callback.onReceiveValue(null);
+            return;
+        }
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            .putExtra(MediaStore.EXTRA_OUTPUT, output)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            NeoAstraResultActivity.startForResult(intent, (resultCode, data, grants) -> {
+                if (resultCode == Activity.RESULT_OK && photo.length() > 0) callback.onReceiveValue(new Uri[] { output });
+                else { photo.delete(); callback.onReceiveValue(null); }
+            });
+        } catch (RuntimeException exception) {
+            photo.delete();
+            callback.onReceiveValue(null);
+        }
     }
 
     /**

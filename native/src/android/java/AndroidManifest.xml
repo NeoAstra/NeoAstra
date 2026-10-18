@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Merged into the manifest of an Android application: the provider loads the Java side of NeoAstra when the process starts,
-     and the activity receives the answers of the system to a picker or a permission request. -->
+     the activity receives the answers of the system to a picker or a permission request, and the file provider gives the
+     camera the file that a photo for a file input with the capture attribute is written to. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application>
     <provider
@@ -13,5 +14,12 @@
         android:exported="false"
         android:theme="@android:style/Theme.Translucent.NoTitleBar"
         android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode" />
+    <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.neoastra.files"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/neoastra_file_paths" />
+    </provider>
   </application>
 </manifest>

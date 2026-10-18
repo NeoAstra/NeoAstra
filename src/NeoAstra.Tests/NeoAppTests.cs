@@ -190,6 +190,25 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public async Task ConventionalAppAnswersFileInputsOnlyWhenItSaysHow()
+    {
+        Assert.IsNull(CreateBuilder(ApplicationPermission()).FileChooserHandler);
+
+        var system = CreateBuilder(ApplicationPermission()).UseSystemFileChooser();
+        var request = new NeoFileChooserRequest(["image/*"], false);
+        Assert.AreEqual(NeoDecisionAction.Default, (await system.FileChooserHandler!(request)).Action);
+        Assert.Throws<InvalidOperationException>(() => system.UseSystemFileChooser());
+        Assert.Throws<InvalidOperationException>(() => system.OnFileChooser(static _ => ValueTask.FromResult(NeoFileChooserDecision.Cancel)));
+
+        NeoFileChooserRequest? seen = null;
+        var custom = CreateBuilder(ApplicationPermission()).OnFileChooser(value => { seen = value; return ValueTask.FromResult(NeoFileChooserDecision.Cancel); });
+        Assert.AreEqual(NeoDecisionAction.Cancel, (await custom.FileChooserHandler!(request)).Action);
+        Assert.AreSame(request, seen);
+        Assert.Throws<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).OnFileChooser(null!));
+        Assert.AreEqual(NeoDecisionAction.Default, NeoFileChooserDecision.Default.Action);
+    }
+
+    [TestMethod]
     public void ConventionalAppExternalLinkConfigurationIsExplicitAndBounded()
     {
         var builder = CreateBuilder(ApplicationPermission());

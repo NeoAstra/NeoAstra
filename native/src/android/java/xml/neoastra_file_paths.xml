@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The files NeoAstra's file provider shares: photos that the camera takes for a file input with the capture attribute. -->
+<paths>
+  <cache-path name="neoastra_camera" path="neoastra-camera/" />
+</paths>

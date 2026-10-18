@@ -281,6 +281,40 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void AndroidFileInputs_GiveThePageReadableCopiesAndAPhotoOfTheCamera()
+    {
+        // A file input with the capture attribute opens the camera, which needs a content address to write the photo to: the
+        // targets merge a file provider and its paths into every Android application, and the host shares only its camera folder.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var resource = targets.Descendants("AndroidResource").Single(static item => ((string)item.Attribute("Include")!).EndsWith("xml/neoastra_file_paths.xml", StringComparison.Ordinal));
+        Assert.AreEqual("'$(_NeoAstraTargetPlatform)' == 'android'", (string?)resource.Parent!.Attribute("Condition"));
+        Assert.AreEqual("Resources/xml/neoastra_file_paths.xml", (string?)resource.Attribute("Link"));
+
+        var java = Path.Combine(root, "native", "src", "android", "java");
+        var manifest = System.Xml.Linq.XDocument.Load(Path.Combine(java, "AndroidManifest.xml"));
+        System.Xml.Linq.XNamespace android = "http://schemas.android.com/apk/res/android";
+        var provider = manifest.Descendants("provider").Single(item => (string?)item.Attribute(android + "name") == "androidx.core.content.FileProvider");
+        Assert.AreEqual("${applicationId}.neoastra.files", (string?)provider.Attribute(android + "authorities"));
+        Assert.AreEqual("false", (string?)provider.Attribute(android + "exported"));
+        Assert.AreEqual("@xml/neoastra_file_paths", (string?)provider.Element("meta-data")!.Attribute(android + "resource"));
+
+        var paths = System.Xml.Linq.XDocument.Load(Path.Combine(java, "xml", "neoastra_file_paths.xml"));
+        var cache = paths.Root!.Elements().Single();
+        Assert.AreEqual("cache-path", cache.Name.LocalName);
+        Assert.AreEqual("neoastra-camera/", (string?)cache.Attribute("path"));
+
+        var host = File.ReadAllText(Path.Combine(java, "com", "neoastra", "backend", "NeoAstraWebHost.java"));
+        StringAssert.Contains(host, "parameters.isCaptureEnabled()");
+        StringAssert.Contains(host, "MediaStore.ACTION_IMAGE_CAPTURE");
+        StringAssert.Contains(host, "\".neoastra.files\"");
+        StringAssert.Contains(host, "\"neoastra-camera\"");
+        // A chosen document is copied while the result activity still holds its read permission.
+        StringAssert.Contains(host, "copyChosen(context, WebChromeClient.FileChooserParams.parseResult(resultCode, data))");
+        StringAssert.Contains(host, "\"neoastra-chooser\"");
+    }
+
+    [TestMethod]
     [DataRow("NeoAstraIOSHideFormAccessoryBar", "hide-form-accessory-bar.plist", "com.neoastra.webview.hideFormAccessoryBar")]
     [DataRow("NeoAstraIOSKeyboardWithoutUserAction", "keyboard-without-user-action.plist", "com.neoastra.webview.keyboardWithoutUserAction")]
     [DataRow("NeoAstraIOSKeyboardOverlay", "keyboard-overlay.plist", "com.neoastra.webview.keyboardOverlay")]

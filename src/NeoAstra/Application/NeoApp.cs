@@ -105,6 +105,7 @@ public sealed class NeoAppBuilder
     private string? _contractHash;
     private NeoExternalUrlScope? _externalLinkScope;
     private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
+    private Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? _fileChooser;
     private Session? _session;
     private Uri? _target;
     private string? _assetsDirectory;
@@ -234,6 +235,35 @@ public sealed class NeoAppBuilder
         return this;
     }
 
+    /// <summary>Answers the file inputs of the main view with the picker of the system.</summary>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// Without a file-chooser answer the view cancels every file input. On Android the default answer shows the picker of the
+    /// system, and the camera for an image input with the <c>capture</c> attribute; WKWebView on iOS shows its own menu in any
+    /// case. This is <see cref="OnFileChooser"/> with a handler that answers <see cref="NeoFileChooserDecision.Default"/>.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">A file-chooser answer was already registered.</exception>
+    public NeoAppBuilder UseSystemFileChooser() => OnFileChooser(static _ => ValueTask.FromResult(NeoFileChooserDecision.Default));
+
+    /// <summary>Registers how the main view answers its file inputs.</summary>
+    /// <param name="handler">The callback, which runs on the native UI thread and decides each request.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The handler can cancel, select local paths, or answer <see cref="NeoFileChooserDecision.Default"/> to let the system
+    /// show its picker. Without a handler the view cancels every file input.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A file-chooser answer was already registered.</exception>
+    public NeoAppBuilder OnFileChooser(Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_fileChooser is not null) throw new InvalidOperationException("The file-chooser answer can be registered only once.");
+        _fileChooser = handler;
+        return this;
+    }
+
+    internal Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? FileChooserHandler => _fileChooser;
+
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
     /// <param name="contractHash">The deterministic generated contract hash.</param>
     /// <param name="permissions">Generated application permission declarations.</param>
@@ -360,6 +390,7 @@ public sealed class NeoAppBuilder
             view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
             view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
             if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
+            if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
             binding = NeoRpcViewBinding.Bind(session.Rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             session.Add(window, view, binding);
