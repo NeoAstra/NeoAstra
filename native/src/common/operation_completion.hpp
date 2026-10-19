@@ -68,6 +68,13 @@ struct neo_operation_completion : neo_ref_counted {
         return value;
     }
 
+    // True when completions beyond `limit` are ready. Called under dispatch_mutex.
+    static bool ready_beyond(neoastra_app_t* app, size_t limit) noexcept {
+        auto* value = app->ready_completions;
+        for (size_t count = 0; value && count < limit; ++count) value = value->_ready_next;
+        return value != nullptr;
+    }
+
     // UI-thread only. Shutdown invocation must not inspect the native result
     // payload: its source may still be writing it on another thread.
     void deliver(bool shutdown) noexcept {

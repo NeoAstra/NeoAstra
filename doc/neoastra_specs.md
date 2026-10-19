@@ -810,6 +810,7 @@ Dispatch requirements:
 * It MUST not invoke callbacks after application shutdown has completed.
 * It SHOULD minimize allocations.
 * It MUST catch and contain native implementation exceptions.
+* It MUST return to the platform message loop between slices of queued callbacks (about 8 ms each), so that a busy queue does not hold back input, painting, and timers. See [Native dispatch drain](application-lifecycle-and-hosting.md#native-dispatch-drain).
 
 ## 11.4 Callback safety
 

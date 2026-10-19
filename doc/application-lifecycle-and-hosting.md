@@ -90,6 +90,28 @@ Host `ApplicationStopping` requests normal NeoAstra quit. A stop recorded before
 
 The native hosting tests exercise this path on Windows with staged native assets; unsupported hosts or missing assets are inconclusive, not passing native validation. The Generic Host integration still creates its own UI thread. macOS/AppKit main-thread ownership and Linux startup/shutdown behavior require separate target-host qualification; these Windows checks do not establish those guarantees. Use explicit native-main-loop ownership where the Generic Host path has not been qualified.
 
+## Native dispatch drain
+
+The native UI thread runs queued dispatcher callbacks and ready completions in order, in slices:
+one wake-up runs them for about 8 ms (and at least one callback), then returns to the platform
+message loop and wakes itself again for the rest. A busy queue, such as many RPC frames posted
+to the UI thread, therefore no longer holds back window input, painting, timers, or the next
+message of the browser, and Windows does not report the window as not responding. Nothing is
+dropped, reordered, or run twice, and an empty queue asks for no further wake-up.
+
+Only one wake-up waits at a time for the whole queue: a Windows dispatch message (or timer), a
+GLib idle source, or a block on the main dispatch queue of macOS. On Windows, posted messages are
+taken before input and painting, so when input, painting, or a timer waits at the end of a slice,
+the rest of the queue waits for a timer of the dispatcher window instead: a dispatch message that
+is already posted then only sets that timer when it arrives. While a slice runs with work queued
+behind the next callback, a dispatch message stays posted, so a nested message loop of a callback
+(a menu, a dialog) still runs the queued callbacks. On Linux the idle source runs after input and
+drawing; on macOS each slice is a new block on the main queue, after the events of the run loop.
+Once quit is requested the drain runs to the end before shutdown, and shutdown itself still drains
+the whole queue, as before; the queue limit (`MaximumPendingDispatches`) is unchanged. A single
+callback that does not return still blocks the UI thread: work that takes long belongs on another
+thread.
+
 ## Native asynchronous completion ownership
 
 Accepted native environment/view creation and Windows script operations reserve their terminal

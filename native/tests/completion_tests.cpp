@@ -10,6 +10,7 @@
 #include <memory>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace completion_test_backend {
 extern neo_platform_created_callback_t environment_callback;
@@ -70,12 +71,12 @@ void NEOASTRA_CALL capture_script(void* pointer, neoastra_result_t result, neoas
     }
 }
 
-neoastra_app_t* create_app() {
+neoastra_app_t* create_app(uint32_t maximum_pending_dispatches = 1) {
     neoastra_app_options_t options{};
     options.size = sizeof(options);
     options.version = 1;
     options.shutdown_mode = NEOASTRA_APP_SHUTDOWN_EXPLICIT;
-    options.maximum_pending_dispatches = 1;
+    options.maximum_pending_dispatches = maximum_pending_dispatches;
     neoastra_app_t* app{};
     assert(neoastra_app_attach(&options, &app, nullptr) == NEOASTRA_OK);
     return app;
@@ -445,6 +446,75 @@ void test_failed_script_start_does_not_own_terminal_callback() {
     neoastra_app_release(app);
 }
 
+struct ordered_dispatch {
+    std::vector<uint32_t>* ran{};
+    uint32_t index{};
+    neoastra_app_t* requeue{}; // Queues the next item from the callback, as a producer on the UI thread would.
+    ordered_dispatch* next{};
+};
+void NEOASTRA_CALL run_ordered_dispatch(void* pointer) {
+    auto* item = static_cast<ordered_dispatch*>(pointer);
+    item->ran->push_back(item->index);
+    if (item->requeue && item->next) assert(neoastra_app_dispatch(item->requeue, run_ordered_dispatch, item->next) == NEOASTRA_OK);
+}
+
+void test_bounded_drain_returns_between_slices() {
+    constexpr uint32_t count = 1000;
+    constexpr auto elapsed = std::chrono::steady_clock::duration::zero();
+    auto* app = create_app(count);
+    std::vector<uint32_t> ran;
+    std::vector<ordered_dispatch> items(count);
+    for (uint32_t index = 0; index < count; ++index) {
+        items[index] = {&ran, index};
+        assert(neoastra_app_dispatch(app, run_ordered_dispatch, &items[index]) == NEOASTRA_OK);
+    }
+    // An elapsed slice still runs one callback: each drain makes progress, none runs the whole queue, and only the last
+    // one reports that nothing remains.
+    uint32_t drains{};
+    while (neo_drain_dispatch_slice(app, elapsed)) {
+        ++drains;
+        assert(ran.size() == drains && neo_dispatch_pending(app));
+    }
+    assert(drains + 1 == count && ran.size() == count);
+    for (uint32_t index = 0; index < count; ++index) assert(ran[index] == index);
+    assert(!neo_dispatch_pending(app));
+    assert(!neo_drain_dispatch_slice(app, elapsed) && ran.size() == count); // An empty queue runs nothing and asks for no wake-up.
+
+    // Work that callbacks keep queuing no longer holds a drain until the queue is empty.
+    ran.clear();
+    for (uint32_t index = 0; index < count; ++index) items[index] = {&ran, index, app, index + 1 < count ? &items[index + 1] : nullptr};
+    assert(neoastra_app_dispatch(app, run_ordered_dispatch, &items[0]) == NEOASTRA_OK);
+    drains = 0;
+    while (neo_drain_dispatch_slice(app, elapsed)) ++drains;
+    assert(drains + 1 == count && ran.size() == count);
+    for (uint32_t index = 0; index < count; ++index) assert(ran[index] == index);
+
+    // A full drain still runs everything at once.
+    ran.clear();
+    for (uint32_t index = 0; index < count; ++index) {
+        items[index] = {&ran, index};
+        assert(neoastra_app_dispatch(app, run_ordered_dispatch, &items[index]) == NEOASTRA_OK);
+    }
+    neo_drain_dispatch(app);
+    assert(ran.size() == count && !neo_dispatch_pending(app));
+    for (uint32_t index = 0; index < count; ++index) assert(ran[index] == index);
+
+    // Once quit is requested, a bounded drain runs to the end and shuts down as before.
+    ran.clear();
+    for (uint32_t index = 0; index < count; ++index) {
+        items[index] = {&ran, index};
+        assert(neoastra_app_dispatch(app, run_ordered_dispatch, &items[index]) == NEOASTRA_OK);
+    }
+    neoastra_app_quit(app, 0);
+    assert(!neo_drain_dispatch_slice(app, elapsed));
+    assert(ran.size() == count && app->stopping.load());
+    for (uint32_t index = 0; index < count; ++index) assert(ran[index] == index);
+    assert(neoastra_app_dispatch(app, run_ordered_dispatch, &items[0]) == NEOASTRA_ERROR_DISPOSED);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    assert(ran.size() == count && app->references.load() == 1);
+    neoastra_app_release(app);
+}
+
 void test_completion_races_with_shutdown() {
     for (uint32_t iteration = 0; iteration < 100; ++iteration) {
         auto* app = create_app();
@@ -497,5 +567,6 @@ int main() {
     test_script_cancellation_failure_and_dropped_handler();
     test_failed_script_start_does_not_own_terminal_callback();
     test_completion_races_with_shutdown();
+    test_bounded_drain_returns_between_slices();
     std::puts("accepted-operation completion tests passed");
 }

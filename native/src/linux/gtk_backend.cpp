@@ -309,7 +309,8 @@ gboolean dispatch_on_main(void* data) {
         if(state){source=state->wake_source;state->wake_source=nullptr;}
     }
     if(source)g_source_unref(source);
-    neo_drain_dispatch(app);
+    // The rest of a busy queue waits for a new idle source, which runs after the input and drawing of the loop.
+    if(neo_drain_dispatch_slice(app))neo_wake_app(app);
     return G_SOURCE_REMOVE;
 }
 gboolean destroy_app_on_main(void* data) { neo_destroy_app_on_ui(static_cast<neoastra_app_t*>(data)); return G_SOURCE_REMOVE; }
