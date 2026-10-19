@@ -81,7 +81,7 @@ public final class NeoAstraServices {
     public static void initialize(Context value) {
         context = value.getApplicationContext();
         if (context instanceof Application) ((Application) context).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); current = resumed; }
+            @Override public void onActivityResumed(Activity activity) { resumed = new WeakReference<>(activity); current = resumed; NeoAstraNotificationReceiver.opened(activity); }
             @Override public void onActivityPaused(Activity activity) { }
             @Override public void onActivityCreated(Activity activity, Bundle state) { current = new WeakReference<>(activity); }
             @Override public void onActivityStarted(Activity activity) { }
@@ -253,13 +253,18 @@ public final class NeoAstraServices {
             case "authorize": output.put("status", "Success").put("permission", authorize(current, manager)); return;
             case "show": {
                 if (!"Granted".equals(permission(current, manager))) { output.put("status", "Denied"); return; }
-                String id = input.getString("id"), title = input.getString("title"), body = input.getString("body");
+                String id = input.getString("id"), title = input.getString("title"), body = input.getString("body"), data = input.optString("data", "");
                 // A moment in the future is kept and armed as an alarm; the receiver posts the notification then.
                 long at = input.optLong("deliverAt", 0);
-                if (at > System.currentTimeMillis()) { NeoAstraNotificationReceiver.schedule(current, id, title, body, at); output.put("status", "Success"); return; }
+                if (at > System.currentTimeMillis()) { NeoAstraNotificationReceiver.schedule(current, id, title, body, data, at); output.put("status", "Success"); return; }
                 NeoAstraNotificationReceiver.cancel(current, id);
-                post(current, id, title, body);
+                post(current, id, title, body, data);
                 output.put("status", "Success");
+                return;
+            }
+            case "next": {
+                JSONObject activation = NeoAstraNotificationReceiver.next(Math.max(0, Math.min(30_000, input.optLong("timeout", 5_000))));
+                if (activation == null) output.put("status", "NotFound"); else output.put("status", "Success").put("activation", activation);
                 return;
             }
             case "remove": NeoAstraNotificationReceiver.cancel(current, input.getString("id")); manager.cancel(input.getString("id"), 0); output.put("status", "Success"); return;
@@ -267,8 +272,11 @@ public final class NeoAstraServices {
         }
     }
 
-    /** Posts a notification in the channel of the application, which a tap opens; the alarm of a scheduled one posts it too. */
-    static void post(Context current, String id, String title, String body) {
+    /**
+     * Posts a notification in the channel of the application, which a tap opens with its ID and activation data in the intent
+     * (reported when the activity resumes); the alarm of a scheduled one posts it too.
+     */
+    static void post(Context current, String id, String title, String body, String data) {
         NotificationManager manager = current.getSystemService(NotificationManager.class);
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= 26) {
@@ -285,7 +293,11 @@ public final class NeoAstraServices {
             .setStyle(new Notification.BigTextStyle().bigText(body))
             .setAutoCancel(true);
         Intent launch = current.getPackageManager().getLaunchIntentForPackage(current.getPackageName());
-        if (launch != null) builder.setContentIntent(PendingIntent.getActivity(current, 0, launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        if (launch != null) {
+            NeoAstraNotificationReceiver.tag(launch, id, data);
+            // One request code per notification, so that each keeps its own extras.
+            builder.setContentIntent(PendingIntent.getActivity(current, id.hashCode(), launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        }
         manager.notify(id, 0, builder.build());
     }
 

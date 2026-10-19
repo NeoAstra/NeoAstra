@@ -45,6 +45,26 @@ public sealed class AndroidDesktopAdapterTests
     }
 
     [TestMethod]
+    public void Notifications_ReportTheTapsOfTheirNotificationsOnceBound()
+    {
+        // The Java side tags the intent of a tap and queues it when the activity resumes; the adapter reads the queue once bound.
+        Assert.IsInstanceOfType<INeoApplicationBoundDesktopService>(new AndroidNotifications());
+        var java = File.ReadAllText(Path.Combine(RepositoryRoot(), "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraNotificationReceiver.java"));
+        StringAssert.Contains(java, "static void opened(Activity activity)");
+        StringAssert.Contains(java, "intent.removeExtra(EXTRA_ID)");
+        var services = File.ReadAllText(Path.Combine(RepositoryRoot(), "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraServices.java"));
+        StringAssert.Contains(services, "NeoAstraNotificationReceiver.opened(activity)");
+        StringAssert.Contains(services, "case \"next\":");
+    }
+
+    private static string RepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (Directory.Exists(Path.Combine(directory.FullName, "native", "src", "android"))) return directory.FullName;
+        throw new DirectoryNotFoundException("The repository root was not found.");
+    }
+
+    [TestMethod]
     public async Task Dialogs_AnswerUnsupportedForFileDialogs()
     {
         var dialogs = new AndroidDialogs();
