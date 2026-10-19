@@ -561,6 +561,34 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void NotificationRequestsAreScheduledOnlyForAMomentInTheFuture()
+    {
+        var now = new DateTimeOffset(2026, 10, 19, 12, 0, 0, TimeSpan.Zero);
+        Assert.IsFalse(new NeoNotificationRequest { Id = "now", Title = "Now", Body = "" }.IsScheduled(now));
+        Assert.IsFalse(new NeoNotificationRequest { Id = "past", Title = "Past", Body = "", DeliverAt = now.AddMinutes(-1) }.IsScheduled(now));
+        Assert.IsFalse(new NeoNotificationRequest { Id = "same", Title = "Same", Body = "", DeliverAt = now }.IsScheduled(now));
+        Assert.IsTrue(new NeoNotificationRequest { Id = "later", Title = "Later", Body = "", DeliverAt = now.AddMinutes(1) }.IsScheduled(now));
+        // Another offset names the same instant.
+        Assert.IsTrue(new NeoNotificationRequest { Id = "zone", Title = "Zone", Body = "", DeliverAt = new DateTimeOffset(2026, 10, 19, 14, 1, 0, TimeSpan.FromHours(2)) }.IsScheduled(now));
+    }
+
+    [TestMethod]
+    public void BoundNotificationAdapterRequiresAnApplication()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoNotifications.CreateSystem((NeoApplication)null!, "test.app", "Test App"));
+    }
+
+    [TestMethod]
+    public async Task PresentersWithoutScheduledDeliveryAnswerUnsupportedForALaterMoment()
+    {
+        var later = new NeoNotificationRequest { Id = "later", Title = "Later", Body = "Body", DeliverAt = DateTimeOffset.UtcNow.AddHours(1) };
+        await using var windows = new WindowsNotifications(null);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await windows.ShowAsync(later));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await new ProcessNotifications("/bin/true", macOS: false).ShowAsync(later));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await new UnsupportedNotifications("none").ShowAsync(later));
+    }
+
+    [TestMethod]
     public async Task LimitedWindowsNotificationsRejectActionsInsteadOfDiscardingThem()
     {
         await using var notifications = new WindowsNotifications(null);

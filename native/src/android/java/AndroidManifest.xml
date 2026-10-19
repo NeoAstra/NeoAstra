@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Merged into the manifest of an Android application: the provider loads the Java side of NeoAstra when the process starts,
-     the activity receives the answers of the system to a picker or a permission request, and the file provider gives the
+     the activity receives the answers of the system to a picker or a permission request, the receiver delivers the notifications
+     scheduled for later, and the file provider gives the
      camera the file that a photo for a file input with the capture attribute is written to. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application>
@@ -14,6 +15,16 @@
         android:exported="false"
         android:theme="@android:style/Theme.Translucent.NoTitleBar"
         android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|uiMode" />
+    <!-- Posts the notifications scheduled for later and arms them again after a restart or an update of the application. -->
+    <receiver
+        android:name="com.neoastra.backend.NeoAstraNotificationReceiver"
+        android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+        <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+      </intent-filter>
+    </receiver>
     <provider
         android:name="androidx.core.content.FileProvider"
         android:authorities="${applicationId}.neoastra.files"

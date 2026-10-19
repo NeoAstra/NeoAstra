@@ -253,30 +253,40 @@ public final class NeoAstraServices {
             case "authorize": output.put("status", "Success").put("permission", authorize(current, manager)); return;
             case "show": {
                 if (!"Granted".equals(permission(current, manager))) { output.put("status", "Denied"); return; }
-                Notification.Builder builder;
-                if (Build.VERSION.SDK_INT >= 26) {
-                    CharSequence name = current.getApplicationInfo().loadLabel(current.getPackageManager());
-                    manager.createNotificationChannel(new NotificationChannel(CHANNEL, name, NotificationManager.IMPORTANCE_DEFAULT));
-                    builder = new Notification.Builder(current, CHANNEL);
-                } else {
-                    builder = new Notification.Builder(current);
-                }
-                int icon = current.getApplicationInfo().icon;
-                String body = input.getString("body");
-                builder.setSmallIcon(icon != 0 ? icon : android.R.drawable.ic_dialog_info)
-                    .setContentTitle(input.getString("title"))
-                    .setContentText(body)
-                    .setStyle(new Notification.BigTextStyle().bigText(body))
-                    .setAutoCancel(true);
-                Intent launch = current.getPackageManager().getLaunchIntentForPackage(current.getPackageName());
-                if (launch != null) builder.setContentIntent(PendingIntent.getActivity(current, 0, launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
-                manager.notify(input.getString("id"), 0, builder.build());
+                String id = input.getString("id"), title = input.getString("title"), body = input.getString("body");
+                // A moment in the future is kept and armed as an alarm; the receiver posts the notification then.
+                long at = input.optLong("deliverAt", 0);
+                if (at > System.currentTimeMillis()) { NeoAstraNotificationReceiver.schedule(current, id, title, body, at); output.put("status", "Success"); return; }
+                NeoAstraNotificationReceiver.cancel(current, id);
+                post(current, id, title, body);
                 output.put("status", "Success");
                 return;
             }
-            case "remove": manager.cancel(input.getString("id"), 0); output.put("status", "Success"); return;
+            case "remove": NeoAstraNotificationReceiver.cancel(current, input.getString("id")); manager.cancel(input.getString("id"), 0); output.put("status", "Success"); return;
             default: output.put("status", "Unsupported");
         }
+    }
+
+    /** Posts a notification in the channel of the application, which a tap opens; the alarm of a scheduled one posts it too. */
+    static void post(Context current, String id, String title, String body) {
+        NotificationManager manager = current.getSystemService(NotificationManager.class);
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= 26) {
+            CharSequence name = current.getApplicationInfo().loadLabel(current.getPackageManager());
+            manager.createNotificationChannel(new NotificationChannel(CHANNEL, name, NotificationManager.IMPORTANCE_DEFAULT));
+            builder = new Notification.Builder(current, CHANNEL);
+        } else {
+            builder = new Notification.Builder(current);
+        }
+        int icon = current.getApplicationInfo().icon;
+        builder.setSmallIcon(icon != 0 ? icon : android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(body))
+            .setAutoCancel(true);
+        Intent launch = current.getPackageManager().getLaunchIntentForPackage(current.getPackageName());
+        if (launch != null) builder.setContentIntent(PendingIntent.getActivity(current, 0, launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+        manager.notify(id, 0, builder.build());
     }
 
     private static String permission(Context current, NotificationManager manager) throws Exception {

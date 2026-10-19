@@ -44,7 +44,8 @@ internal sealed unsafe partial class WindowsNotifications(NeoDispatcher? dispatc
     public ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate();
-        if (request.Actions.Count != 0) return ValueTask.FromResult(NeoDesktopStatus.Unsupported);
+        // Balloons show at once: a moment in the future would need a packaged scheduled toast.
+        if (request.Actions.Count != 0 || request.IsScheduled(DateTimeOffset.UtcNow)) return ValueTask.FromResult(NeoDesktopStatus.Unsupported);
         if (request.Title.Length > 63 || request.Body.Length > 255) return ValueTask.FromResult(NeoDesktopStatus.LimitExceeded);
         var value = _dispatcher ?? throw new InvalidOperationException("The Windows notification presenter must be bound to the NeoAstra UI dispatcher before use.");
         return value.InvokeAsync(() => ShowOnDispatcher(request, cancellationToken), cancellationToken);

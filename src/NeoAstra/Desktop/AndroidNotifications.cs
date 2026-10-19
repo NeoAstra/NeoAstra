@@ -1,6 +1,8 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Globalization;
+
 namespace NeoAstra.Desktop.Notifications;
 
 // The NotificationManager answers from any thread; the permission request waits for the user, so every call runs off the
@@ -8,7 +10,7 @@ namespace NeoAstra.Desktop.Notifications;
 internal sealed class AndroidNotifications : INeoNotifications
 {
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0,
-        "Android notifications in one channel of the application, replaced and removed by ID, with the POST_NOTIFICATIONS permission asked on first display (the application declares it). Tapping a notification opens the application; actions, activation, and dismissal are not reported.");
+        "Android notifications in one channel of the application, replaced and removed by ID, with the POST_NOTIFICATIONS permission asked on first display (the application declares it). A notification for later is kept and armed as an alarm, exact when the application may set exact alarms, and armed again after a restart when the application declares RECEIVE_BOOT_COMPLETED. Tapping a notification opens the application; actions, activation, and dismissal are not reported.");
 
 #pragma warning disable CS0067
     public event EventHandler<NeoNotificationActivation>? Activated;
@@ -25,7 +27,8 @@ internal sealed class AndroidNotifications : INeoNotifications
         if (permission == NeoNotificationPermissionStatus.NotRequested)
             permission = await Task.Factory.StartNew(() => Permission("authorize"), cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default).WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
         if (permission != NeoNotificationPermissionStatus.Granted) return MacNotifications.PermissionFailureStatus(permission);
-        return await Task.Run(() => { using var response = AndroidPlatform.Call("notifications", ("operation", "show"), ("id", request.Id), ("title", request.Title), ("body", request.Body)); return AndroidPlatform.Status(response); }, cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => { var deliverAt = request.IsScheduled(DateTimeOffset.UtcNow) ? request.DeliverAt!.Value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture) : "0";
+            using var response = AndroidPlatform.Call("notifications", ("operation", "show"), ("id", request.Id), ("title", request.Title), ("body", request.Body), ("deliverAt", deliverAt)); return AndroidPlatform.Status(response); }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<NeoDesktopStatus> RemoveAsync(string id, CancellationToken cancellationToken = default)
