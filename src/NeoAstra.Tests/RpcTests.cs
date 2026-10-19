@@ -1614,6 +1614,57 @@ public sealed class RpcTests
     }
 
     [TestMethod]
+    public void CommandConcurrencyDefaultsAreBounded()
+    {
+        Assert.AreEqual(8, new NeoRpcOptions().DefaultCommandMaximumConcurrency);
+        Assert.AreEqual(8, new NeoRpcCommandOptions().MaximumConcurrency);
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 0 }));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 4097 }));
+        _ = new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 1 });
+        _ = new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 4096 });
+        foreach (var invalid in new[] { 0, 4097 })
+        {
+            var builder = new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 64 });
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => builder.AddCommand<Request>("bounded.touch", (_, _, _) => ValueTask.CompletedTask, RpcTestJsonContext.Default.Request, new() { MaximumConcurrency = invalid }));
+        }
+    }
+
+    [TestMethod]
+    [DataRow(8, null, 9, 8, DisplayName = "The default host admits 8 calls of a command without its own limit")]
+    [DataRow(64, null, 16, 16, DisplayName = "A larger host default admits more than 8 calls")]
+    [DataRow(64, 2, 4, 2, DisplayName = "A command's own smaller limit wins over the host default")]
+    [DataRow(2, 4, 4, 4, DisplayName = "A command's own larger limit wins over the host default")]
+    public async Task CommandConcurrencyUsesTheHostDefaultUnlessTheCommandSetsItsOwn(int hostDefault, int? commandLimit, int calls, int admitted)
+    {
+        var entered = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commandOptions = new NeoRpcCommandOptions { Permission = "test:invoke" };
+        if (commandLimit is { } limit) commandOptions.MaximumConcurrency = limit;
+        var (host, session, frames) = Create(builder => builder.AddCommand<Request, Response>("limited.wait", async (request, _, _) =>
+        {
+            Interlocked.Increment(ref entered);
+            await release.Task;
+            return new Response(request.Id, "done");
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, commandOptions), new NeoRpcOptions { DefaultCommandMaximumConcurrency = hostDefault });
+        await using (host) await using (session)
+        {
+            var invocations = Enumerable.Range(0, calls).Select(index => session.ReceiveAsync(Invoke("limited-" + index, "limited.wait", "{\"id\":\"x\"}")).AsTask()).ToArray();
+            try
+            {
+                await WaitUntilAsync(() => Volatile.Read(ref entered) + frames.Count(frame => ErrorCode(frame) == NeoRpcErrorCodes.TooManyRequests) == calls);
+                Assert.AreEqual(admitted, Volatile.Read(ref entered));
+                Assert.AreEqual(calls - admitted, frames.Count(frame => ErrorCode(frame) == NeoRpcErrorCodes.TooManyRequests));
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
+            await Task.WhenAll(invocations).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(admitted, frames.Count(frame => Parse(frame).GetProperty("ok").GetBoolean()));
+        }
+    }
+
+    [TestMethod]
     public async Task AuthorizationExplicitErrorsMappingAndRedactionAreStable()
     {
         var options = new NeoRpcOptions

@@ -54,6 +54,10 @@ public sealed class NeoRpcMethodAttribute : Attribute
 
     /// <summary>Gets or sets the command timeout in milliseconds; zero uses the host default.</summary>
     public int TimeoutMilliseconds { get; set; }
+
+    /// <summary>Gets or sets the maximum simultaneous invocations of the command across all sessions; zero uses <see cref="NeoRpcOptions.DefaultCommandMaximumConcurrency"/> of the host.</summary>
+    /// <remarks>A non-zero value must be between 1 and 4096; the generator reports any other value.</remarks>
+    public int MaximumConcurrency { get; set; }
 }
 
 /// <summary>Marks a declaration used to generate a typed event contract.</summary>

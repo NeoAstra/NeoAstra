@@ -280,6 +280,12 @@ public sealed class CapabilityTests
         var excessiveConcurrency = new NeoRpcBuilder(new NeoRpcOptions { CapabilityManifest = productionManifest, AuthorizationService = new NeoCapabilityAuthorizationService(productionManifest) });
         excessiveConcurrency.AddCommand<JsonElement, JsonElement>("documents.open", static (request, _, _) => ValueTask.FromResult(request), CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open", MaximumConcurrency = 9 });
         Assert.Throws<InvalidOperationException>(() => excessiveConcurrency.Build());
+        var excessiveDefaultConcurrency = new NeoRpcBuilder(new NeoRpcOptions { CapabilityManifest = productionManifest, AuthorizationService = new NeoCapabilityAuthorizationService(productionManifest), DefaultCommandMaximumConcurrency = 9 });
+        excessiveDefaultConcurrency.AddCommand<JsonElement, JsonElement>("documents.open", static (request, _, _) => ValueTask.FromResult(request), CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open" });
+        Assert.Throws<InvalidOperationException>(() => excessiveDefaultConcurrency.Build(), "The host default is the effective limit of a command without its own.");
+        var boundedOverDefault = new NeoRpcBuilder(new NeoRpcOptions { CapabilityManifest = productionManifest, AuthorizationService = new NeoCapabilityAuthorizationService(productionManifest), DefaultCommandMaximumConcurrency = 9 });
+        boundedOverDefault.AddCommand<JsonElement, JsonElement>("documents.open", static (request, _, _) => ValueTask.FromResult(request), CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open", MaximumConcurrency = 8 });
+        _ = boundedOverDefault.Build();
         const string impossible = """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"linux","views":["main"],"platforms":["linux"],"origins":["https://app.example"],"permissions":["documents:open"]}]}""";
         AssertCode("origin_unavailable", impossible, Catalog(), NeoCapabilityPlatform.Linux);
     }

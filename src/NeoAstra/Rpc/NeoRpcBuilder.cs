@@ -200,7 +200,7 @@ public sealed class NeoRpcBuilder
         return this;
     }
 
-    private NeoRpcCommandOptions Validate(NeoRpcCommandOptions? options) => (options ?? new NeoRpcCommandOptions()).CloneValidated();
+    private NeoRpcCommandOptions Validate(NeoRpcCommandOptions? options) => (options ?? new NeoRpcCommandOptions()).CloneValidated(_options.DefaultCommandMaximumConcurrency);
 
     private void ValidateWireName(string value, string parameterName)
     {

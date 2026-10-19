@@ -68,13 +68,15 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
             string? permission = null;
             var dispatch = 0;
             var timeout = 0;
+            var maximumConcurrency = 0;
             foreach (var argument in methodAttribute.NamedArguments)
             {
                 if (argument.Key == "Permission") permission = argument.Value.Value as string;
                 else if (argument.Key == "Dispatch" && argument.Value.Value is int dispatchValue) dispatch = dispatchValue;
                 else if (argument.Key == "TimeoutMilliseconds" && argument.Value.Value is int timeoutValue) timeout = timeoutValue;
+                else if (argument.Key == "MaximumConcurrency" && argument.Value.Value is int concurrencyValue) maximumConcurrency = concurrencyValue;
             }
-            methods.Add(new MethodModel(method, methodName, permission, dispatch, timeout));
+            methods.Add(new MethodModel(method, methodName, permission, dispatch, timeout, maximumConcurrency));
         }
         return new ServiceModel(symbol, name, version, methods);
     }
@@ -229,9 +231,9 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
             return false;
         }
         if (result != null) AddContractDirection(contractTypes, result, ContractDirection.Output);
-        if (method.TimeoutMilliseconds < 0 || method.TimeoutMilliseconds > 600000 || method.Dispatch is < 0 or > 1)
+        if (method.TimeoutMilliseconds < 0 || method.TimeoutMilliseconds > 600000 || method.Dispatch is < 0 or > 1 || method.MaximumConcurrency is < 0 or > 4096)
         {
-            context.ReportDiagnostic(Diagnostic.Create(InvalidSignature, symbol.Locations.FirstOrDefault(), symbol.Name, "dispatch and timeout policy is invalid"));
+            context.ReportDiagnostic(Diagnostic.Create(InvalidSignature, symbol.Locations.FirstOrDefault(), symbol.Name, "dispatch, timeout, and concurrency policy is invalid"));
             return false;
         }
         return true;
@@ -448,6 +450,8 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
     private static void EmitApplicationRegistration(StringBuilder builder, IReadOnlyList<ServiceModel> services, IReadOnlyList<EventModel> events, string hash)
     {
         var permissions = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        // The largest explicit command limit of a permission above the declaration default (8), so its grant admits that limit.
+        var permissionConcurrency = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var service in services)
         {
             foreach (var method in service.Methods)
@@ -455,6 +459,8 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
                 if (method.Permission == null) continue;
                 if (!permissions.TryGetValue(method.Permission, out var commands)) permissions.Add(method.Permission, commands = new SortedSet<string>(StringComparer.Ordinal));
                 commands.Add(service.Name + "." + method.Name);
+                if (method.MaximumConcurrency > 8 && (!permissionConcurrency.TryGetValue(method.Permission, out var current) || method.MaximumConcurrency > current))
+                    permissionConcurrency[method.Permission] = method.MaximumConcurrency;
             }
         }
         foreach (var item in events)
@@ -481,7 +487,9 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
                 first = false;
                 builder.Append('"').Append(Escape(command)).Append('"');
             }
-            builder.AppendLine(" }, global::NeoAstra.Rpc.NeoPermissionRisk.Low, global::NeoAstra.Rpc.NeoScopeFamily.None),");
+            builder.Append(" }, global::NeoAstra.Rpc.NeoPermissionRisk.Low, global::NeoAstra.Rpc.NeoScopeFamily.None)");
+            if (permissionConcurrency.TryGetValue(permission.Key, out var concurrency)) builder.Append(" { MaximumConcurrency = ").Append(concurrency).Append(" }");
+            builder.AppendLine(",");
         }
         builder.AppendLine("        }, configure);");
         builder.AppendLine("    }");
@@ -504,6 +512,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
         builder.Append(", new global::NeoAstra.Rpc.NeoRpcCommandOptions { Dispatch = (global::NeoAstra.Rpc.NeoRpcDispatchMode)").Append(method.Dispatch);
         if (method.Permission != null) builder.Append(", Permission = \"").Append(Escape(method.Permission)).Append('"');
         if (method.TimeoutMilliseconds > 0) builder.Append(", Timeout = global::System.TimeSpan.FromMilliseconds(").Append(method.TimeoutMilliseconds).Append(')');
+        if (method.MaximumConcurrency > 0) builder.Append(", MaximumConcurrency = ").Append(method.MaximumConcurrency);
         builder.AppendLine(" });");
     }
 
@@ -995,11 +1004,12 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
 
     private sealed class MethodModel
     {
-        internal MethodModel(IMethodSymbol symbol, string name, string? permission, int dispatch, int timeoutMilliseconds) { Symbol = symbol; Name = name; Permission = permission; Dispatch = dispatch; TimeoutMilliseconds = timeoutMilliseconds; }
+        internal MethodModel(IMethodSymbol symbol, string name, string? permission, int dispatch, int timeoutMilliseconds, int maximumConcurrency) { Symbol = symbol; Name = name; Permission = permission; Dispatch = dispatch; TimeoutMilliseconds = timeoutMilliseconds; MaximumConcurrency = maximumConcurrency; }
         internal IMethodSymbol Symbol { get; }
         internal string Name { get; }
         internal string? Permission { get; }
         internal int Dispatch { get; }
         internal int TimeoutMilliseconds { get; }
+        internal int MaximumConcurrency { get; }
     }
 }
