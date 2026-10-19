@@ -310,7 +310,9 @@ public sealed class ToolingTests
         StringAssert.Contains(host, "\".neoastra.files\"");
         StringAssert.Contains(host, "\"neoastra-camera\"");
         // A chosen document is copied while the result activity still holds its read permission.
-        StringAssert.Contains(host, "copyChosen(context, WebChromeClient.FileChooserParams.parseResult(resultCode, data))");
+        StringAssert.Contains(host, "copyChosen(context, parseChosen(resultCode, data))");
+        // A multiple choice comes in the ClipData of the result, which parseResult of the platform drops.
+        StringAssert.Contains(host, "data.getClipData()");
         StringAssert.Contains(host, "\"neoastra-chooser\"");
     }
 
