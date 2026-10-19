@@ -206,6 +206,19 @@ internal sealed class NeoTransportCoordinator
         }
     }
 
+    // A frame NeoAstra wrote itself (an RPC answer, event or channel item) is a valid JSON object already: only its
+    // envelope is written, on the thread that owns the transport state, without parsing it again.
+    internal string WrapOutboundTrusted(string json)
+    {
+        if (_active is null || _closed) return json;
+        var envelope = BuildEnvelope(_active.RendererDocumentId, writer => writer.WriteRawValue(json, skipInputValidation: true));
+        if (Encoding.UTF8.GetByteCount(envelope) > _viewOptions.MaximumMessageSize)
+        {
+            throw new ArgumentException("The transport envelope exceeds the configured message size.", nameof(json));
+        }
+        return envelope;
+    }
+
     internal string WrapOutbound(string json)
     {
         if (_active is null || _closed) return json;

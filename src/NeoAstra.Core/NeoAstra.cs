@@ -342,6 +342,28 @@ public sealed class NeoAstra : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>
+    /// Posts frames that NeoAstra wrote itself to web content, in order, in one turn of the UI thread: an RPC session
+    /// sends what it has queued this way instead of one dispatcher round trip per frame. The frames are valid JSON
+    /// objects already, so they are not parsed again here. Runs on the UI thread.
+    /// </summary>
+    /// <param name="frames">Complete JSON objects, in the order they are posted.</param>
+    /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend refused a message; the frames before it were posted.</exception>
+    internal unsafe void PostTrustedMessages(IReadOnlyList<string> frames)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(frames);
+        foreach (var json in frames)
+        {
+            var outbound = _transport?.WrapOutboundTrusted(json) ?? json;
+            using var nativeJson = new Utf8String(outbound);
+            NativeMethods.neoastra_error_t error = default;
+            var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
+            NativeError.ThrowIfFailed(result, error, "post web message", CancellationToken.None);
+        }
+    }
+
     /// <summary>Reloads the current document.</summary>
     public void Reload() => Reload(ignoreCache: false);
 

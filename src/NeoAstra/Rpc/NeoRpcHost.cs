@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace NeoAstra.Rpc;
 
@@ -19,6 +20,9 @@ namespace NeoAstra.Rpc;
 /// so the connection must still be able to carry later frames. Any other failure is a transport failure and closes the session.
 /// </remarks>
 public delegate ValueTask NeoRpcSendFrame(string json, CancellationToken cancellationToken);
+
+// Sends frames a session queued, in order, in one call: a view posts them in one turn of its UI thread.
+internal delegate ValueTask NeoRpcSendFrames(IReadOnlyList<string> frames);
 
 /// <summary>Owns an immutable command registry and all active document RPC sessions.</summary>
 public sealed class NeoRpcHost : IAsyncDisposable
@@ -80,6 +84,9 @@ public sealed class NeoRpcHost : IAsyncDisposable
         => OpenSessionCore(identity, send, null, null);
 
     internal NeoRpcSession OpenSessionCore(NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window)
+        => OpenSessionCore(identity, send, null, view, window);
+
+    internal NeoRpcSession OpenSessionCore(NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(send);
@@ -87,7 +94,7 @@ public sealed class NeoRpcHost : IAsyncDisposable
         lock (_lifecycleLock)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            var session = new NeoRpcSession(this, snapshot, send, view, window, _shutdown.Token);
+            var session = new NeoRpcSession(this, snapshot, send, sendBatch, view, window, _shutdown.Token);
             if (!_sessions.TryAdd(snapshot.DocumentSessionId, session))
             {
                 session.DisposeWithoutCallback();
@@ -237,10 +244,14 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly NeoRpcHost _host;
     private readonly NeoRpcSessionIdentity _identity;
     private readonly NeoRpcSendFrame _send;
+    private readonly NeoRpcSendFrames? _sendBatch;
+    // Every outbound frame (answers, events, channel items) waits in one ordered queue, and one writer sends what has
+    // queued: a view posts it in one turn of its UI thread instead of one dispatcher round trip per frame.
+    private readonly Channel<OutboundFrame> _outbound = Channel.CreateUnbounded<OutboundFrame>(new UnboundedChannelOptions { SingleReader = true });
+    private int _writing;
     private readonly WeakReference<global::NeoAstra.NeoAstra>? _view;
     private readonly WeakReference<NeoWindow>? _window;
     private readonly CancellationTokenSource _closed;
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly ConcurrentDictionary<string, InvocationState> _requests = new(StringComparer.Ordinal);
     // Actual IDs and request-state objects are owned only while processing is active.
     private readonly Dictionary<string, RequestIdState> _usedRequestIds = new(StringComparer.Ordinal);
@@ -261,13 +272,20 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly object _rateLock = new();
     private double _rateTokens;
     private long _lastRateTimestamp;
-    private int _abuseDenials;
+    private double _abuseDenials;
+    private long _lastAbuseTimestamp;
 
     internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
+        : this(host, identity, send, null, view, window, shutdown)
+    {
+    }
+
+    internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
     {
         _host = host;
         _identity = identity;
         _send = send;
+        _sendBatch = sendBatch;
         _view = view is null ? null : new(view);
         _window = window is null ? null : new(window);
         _closed = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -316,7 +334,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
     /// <returns>A task representing frame acceptance and, for invokes, terminal completion.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="json"/> is <see langword="null"/>.</exception>
     /// <exception cref="ObjectDisposedException">The session is closed.</exception>
-    public async ValueTask ReceiveAsync(string json, Uri? sourceOrigin, bool isMainFrame, CancellationToken cancellationToken = default)
+    public ValueTask ReceiveAsync(string json, Uri? sourceOrigin, bool isMainFrame, CancellationToken cancellationToken = default)
+        => ReceiveAsync(json, sourceOrigin, isMainFrame, System.Diagnostics.Stopwatch.GetTimestamp(), cancellationToken);
+
+    // A frame is charged to the rate of the session when it arrived (a Stopwatch timestamp), not when it is processed:
+    // a reader that falls behind does not turn a steady page into one over its rate.
+    internal async ValueTask ReceiveAsync(string json, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentNullException.ThrowIfNull(json);
@@ -354,13 +377,13 @@ public sealed class NeoRpcSession : IAsyncDisposable
             switch (kind)
             {
                 case "invoke":
-                    await ReceiveInvokeAsync(root, sourceOrigin, isMainFrame, cancellationToken).ConfigureAwait(false);
+                    await ReceiveInvokeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
                     break;
                 case "cancel":
                     ReceiveCancel(root);
                     break;
                 case "subscribe":
-                    await ReceiveSubscribeAsync(root, sourceOrigin, isMainFrame, cancellationToken).ConfigureAwait(false);
+                    await ReceiveSubscribeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
                     break;
                 case "unsubscribe":
                     await ReceiveUnsubscribeAsync(root).ConfigureAwait(false);
@@ -455,7 +478,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             _completedRequestIdOrder.Clear();
         }
         _host.Remove(this);
-        _sendLock.Dispose();
+        CompleteOutbound();
         _closed.Dispose();
         if (failures is not null) throw new AggregateException("One or more RPC session teardown callbacks failed after all session state was closed.", failures);
     }
@@ -468,9 +491,17 @@ public sealed class NeoRpcSession : IAsyncDisposable
             Volatile.Write(ref _disposed, 1);
             _closed.Cancel();
             _closed.Dispose();
-            _sendLock.Dispose();
+            CompleteOutbound();
             _disposeTask = Task.CompletedTask;
         }
+    }
+
+    // No frame is queued once the session is closed; frames still waiting when it closed are failed as withdrawn.
+    private void CompleteOutbound()
+    {
+        _outbound.Writer.TryComplete();
+        while (_outbound.Reader.TryRead(out var frame))
+            if (frame.TryTake()) frame.Done.TrySetCanceled();
     }
 
     internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool> recipient)
@@ -532,7 +563,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (_subscriptions.TryRemove(new KeyValuePair<string, SubscriptionState>(id, state))) Interlocked.Decrement(ref _subscriptionSlots);
     }
 
-    private async ValueTask ReceiveInvokeAsync(JsonElement root, Uri? sourceOrigin, bool isMainFrame, CancellationToken receiveCancellation)
+    private async ValueTask ReceiveInvokeAsync(JsonElement root, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken receiveCancellation)
     {
         if (!TryValidId(root, "id", out var id) || !TryString(root, "command", out var command) ||
             !NeoRpcValidation.IsWireName(command, _host.Options.MaximumWireNameLength) ||
@@ -541,7 +572,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             if (!string.IsNullOrEmpty(id)) await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.InvalidRequest, "The invocation frame is invalid.", null)).ConfigureAwait(false);
             return;
         }
-        if (!TryAdmitRate())
+        if (!TryAdmitRate(arrival))
         {
             await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
             await HandleAbuseAsync().ConfigureAwait(false);
@@ -728,7 +759,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             _host.Diagnose(NeoRpcDiagnosticLevel.Debug, "late_cancel", "A cancel for an unknown or completed request was ignored.");
     }
 
-    private async ValueTask ReceiveSubscribeAsync(JsonElement root, Uri? sourceOrigin, bool isMainFrame, CancellationToken cancellationToken)
+    private async ValueTask ReceiveSubscribeAsync(JsonElement root, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken cancellationToken)
     {
         if (!TryValidId(root, "id", out var id) || !TryString(root, "event", out var eventName) ||
             !_host.TryGetEvent(eventName, out var descriptor) || descriptor is null)
@@ -736,7 +767,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             if (!string.IsNullOrEmpty(id)) await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.InvalidRequest, "The subscription frame or event is invalid.", null)).ConfigureAwait(false);
             return;
         }
-        if (!TryAdmitRate())
+        if (!TryAdmitRate(arrival))
         {
             await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
             await HandleAbuseAsync().ConfigureAwait(false);
@@ -953,11 +984,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    private bool TryAdmitRate()
+    private bool TryAdmitRate(long arrival)
     {
         lock (_rateLock)
         {
-            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            // Frames are processed in the order they arrived: a stamp older than the last one charged counts as the same moment.
+            var now = Math.Max(arrival, _lastRateTimestamp);
             var elapsed = (now - _lastRateTimestamp) / (double)System.Diagnostics.Stopwatch.Frequency;
             _lastRateTimestamp = now;
             _rateTokens = Math.Min(_host.Options.RequestRateBurst, _rateTokens + elapsed * _host.Options.RequestRatePerSecond);
@@ -970,7 +1002,24 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private async ValueTask HandleAbuseAsync()
     {
         _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.LimitExceeded, "A document session exceeded its bounded RPC request rate.");
-        if (Interlocked.Increment(ref _abuseDenials) >= _host.Options.AbuseClosureThreshold) await DisposeAsync().ConfigureAwait(false);
+        if (CountAbuseDenial(System.Diagnostics.Stopwatch.GetTimestamp()) >= _host.Options.AbuseClosureThreshold) await DisposeAsync().ConfigureAwait(false);
+    }
+
+    // The denials of the rate limit add up, and one is forgotten for each second without a denial: a page that keeps
+    // flooding reaches the threshold, while denials scattered over a long session never close it.
+    internal double CountAbuseDenial(long timestamp)
+    {
+        lock (_rateLock)
+        {
+            if (_abuseDenials > 0)
+            {
+                var quiet = Math.Max(0, timestamp - _lastAbuseTimestamp) / (double)System.Diagnostics.Stopwatch.Frequency;
+                _abuseDenials = Math.Max(0, _abuseDenials - quiet);
+            }
+
+            _lastAbuseTimestamp = Math.Max(timestamp, _lastAbuseTimestamp);
+            return ++_abuseDenials;
+        }
     }
 
     private bool TryEnterInvocation()
@@ -1037,17 +1086,99 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private async ValueTask SendRawAsync(string json, CancellationToken cancellationToken, bool allowClosing = false)
     {
         if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closed.Token);
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { await _send(json, cancellationToken).ConfigureAwait(false); }
-        // The caller withdrew its own frame (a closed channel or subscription): the transport did not fail.
-        // Session teardown cancels every caller token too, and then there is nothing left to close.
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch
+        cancellationToken.ThrowIfCancellationRequested();
+        var frame = new OutboundFrame(json, cancellationToken);
+        if (!_outbound.Writer.TryWrite(frame)) throw new OperationCanceledException("The RPC session is closed.");
+        // The caller withdraws a frame still waiting in the queue with its own token (a closed channel or
+        // subscription): it is not sent, and the transport did not fail.
+        using (cancellationToken.CanBeCanceled ? cancellationToken.Register(static state => ((OutboundFrame)state!).TryWithdraw(), frame) : default)
         {
-            _closed.Cancel();
-            throw;
+            StartWriter();
+            await frame.Done.Task.ConfigureAwait(false);
         }
-        finally { _sendLock.Release(); }
+    }
+
+    private void StartWriter()
+    {
+        if (Interlocked.CompareExchange(ref _writing, 1, 0) == 0) _ = Task.Run(WriteAsync);
+    }
+
+    // The one writer of the session: it takes every frame waiting and sends them in order, in one call when the
+    // transport takes a batch. A frame withdrawn before it was taken is skipped. A failure of the transport fails the
+    // frames it held and closes the session, as a failed send did.
+    private async Task WriteAsync()
+    {
+        var batch = new List<OutboundFrame>();
+        while (true)
+        {
+            batch.Clear();
+            while (batch.Count < MaximumOutboundBatch && _outbound.Reader.TryRead(out var next))
+                if (next.TryTake()) batch.Add(next);
+            if (batch.Count == 0)
+            {
+                Volatile.Write(ref _writing, 0);
+                // A frame queued after the last read and before the flag was cleared is written by this writer.
+                if (!_outbound.Reader.TryPeek(out _) || Interlocked.CompareExchange(ref _writing, 1, 0) != 0) return;
+                continue;
+            }
+
+            if (_sendBatch is { } sendBatch)
+            {
+                var frames = new string[batch.Count];
+                for (var index = 0; index < frames.Length; index++) frames[index] = batch[index].Json;
+                try
+                {
+                    await sendBatch(frames).ConfigureAwait(false);
+                    foreach (var frame in batch) frame.Done.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    CloseAfterSendFailure();
+                    foreach (var frame in batch) frame.Done.TrySetException(exception);
+                }
+
+                continue;
+            }
+
+            foreach (var frame in batch)
+            {
+                try
+                {
+                    await _send(frame.Json, frame.Token).ConfigureAwait(false);
+                    frame.Done.TrySetResult();
+                }
+                // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
+                // transport did not fail. Session teardown cancels every caller token too.
+                catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Done.TrySetCanceled(exception.CancellationToken); }
+                catch (Exception exception)
+                {
+                    CloseAfterSendFailure();
+                    frame.Done.TrySetException(exception);
+                }
+            }
+        }
+    }
+
+    private void CloseAfterSendFailure()
+    {
+        try { _closed.Cancel(); }
+        catch (ObjectDisposedException) { /* The session finished closing already. */ }
+    }
+
+    // The most frames one write takes: one turn of a UI thread stays bounded.
+    private const int MaximumOutboundBatch = 256;
+
+    private sealed class OutboundFrame(string json, CancellationToken token)
+    {
+        private int _state; // 0 queued, 1 taken by the writer, 2 withdrawn by its caller
+        public string Json { get; } = json;
+        public CancellationToken Token { get; } = token;
+        public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool TryTake() => Interlocked.CompareExchange(ref _state, 1, 0) == 0;
+        public void TryWithdraw()
+        {
+            if (Interlocked.CompareExchange(ref _state, 2, 0) == 0) Done.TrySetCanceled(Token);
+        }
     }
 
     private bool TryValidId(JsonElement root, string property, out string value)

@@ -16,6 +16,11 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private NeoRpcSession? _session;
     private bool _droppedFrameDiagnosed;
     private int _disposed;
+    // The frames of the page, in the order the transport delivered them, read by one reader on the thread pool: the
+    // UI thread only queues them, and no JSON of a request is parsed or deserialized there.
+    private readonly System.Threading.Channels.Channel<InboundFrame> _inbound =
+        System.Threading.Channels.Channel.CreateUnbounded<InboundFrame>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
+    private int _reading;
 
     private NeoRpcViewBinding(NeoRpcHost host, global::NeoAstra.NeoAstra view)
         : this(host, view, snapshot => Open(host, view, snapshot))
@@ -132,9 +137,15 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         };
         return host.OpenSessionCore(identity,
             (json, cancellationToken) => SendAsync(view, json, cancellationToken),
+            frames => SendBatchAsync(view, frames),
             view,
             view.OwnedWindow);
     }
+
+    // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
+    // trip each, and the UI thread only writes their envelope and posts them.
+    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, IReadOnlyList<string> frames)
+        => await view.Environment.Application.Dispatcher.InvokeAsync(() => view.PostTrustedMessages(frames)).ConfigureAwait(false);
 
     private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string json, CancellationToken cancellationToken)
     {
@@ -157,26 +168,29 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         NeoRpcSession? session;
         lock (_gate) session = _session;
         if (session is null || !string.Equals(session.DocumentSessionId, message.Session.DocumentSessionId, StringComparison.Ordinal)) return;
-        if (_application is null)
+        // Transport order is kept by one reader, and the native WebView callback is left at once: no application
+        // handler can enter its own native modal loop from it. The frame is stamped now, for the rate of the session.
+        if (!_inbound.Writer.TryWrite(new(session, message, System.Diagnostics.Stopwatch.GetTimestamp()))) return;
+        if (Interlocked.CompareExchange(ref _reading, 1, 0) == 0) _ = Task.Run(ReadInbound);
+    }
+
+    // Starts each frame in order, as the UI thread did: a frame runs until its first wait before the next one starts.
+    private void ReadInbound()
+    {
+        while (true)
         {
-            _ = Task.Run(() => ReceiveContainedAsync(session, message));
-            return;
-        }
-        try
-        {
-            // Preserve transport order while leaving the native WebView callback before any
-            // application handler can synchronously enter its own native modal loop.
-            _application.Dispatcher.Post(() => _ = ReceiveContainedAsync(session, message));
-        }
-        catch (ObjectDisposedException)
-        {
-            // Application shutdown already revoked this binding's document authority.
+            while (_inbound.Reader.TryRead(out var frame)) _ = ReceiveContainedAsync(frame.Session, frame.Message, frame.Arrival);
+            Volatile.Write(ref _reading, 0);
+            // A frame queued after the last read and before the flag was cleared is read by this reader.
+            if (!_inbound.Reader.TryPeek(out _) || Interlocked.CompareExchange(ref _reading, 1, 0) != 0) return;
         }
     }
 
-    private async Task ReceiveContainedAsync(NeoRpcSession session, NeoTransportApplicationMessage message)
+    private readonly record struct InboundFrame(NeoRpcSession Session, NeoTransportApplicationMessage Message, long Arrival);
+
+    private async Task ReceiveContainedAsync(NeoRpcSession session, NeoTransportApplicationMessage message, long arrival)
     {
-        try { await session.ReceiveAsync(message.Json, message.SourceOrigin, message.IsMainFrame, session.Closed).ConfigureAwait(false); }
+        try { await session.ReceiveAsync(message.Json, message.SourceOrigin, message.IsMainFrame, arrival, session.Closed).ConfigureAwait(false); }
         catch (OperationCanceledException) when (session.Closed.IsCancellationRequested) { DiagnoseDroppedFrame(session); }
         catch (ObjectDisposedException) { DiagnoseDroppedFrame(session); }
         catch (Exception exception)
