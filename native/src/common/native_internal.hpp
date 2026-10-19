@@ -832,7 +832,18 @@ void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, u
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
 void neo_finish_decision_event(neoastra_app_t* app, neoastra_decision_t* decision) noexcept;
 inline void neo_finish_decision_event(neoastra_view_t* view, neoastra_decision_t* decision) noexcept { neo_finish_decision_event(view->environment->app, decision); }
+// Runs ready completions and queued dispatches until none is left; shutdown and the quit message use it.
 void neo_drain_dispatch(neoastra_app_t* app) noexcept;
+// The longest that one wake-up of the UI thread runs queued work before it returns to the platform loop.
+inline constexpr std::chrono::milliseconds neo_dispatch_slice{8};
+// Runs ready completions and queued dispatches in order, at least one and then until `slice` has elapsed, so that input,
+// painting, and timers of the platform loop are not held behind a busy queue. Returns true when work remains: the
+// platform then arms its wake-up again and returns to its loop. Once quit is requested it drains to the end as before.
+bool neo_drain_dispatch_slice(neoastra_app_t* app, std::chrono::steady_clock::duration slice = neo_dispatch_slice) noexcept;
+// True when completions, dispatches, or UI destructions wait for the UI thread.
+bool neo_dispatch_pending(neoastra_app_t* app) noexcept;
+// True when more than one completion or dispatch waits: work is queued behind the callback that runs next.
+bool neo_dispatch_backlog(neoastra_app_t* app) noexcept;
 void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept;
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept;
 void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept;

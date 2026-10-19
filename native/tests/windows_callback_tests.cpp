@@ -8,7 +8,9 @@
 #undef NDEBUG
 #endif
 #include <cassert>
+#include <chrono>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -225,6 +227,114 @@ void test_dispatcher_callback_release() {
     assert(quit.wParam == 73 && !IsWindow(dispatcher));
 }
 
+constexpr UINT dispatch_message = WM_APP + 0x4e;
+constexpr UINT_PTR dispatch_timer = 1;
+
+struct slow_dispatch {
+    std::vector<uint32_t>* ran{};
+    uint32_t index{};
+};
+
+void NEOASTRA_CALL run_slow_dispatch(void* pointer) {
+    auto* item = static_cast<slow_dispatch*>(pointer);
+    item->ran->push_back(item->index);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+    while (std::chrono::steady_clock::now() < until) { }
+}
+
+// Queues callbacks that take longer together than a slice, then lets the message loop run them. With `paint`, a
+// visible window waits to be painted when the first slice ends, so the rest waits for a timer and runs after the paint.
+void test_dispatch_drain_returns_to_message_loop(bool paint) {
+    auto* app = create_app();
+    const auto dispatcher = dispatcher_handle(app);
+    HWND painted{};
+    if (paint) {
+        painted = CreateWindowExW(0, L"STATIC", L"", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 200, 120, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        assert(painted);
+        UpdateWindow(painted);
+    }
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+    if (paint) InvalidateRect(painted, nullptr, TRUE);
+
+    constexpr uint32_t count = 64;
+    std::vector<uint32_t> ran;
+    std::vector<slow_dispatch> items(count);
+    for (uint32_t index = 0; index < count; ++index) {
+        items[index] = {&ran, index};
+        assert(neoastra_app_dispatch(app, run_slow_dispatch, &items[index]) == NEOASTRA_OK);
+    }
+    // One wake-up message stands for the whole queue.
+    MSG first{};
+    assert(PeekMessageW(&first, dispatcher, dispatch_message, dispatch_message, PM_REMOVE));
+    assert(!PeekMessageW(&message, dispatcher, dispatch_message, dispatch_message, PM_NOREMOVE));
+    DispatchMessageW(&first);
+    assert(!ran.empty() && ran.size() < count);
+    const auto first_slice = ran.size();
+
+    uint32_t wakes = 1;
+    uint32_t timer_wakes{};
+    bool painted_before_next_slice{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (ran.size() < count && std::chrono::steady_clock::now() < deadline) {
+        if (!PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 50, QS_ALLINPUT);
+            continue;
+        }
+        if (message.hwnd == dispatcher && (message.message == dispatch_message || (message.message == WM_TIMER && message.wParam == dispatch_timer))) {
+            if (message.message == WM_TIMER) ++timer_wakes;
+            ++wakes;
+        }
+        if (paint && message.hwnd == painted && message.message == WM_PAINT && ran.size() == first_slice) painted_before_next_slice = true;
+        DispatchMessageW(&message);
+    }
+    assert(ran.size() == count && wakes > 1);
+    for (uint32_t index = 0; index < count; ++index) assert(ran[index] == index);
+    if (paint) assert(painted_before_next_slice && timer_wakes != 0);
+    // The wake-up left for a nested loop may still come once and find the queue empty; that one arms no further wake-up.
+    if (PeekMessageW(&message, dispatcher, dispatch_message, dispatch_message, PM_REMOVE)) DispatchMessageW(&message);
+    assert(!PeekMessageW(&message, dispatcher, dispatch_message, dispatch_message, PM_NOREMOVE));
+    assert(!KillTimer(dispatcher, dispatch_timer));
+    if (painted) DestroyWindow(painted);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+}
+
+struct nested_dispatch {
+    bool ran{};
+    bool ran_in_nested_loop{};
+};
+
+void NEOASTRA_CALL mark_dispatch(void* pointer) { static_cast<nested_dispatch*>(pointer)->ran = true; }
+
+// Runs a message loop inside a callback, as a menu or a dialog does, until the next queued callback has run.
+void NEOASTRA_CALL pump_until_next_dispatch(void* pointer) {
+    auto* context = static_cast<nested_dispatch*>(pointer);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    MSG message{};
+    while (!context->ran && std::chrono::steady_clock::now() < deadline) {
+        if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+        else MsgWaitForMultipleObjects(0, nullptr, FALSE, 50, QS_ALLINPUT);
+    }
+    context->ran_in_nested_loop = context->ran;
+}
+
+void test_nested_message_loop_runs_queued_dispatch() {
+    auto* app = create_app();
+    const auto dispatcher = dispatcher_handle(app);
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&message);
+    nested_dispatch context;
+    assert(neoastra_app_dispatch(app, pump_until_next_dispatch, &context) == NEOASTRA_OK);
+    assert(neoastra_app_dispatch(app, mark_dispatch, &context) == NEOASTRA_OK);
+    // Both callbacks were queued behind the one wake-up message that this drain consumes.
+    assert(PeekMessageW(&message, dispatcher, dispatch_message, dispatch_message, PM_REMOVE));
+    DispatchMessageW(&message);
+    assert(context.ran_in_nested_loop);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+}
+
 void test_zero_reference_app_native_cleanup() {
     auto* app = create_app();
     const auto dispatcher = dispatcher_handle(app);
@@ -342,6 +452,9 @@ int main() {
     test_session_callback_release();
     test_window_session_callback_detach();
     test_dispatcher_callback_release();
+    test_dispatch_drain_returns_to_message_loop(false);
+    test_dispatch_drain_returns_to_message_loop(true);
+    test_nested_message_loop_runs_queued_dispatch();
     test_zero_reference_app_native_cleanup();
     test_modal_sibling_final_release(false);
     test_modal_sibling_final_release(true);

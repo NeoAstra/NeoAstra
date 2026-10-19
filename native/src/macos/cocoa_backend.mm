@@ -16,7 +16,8 @@
 #include <vector>
 
 namespace {
-struct cocoa_app { id previous_delegate; id delegate; neoastra_decision_t* termination_decision{}; };
+// `wake_pending` is true, under the platform mutex, while a drain block waits on the main queue: that one block stands for all queued work.
+struct cocoa_app { id previous_delegate; id delegate; neoastra_decision_t* termination_decision{}; bool wake_pending{}; };
 struct cocoa_window;
 struct cocoa_environment { WKProcessPool* process_pool; WKWebsiteDataStore* data_store; };
 struct cocoa_profile { WKWebsiteDataStore* data_store; };
@@ -472,7 +473,8 @@ void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cas
 bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept {dispatch_async(dispatch_get_main_queue(),^{neo_destroy_app_on_ui(app);});return true;}
 int32_t neo_platform_run(neoastra_app_t* app) noexcept {@autoreleasepool{[NSApp run];return app->exit_code.load();}}
 void neo_platform_quit(neoastra_app_t*) noexcept {dispatch_async(dispatch_get_main_queue(),^{[NSApp stop:nil];NSEvent* event=[NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];[NSApp postEvent:event atStart:NO];});}
-void neo_platform_wake(neoastra_app_t* app) noexcept {app->retain();dispatch_async(dispatch_get_main_queue(),^{neo_drain_dispatch(app);app->release();});}
+// Called under the platform mutex. A drain runs for one slice; the rest of a busy queue waits for a new block, after the events of the run loop.
+void neo_platform_wake(neoastra_app_t* app) noexcept {auto* state=static_cast<cocoa_app*>(app->platform);if(!state||state->wake_pending)return;state->wake_pending=true;app->retain();dispatch_async(dispatch_get_main_queue(),^{{std::lock_guard lock(app->platform_mutex);if(auto* current=static_cast<cocoa_app*>(app->platform))current->wake_pending=false;}if(neo_drain_dispatch_slice(app))neo_wake_app(app);app->release();});}
 bool neo_platform_schedule_decision_timeout(neoastra_app_t*,neoastra_decision_t* decision) noexcept {const auto remaining=std::chrono::duration_cast<std::chrono::nanoseconds>(decision->deadline-std::chrono::steady_clock::now()).count();decision->retain();dispatch_after(dispatch_time(DISPATCH_TIME_NOW,std::max<int64_t>(remaining,1)),dispatch_get_main_queue(),^{decision->expire();decision->release();});return true;}
 
 // The color the window shows before and behind its content.

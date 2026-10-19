@@ -565,28 +565,54 @@ void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type
                            download->bytes_received.load(std::memory_order_acquire), 0, nullptr, details);
 }
 
-void neo_drain_dispatch(neoastra_app_t* app) noexcept {
-    if (!app || !check_ui(app) || !app->retain()) return;
+bool neo_dispatch_pending(neoastra_app_t* app) noexcept {
+    if (!app) return false;
+    {
+        std::lock_guard lock(app->dispatch_mutex);
+        if (!app->dispatches.empty() || app->ready_completions) return true;
+    }
+    std::lock_guard lock(app->ui_lifetime_mutex);
+    return app->pending_ui_destructions != nullptr;
+}
+
+bool neo_dispatch_backlog(neoastra_app_t* app) noexcept {
+    if (!app) return false;
+    std::lock_guard lock(app->dispatch_mutex);
+    const auto dispatches = app->dispatches.size();
+    return dispatches > 1 || neo_operation_completion::ready_beyond(app, dispatches == 1 ? 0 : 1);
+}
+
+// A bounded drain checks its slice between callbacks and returns true when it stopped with work left.
+static bool drain_dispatch(neoastra_app_t* app, bool bounded, std::chrono::steady_clock::duration slice) noexcept {
+    if (!app || !check_ui(app) || !app->retain()) return false;
+    const auto deadline = bounded ? std::chrono::steady_clock::now() + slice : std::chrono::steady_clock::time_point{};
+    bool remaining{};
     drain_ui_destructions(app);
     for (;;) {
         if (auto* completion = neo_operation_completion::take(app)) {
             completion->deliver(false);
             drain_ui_destructions(app);
-            continue;
+        } else {
+            neo_dispatch_item item{};
+            {
+                std::lock_guard lock(app->dispatch_mutex);
+                if (app->dispatches.empty()) break;
+                item = app->dispatches.front();
+                app->dispatches.pop_front();
+            }
+            try { item.callback(item.context); } catch (...) { }
+            app->release();
+            drain_ui_destructions(app);
         }
-        neo_dispatch_item item{};
-        {
-            std::lock_guard lock(app->dispatch_mutex);
-            if (app->dispatches.empty()) break;
-            item = app->dispatches.front();
-            app->dispatches.pop_front();
+        // Quit drains to the end, as shutdown expects, whatever the slice.
+        if (bounded && std::chrono::steady_clock::now() >= deadline && !app->quit_requested.load(std::memory_order_acquire)) {
+            remaining = neo_dispatch_pending(app);
+            break;
         }
-        try { item.callback(item.context); } catch (...) { }
-        app->release();
-        drain_ui_destructions(app);
     }
     drain_ui_destructions(app);
-    if (app->quit_requested.load(std::memory_order_acquire)) {
+    // Work left for the next wake-up runs before the shutdown that a quit requested meanwhile.
+    if (!remaining && app->quit_requested.load(std::memory_order_acquire)) {
         {
             std::lock_guard lock(app->dispatch_mutex);
             app->stopping.store(true, std::memory_order_release);
@@ -596,7 +622,12 @@ void neo_drain_dispatch(neoastra_app_t* app) noexcept {
         neo_complete_ui_shutdown(app);
     }
     app->release();
+    return remaining;
 }
+
+void neo_drain_dispatch(neoastra_app_t* app) noexcept { drain_dispatch(app, false, {}); }
+
+bool neo_drain_dispatch_slice(neoastra_app_t* app, std::chrono::steady_clock::duration slice) noexcept { return drain_dispatch(app, true, slice); }
 
 void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept {
     if (!app || !check_ui(app)) return;

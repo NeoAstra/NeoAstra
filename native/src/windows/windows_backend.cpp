@@ -30,10 +30,14 @@ namespace {
 constexpr UINT dispatch_message = WM_APP + 0x4e;
 constexpr UINT quit_message = WM_APP + 0x4f;
 constexpr UINT destroy_app_message = WM_APP + 0x50;
+// Decision timers use the address of their decision as identifier, which is never 1.
+constexpr UINT_PTR dispatch_timer = 1;
 constexpr wchar_t dispatch_class[] = L"NeoAstra.Dispatcher";
 constexpr wchar_t window_class[] = L"NeoAstra.Window";
 
-struct windows_app { HWND dispatcher{}; bool owns_com{}; std::vector<neoastra_decision_t*> decision_timers; };
+// `dispatch_armed` is true while a dispatch message or the dispatch timer waits: that one wake-up stands for all queued
+// work. `dispatch_deferred`, on the UI thread only, turns a dispatch message that waits into the timer when it arrives.
+struct windows_app { HWND dispatcher{}; bool owns_com{}; std::atomic<bool> dispatch_armed{false}; bool dispatch_deferred{}; std::vector<neoastra_decision_t*> decision_timers; };
 struct windows_window {
     HWND hwnd{};
     bool fullscreen{};
@@ -1239,6 +1243,38 @@ LRESULT handle_session_message(neoastra_app_t* app, UINT message, WPARAM wparam)
     return 0;
 }
 
+// One wake-up at a time stands for the whole queue; a failed post leaves the next producer to post again.
+void post_dispatch(windows_app* state) noexcept {
+    if (state && state->dispatcher && !state->dispatch_armed.exchange(true) && !PostMessageW(state->dispatcher, dispatch_message, 0, 0)) state->dispatch_armed.store(false);
+}
+
+// Runs one slice of queued work on the UI thread, then arms the next wake-up if work remains. Posted messages are
+// retrieved before input, painting, and timers, so while any of those waits the rest of the queue waits for a timer
+// instead: a busy queue then shares the loop with them rather than holding them back.
+void run_dispatch_slice(neoastra_app_t* app, bool posted) noexcept {
+    if (auto* state = static_cast<windows_app*>(app->platform)) {
+        // A message that waited while input or painting did now gives them their turn: the timer stands for it.
+        if (std::exchange(state->dispatch_deferred, false) && posted && SetTimer(state->dispatcher, dispatch_timer, USER_TIMER_MINIMUM, nullptr)) return;
+        // Cleared before the slice, so work queued meanwhile posts its own wake-up. Work already queued behind the next
+        // callback gets one too: a nested message loop of a callback (a menu, a dialog) still runs it, as it did before.
+        state->dispatch_armed.store(false);
+        if (neo_dispatch_backlog(app)) post_dispatch(state);
+    }
+    if (!neo_drain_dispatch_slice(app)) return;
+    auto* state = static_cast<windows_app*>(app->platform);
+    if (!state || !state->dispatcher || app->stopped.load(std::memory_order_acquire)) return;
+    const bool yield = HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT | QS_TIMER)) != 0;
+    if (state->dispatch_armed.exchange(true)) {
+        // A wake-up was armed during the slice; a posted one would again go ahead of what waits.
+        if (yield) state->dispatch_deferred = true;
+        return;
+    }
+    if (yield && SetTimer(state->dispatcher, dispatch_timer, USER_TIMER_MINIMUM, nullptr)) return;
+    if (PostMessageW(state->dispatcher, dispatch_message, 0, 0)) return;
+    if (!yield && SetTimer(state->dispatcher, dispatch_timer, USER_TIMER_MINIMUM, nullptr)) return;
+    state->dispatch_armed.store(false);
+}
+
 LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
@@ -1250,8 +1286,9 @@ LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     neo_retain_guard owner(app);
     if (!owner) return DefWindowProcW(hwnd, message, wparam, lparam);
     if (app && (message == WM_QUERYENDSESSION || message == WM_ENDSESSION)) return handle_session_message(app, message, wparam);
-    if (message == dispatch_message && app) { neo_drain_dispatch(app); return 0; }
+    if (message == dispatch_message && app) { run_dispatch_slice(app, true); return 0; }
     if (message == quit_message && app) { neo_drain_dispatch(app); PostQuitMessage(app->exit_code.load()); return 0; }
+    if (message == WM_TIMER && wparam == dispatch_timer && app) { KillTimer(hwnd, dispatch_timer); run_dispatch_slice(app, false); return 0; }
     if (message == WM_TIMER && app) {
         auto* decision = reinterpret_cast<neoastra_decision_t*>(wparam);
         auto* state = static_cast<windows_app*>(app->platform);
@@ -1913,7 +1950,7 @@ int32_t neo_platform_run(neoastra_app_t* app) noexcept {
     return app->exit_code.load();
 }
 void neo_platform_quit(neoastra_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,quit_message,0,0); }
-void neo_platform_wake(neoastra_app_t* app) noexcept { auto* state=static_cast<windows_app*>(app->platform); if(state&&state->dispatcher)PostMessageW(state->dispatcher,dispatch_message,0,0); }
+void neo_platform_wake(neoastra_app_t* app) noexcept { post_dispatch(static_cast<windows_app*>(app->platform)); }
 bool neo_platform_schedule_decision_timeout(neoastra_app_t* app,neoastra_decision_t* decision) noexcept {auto* state=static_cast<windows_app*>(app->platform);if(!state||!state->dispatcher)return false;const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(decision->deadline-std::chrono::steady_clock::now()).count();const auto delay=static_cast<UINT>(std::clamp<int64_t>(remaining+1,1,USER_TIMER_MAXIMUM));decision->retain();try{state->decision_timers.push_back(decision);}catch(...){decision->release();return false;}if(!SetTimer(state->dispatcher,reinterpret_cast<UINT_PTR>(decision),delay,nullptr)){state->decision_timers.pop_back();decision->release();return false;}return true;}
 
 bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window_options_t* options, neoastra_error_t** error) noexcept {
