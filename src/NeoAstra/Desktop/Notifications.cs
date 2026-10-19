@@ -101,6 +101,14 @@ public interface INeoNotifications
     event EventHandler<NeoNotificationActivation>? Activated;
     /// <summary>Queries OS authority.</summary>
     ValueTask<NeoNotificationPermissionStatus> GetPermissionStatusAsync(CancellationToken cancellationToken = default);
+    /// <summary>Asks the user to allow notifications when the system has not asked yet, and returns the resulting authority.</summary>
+    /// <remarks>
+    /// <see cref="ShowAsync"/> asks on its first display; an application that schedules notifications for later asks here first,
+    /// from an action of the user, so that a background scheduling pass never shows the system prompt. Once the user decided,
+    /// only the settings of the system change the answer, and this returns it without asking. A presenter that cannot ask returns
+    /// its status.
+    /// </remarks>
+    ValueTask<NeoNotificationPermissionStatus> RequestPermissionAsync(CancellationToken cancellationToken = default) => GetPermissionStatusAsync(cancellationToken);
     /// <summary>Displays or replaces a notification.</summary>
     ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default);
     /// <summary>Removes one notification when supported.</summary>

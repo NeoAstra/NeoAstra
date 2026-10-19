@@ -573,6 +573,15 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public async Task RequestingPermissionWithoutAPromptAnswersTheStatus()
+    {
+        INeoNotifications fake = new NeoFakeNotifications();
+        Assert.AreEqual(NeoNotificationPermissionStatus.Granted, await fake.RequestPermissionAsync());
+        INeoNotifications none = new UnsupportedNotifications("none");
+        Assert.AreEqual(NeoNotificationPermissionStatus.Unsupported, await none.RequestPermissionAsync());
+    }
+
+    [TestMethod]
     public void BoundNotificationAdapterRequiresAnApplication()
     {
         Assert.ThrowsExactly<ArgumentNullException>(() => NeoNotifications.CreateSystem((NeoApplication)null!, "test.app", "Test App"));

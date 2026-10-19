@@ -19,6 +19,13 @@ internal sealed class AndroidNotifications : INeoNotifications
     public async ValueTask<NeoNotificationPermissionStatus> GetPermissionStatusAsync(CancellationToken cancellationToken = default)
         => await Task.Run(() => Permission("status"), cancellationToken).ConfigureAwait(false);
 
+    public async ValueTask<NeoNotificationPermissionStatus> RequestPermissionAsync(CancellationToken cancellationToken = default)
+    {
+        var permission = await Task.Run(() => Permission("status"), cancellationToken).ConfigureAwait(false);
+        if (permission != NeoNotificationPermissionStatus.NotRequested) return permission;
+        return await Task.Factory.StartNew(() => Permission("authorize"), cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default).WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate();

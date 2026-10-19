@@ -54,6 +54,12 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
         return dispatcher.CheckAccess() ? new(MacNotificationTasks.WaitAsync(StartSettingsQuery(), TimeSpan.FromSeconds(10), cancellationToken)) : new(MacNotificationTasks.DispatchAndWaitAsync(dispatcher.InvokeAsync(StartSettingsQuery, cancellationToken), TimeSpan.FromSeconds(10), cancellationToken));
     }
 
+    public ValueTask<NeoNotificationPermissionStatus> RequestPermissionAsync(CancellationToken cancellationToken = default)
+    {
+        var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
+        return new(MacNotificationTasks.RequestPermissionAsync(dispatcher, StartSettingsQuery, StartAuthorizationRequest, cancellationToken));
+    }
+
     public ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate(); var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
@@ -323,6 +329,14 @@ internal static class MacNotificationTasks
         return dispatcher.CheckAccess()
             ? await WaitAsync(show(), TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false)
             : await DispatchAndWaitAsync(dispatcher.InvokeAsync(show, cancellationToken), TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<NeoNotificationPermissionStatus> RequestPermissionAsync(NeoDispatcher dispatcher, Func<Task<NeoNotificationPermissionStatus>> query, Func<Task<NeoNotificationPermissionStatus>> authorize, CancellationToken cancellationToken)
+    {
+        var status = await DispatchAndWaitAsync(dispatcher.InvokeAsync(query, cancellationToken), TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+        if (status != NeoNotificationPermissionStatus.NotRequested) return status;
+        // The user answers the prompt of the system, so the wait is as long as the one of a first display.
+        return await DispatchAndWaitAsync(dispatcher.InvokeAsync(authorize, cancellationToken), TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task<T> DispatchAndWaitAsync<T>(ValueTask<Task<T>> dispatch, TimeSpan timeout, CancellationToken cancellationToken)
