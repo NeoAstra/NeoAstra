@@ -20,6 +20,9 @@ public sealed class NeoRpcOptions
     /// <summary>Gets or sets the maximum completed invocation/subscription fingerprints retained for duplicate protection.</summary>
     /// <remarks>Defaults to 4,096 and is also constrained by <see cref="MaximumRetainedRequestIds"/>. Completed ID strings and request-state objects are released immediately; only fixed-size SHA-256 fingerprints are retained, oldest first. IDs must not be reused; this bounded history is not a durable exactly-once guarantee.</remarks>
     public int MaximumCompletedRequestIds { get; set; } = 4096;
+    /// <summary>Gets or sets the maximum simultaneous invocations of one command, across all sessions, for a command that does not set <see cref="NeoRpcCommandOptions.MaximumConcurrency"/>.</summary>
+    /// <remarks>Defaults to 8 and must be between 1 and 4096. An invocation beyond the limit of its command is refused with <see cref="NeoRpcErrorCodes.TooManyRequests"/>.</remarks>
+    public int DefaultCommandMaximumConcurrency { get; set; } = NeoRpcCommandOptions.DefaultMaximumConcurrency;
     /// <summary>Gets or sets the default command timeout.</summary>
     public TimeSpan InvocationTimeout { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>Gets or sets the maximum opaque request, subscription, channel, and resource ID length.</summary>
@@ -93,6 +96,7 @@ public sealed class NeoRpcOptions
             throw new ArgumentOutOfRangeException(nameof(MaximumConcurrentInvocationsPerSession));
         if (MaximumRetainedRequestIds is < 1 or > 16_777_216) throw new ArgumentOutOfRangeException(nameof(MaximumRetainedRequestIds));
         if (MaximumCompletedRequestIds is < 1 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumCompletedRequestIds));
+        if (DefaultCommandMaximumConcurrency is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(DefaultCommandMaximumConcurrency));
         if (InvocationTimeout <= TimeSpan.Zero || InvocationTimeout > TimeSpan.FromMinutes(10)) throw new ArgumentOutOfRangeException(nameof(InvocationTimeout));
         if (MaximumIdLength is < 16 or > 256) throw new ArgumentOutOfRangeException(nameof(MaximumIdLength));
         if (MaximumWireNameLength is < 16 or > 512) throw new ArgumentOutOfRangeException(nameof(MaximumWireNameLength));
@@ -128,6 +132,7 @@ public sealed class NeoRpcOptions
             MaximumConcurrentInvocationsPerSession = MaximumConcurrentInvocationsPerSession,
             MaximumRetainedRequestIds = MaximumRetainedRequestIds,
             MaximumCompletedRequestIds = MaximumCompletedRequestIds,
+            DefaultCommandMaximumConcurrency = DefaultCommandMaximumConcurrency,
             InvocationTimeout = InvocationTimeout,
             MaximumIdLength = MaximumIdLength,
             MaximumWireNameLength = MaximumWireNameLength,
@@ -163,6 +168,9 @@ public sealed class NeoRpcOptions
 /// <summary>Configures one registered command.</summary>
 public sealed class NeoRpcCommandOptions
 {
+    internal const int DefaultMaximumConcurrency = 8;
+    private int? _maximumConcurrency;
+
     /// <summary>Gets or sets the optional permission checked before dispatch.</summary>
     /// <remarks>A <see langword="null"/> permission trusts the explicitly registered application command.</remarks>
     public string? Permission { get; set; }
@@ -170,16 +178,20 @@ public sealed class NeoRpcCommandOptions
     public NeoRpcDispatchMode Dispatch { get; set; }
     /// <summary>Gets or sets a command-specific timeout, or <see langword="null"/> for the host default.</summary>
     public TimeSpan? Timeout { get; set; }
-    /// <summary>Gets or sets a command-specific concurrency bound.</summary>
-    public int MaximumConcurrency { get; set; } = 8;
+    /// <summary>Gets or sets the maximum simultaneous invocations of this command across all sessions.</summary>
+    /// <remarks>
+    /// When this is not set, the command uses <see cref="NeoRpcOptions.DefaultCommandMaximumConcurrency"/> of its host, and the getter
+    /// returns 8, the default of that option. A set value must be between 1 and 4096 and wins over the host default.
+    /// </remarks>
+    public int MaximumConcurrency { get => _maximumConcurrency ?? DefaultMaximumConcurrency; set => _maximumConcurrency = value; }
 
-    internal NeoRpcCommandOptions CloneValidated()
+    internal NeoRpcCommandOptions CloneValidated(int defaultMaximumConcurrency)
     {
         if (Permission is not null && !NeoRpcValidation.IsPermission(Permission)) throw new ArgumentException("A command permission must be a bounded colon-separated ASCII identifier.", nameof(Permission));
         if (!Enum.IsDefined(Dispatch)) throw new ArgumentOutOfRangeException(nameof(Dispatch));
         if (Timeout is { } timeout && (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromMinutes(10))) throw new ArgumentOutOfRangeException(nameof(Timeout));
-        if (MaximumConcurrency is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumConcurrency));
-        return new NeoRpcCommandOptions { Permission = Permission, Dispatch = Dispatch, Timeout = Timeout, MaximumConcurrency = MaximumConcurrency };
+        if (_maximumConcurrency is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(MaximumConcurrency));
+        return new NeoRpcCommandOptions { Permission = Permission, Dispatch = Dispatch, Timeout = Timeout, MaximumConcurrency = _maximumConcurrency ?? defaultMaximumConcurrency };
     }
 }
 

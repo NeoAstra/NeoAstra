@@ -38,6 +38,29 @@ public sealed class RpcGeneratorTests
     }
 
     [TestMethod]
+    public void GeneratorEmitsMaximumConcurrencyOnlyWhenTheMethodSetsIt()
+    {
+        var unset = Run(ValidSource);
+        Assert.AreEqual(0, unset.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, unset.Diagnostics));
+        Assert.IsFalse(unset.Generated.Contains("MaximumConcurrency", StringComparison.Ordinal), "A method without its own limit must use the host default.");
+        var zero = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", MaximumConcurrency = 0)]"));
+        Assert.AreEqual(0, zero.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, zero.Diagnostics));
+        Assert.IsFalse(zero.Generated.Contains("MaximumConcurrency", StringComparison.Ordinal));
+        var set = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", MaximumConcurrency = 64)]"));
+        Assert.AreEqual(0, set.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, set.Diagnostics));
+        StringAssert.Contains(set.Generated, ", MaximumConcurrency = 64 });");
+        StringAssert.Contains(set.Generated, "global::NeoAstra.Rpc.NeoScopeFamily.None) { MaximumConcurrency = 64 },", "The generated permission must admit the limit of its command.");
+        var small = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", MaximumConcurrency = 2)]"));
+        StringAssert.Contains(small.Generated, ", MaximumConcurrency = 2 });");
+        Assert.IsFalse(small.Generated.Contains("{ MaximumConcurrency = 2 },", StringComparison.Ordinal), "A limit within the declaration default keeps the default declaration.");
+        foreach (var invalid in new[] { -1, 4097 })
+        {
+            var result = Run(ValidSource.Replace("Permission = \"test:invoke\")]", $"Permission = \"test:invoke\", MaximumConcurrency = {invalid})]"));
+            Assert.IsTrue(result.Diagnostics.Any(static diagnostic => diagnostic.GetMessage().Contains("concurrency policy is invalid", StringComparison.Ordinal)), string.Join(Environment.NewLine, result.Diagnostics));
+        }
+    }
+
+    [TestMethod]
     public void GeneratorDiagnosesDuplicateCommandsAndMissingSerializerMetadata()
     {
         var duplicate = Run(ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]\n    public ValueTask<Response> Again(Request request) => ValueTask.FromResult(new Response());\n    [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]"));
