@@ -146,8 +146,7 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
         } else {
             builder = new Notification.Builder(context);
         }
-        int icon = context.getApplicationInfo().icon;
-        builder.setSmallIcon(icon != 0 ? icon : android.R.drawable.ic_dialog_info).setContentTitle(notification.getTitle()).setContentText(notification.getBody()).setAutoCancel(true);
+        builder.setSmallIcon(NeoAstraServices.smallIcon(context)).setContentTitle(notification.getTitle()).setContentText(notification.getBody()).setAutoCancel(true);
         Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         int code = id == null ? 0 : id.hashCode();
         if (launchIntent != null) {

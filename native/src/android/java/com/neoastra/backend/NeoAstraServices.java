@@ -273,6 +273,22 @@ public final class NeoAstraServices {
     }
 
     /**
+     * The small icon of a notification: the drawable that the application names in the meta-data
+     * {@code com.neoastra.notification_icon} of its manifest (a monochrome glyph, which Android draws as a mask in the status
+     * bar), else the icon of the application.
+     */
+    public static int smallIcon(Context current) {
+        try {
+            ApplicationInfo info = current.getPackageManager().getApplicationInfo(current.getPackageName(), PackageManager.GET_META_DATA);
+            int named = info.metaData != null ? info.metaData.getInt("com.neoastra.notification_icon", 0) : 0;
+            if (named != 0) return named;
+        } catch (PackageManager.NameNotFoundException ignored) {
+        }
+        int icon = current.getApplicationInfo().icon;
+        return icon != 0 ? icon : android.R.drawable.ic_dialog_info;
+    }
+
+    /**
      * Posts a notification in the channel of the application, which a tap opens with its ID and activation data in the intent
      * (reported when the activity resumes); the alarm of a scheduled one posts it too.
      */
@@ -286,8 +302,7 @@ public final class NeoAstraServices {
         } else {
             builder = new Notification.Builder(current);
         }
-        int icon = current.getApplicationInfo().icon;
-        builder.setSmallIcon(icon != 0 ? icon : android.R.drawable.ic_dialog_info)
+        builder.setSmallIcon(smallIcon(current))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new Notification.BigTextStyle().bigText(body))

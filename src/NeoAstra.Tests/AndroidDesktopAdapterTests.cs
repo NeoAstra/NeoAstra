@@ -57,6 +57,18 @@ public sealed class AndroidDesktopAdapterTests
         StringAssert.Contains(services, "case \"next\":");
     }
 
+    [TestMethod]
+    public void Notifications_TakeTheSmallIconThatTheManifestNames()
+    {
+        // Android draws the small icon as a mask: an application names a monochrome glyph, else its icon serves; push shows its
+        // foreground messages with the same one.
+        var services = File.ReadAllText(Path.Combine(RepositoryRoot(), "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraServices.java"));
+        StringAssert.Contains(services, "getInt(\"com.neoastra.notification_icon\", 0)");
+        StringAssert.Contains(services, "builder.setSmallIcon(smallIcon(current))");
+        var push = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "NeoAstra.Push", "Android", "com", "neoastra", "push", "NeoAstraPush.java"));
+        StringAssert.Contains(push, "builder.setSmallIcon(NeoAstraServices.smallIcon(context))");
+    }
+
     private static string RepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
