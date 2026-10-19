@@ -12,4 +12,10 @@ internal static class IosNotifications
 
     internal static INeoNotifications Create(string applicationId)
         => NativeLibrary.TryLoad(Framework, out _) ? new MacNotifications(applicationId, attachOnBind: true) : new UnsupportedNotifications("The UserNotifications framework is unavailable.");
+
+    // Called while the scene connects, before the application is configured: the tap that launched it is kept for the presenter.
+    internal static void CatchLaunchResponses()
+    {
+        if (NativeLibrary.TryLoad(Framework, out _)) MacNotifications.CatchLaunchResponses();
+    }
 }

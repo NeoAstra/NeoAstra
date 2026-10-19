@@ -63,6 +63,7 @@ public static class NeoApp
             await builder.ShowMainWindowAsync(application, CancellationToken.None).ConfigureAwait(true);
             return;
         }
+        if (OperatingSystem.IsIOS()) global::NeoAstra.Desktop.Notifications.IosNotifications.CatchLaunchResponses();
         s_attached = StartAttachedAsync(configure);
         try { await s_attached.ConfigureAwait(true); }
         catch { s_attached = null; throw; }

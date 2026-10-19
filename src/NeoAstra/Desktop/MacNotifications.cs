@@ -15,7 +15,8 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
 {
     private static readonly object ClassLock = new();
     private static readonly ConcurrentDictionary<nint, MacNotifications> Owners = new();
-    private static nint s_delegateClass, s_stackBlock;
+    private static nint s_delegateClass, s_stackBlock, s_launchDelegate;
+    private static readonly List<nint> LaunchResponses = [];
     private static BlockDescriptor* s_blockDescriptor;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, nint> _categories = new(StringComparer.Ordinal);
@@ -209,7 +210,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
 
     private void EnsureCenter()
     {
-        if (_center != 0) return; EnsureDelegateClass(); EnsureBlockRuntime(); _center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); _delegate = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (_center == 0 || _delegate == 0 || !Owners.TryAdd(_delegate, this)) throw new PlatformNotSupportedException("UNUserNotificationCenter is unavailable."); Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), _delegate);
+        if (_center != 0) return; EnsureDelegateClass(); EnsureBlockRuntime(); _center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); _delegate = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (_center == 0 || _delegate == 0 || !Owners.TryAdd(_delegate, this)) throw new PlatformNotSupportedException("UNUserNotificationCenter is unavailable."); Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), _delegate); ReplayLaunchResponses();
     }
 
     private static void EnsureDelegateClass()
@@ -230,12 +231,35 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
     {
         try
         {
-            if (Owners.ContainsKey(self)) { var notification = Native.Send(response, Native.GetSelector("notification")); var request = Native.Send(notification, Native.GetSelector("request")); var id = ReadString(Native.Send(request, Native.GetSelector("identifier"))); var action = ReadString(Native.Send(response, Native.GetSelector("actionIdentifier"))); var content = Native.Send(request, Native.GetSelector("content")); var info = Native.Send(content, Native.GetSelector("userInfo")); using var key = NativeString.Create("neoastraGeneration"); var generationText = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), key.Value)); using var dataKey = NativeString.Create("neoastraActivation"); var data = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), dataKey.Value)); if (id is not null && action is not null && long.TryParse(generationText, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)) foreach (var owner in Owners.Values.Distinct()) { var dispatcher = owner._dispatcher; if (dispatcher is not null) { try { _ = dispatcher.InvokeAsync(() => owner.Response(id, generation, action, data)); } catch { } } }
-                // A notification that NeoAstra did not show, such as one of a push service, goes to whoever observes it; a dismissal is not an activation.
-                else if (action is not null && action != "com.apple.UNNotificationDismissActionIdentifier" && External(notification) is { } external) Report(external.Id, action == "com.apple.UNNotificationDefaultActionIdentifier" ? null : action, external.Payload, activated: true); }
+            if (self == s_launchDelegate) { lock (ClassLock) { if (LaunchResponses.Count < 16) LaunchResponses.Add(Native.Send(response, Native.GetSelector("retain"))); } }
+            else if (Owners.ContainsKey(self)) HandleResponse(response, external: true);
         }
         catch { }
         finally { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, void>)((Block*)completion)->Invoke)((nint)completion); } catch { } }
+    }
+    private static void HandleResponse(nint response, bool external)
+    {
+        var notification = Native.Send(response, Native.GetSelector("notification")); var request = Native.Send(notification, Native.GetSelector("request")); var id = ReadString(Native.Send(request, Native.GetSelector("identifier"))); var action = ReadString(Native.Send(response, Native.GetSelector("actionIdentifier"))); var content = Native.Send(request, Native.GetSelector("content")); var info = Native.Send(content, Native.GetSelector("userInfo")); using var key = NativeString.Create("neoastraGeneration"); var generationText = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), key.Value)); using var dataKey = NativeString.Create("neoastraActivation"); var data = ReadString(Native.SendArg(info, Native.GetSelector("objectForKey:"), dataKey.Value)); if (id is not null && action is not null && long.TryParse(generationText, NumberStyles.None, CultureInfo.InvariantCulture, out var generation)) foreach (var owner in Owners.Values.Distinct()) { var dispatcher = owner._dispatcher; if (dispatcher is not null) { try { _ = dispatcher.InvokeAsync(() => owner.Response(id, generation, action, data)); } catch { } } }
+        // A notification that NeoAstra did not show, such as one of a push service, goes to whoever observes it; a dismissal is not an activation.
+        else if (external && action is not null && action != "com.apple.UNNotificationDismissActionIdentifier" && External(notification) is { } other) Report(other.Id, action == "com.apple.UNNotificationDefaultActionIdentifier" ? null : action, other.Payload, activated: true);
+    }
+
+    // The tap that launches an iOS application reaches only a delegate that is there before its scene connected, and the
+    // presenters take the delegate later, once the main window is configured: until then one that keeps the responses waits.
+    // A push notification that launched the application is not replayed: the scene hands it to NeoApplePush.DidLaunch.
+    internal static void CatchLaunchResponses()
+    {
+        if (s_launchDelegate != 0) return; EnsureDelegateClass();
+        var center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); if (center == 0 || Native.Send(center, Native.GetSelector("delegate")) != 0) return;
+        var value = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (value == 0) return;
+        s_launchDelegate = value; Native.SendVoidArg(center, Native.GetSelector("setDelegate:"), value);
+    }
+    private static void ReplayLaunchResponses()
+    {
+        nint launch; nint[] responses;
+        lock (ClassLock) { launch = s_launchDelegate; s_launchDelegate = 0; responses = [.. LaunchResponses]; LaunchResponses.Clear(); }
+        if (launch != 0) Native.SendVoid(launch, Native.GetSelector("release"));
+        foreach (var response in responses) { try { HandleResponse(response, external: false); } catch { } finally { Native.SendVoid(response, Native.GetSelector("release")); } }
     }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void SettingsCompleted(Block* block, nint settings) { var handle = GCHandle.FromIntPtr(block->Context); try { var status = (long)Native.Send(settings, Native.GetSelector("authorizationStatus")); if (handle.Target is SettingsState state) state.Owner.CompleteSettings(state, status switch { 0 => NeoNotificationPermissionStatus.NotRequested, 1 => NeoNotificationPermissionStatus.Denied, 2 or 3 or 4 => NeoNotificationPermissionStatus.Granted, _ => NeoNotificationPermissionStatus.Unknown }); } catch (Exception exception) { if (handle.Target is SettingsState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void AuthorizationCompleted(Block* block, byte granted, nint error) { var handle = GCHandle.FromIntPtr(block->Context); try { if (handle.Target is AuthorizationState state) state.Owner.CompleteAuthorization(state, error != 0 ? NeoNotificationPermissionStatus.Unknown : granted != 0 ? NeoNotificationPermissionStatus.Granted : NeoNotificationPermissionStatus.Denied); } catch (Exception exception) { if (handle.Target is AuthorizationState state) state.Completion.TrySetException(exception); } finally { handle.Free(); } }

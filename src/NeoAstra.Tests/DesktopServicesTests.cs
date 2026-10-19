@@ -624,6 +624,21 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void IosNotificationsKeepTheTapThatLaunchedTheApplication()
+    {
+        // iOS reports the tap that launched an application only to a delegate that is there while the scene connects: the attach
+        // takes one before it awaits anything, and the presenter that takes the delegate later handles what it kept.
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra", "Application"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var app = File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Application", "NeoApp.cs"));
+        var caught = app.IndexOf("IosNotifications.CatchLaunchResponses();", StringComparison.Ordinal);
+        Assert.IsTrue(caught > 0 && caught < app.IndexOf("s_attached = StartAttachedAsync(configure);", StringComparison.Ordinal));
+        var presenter = File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "MacNotifications.cs"));
+        StringAssert.Contains(presenter, "Native.SendVoidArg(_center, Native.GetSelector(\"setDelegate:\"), _delegate); ReplayLaunchResponses();");
+        StringAssert.Contains(presenter, "if (self == s_launchDelegate)");
+    }
+
+    [TestMethod]
     public void AnyWebAddressScopeAcceptsOnlyCredentialFreeHttpAddresses()
     {
         var scope = global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress;
