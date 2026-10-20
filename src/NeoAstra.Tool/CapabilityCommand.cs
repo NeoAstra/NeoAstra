@@ -110,7 +110,8 @@ internal static class CapabilityCommand
             UnionSafe = item.TryGetProperty("unionSafe", out var union) && union.GetBoolean(),
             Platforms = platforms,
             DefaultTimeout = TimeSpan.FromMilliseconds(item.TryGetProperty("timeoutMilliseconds", out var timeout) ? timeout.GetInt32() : 30_000),
-            MaximumConcurrency = item.TryGetProperty("maximumConcurrency", out var concurrency) ? concurrency.GetInt32() : 8,
+            // 1,024 is the default of NeoPermissionDeclaration.MaximumConcurrency.
+            MaximumConcurrency = item.TryGetProperty("maximumConcurrency", out var concurrency) ? concurrency.GetInt32() : 1024,
             Redaction = item.TryGetProperty("redaction", out var redaction) ? ParseRedaction(redaction.GetString()) : NeoAuditRedaction.Full,
             Documentation = item.TryGetProperty("documentation", out var docs) ? docs.GetString()! : string.Empty,
         };

@@ -262,19 +262,23 @@ public readonly struct NeoRpcContext
     private readonly WeakReference<global::NeoAstra.NeoAstra>? _view;
     private readonly WeakReference<NeoWindow>? _window;
 
+    // The identity is the immutable snapshot of the session; the sender of the frame and the weak references of the
+    // session are taken as they are, so a call copies neither the identity nor a reference.
     internal NeoRpcContext(
         NeoRpcSessionIdentity identity,
+        Uri? sourceOrigin,
+        bool isMainFrame,
         string correlationId,
         CancellationToken cancellationToken,
         NeoRpcResourceCollection resources,
-        global::NeoAstra.NeoAstra? view = null,
-        NeoWindow? window = null)
+        WeakReference<global::NeoAstra.NeoAstra>? view,
+        WeakReference<NeoWindow>? window)
     {
         ViewLabel = identity.ViewLabel;
         DocumentSessionId = identity.DocumentSessionId;
         DocumentId = identity.DocumentId;
-        SourceOrigin = identity.SourceOrigin;
-        IsMainFrame = identity.IsMainFrame;
+        SourceOrigin = sourceOrigin;
+        IsMainFrame = isMainFrame;
         WholeViewTrust = identity.WholeViewTrust;
         Platform = identity.Platform;
         CorrelationId = correlationId;
@@ -286,8 +290,8 @@ public readonly struct NeoRpcContext
         Dispatcher = identity.Dispatcher;
         Resources = resources;
         Authorization = null;
-        _view = view is null ? null : new(view);
-        _window = window is null ? null : new(window);
+        _view = view;
+        _window = window;
     }
 
     /// <summary>Gets the immutable application view label.</summary>

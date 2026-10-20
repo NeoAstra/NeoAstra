@@ -219,7 +219,7 @@ public sealed class ToolingTests
             .Build();
         var platform = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
         var manifest = NeoCapabilityManifest.Resolve(bytes, catalog, new() { Platform = platform, Release = true, Profile = NeoSecurityProfile.ProductionLocalApp });
-        NeoRpcContext Context(string view) => new(new NeoRpcSessionIdentity(view, "reference-session") { IsMainFrame = true, WholeViewTrust = true, Platform = platform }, "reference-correlation", default, null!);
+        NeoRpcContext Context(string view) => new(new NeoRpcSessionIdentity(view, "reference-session") { WholeViewTrust = true, Platform = platform }, null, true, "reference-correlation", default, null!, null, null);
         var main = manifest.Match(new(Context("main"), "tour.hello", "tour:read", false, default));
         var allowedDesktop = manifest.Match(new(Context("preview"), "desktop.system.theme", "system-info:theme", false, default));
         var deniedDesktop = manifest.Match(new(Context("preview"), "desktop.system.metadata", "system-info:metadata", false, default));
