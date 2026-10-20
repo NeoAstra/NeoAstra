@@ -60,7 +60,9 @@ A window is placed with its position and its client size:
 
 - `NeoWindowOptions.X`, `Y`, `Width`, and `Height` with `StartupLocation = NeoWindowStartupLocation.Manual` create it there. On
   Windows a window created on a display has the scale of that display from the start.
-- `NeoWindow.Bounds` sets the position and the client size in one request.
+- `NeoWindow.Bounds` sets the position and the client size in one request. Prefer it to `Position` followed by `ClientSize`: on
+  Windows a window that a move takes to a display of another scale keeps the bounds it is given in the pixels of that display,
+  where a `Position` alone keeps the size it had in pixels on the display it left.
 - `NeoWindow.MoveToDisplay(display, bounds)` places it with a position relative to the top-left corner of the work area of the
   display, and `NeoWindow.MoveToDisplay(display)` moves it to the same place in the work area of another display with the same
   size in logical units, shrunk and moved to fit that work area.

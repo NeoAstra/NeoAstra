@@ -57,6 +57,9 @@ struct windows_window {
     uint32_t modal_children{};
     bool modal_active{};
     bool modal{};
+    // While a request places the window, the bounds it asked for: a display of another scale that the window lands on takes them at that scale.
+    bool placing{};
+    neoastra_rect_t placement{};
     HWND caption{}; // Caption-button overlay for NEOASTRA_TITLE_BAR_OVERLAY.
     HWND top_grip{}; // Input-only strip restoring top-edge resizing above the browser.
     bool caption_layered{};
@@ -1893,8 +1896,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             // Before the move below, which can reenter user code that releases the window.
             if (auto* native = static_cast<windows_window*>(window->platform)) apply_executable_icons(native, hwnd, HIWORD(wparam));
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
-                         suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+            if (auto* native = static_cast<windows_window*>(window->platform); native && native->placing) {
+                // A position and a size that were asked for are in the pixels of the display that the window goes to: the window
+                // takes them there, with the frame of that scale, instead of the size it had scaled to the new display.
+                const auto placement = native->placement;
+                const auto outer = outer_size(window, hwnd, placement.width, placement.height);
+                SetWindowPos(hwnd, nullptr, placement.x, placement.y, outer.cx, outer.cy, SWP_NOACTIVATE | SWP_NOZORDER);
+            } else {
+                SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
+                             suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+            }
             layout_title_bar(window);
             neo_window_set_scale_factor(window, HIWORD(wparam) / static_cast<double>(USER_DEFAULT_SCREEN_DPI));
             neo_window_display_changed(window);
@@ -2197,9 +2208,22 @@ neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {
     auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;
-    const auto outer=outer_size(w,s->hwnd,w->bounds.width,w->bounds.height);
-    if(!SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE))return NEOASTRA_ERROR_DISPOSED;
+    neoastra_rect_t requested{};{std::lock_guard lock(w->state_mutex);requested=w->bounds;}
+    const auto dpi=window_dpi(s->hwnd);
+    const auto outer=outer_size(w,s->hwnd,requested.width,requested.height);
+    // A window that the move takes to a display of another scale is told of it during the move (WM_DPICHANGED), and keeps the
+    // requested bounds rather than the size that the system scales for that display.
+    s->placing=true;s->placement=requested;
+    const auto moved=SetWindowPos(s->hwnd,nullptr,requested.x,requested.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE);
     if (w->platform != s || !s->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    s->placing=false;
+    if(!moved)return NEOASTRA_ERROR_DISPOSED;
+    // The frame of the new scale has another size, which a window that changed its scale without being told takes here.
+    if(window_dpi(s->hwnd)!=dpi&&!IsIconic(s->hwnd)&&!IsZoomed(s->hwnd)){
+        const auto scaled=outer_size(w,s->hwnd,requested.width,requested.height);
+        SetWindowPos(s->hwnd,nullptr,requested.x,requested.y,scaled.cx,scaled.cy,SWP_NOZORDER|SWP_NOACTIVATE);
+        if (w->platform != s || !s->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    }
     // A request the system adjusted to a placement the window already had sends no move or size message.
     if(!IsIconic(s->hwnd))sync_bounds(w,s->hwnd);
     return NEOASTRA_OK;

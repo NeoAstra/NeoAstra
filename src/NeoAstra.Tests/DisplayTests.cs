@@ -131,11 +131,41 @@ public sealed class DisplayTests
                 Assert.AreEqual(1, changes.Count);
                 Assert.AreEqual(first.Id, changes[0].OldDisplay?.Id);
                 Assert.AreEqual(second.Id, changes[0].NewDisplay.Id);
+                // The size in logical units is kept: in the pixels of the display, it follows its scale.
+                var ratio = aware ? second.ScaleFactor / first.ScaleFactor : 1d;
+                Assert.AreEqual((int)Math.Round(500 * ratio), window.ClientSize.Width, 2);
                 window.Bounds = new NeoRect(first.WorkArea.X + 30, first.WorkArea.Y + 30, 520, 310);
                 Assert.AreEqual(first.Id, window.Display?.Id);
                 Assert.AreEqual(2, changes.Count);
             });
         }
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task Window_PlacedOnADisplayOfAnotherScaleKeepsTheBoundsItWasGiven()
+    {
+        // Windows used to scale a window that a move took to a display of another scale, after it had taken the requested size.
+        await RunAsync(aware: true, async application =>
+        {
+            var displays = application.GetDisplays();
+            var pair = (from left in displays from right in displays where left.ScaleFactor != right.ScaleFactor select (From: left, To: right)).FirstOrDefault();
+            if (pair.From is null) Assert.Inconclusive("This machine has no two displays of different scales.");
+            await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Manual, X = pair.From.WorkArea.X + 20, Y = pair.From.WorkArea.Y + 20, Width = 500, Height = 300 });
+            Assert.AreEqual(pair.From.ScaleFactor, window.ScaleFactor);
+            var requested = new NeoRect(pair.To.WorkArea.X + 40, pair.To.WorkArea.Y + 30, 700, 450);
+            window.Bounds = requested;
+            Assert.AreEqual(pair.To.ScaleFactor, window.ScaleFactor);
+            Assert.AreEqual(requested, window.Bounds);
+            Assert.AreEqual(pair.To.Id, window.Display?.Id);
+            // And back, with the position alone: the window keeps its size in pixels.
+            window.Position = new NeoPoint(pair.From.WorkArea.X + 20, pair.From.WorkArea.Y + 20);
+            Assert.AreEqual(new NeoRect(pair.From.WorkArea.X + 20, pair.From.WorkArea.Y + 20, 700, 450), window.Bounds);
+            // A move to the work area of a display keeps the size in logical units.
+            window.MoveToDisplay(pair.To);
+            Assert.AreEqual((int)Math.Round(700 * pair.To.ScaleFactor / pair.From.ScaleFactor), window.ClientSize.Width, 2);
+            await Task.CompletedTask;
+        });
     }
 
     [TestMethod]

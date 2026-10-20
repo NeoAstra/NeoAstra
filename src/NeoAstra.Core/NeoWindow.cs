@@ -126,7 +126,9 @@ public sealed class NeoWindow : IAsyncDisposable
     /// <remarks>
     /// <para>
     /// The position of the rectangle is <see cref="Position"/> and its size <see cref="ClientSize"/>. Assigning both at once
-    /// moves and sizes the window in one request. A position is not applied with GTK.
+    /// moves and sizes the window in one request. On Windows a window that a request takes to a display of another scale keeps
+    /// the bounds it is given, in the pixels of that display: one moved with <see cref="Position"/> alone keeps the size it had in
+    /// pixels, while one that the user drags there is scaled by the system. A position is not applied with GTK.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">A dimension of the assigned value is not positive.</exception>
@@ -222,7 +224,8 @@ public sealed class NeoWindow : IAsyncDisposable
     /// </param>
     /// <remarks>
     /// The position is that of the frame, as <see cref="Position"/> is: on Windows the borders of a resizable frame that are not
-    /// drawn are to the left of it, and <see cref="FrameBounds"/> tells what the window shows once placed.
+    /// drawn are to the left of it, and <see cref="FrameBounds"/> tells what the window shows once placed. The window takes the
+    /// size it is given also when the display has another scale than the one it leaves.
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="display"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A dimension of <paramref name="bounds"/> is not positive.</exception>
