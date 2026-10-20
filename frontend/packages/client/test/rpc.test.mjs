@@ -317,3 +317,23 @@ test("the mock transport fails a call whose result is deeper than its negotiated
   await assert.rejects(pending, error => error instanceof NeoRpcError && error.code === "invalid_frame" && !error.retryable);
   client.close();
 });
+
+test("an invocation timeout sends cancel and rejects with the retryable timeout code", async () => {
+  const transport = createMockClient();
+  let next = 0;
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => `timed-${++next}` });
+  transport.outboundFrames.length = 0;
+  await assert.rejects(
+    client.invoke("documents.slow", {}, { timeoutMilliseconds: 5 }),
+    error => error instanceof NeoRpcError && error.code === "timeout" && error.retryable === true);
+  assert.deepEqual(transport.outboundFrames.map(frame => [frame.kind, frame.id]), [["invoke", "timed-1"], ["cancel", "timed-1"]]);
+
+  // A late result changes nothing, and an abort by the application keeps its own code.
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "timed-1", ok: true, value: 1 });
+  const controller = new AbortController();
+  const aborted = client.invoke("documents.slow", {}, { signal: controller.signal, timeoutMilliseconds: 10_000 });
+  controller.abort();
+  await assert.rejects(aborted, error => error.code === "operation_canceled" && error.retryable === false);
+  assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel").length, 2);
+  client.close();
+});

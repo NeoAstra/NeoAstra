@@ -99,12 +99,14 @@ export class NeoRpcClient {
     const id = this.nextId("req");
     return new Promise<TResult>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const abort = (): void => {
+      // An abort and a timeout both cancel the call on the host; only their error differs.
+      const stop = (error: NeoRpcError): void => {
         if (!this.pending.delete(id)) return;
         try { this.connection.send(Object.freeze({ neoastra: 1, kind: "cancel", id })); } catch { }
         cleanup();
-        reject(abortError());
+        reject(error);
       };
+      const abort = (): void => stop(abortError());
       const cleanup = (): void => {
         options.signal?.removeEventListener("abort", abort);
         if (timer !== undefined) clearTimeout(timer);
@@ -116,7 +118,7 @@ export class NeoRpcClient {
         if (!Number.isFinite(options.timeoutMilliseconds) || options.timeoutMilliseconds <= 0 || options.timeoutMilliseconds > 600_000) {
           this.pending.delete(id); cleanup(); reject(new TypeError("timeoutMilliseconds must be greater than zero and no more than ten minutes.")); return;
         }
-        timer = setTimeout(abort, options.timeoutMilliseconds);
+        timer = setTimeout(() => stop(new NeoRpcError({ code: "timeout", message: "The RPC invocation timed out.", retryable: true })), options.timeoutMilliseconds);
       }
       try { this.connection.send(Object.freeze({ neoastra: 1, kind: "invoke", id, command, args, contract: options.contractHash })); }
       catch (error) { this.pending.delete(id); cleanup(); reject(normalize(error)); }

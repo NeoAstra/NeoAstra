@@ -25,8 +25,9 @@ Generated bindings use the public `invoke` and `subscribe` functions. For direct
 `NeoRpcClient` multiplexes calls, stable `NeoRpcError` values, `AbortSignal` cancellation, ordered event
 subscriptions, acknowledged async channels, and session-owned resource close over one connected
 transport. An already-aborted call sends no invoke frame. `timeoutMilliseconds` bounds both invocation
-completion and the pending `subscribe` acknowledgement; a subscription timeout sends one idempotent
-`unsubscribe` and rejects with the stable `timeout` code. A host frame the client refuses, such as one
+completion and the pending `subscribe` acknowledgement; an invocation timeout sends one `cancel`, a
+subscription timeout one idempotent `unsubscribe`, and both reject with the stable, retryable `timeout`
+code, while an abort rejects with `operation_canceled`. A host frame the client refuses, such as one
 deeper than the negotiated JSON depth (counted like `System.Text.Json`: objects and arrays only), fails
 the call, channel or pending subscription it answers with `invalid_frame` rather than leaving it pending.
 Generated bindings attach their deterministic contract hash; a configured host rejects stale generated
