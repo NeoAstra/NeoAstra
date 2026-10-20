@@ -334,7 +334,8 @@ public sealed class WindowsDropTargetTests
                         }
 
                         await WaitAsync(view, "globalThis.released === true", timeout.Token);
-                        var last = JsonDocument.Parse(await view.EvaluateScriptAsync("JSON.stringify(globalThis.moves.at(-1) ?? null)", timeout.Token) ?? "null").RootElement;
+                        // The result of a script is given as JSON already.
+                        var last = JsonDocument.Parse(await view.EvaluateScriptAsync("globalThis.moves.at(-1) ?? null", timeout.Token) ?? "null").RootElement;
                         Assert.AreEqual(JsonValueKind.Array, last.ValueKind, "The page heard of no move of the captured pointer.");
                         var css = new NeoViewPoint(last[0].GetDouble(), last[1].GetDouble());
                         Assert.IsTrue(css.X < 0 || css.X > window.ClientSize.Width / window.ScaleFactor, $"The last move the page heard of, {css}, is in its window.");
