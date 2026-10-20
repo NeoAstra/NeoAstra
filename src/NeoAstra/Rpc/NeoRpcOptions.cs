@@ -64,7 +64,12 @@ public sealed class NeoRpcOptions
     public int RequestRatePerSecond { get; set; } = 100;
     /// <summary>Gets or sets the bounded per-session request burst.</summary>
     public int RequestRateBurst { get; set; } = 200;
-    /// <summary>Gets or sets the abuse-denial count after which the offending document session is closed.</summary>
+    /// <summary>Gets or sets the number of seconds with request-rate denials after which the offending document session is closed.</summary>
+    /// <remarks>
+    /// The denials of one second count once, however many there are, and one such second is forgotten for each second
+    /// without a denial: a single burst never closes a session, while a page that keeps sending more than its rate for
+    /// this many seconds in a row is closed. Seconds are counted from the opening of the session, when the frames arrived.
+    /// </remarks>
     public int AbuseClosureThreshold { get; set; } = 20;
     /// <summary>Gets or sets the named resolved security profile.</summary>
     public NeoSecurityProfile SecurityProfile { get; set; } = NeoSecurityProfile.ProductionLocalApp;

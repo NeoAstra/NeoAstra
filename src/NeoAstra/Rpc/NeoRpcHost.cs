@@ -271,10 +271,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private long _unknownCancelCount;
     private int _subscriptionSlots;
     private readonly object _rateLock = new();
+    private readonly long _openedTimestamp;
     private double _rateTokens;
     private long _lastRateTimestamp;
-    private double _abuseDenials;
-    private long _lastAbuseTimestamp;
+    private int _abuseSeconds;
+    private long _lastAbuseSecond;
 
     internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
         : this(host, identity, send, null, view, window, shutdown)
@@ -292,7 +293,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _closed = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
         _resources = new NeoRpcResourceCollection(this, host.Options.MaximumResourcesPerSession);
         _rateTokens = host.Options.RequestRateBurst;
-        _lastRateTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        _openedTimestamp = _lastRateTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
     /// <summary>Gets the opaque trusted document-session ID.</summary>
@@ -581,7 +582,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (!TryAdmitRate(arrival))
         {
             await SendErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
-            await HandleAbuseAsync().ConfigureAwait(false);
+            await HandleAbuseAsync(arrival).ConfigureAwait(false);
             return;
         }
         var requestId = RememberRequestId(id, out var admissionError);
@@ -776,7 +777,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (!TryAdmitRate(arrival))
         {
             await SendSubscriptionErrorAsync(id, FrameworkError(NeoRpcErrorCodes.TooManyRequests, "The RPC request-rate limit is exhausted.", null, true)).ConfigureAwait(false);
-            await HandleAbuseAsync().ConfigureAwait(false);
+            await HandleAbuseAsync(arrival).ConfigureAwait(false);
             return;
         }
         if (!ContractMatches(root))
@@ -1005,26 +1006,31 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    private async ValueTask HandleAbuseAsync()
+    private async ValueTask HandleAbuseAsync(long arrival)
     {
-        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.LimitExceeded, "A document session exceeded its bounded RPC request rate.");
-        if (CountAbuseDenial(System.Diagnostics.Stopwatch.GetTimestamp()) >= _host.Options.AbuseClosureThreshold) await DisposeAsync().ConfigureAwait(false);
+        var (seconds, newSecond) = CountAbuseDenialCore(arrival);
+        // One warning for each second with denials: a burst does not flood the diagnostic sink either.
+        if (newSecond) _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoCapabilityDecisionCodes.LimitExceeded, "A document session exceeded its bounded RPC request rate.");
+        if (seconds >= _host.Options.AbuseClosureThreshold) await DisposeAsync().ConfigureAwait(false);
     }
 
-    // The denials of the rate limit add up, and one is forgotten for each second without a denial: a page that keeps
-    // flooding reaches the threshold, while denials scattered over a long session never close it.
-    internal double CountAbuseDenial(long timestamp)
+    internal int CountAbuseDenial(long timestamp) => CountAbuseDenialCore(timestamp).Seconds;
+
+    // The denials of one second (counted from the opening of the session, when the frames arrived) count once, and one
+    // such second is forgotten for each second without a denial. A burst, however large, counts one second, so only a page
+    // that keeps sending more than its rate for AbuseClosureThreshold seconds is closed; denials scattered over a long
+    // session never add up.
+    private (int Seconds, bool NewSecond) CountAbuseDenialCore(long timestamp)
     {
         lock (_rateLock)
         {
-            if (_abuseDenials > 0)
-            {
-                var quiet = Math.Max(0, timestamp - _lastAbuseTimestamp) / (double)System.Diagnostics.Stopwatch.Frequency;
-                _abuseDenials = Math.Max(0, _abuseDenials - quiet);
-            }
-
-            _lastAbuseTimestamp = Math.Max(timestamp, _lastAbuseTimestamp);
-            return ++_abuseDenials;
+            var second = Math.Max(0, timestamp - _openedTimestamp) / System.Diagnostics.Stopwatch.Frequency;
+            // A stamp older than the last second counted counts with it, as frames are charged in the order they arrived.
+            if (_abuseSeconds != 0 && second <= _lastAbuseSecond) return (_abuseSeconds, false);
+            var quiet = _abuseSeconds == 0 ? 0 : second - _lastAbuseSecond - 1;
+            _abuseSeconds = (int)Math.Max(0, _abuseSeconds - quiet) + 1;
+            _lastAbuseSecond = second;
+            return (_abuseSeconds, true);
         }
     }
 

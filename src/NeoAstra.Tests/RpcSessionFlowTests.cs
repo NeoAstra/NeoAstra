@@ -104,19 +104,84 @@ public sealed class RpcSessionFlowTests
     }
 
     [TestMethod]
-    public async Task DenialsAreForgottenOnePerQuietSecond()
+    public async Task ASecondWithDenialsCountsOnce_AndIsForgottenAfterAQuietSecond()
     {
-        await using var host = new NeoRpcBuilder(new NeoRpcOptions()).Build();
+        await using var host = new NeoRpcBuilder(RateLimited()).Build();
         await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "abuse-session"), (_, _) => ValueTask.CompletedTask);
         var start = Stopwatch.GetTimestamp();
         var second = Stopwatch.Frequency;
-        for (var index = 0; index < 9; index++) session.CountAbuseDenial(start);
-        Assert.AreEqual(10, session.CountAbuseDenial(start), 1e-9, "A flood adds up.");
-        Assert.AreEqual(6, session.CountAbuseDenial(start + 5 * second), 1e-9, "Five quiet seconds forget five denials.");
-        Assert.AreEqual(1, session.CountAbuseDenial(start + 60 * second), 1e-9, "Denials scattered over a long session never add up.");
+        for (var index = 0; index < 99; index++) session.CountAbuseDenial(start);
+        Assert.AreEqual(1, session.CountAbuseDenial(start), "A burst, however large, counts one second.");
+        for (var index = 1; index < 5; index++) session.CountAbuseDenial(start + index * second);
+        Assert.AreEqual(5, session.CountAbuseDenial(start + 4 * second), "Five seconds in a row with denials add up.");
+        Assert.AreEqual(5, session.CountAbuseDenial(start + 2 * second), "A late stamp counts with the last second.");
+        Assert.AreEqual(3, session.CountAbuseDenial(start + 8 * second), "Three quiet seconds forget three seconds with denials.");
+        Assert.AreEqual(1, session.CountAbuseDenial(start + 60 * second), "Denials scattered over a long session never add up.");
+    }
+
+    // A rate an application configures as a safety rail: 100 frames a second, a burst of 200, closure after 20 seconds.
+    private static NeoRpcOptions RateLimited(INeoRpcDiagnosticSink? diagnostics = null)
+        => new() { RequestRatePerSecond = 100, RequestRateBurst = 200, AbuseClosureThreshold = 20, DiagnosticSink = diagnostics };
+
+    [TestMethod]
+    public async Task ABurstOverAConfiguredRate_IsRefusedInPart_AndTheSessionKeepsServing()
+    {
+        // A window that restores 30 tabs, each calling and subscribing a few things, sends some 250 frames in one tick.
+        var diagnostics = new ConcurrentQueue<NeoRpcDiagnostic>();
+        var builder = new NeoRpcBuilder(RateLimited(new DiagnosticSink(diagnostics)));
+        builder.AddCommand<Request, Response>("flow.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "burst-session"), (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+        var start = Stopwatch.GetTimestamp();
+        for (var index = 0; index < 250; index++)
+            await session.ReceiveAsync(Invoke($"burst-{index}", "flow.echo", "{\"id\":\"x\"}"), null, true, start, CancellationToken.None);
+
+        Assert.AreEqual(50, frames.Count(static frame => ErrorCode(frame) == NeoRpcErrorCodes.TooManyRequests), "The burst is 200 frames.");
+        Assert.IsFalse(session.Closed.IsCancellationRequested, "One burst must never close the session.");
+        Assert.AreEqual(1, host.ActiveSessionCount);
+        Assert.AreEqual(1, diagnostics.Count(static value => value.Code == NeoCapabilityDecisionCodes.LimitExceeded), "A second with denials is diagnosed once.");
+
+        await session.ReceiveAsync(Invoke("later", "flow.echo", "{\"id\":\"x\"}"), null, true, start + Stopwatch.Frequency, CancellationToken.None);
+        Assert.IsNull(ErrorCode(frames.Last()), "A call one second later is served.");
+    }
+
+    [TestMethod]
+    public async Task SustainedFloodingForTheThresholdOfSeconds_ClosesTheSession()
+    {
+        var builder = new NeoRpcBuilder(RateLimited());
+        builder.AddCommand<Request, Response>("flow.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
+        await using var host = builder.Build();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "flood-session"), (_, _) => ValueTask.CompletedTask);
+        var start = Stopwatch.GetTimestamp();
+        var threshold = RateLimited().AbuseClosureThreshold;
+        for (var second = 0; second < threshold; second++)
+        {
+            Assert.AreEqual(1, host.ActiveSessionCount, $"The session closed after {second} seconds of flooding.");
+            // More than the burst in the first second, and more than the rate in every one after.
+            for (var index = 0; index < 250; index++)
+            {
+                try { await session.ReceiveAsync(Invoke($"flood-{second}-{index}", "flow.echo", "{\"id\":\"x\"}"), null, true, start + second * Stopwatch.Frequency, CancellationToken.None); }
+                catch (ObjectDisposedException) { break; }
+            }
+        }
+        Assert.AreEqual(0, host.ActiveSessionCount, "A page that keeps flooding is closed.");
     }
 
     private static string Invoke(string id, string command, string args) => $"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"{id}\",\"command\":\"{command}\",\"args\":{args}}}";
+
+    private static string? ErrorCode(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty("error", out var error) ? error.GetProperty("code").GetString() : null;
+    }
+
+    private sealed class DiagnosticSink(ConcurrentQueue<NeoRpcDiagnostic> values) : INeoRpcDiagnosticSink
+    {
+        public void Write(NeoRpcDiagnostic diagnostic) => values.Enqueue(diagnostic);
+    }
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
