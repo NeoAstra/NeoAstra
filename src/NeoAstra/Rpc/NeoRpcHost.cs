@@ -513,7 +513,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         while (_outbound.Reader.TryRead(out var frame))
         {
             Interlocked.Decrement(ref _queuedOutbound);
-            if (frame.TryTake()) frame.Done.TrySetCanceled();
+            if (frame.TryTake()) frame.Cancel(CancellationToken.None);
         }
     }
 
@@ -542,8 +542,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    internal async ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, CancellationToken cancellationToken)
-        => await SendRawAsync(BuildFrame(writer =>
+    // The last event of what a pump took from its queue is awaited, so that one subscription holds at most one batch of
+    // events in the session queue and its own bounded queue applies its overflow policy; the others only queue.
+    private ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, bool awaitDelivery, CancellationToken cancellationToken)
+    {
+        var frame = BuildFrame(writer =>
         {
             writer.WriteStartObject();
             WriteHeader(writer, "event");
@@ -551,14 +554,19 @@ public sealed class NeoRpcSession : IAsyncDisposable
             writer.WriteNumber("sequence", sequence);
             writer.WritePropertyName("value"); writer.WriteRawValue(json, skipInputValidation: true);
             writer.WriteEndObject();
-        }), cancellationToken).ConfigureAwait(false);
+        });
+        if (awaitDelivery) return SendRawAsync(frame, cancellationToken);
+        QueueStreamFrame(frame, cancellationToken);
+        return ValueTask.CompletedTask;
+    }
 
-    internal async ValueTask SendChannelItemAsync(string channelId, long sequence, byte[] json, CancellationToken cancellationToken)
-        => await SendRawAsync(BuildFrame(writer =>
+    // Channel items are only queued: the unacknowledged-item credits of the channel bound how many are in flight.
+    private void QueueChannelItem(string channelId, long sequence, byte[] json, CancellationToken cancellationToken)
+        => QueueStreamFrame(BuildFrame(writer =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "channel_item"); writer.WriteString("channel", channelId);
             writer.WriteNumber("sequence", sequence); writer.WritePropertyName("value"); writer.WriteRawValue(json, true); writer.WriteEndObject();
-        }), cancellationToken).ConfigureAwait(false);
+        }), cancellationToken);
 
     internal ValueTask SendChannelTerminalAsync(string channelId, string kind, NeoRpcError? error, CancellationToken cancellationToken)
         => SendRawAsync(BuildFrame(writer =>
@@ -1107,20 +1115,32 @@ public sealed class NeoRpcSession : IAsyncDisposable
     {
         if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closedToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var frame = new OutboundFrame(json, cancellationToken);
-        Interlocked.Increment(ref _queuedOutbound);
-        if (!_outbound.Writer.TryWrite(frame))
-        {
-            Interlocked.Decrement(ref _queuedOutbound);
-            throw new OperationCanceledException("The RPC session is closed.");
-        }
+        var frame = new OutboundFrame(json, cancellationToken, awaited: true);
+        if (!TryQueue(frame)) throw new OperationCanceledException("The RPC session is closed.");
         // The caller withdraws a frame still waiting in the queue with its own token (a closed channel or
         // subscription): it is not sent, and the transport did not fail.
         using (cancellationToken.CanBeCanceled ? cancellationToken.Register(static state => ((OutboundFrame)state!).TryWithdraw(), frame) : default)
         {
             StartWriter();
-            await frame.Done.Task.ConfigureAwait(false);
+            await frame.Done!.Task.ConfigureAwait(false);
         }
+    }
+
+    // Queues a frame of a stream (an event or a channel item) without waiting for it to be sent: the frames of a stream
+    // leave in batches instead of one round trip each. Nobody waits for it, so it is withdrawn when its token is canceled
+    // before the writer takes it, and a failure of the transport closes the session, which ends its stream.
+    private void QueueStreamFrame(string json, CancellationToken cancellationToken)
+    {
+        if (Volatile.Read(ref _disposed) != 0 || cancellationToken.IsCancellationRequested) return;
+        if (TryQueue(new OutboundFrame(json, cancellationToken, awaited: false))) StartWriter();
+    }
+
+    private bool TryQueue(OutboundFrame frame)
+    {
+        Interlocked.Increment(ref _queuedOutbound);
+        if (_outbound.Writer.TryWrite(frame)) return true;
+        Interlocked.Decrement(ref _queuedOutbound);
+        return false;
     }
 
     private void StartWriter()
@@ -1140,7 +1160,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
             while (batch.Count < MaximumOutboundBatch && _outbound.Reader.TryRead(out var next))
             {
                 Interlocked.Decrement(ref _queuedOutbound);
-                if (next.TryTake()) batch.Add(next);
+                // A frame of a closed stream is withdrawn here: nobody registered to withdraw it earlier.
+                if (next.Token.IsCancellationRequested) next.TryWithdraw();
+                else if (next.TryTake()) batch.Add(next);
             }
             if (batch.Count == 0)
             {
@@ -1157,12 +1179,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 try
                 {
                     await sendBatch(frames).ConfigureAwait(false);
-                    foreach (var frame in batch) frame.Done.TrySetResult();
+                    foreach (var frame in batch) frame.Complete();
                 }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
-                    foreach (var frame in batch) frame.Done.TrySetException(exception);
+                    foreach (var frame in batch) frame.Fail(exception);
                 }
 
                 continue;
@@ -1173,15 +1195,15 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 try
                 {
                     await _send(frame.Json, frame.Token).ConfigureAwait(false);
-                    frame.Done.TrySetResult();
+                    frame.Complete();
                 }
                 // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
                 // transport did not fail. Session teardown cancels every caller token too.
-                catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Done.TrySetCanceled(exception.CancellationToken); }
+                catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Cancel(exception.CancellationToken); }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
-                    frame.Done.TrySetException(exception);
+                    frame.Fail(exception);
                 }
             }
         }
@@ -1196,17 +1218,21 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // The most frames one write takes: one turn of a UI thread stays bounded.
     private const int MaximumOutboundBatch = 256;
 
-    private sealed class OutboundFrame(string json, CancellationToken token)
+    // A frame that a caller awaits has a completion; a frame of a stream has none, and nothing observes its outcome.
+    private sealed class OutboundFrame(string json, CancellationToken token, bool awaited)
     {
         private int _state; // 0 queued, 1 taken by the writer, 2 withdrawn by its caller
         public string Json { get; } = json;
         public CancellationToken Token { get; } = token;
-        public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource? Done { get; } = awaited ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null;
         public bool TryTake() => Interlocked.CompareExchange(ref _state, 1, 0) == 0;
         public void TryWithdraw()
         {
-            if (Interlocked.CompareExchange(ref _state, 2, 0) == 0) Done.TrySetCanceled(Token);
+            if (Interlocked.CompareExchange(ref _state, 2, 0) == 0) Done?.TrySetCanceled(Token);
         }
+        public void Complete() => Done?.TrySetResult();
+        public void Cancel(CancellationToken cancellationToken) => Done?.TrySetCanceled(cancellationToken);
+        public void Fail(Exception exception) => Done?.TrySetException(exception);
     }
 
     private bool TryValidId(JsonElement root, string property, out string value)
@@ -1467,20 +1493,27 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             // Closing the subscription or its session wakes a pump that waits for an event.
             var wake = _token.UnsafeRegister(static state => { var subscription = (SubscriptionState)state!; lock (subscription._lock) subscription.WakeLocked(); }, this);
+            var taken = new List<byte[]>();
             try
             {
                 while (true)
                 {
-                    byte[]? item = null;
                     Task? waiting = null;
                     lock (_lock)
                     {
                         if (_token.IsCancellationRequested) return;
-                        if (_queue.TryDequeue(out item)) _bytes -= item.Length;
-                        else waiting = (_waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+                        // Everything queued leaves together, in order; events published meanwhile wait in the bounded queue.
+                        while (_queue.TryDequeue(out var item)) { _bytes -= item.Length; taken.Add(item); }
+                        if (taken.Count == 0) waiting = (_waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
                     }
-                    if (waiting is not null) await waiting.ConfigureAwait(false);
-                    else await _session.SendEventAsync(_id, Interlocked.Increment(ref _sequence), item!, _token).ConfigureAwait(false);
+                    if (waiting is not null)
+                    {
+                        await waiting.ConfigureAwait(false);
+                        continue;
+                    }
+                    for (var index = 0; index < taken.Count; index++)
+                        await _session.SendEventAsync(_id, ++_sequence, taken[index], awaitDelivery: index == taken.Count - 1, _token).ConfigureAwait(false);
+                    taken.Clear();
                 }
             }
             catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
@@ -1552,7 +1585,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     await _credits.WaitAsync(_closed.Token).ConfigureAwait(false);
                     var bytes = JsonSerializer.SerializeToUtf8Bytes(item, _channel.ItemTypeInfo);
                     var sequence = Interlocked.Increment(ref _sent);
-                    await _session.SendChannelItemAsync(_id, sequence, bytes, _closed.Token).ConfigureAwait(false);
+                    _session.QueueChannelItem(_id, sequence, bytes, _closed.Token);
                 }
             }
             catch (OperationCanceledException) when (_closed.IsCancellationRequested) { }

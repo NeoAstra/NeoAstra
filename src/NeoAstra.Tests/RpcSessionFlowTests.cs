@@ -52,6 +52,127 @@ public sealed class RpcSessionFlowTests
     }
 
     [TestMethod]
+    public async Task TheEventsOfOneSubscription_LeaveTogether_InSequenceOrder()
+    {
+        var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "result"));
+        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        var changed = builder.AddEvent("flow.changed", RpcTestJsonContext.Default.Response);
+        await using var host = builder.Build();
+        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "event-batch-session"),
+            (_, _) => throw new AssertFailedException("A view session sends in batches."), gate.SendAsync, null, null);
+        using var releaseBeforeTeardown = gate;
+        await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"sub\",\"event\":\"flow.changed\"}");
+        // An answer held in its batch: the events published meanwhile wait behind it.
+        var holding = session.ReceiveAsync(Invoke("hold", "missing.command", "{}")).AsTask();
+        await gate.Held.WaitAsync(TimeSpan.FromSeconds(5));
+        for (var index = 0; index < 20; index++) Assert.AreEqual(1, await changed.PublishAsync(new Response(index.ToString(), "view")));
+        var batchesBefore = gate.Batches;
+        gate.Release();
+        await holding.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "event") == 20);
+
+        var events = gate.Frames.Where(static frame => Kind(frame) == "event").Select(static frame => JsonDocument.Parse(frame).RootElement).ToArray();
+        CollectionAssert.AreEqual(Enumerable.Range(1, 20).Select(static value => (long)value).ToArray(), events.Select(static root => root.GetProperty("sequence").GetInt64()).ToArray());
+        CollectionAssert.AreEqual(Enumerable.Range(0, 20).Select(static value => value.ToString()).ToArray(), events.Select(static root => root.GetProperty("value").GetProperty("title").GetString()).ToArray());
+        // The pump takes what was published while it waited, together: one round trip each would take 20 batches.
+        Assert.IsLessThan(10, gate.Batches - batchesBefore, "The events of a subscription leave together, not one round trip each.");
+    }
+
+    [TestMethod]
+    public async Task TheItemsOfAChannel_LeaveTogether_UpToItsUnacknowledgedWindow()
+    {
+        var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "channel_item"));
+        var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 16 });
+        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(40), RpcTestJsonContext.Default.Response)),
+            RpcTestJsonContext.Default.Request);
+        await using var host = builder.Build();
+        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "channel-batch-session"),
+            (_, _) => throw new AssertFailedException("A view session sends in batches."), gate.SendAsync, null, null);
+        using var releaseBeforeTeardown = gate;
+        await session.ReceiveAsync(Invoke("stream", "flow.stream", "{\"id\":\"x\"}"));
+        await gate.Held.WaitAsync(TimeSpan.FromSeconds(5));
+        // The first items are held in their batch; the rest of the 16 credits of the window queue without waiting for them.
+        await WaitUntilAsync(() => ItemCount(gate) + session.QueuedOutboundFrameCount == 16);
+        await Task.Delay(50);
+        Assert.AreEqual(16, ItemCount(gate) + session.QueuedOutboundFrameCount, "No item beyond the unacknowledged window is queued.");
+        gate.Release();
+        await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "channel_item") == 16);
+        var channel = JsonDocument.Parse(gate.Frames.First(static frame => Kind(frame) == "result")).RootElement.GetProperty("value").GetProperty("channel").GetString();
+        await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"channel_ack\",\"channel\":\"{channel}\",\"sequence\":16}}");
+        await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "channel_item") == 32);
+        await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"channel_ack\",\"channel\":\"{channel}\",\"sequence\":32}}");
+        await WaitUntilAsync(() => gate.Frames.Any(static frame => Kind(frame) == "channel_complete"));
+
+        var items = gate.Frames.Where(static frame => Kind(frame) == "channel_item").Select(static frame => JsonDocument.Parse(frame).RootElement).ToArray();
+        CollectionAssert.AreEqual(Enumerable.Range(1, 40).Select(static value => (long)value).ToArray(), items.Select(static root => root.GetProperty("sequence").GetInt64()).ToArray());
+        Assert.AreEqual("channel_complete", Kind(gate.Frames.Last()), "The terminal frame follows every item.");
+        Assert.IsLessThan(20, gate.Batches, "Items leave in batches, not one round trip each.");
+
+        static async IAsyncEnumerable<Response> Items(int count)
+        {
+            for (var index = 0; index < count; index++) yield return new Response(index.ToString(), "view");
+            await Task.CompletedTask;
+        }
+    }
+
+    [TestMethod]
+    public async Task TheQueuedEventsOfAClosedSubscription_AreWithdrawn()
+    {
+        var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "result"));
+        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        var changed = builder.AddEvent("flow.changed", RpcTestJsonContext.Default.Response);
+        await using var host = builder.Build();
+        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "withdraw-session"),
+            (_, _) => throw new AssertFailedException("A view session sends in batches."), gate.SendAsync, null, null);
+        using var releaseBeforeTeardown = gate;
+        await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"sub\",\"event\":\"flow.changed\"}");
+        var holding = session.ReceiveAsync(Invoke("hold", "missing.command", "{}")).AsTask();
+        await gate.Held.WaitAsync(TimeSpan.FromSeconds(5));
+        for (var index = 0; index < 10; index++) await changed.PublishAsync(new Response("late", "view"));
+        // The pump queued what it took behind the held answer.
+        await WaitUntilAsync(() => session.QueuedOutboundFrameCount >= 1);
+
+        await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"sub\"}").AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        gate.Release();
+        await holding.WaitAsync(TimeSpan.FromSeconds(5));
+        await session.ReceiveAsync(Invoke("after", "missing.command", "{}"));
+        await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "result") == 2);
+        Assert.AreEqual(0, gate.Frames.Count(static frame => Kind(frame) == "event"), "The events queued for a closed subscription are not sent.");
+        Assert.AreEqual(0, session.ActiveSubscriptionCount);
+        Assert.AreEqual(0, session.QueuedOutboundFrameCount);
+    }
+
+    [TestMethod]
+    public async Task TheQueuedItemsOfAClosedChannel_AreWithdrawn_BeforeItsTerminalFrame()
+    {
+        var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "channel_item"));
+        var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 16 });
+        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Endless(), RpcTestJsonContext.Default.Response)),
+            RpcTestJsonContext.Default.Request);
+        await using var host = builder.Build();
+        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "channel-withdraw-session"),
+            (_, _) => throw new AssertFailedException("A view session sends in batches."), gate.SendAsync, null, null);
+        using var releaseBeforeTeardown = gate;
+        await session.ReceiveAsync(Invoke("stream", "flow.stream", "{\"id\":\"x\"}"));
+        await gate.Held.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => ItemCount(gate) + session.QueuedOutboundFrameCount == 16);
+        var held = ItemCount(gate);
+        var channel = JsonDocument.Parse(gate.Frames.First(static frame => Kind(frame) == "result")).RootElement.GetProperty("value").GetProperty("channel").GetString();
+        await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"channel_close\",\"channel\":\"{channel}\"}}");
+        gate.Release();
+        await WaitUntilAsync(() => session.ActiveChannelCount == 0 && gate.Frames.Any(static frame => Kind(frame) is "channel_complete" or "channel_error"));
+        Assert.AreEqual(held, ItemCount(gate), "Only the items already being sent leave; those queued after them are withdrawn.");
+        Assert.IsLessThan(16, held);
+        Assert.AreEqual(0, session.QueuedOutboundFrameCount);
+
+        static async IAsyncEnumerable<Response> Endless([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            for (var index = 0; !cancellationToken.IsCancellationRequested; index++) yield return new Response(index.ToString(), "view");
+            await Task.CompletedTask;
+        }
+    }
+
+    [TestMethod]
     public async Task ABatchTheTransportRefuses_FailsItsFrames_AndClosesTheSession()
     {
         var builder = new NeoRpcBuilder(new NeoRpcOptions());
@@ -292,6 +413,44 @@ public sealed class RpcSessionFlowTests
     }
 
     private static string Invoke(string id, string command, string args) => $"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"{id}\",\"command\":\"{command}\",\"args\":{args}}}";
+
+    private static int ItemCount(BatchGate gate) => gate.Frames.Count(static frame => Kind(frame) == "channel_item");
+
+    private static string? Kind(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("kind").GetString();
+    }
+
+    // Records the batches a session sends, and holds the first one that matches until released.
+    // Disposing it releases a held batch: a failed assertion must not leave the writer, and so teardown, blocked.
+    private sealed class BatchGate(Func<IReadOnlyList<string>, bool> hold) : IDisposable
+    {
+        private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ConcurrentQueue<string> _frames = new();
+        private int _batches;
+        private int _holding;
+
+        internal Task Held => _held.Task;
+        internal int Batches => Volatile.Read(ref _batches);
+        internal IReadOnlyCollection<string> Frames => _frames;
+        internal void Release() => _release.TrySetResult();
+        public void Dispose() => Release();
+
+        internal async ValueTask SendAsync(IReadOnlyList<string> frames)
+        {
+            Interlocked.Increment(ref _batches);
+            foreach (var frame in frames) _frames.Enqueue(frame);
+            if (hold(frames) && Interlocked.Exchange(ref _holding, 1) == 0)
+            {
+                _held.TrySetResult();
+                await _release.Task;
+            }
+            // A turn of a UI thread is not free: frames queued while a batch is posted leave in the next one.
+            await Task.Yield();
+        }
+    }
 
     private static string? ErrorCode(string json)
     {
