@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="MSTest" />
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting"/>
+    <None Include="Fixtures\window-icon.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

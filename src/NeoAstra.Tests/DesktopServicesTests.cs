@@ -124,6 +124,48 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowIconHasTheSizesOfTheScaleOfItsDisplay()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        // An .ico file whose first picture is 16 pixels: the window used to get that picture for its big icon too, which
+        // the taskbar and Alt+Tab enlarged.
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "window-icon.ico");
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                SetThreadDpiAwarenessContext(-4);
+                return NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra window icon test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                {
+                    var service = new NeoWindowPolishService();
+                    await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 });
+                    var hwnd = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                    var dpi = GetDpiForWindow(hwnd);
+                    Assert.AreEqual(NeoDesktopStatus.Success, await service.SetIconAsync(window, path));
+                    Assert.AreEqual(GetSystemMetricsForDpi(11, dpi), IconSize(hwnd, 1), $"big icon at {dpi} DPI");
+                    Assert.AreEqual(GetSystemMetricsForDpi(49, dpi), IconSize(hwnd, 0), $"small icon at {dpi} DPI");
+
+                    // The window moves to a display of another scale: its icons are loaded again at the sizes of that scale.
+                    var other = dpi == 192 ? 144u : 192u;
+                    Assert.IsTrue(GetWindowRect(hwnd, out var suggested));
+                    SendMessage(hwnd, 0x02E0, (nuint)(other | (other << 16)), ref suggested);
+                    await WaitUntilAsync(() => IconSize(hwnd, 1) == GetSystemMetricsForDpi(11, other) && IconSize(hwnd, 0) == GetSystemMetricsForDpi(49, other));
+
+                    // The service takes back the icons it gave when it is disposed.
+                    var big = SendMessage(hwnd, 0x007F, 1, 0);
+                    var small = SendMessage(hwnd, 0x007F, 0, 0);
+                    await service.DisposeAsync();
+                    Assert.AreNotEqual(big, SendMessage(hwnd, 0x007F, 1, 0));
+                    Assert.AreNotEqual(small, SendMessage(hwnd, 0x007F, 0, 0));
+                    application.Shutdown(0);
+                });
+            });
+        }
+        catch (NeoAstraNativeLibraryException) { }
+    }
+
+    [TestMethod]
     public async Task SystemGraphSelectsNativeInboundAndOutboundDragIntegration()
     {
         var root = CreateTemporaryDirectory();
@@ -1441,7 +1483,49 @@ public sealed class DesktopServicesTests
     private static extern bool EnumChildWindows(nint parent, EnumWindow callback, nint parameter);
 
     private delegate bool EnumWindow(nint window, nint parameter);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessage(nint window, uint message, nuint wide, ref NativeRect value);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint window, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(nint window);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetIconInfo(nint icon, out NativeIconInfo info);
+
+    [DllImport("gdi32.dll", EntryPoint = "GetObjectW")]
+    private static extern int GetObject(nint value, int size, out NativeBitmap bitmap);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeleteObject(nint value);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeIconInfo { public int IsIcon; public uint HotspotX, HotspotY; public nint Mask, Color; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeBitmap { public int Type, Width, Height, WidthBytes; public ushort Planes, BitsPerPixel; public nint Bits; }
 #pragma warning restore SYSLIB1054
+
+    /// <summary>The width in pixels of the big (1) or small (0) icon of a window; 0 when it has none.</summary>
+    private static int IconSize(nint window, nuint kind)
+    {
+        var icon = SendMessage(window, 0x007F, kind, 0);
+        if (icon == 0 || !GetIconInfo(icon, out var info)) return 0;
+        try { return GetObject(info.Color != 0 ? info.Color : info.Mask, Marshal.SizeOf<NativeBitmap>(), out var bitmap) != 0 ? bitmap.Width : 0; }
+        finally { if (info.Color != 0) DeleteObject(info.Color); if (info.Mask != 0) DeleteObject(info.Mask); }
+    }
     private static IReadOnlyList<JsonElement> EventFrames(ConcurrentQueue<string> frames)
         => frames.Select(ParseFrame).Where(static frame => frame.GetProperty("kind").GetString() == "event").ToArray();
     private static JsonElement ParseFrame(string json) => JsonDocument.Parse(json).RootElement.Clone();

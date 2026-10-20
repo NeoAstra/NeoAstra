@@ -42,7 +42,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
 
     /// <summary>Gets icon support.</summary>
     public NeoCapabilityInfo IconSupport { get; } = OperatingSystem.IsWindows()
-        ? new(NeoSupportLevel.Native, 1, 0, "Native Win32 window icons use copied application-controlled files.")
+        ? new(NeoSupportLevel.Native, 1, 0, "Native Win32 window icons use copied application-controlled .ico files at the sizes of the scale of the window's display.")
         : OperatingSystem.IsMacOS()
             ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa exposes an application-scoped icon rather than a per-window icon.")
             : OperatingSystem.IsLinux()
@@ -70,6 +70,19 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     public NeoCapabilityInfo TitleBarThemeSupport { get; } = OperatingSystem.IsWindows() ? new(NeoSupportLevel.Limited, 1, 0, "DWM immersive dark-mode title-bar intent on supported Windows versions.") : new(NeoSupportLevel.None, 1, 0, "No safe portable title-bar-only theme override is exposed on this target.");
 
     /// <summary>Sets a copied native window icon from an existing absolute .ico/.png path.</summary>
+    /// <param name="window">The window whose icon is set.</param>
+    /// <param name="path">The full path of an existing .ico or .png file.</param>
+    /// <param name="cancellationToken">Cancels the request before it reaches the UI thread.</param>
+    /// <returns>The status of the request: <see cref="NeoDesktopStatus.Denied"/> for a path that is not a full path of an existing .ico/.png file, <see cref="NeoDesktopStatus.Unsupported"/> for a format or platform without that semantic.</returns>
+    /// <remarks>
+    /// On Windows only .ico files are accepted. The window gets a big icon, for the taskbar and Alt+Tab, at the <c>SM_CXICON</c> size of the
+    /// scale of its display, and a small one, for its title bar, at the <c>SM_CXSMICON</c> size: each is the picture of the file that suits
+    /// that size best. Both are loaded again from the file when the window moves to a display of another scale, and destroyed when the window
+    /// closes or the service is disposed.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="window"/> or <paramref name="path"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="path"/> is empty or white space.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public ValueTask<NeoDesktopStatus> SetIconAsync(NeoWindow window, string path, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(window); ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -129,7 +142,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         var cleanups = new List<Task>(entries.Length);
         foreach (var pair in entries)
         {
-            pair.Key.Closed -= pair.Value.ClosedHandler;
+            pair.Key.Closed -= pair.Value.ClosedHandler; pair.Key.ScaleFactorChanged -= pair.Value.ScaleFactorChangedHandler;
             try
             {
                 if (pair.Key.Application.Dispatcher.CheckAccess()) ClearAndDestroyIcon(pair.Value);
@@ -156,19 +169,19 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         {
             if (!string.Equals(Path.GetExtension(path), ".ico", StringComparison.OrdinalIgnoreCase)) return NeoDesktopStatus.Unsupported;
             lock (_sync) if (!_windowsIcons.ContainsKey(window) && _windowsIcons.Count >= 128) return NeoDesktopStatus.LimitExceeded;
-            var icon = Native.LoadImage(0, path, 1, 0, 0, 0x0010); if (icon == 0) return NeoDesktopStatus.Failed;
             var handle = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
-            if (!Native.IsWindow(handle)) { _ = Native.DestroyIcon(icon); return NeoDesktopStatus.NotFound; }
-            _ = Native.SendMessage(handle, 0x0080, 0, icon); _ = Native.SendMessage(handle, 0x0080, 1, icon);
+            if (!Native.IsWindow(handle)) return NeoDesktopStatus.NotFound;
+            if (!LoadWindowsIcons(path, WindowDpi(window), out var big, out var small)) return NeoDesktopStatus.Failed;
+            _ = Native.SendMessage(handle, 0x0080, 1, big); _ = Native.SendMessage(handle, 0x0080, 0, small);
             lock (_sync)
             {
                 if (_windowsIcons.Remove(window, out var previous))
                 {
-                    window.Closed -= previous.ClosedHandler;
-                    if (previous.Icon != 0) _ = Native.DestroyIcon(previous.Icon);
+                    window.Closed -= previous.ClosedHandler; window.ScaleFactorChanged -= previous.ScaleFactorChangedHandler;
+                    DestroyIcons(previous);
                 }
-                EventHandler handler = (_, _) => ReleaseWindowIcon(window);
-                _windowsIcons[window] = new(handle, icon, handler); window.Closed += handler;
+                var entry = new WindowIconEntry(handle, path, (_, _) => ReleaseWindowIcon(window), (_, _) => ReloadWindowIcon(window)) { Big = big, Small = small };
+                _windowsIcons[window] = entry; window.Closed += entry.ClosedHandler; window.ScaleFactorChanged += entry.ScaleFactorChangedHandler;
             }
             return NeoDesktopStatus.Success;
         }
@@ -241,10 +254,42 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     {
         WindowIconEntry? entry;
         lock (_sync) if (!_windowsIcons.Remove(window, out entry) || entry is null) return;
-        window.Closed -= entry.ClosedHandler; ClearAndDestroyIcon(entry);
+        window.Closed -= entry.ClosedHandler; window.ScaleFactorChanged -= entry.ScaleFactorChangedHandler; ClearAndDestroyIcon(entry);
     }
-    private static void ClearAndDestroyIcon(WindowIconEntry entry) { if (Native.IsWindow(entry.WindowHandle)) { _ = Native.SendMessage(entry.WindowHandle, 0x0080, 0, 0); _ = Native.SendMessage(entry.WindowHandle, 0x0080, 1, 0); } if (entry.Icon != 0) _ = Native.DestroyIcon(entry.Icon); }
-    private sealed record WindowIconEntry(nint WindowHandle, nint Icon, EventHandler ClosedHandler);
+    // Runs on the UI thread, which alone gives, replaces, and destroys the icons of an entry.
+    private void ReloadWindowIcon(NeoWindow window)
+    {
+        WindowIconEntry? entry;
+        lock (_sync) if (!_windowsIcons.TryGetValue(window, out entry)) return;
+        // When the file cannot be loaded again, the icons of the previous scale stay.
+        if (!Native.IsWindow(entry.WindowHandle) || !LoadWindowsIcons(entry.Path, WindowDpi(window), out var big, out var small)) return;
+        _ = Native.SendMessage(entry.WindowHandle, 0x0080, 1, big); _ = Native.SendMessage(entry.WindowHandle, 0x0080, 0, small);
+        DestroyIcons(entry); entry.Big = big; entry.Small = small;
+    }
+    // The system draws a big icon in the taskbar and Alt+Tab and a small one in the title bar, at sizes that follow the scale of
+    // the display. An .ico loaded without a size gives its first picture, often 16 pixels, which the taskbar enlarges.
+    private static bool LoadWindowsIcons(string path, uint dpi, out nint big, out nint small)
+    {
+        var bigSize = Native.GetSystemMetricsForDpi(11, dpi); if (bigSize <= 0) bigSize = (int)(32 * dpi / 96); // SM_CXICON
+        var smallSize = Native.GetSystemMetricsForDpi(49, dpi); if (smallSize <= 0) smallSize = (int)(16 * dpi / 96); // SM_CXSMICON
+        big = Native.LoadImage(0, path, 1, bigSize, bigSize, 0x0010); small = Native.LoadImage(0, path, 1, smallSize, smallSize, 0x0010);
+        if (big != 0 && small != 0) return true;
+        if (big != 0) _ = Native.DestroyIcon(big); if (small != 0) _ = Native.DestroyIcon(small);
+        big = small = 0; return false;
+    }
+    // The scale of a window is the one of its display in a process aware of it, and 1 otherwise, as GetDpiForWindow tells.
+    private static uint WindowDpi(NeoWindow window) { var dpi = Math.Round(window.ScaleFactor * 96); return dpi is >= 48 and <= 96 * 8 ? (uint)dpi : 96u; }
+    private static void DestroyIcons(WindowIconEntry entry) { if (entry.Big != 0) _ = Native.DestroyIcon(entry.Big); if (entry.Small != 0) _ = Native.DestroyIcon(entry.Small); entry.Big = entry.Small = 0; }
+    private static void ClearAndDestroyIcon(WindowIconEntry entry) { if (Native.IsWindow(entry.WindowHandle)) { _ = Native.SendMessage(entry.WindowHandle, 0x0080, 0, 0); _ = Native.SendMessage(entry.WindowHandle, 0x0080, 1, 0); } DestroyIcons(entry); }
+    private sealed class WindowIconEntry(nint windowHandle, string path, EventHandler closedHandler, EventHandler<NeoWindowScaleFactorChangedEventArgs> scaleFactorChangedHandler)
+    {
+        internal nint WindowHandle { get; } = windowHandle;
+        internal string Path { get; } = path;
+        internal EventHandler ClosedHandler { get; } = closedHandler;
+        internal EventHandler<NeoWindowScaleFactorChangedEventArgs> ScaleFactorChangedHandler { get; } = scaleFactorChangedHandler;
+        internal nint Big { get; set; }
+        internal nint Small { get; set; }
+    }
     [StructLayout(LayoutKind.Sequential)] private struct FlashWindowInfo { internal uint Size; internal nint Window; internal uint Flags; internal uint Count; internal uint Timeout; }
     private static unsafe partial class Native
     {
@@ -254,6 +299,7 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool FlashWindowEx(ref FlashWindowInfo info);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool EnableWindow(nint window, [MarshalAs(UnmanagedType.Bool)] bool enabled);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool IsWindow(nint window);
+        [LibraryImport("user32.dll")] internal static partial int GetSystemMetricsForDpi(int index, uint dpi);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool SetWindowDisplayAffinity(nint window, uint affinity);
         [LibraryImport("dwmapi.dll")] internal static partial int DwmSetWindowAttribute(nint window, uint attribute, ref int value, int size);
         [LibraryImport("ole32.dll")] internal static partial int CoCreateInstance(ref Guid clsid, nint outer, uint context, ref Guid iid, nint* value);
