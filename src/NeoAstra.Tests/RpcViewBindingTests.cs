@@ -106,6 +106,10 @@ public sealed class RpcViewBindingTests
     {
         var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
         typeof(global::NeoAstra.NeoAstra).GetField("_viewLabel", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(view, viewLabel);
+        // The limits a view takes from its options, which an RPC session applies to the frames it sends.
+        var options = new NeoAstraOptions();
+        typeof(global::NeoAstra.NeoAstra).GetField("<TransportLimits>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(view, (options.MaximumMessageSize, options.Transport.MaximumJsonDepth));
         return view;
     }
 
