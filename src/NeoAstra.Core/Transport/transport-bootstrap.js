@@ -62,6 +62,13 @@
     postEnvelope = value => adapter.postMessage(value);
   }
 
+  // A document that the engine keeps in its back-forward cache is hidden, not unloaded, once the next document has
+  // replaced it: the host ended its session then without a word to it, since a frame would reach the new document.
+  // Its client learns it here, and does not wait on calls that nobody answers if the document is shown again.
+  globalThis.addEventListener("pagehide", event => {
+    if (event.persisted) receiveHandler?.({ neoastra: 1, kind: "close", reason: "navigation" });
+  });
+
   const transport = Object.freeze({
     metadata,
     send(frame) {

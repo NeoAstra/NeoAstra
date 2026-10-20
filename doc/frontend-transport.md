@@ -61,7 +61,9 @@ A connection closed by the host reports why through `closeReason`, set before `c
 through one `connection_closed` information diagnostic. `client_close` follows the document's own
 `close()`. `view_disposed` and `application_shutdown` end a document that is going away; a document
 that a navigation replaced or whose renderer is lost is gone before anything can reach it, and is told
-nothing (the host no longer sends `navigation` or `renderer_lost`). `rpc_session_closed` is
+nothing (the host no longer sends `navigation` or `renderer_lost`). A replaced document that the
+engine keeps in its back-forward cache can be shown again, though: its bootstrap reports `navigation`
+to it when the document is hidden, so its calls fail at once instead of waiting. `rpc_session_closed` is
 different: the host closed the RPC session of a document that keeps running (see
 [RPC and bindings](rpc-and-bindings.md)). A close without a valid reason token reports `unspecified`.
 A document handshakes once, so `connect()` then rejects with `connection_closed` and every RPC call

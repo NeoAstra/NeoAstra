@@ -83,6 +83,21 @@ test("bootstrap reports envelope byte-limit failures with a stable code", () => 
     error => error.code === "payload_too_large");
 });
 
+test("bootstrap closes the connection of a document kept in the back-forward cache", () => {
+  for (const [backend, platform] of [["webview2", "windows"], ["wkwebview", "macos"], ["webkitgtk", "linux"]]) {
+    const fixture = runBackend(backend, platform);
+    const received = [];
+    fixture.transport.setReceiveHandler(value => received.push(value));
+    // A document unloaded for good is not told anything: it is gone.
+    fixture.listeners.get("pagehide")({ persisted: false });
+    assert.deepEqual(received, []);
+    // A cached one was replaced, and the host ended its session without a frame that would reach the new document.
+    fixture.listeners.get("pagehide")({ persisted: true });
+    // The frame is an object of the bootstrap realm.
+    assert.deepEqual(JSON.parse(JSON.stringify(received)), [{ neoastra: 1, kind: "close", reason: "navigation" }]);
+  }
+});
+
 test("bootstrap source is compatible with restrictive script CSP", () => {
   assert.doesNotMatch(template, /\beval\s*\(|\bnew\s+Function\b|import\s*\(/);
   assert.doesNotMatch(template, /https?:\/\//);
