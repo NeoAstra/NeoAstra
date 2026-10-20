@@ -37,7 +37,11 @@ internal sealed class NeoTransportCoordinator
     private readonly string _backend;
     private PendingHello? _pendingHello;
     private ActiveSession? _active;
+    // Whether the native library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED; without it, the replacement of a document
+    // is inferred from the hello of another document during a navigation, or from the successful end of the navigation.
+    private readonly bool _reportsCommit;
     private bool _navigationPending;
+    private bool _replacementSeen;
     private bool _revokedUntilNavigation;
     private bool _closed;
     private int _handshakeAttempts;
@@ -72,6 +76,7 @@ internal sealed class NeoTransportCoordinator
         _sessionChanged = sessionChanged;
         HostViewBinding = RandomNumberGenerator.GetHexString(32).ToLowerInvariant();
         (_platform, _backend) = GetPlatformMetadata(runtimeInfo);
+        _reportsCommit = runtimeInfo.ReportsNavigationCommit;
     }
 
     // This host-generated value is injected into the isolated bootstrap and never exposed by the
@@ -99,34 +104,53 @@ internal sealed class NeoTransportCoordinator
             .Replace("__NEOASTRA_WHOLE_VIEW_TRUST__", _viewOptions.BridgePolicy == NeoBridgePolicy.TrustEntireView ? "true" : "false", StringComparison.Ordinal);
     }
 
+    // A navigation that started may never replace the document: a download, an answer without content, Stop(), or a
+    // newer navigation. The document keeps running and keeps its session until a navigation commits a new document.
     internal void NavigationStarted()
     {
         if (_closed) return;
-        CloseActive("navigation", sendClose: true);
+        // A hello held for the navigation this one supersedes cannot bind to it.
         if (_pendingHello is { } pending) RememberClosedRendererDocumentId(pending.RendererDocumentId);
-        _navigationPending = true;
-        _revokedUntilNavigation = false;
         _pendingHello = null;
+        _navigationPending = true;
+        _replacementSeen = false;
         _handshakeAttempts = 0;
         _navigationGeneration++;
+    }
+
+    // The navigation committed a new document: the old one is gone. Its session closes without a close frame, which
+    // would reach the new document, and the new document handshakes at once, without waiting for its load to finish.
+    internal void NavigationCommitted()
+    {
+        if (_closed) return;
+        ReplaceDocument();
+        // The attempts of the old document since the navigation started do not count against the new one.
+        _handshakeAttempts = 0;
     }
 
     internal void NavigationCompleted(bool succeeded)
     {
         if (_closed) return;
+        var started = _navigationPending;
         _navigationPending = false;
-        if (!succeeded)
+        // A native library that does not report the commit: a navigation that loaded a document replaced the old one,
+        // unless the hello of the new document already told it.
+        if (!_reportsCommit && started && succeeded && !_replacementSeen) ReplaceDocument();
+        _replacementSeen = false;
+        // The document that sent a held hello is the one that runs now, whether the navigation committed it or failed
+        // before replacing it.
+        if (_pendingHello is { } held)
         {
-            if (_pendingHello is { } failed) RememberClosedRendererDocumentId(failed.RendererDocumentId);
             _pendingHello = null;
-            return;
+            AcceptHello(held);
         }
+    }
 
-        if (_pendingHello is { } pending)
-        {
-            _pendingHello = null;
-            AcceptHello(pending);
-        }
+    private void ReplaceDocument()
+    {
+        CloseActive("navigation", sendClose: false);
+        _replacementSeen = true;
+        _revokedUntilNavigation = false;
     }
 
     internal NeoTransportReceiveResult Receive(string json)
@@ -190,8 +214,7 @@ internal sealed class NeoTransportCoordinator
                 AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "An application frame was rejected before transport handshake completion.");
                 return new(NeoTransportReceiveKind.Consumed);
             }
-            if (_active.NavigationGeneration != _navigationGeneration ||
-                !string.Equals(_active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal))
+            if (!string.Equals(_active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal))
             {
                 AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A frame for an inactive document session was ignored.");
                 return new(NeoTransportReceiveKind.Consumed);
@@ -241,8 +264,8 @@ internal sealed class NeoTransportCoordinator
 
     // Revokes the active session on the host's initiative, for example when the RPC session bound to it
     // closed. The document is told through a close frame so its client fails fast instead of waiting on a
-    // host that no longer answers. Nothing in the current navigation may handshake again: only a new
-    // navigation, which goes through the normal handshake, establishes a replacement session.
+    // host that no longer answers. Nothing may handshake again until a navigation replaces the document: only
+    // the new document, which goes through the normal handshake, establishes a replacement session.
     internal bool CloseSession(string documentSessionId, string reason)
     {
         ArgumentNullException.ThrowIfNull(documentSessionId);
@@ -270,6 +293,7 @@ internal sealed class NeoTransportCoordinator
         if (_pendingHello is { } pending) RememberClosedRendererDocumentId(pending.RendererDocumentId);
         _pendingHello = null;
         _navigationPending = false;
+        _replacementSeen = false;
         _revokedUntilNavigation = false;
         _handshakeAttempts = 0;
         _navigationGeneration++;
@@ -313,18 +337,28 @@ internal sealed class NeoTransportCoordinator
             if (_pendingHello?.RendererDocumentId == rendererDocumentId) _pendingHello = null;
             return;
         }
-        if (_revokedUntilNavigation)
+        // Without a reported commit, the hello of another document while a navigation is under way is the sign that the
+        // navigation replaced the document. With it, a hello before the commit comes from the document that still runs.
+        var inferredReplacement = !_reportsCommit && _navigationPending;
+        if (_revokedUntilNavigation && !inferredReplacement)
         {
-            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "connection_closed", "A hello was rejected because the host closed this navigation's document session.");
+            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "connection_closed", "A hello was rejected because the host closed this document's session.");
             SendRejected(rendererDocumentId, "connection_closed");
             RememberClosedRendererDocumentId(rendererDocumentId);
             return;
         }
         if (_active is { } active)
         {
-            if (string.Equals(active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal)) SendHelloAck(active);
-            else AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A duplicate hello for an inactive document was ignored.");
-            return;
+            if (string.Equals(active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal))
+            {
+                SendHelloAck(active);
+                return;
+            }
+            if (!inferredReplacement)
+            {
+                AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A duplicate hello for an inactive document was ignored.");
+                return;
+            }
         }
         if (!TryParseHello(rendererDocumentId, frame, out var hello, out var errorCode))
         {
@@ -333,8 +367,10 @@ internal sealed class NeoTransportCoordinator
             RememberClosedRendererDocumentId(rendererDocumentId);
             return;
         }
-        if (_navigationPending)
+        if (inferredReplacement)
         {
+            if (_active is not null || _revokedUntilNavigation) ReplaceDocument();
+            // Which document sent it is known only once the navigation ends.
             _pendingHello = hello;
             ScheduleHandshakeTimeout(_navigationGeneration);
             return;
@@ -375,7 +411,7 @@ internal sealed class NeoTransportCoordinator
     private void AcceptHello(PendingHello hello)
     {
         if (_closed || hello.NavigationGeneration != _navigationGeneration || _closedRendererDocumentIdSet.Contains(hello.RendererDocumentId)) return;
-        _active = new ActiveSession(hello.RendererDocumentId, hello.NavigationGeneration, _idFactory(), hello.ProtocolMinor, hello.Features);
+        _active = new ActiveSession(hello.RendererDocumentId, _idFactory(), hello.ProtocolMinor, hello.Features);
         _sessionChanged?.Invoke(new NeoTransportSessionSnapshot(_active.DocumentSessionId, _active.ProtocolMinor, _active.Features, _viewOptions.BridgePolicy == NeoBridgePolicy.TrustEntireView));
         SendHelloAck(_active);
     }
@@ -503,7 +539,7 @@ internal sealed class NeoTransportCoordinator
     }
 
     private readonly record struct PendingHello(string RendererDocumentId, long NavigationGeneration, int ProtocolMinor, string[] Features);
-    private sealed record ActiveSession(string RendererDocumentId, long NavigationGeneration, string DocumentSessionId, int ProtocolMinor, string[] Features);
+    private sealed record ActiveSession(string RendererDocumentId, string DocumentSessionId, int ProtocolMinor, string[] Features);
 }
 
 internal readonly record struct NeoTransportSessionSnapshot(string DocumentSessionId, int ProtocolMinor, IReadOnlyList<string> Features, bool WholeViewTrust);

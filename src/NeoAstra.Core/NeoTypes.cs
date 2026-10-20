@@ -484,6 +484,12 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
     /// a view keeps its history navigation whatever its features say.
     /// </remarks>
     public bool ControlsHistoryNavigation => (BuildFeatures & HistoryNavigation) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT of native/include/neoastra.h.
+    private const ulong NavigationCommit = 1UL << 2;
+
+    // Whether the native library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a navigation replaces the document.
+    internal bool ReportsNavigationCommit => (BuildFeatures & NavigationCommit) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

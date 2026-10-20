@@ -764,6 +764,9 @@ public sealed class NeoAstra : IAsyncDisposable
                 _source = uri ?? _source;
                 _isLoading = true;
                 break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_COMMITTED:
+                _transport?.NavigationCommitted();
+                break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_COMPLETED:
                 _source = uri ?? _source;
                 _isLoading = false;

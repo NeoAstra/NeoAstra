@@ -160,9 +160,13 @@ typedef uint64_t neoastra_data_kind_t;
 /* Bits of neoastra_runtime_info_t.build_features. EXTERNAL_OPEN_CHECK says that this library hands only a web address to the
    system for an OPEN_EXTERNAL decision and raises NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED; a library without it opens any address
    and reports nothing. HISTORY_NAVIGATION says that this library reports the kind of a navigation request and has
-   NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION; a library without it reports no kind and refuses that setting as an invalid argument. */
+   NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION; a library without it reports no kind and refuses that setting as an invalid argument.
+   NAVIGATION_COMMIT says that this library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a main-frame navigation replaces the
+   document, between NEOASTRA_EVENT_NAVIGATION_STARTED and the end of the navigation, and not for a navigation that leaves the document
+   in place (a download, an answer without content, a stopped or superseded navigation, or a same-document navigation). */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
+#define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)

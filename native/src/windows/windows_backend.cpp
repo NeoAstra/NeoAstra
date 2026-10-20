@@ -83,6 +83,7 @@ struct windows_view {
     std::string refused_navigation;
     ULONGLONG refused_navigation_time{};
     EventRegistrationToken navigation_completed{};
+    EventRegistrationToken content_loading{};
     EventRegistrationToken source_changed{};
     EventRegistrationToken title_changed{};
     EventRegistrationToken history_changed{};
@@ -566,6 +567,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_NavigationStarting(state->navigation_starting);
     state->core->remove_FrameNavigationStarting(state->frame_navigation_starting);
     state->core->remove_NavigationCompleted(state->navigation_completed);
+    state->core->remove_ContentLoading(state->content_loading);
     state->core->remove_SourceChanged(state->source_changed);
     state->core->remove_DocumentTitleChanged(state->title_changed);
     state->core->remove_HistoryChanged(state->history_changed);
@@ -940,6 +942,17 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                           static_cast<int64_t>(status));
             return S_OK;
         }).Get(), &state->navigation_completed);
+    if (FAILED(result)) return result;
+
+    // ContentLoading is the commit of a new main-frame document, error pages included; WebView2 raises it for no same-document
+    // navigation, and for no navigation that ends without a document, such as a download or an answer without content.
+    result = state->core->add_ContentLoading(
+        Callback<ICoreWebView2ContentLoadingEventHandler>([view](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs*) -> HRESULT {
+            neo_retain_guard owner(view);
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &view->source);
+            return S_OK;
+        }).Get(), &state->content_loading);
     if (FAILED(result)) return result;
 
     result = state->core->add_SourceChanged(
