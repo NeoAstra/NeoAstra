@@ -149,6 +149,17 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public void AndroidPush_CreatedWithADispatcherReadsItsEvents()
+    {
+        // Without the plugin only CreateSystem binds the dispatcher: on Android it starts the loop that reports taps and tokens.
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra.Push"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var push = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Push.cs"));
+        StringAssert.Contains(push, "if (OperatingSystem.IsAndroid()) return AndroidPush.Create(dispatcher);");
+        Assert.IsFalse(AndroidPush.Create(null).IsBound);
+    }
+
+    [TestMethod]
     public void AndroidPush_ShowsADataMessageAsTheManifestNamesItsKeys()
     {
         // Firebase shows no data message: the service shows it from the keys that the manifest names, a string resource for a key.

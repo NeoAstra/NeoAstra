@@ -38,6 +38,16 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     public event EventHandler<NeoPushMessage>? MessageReceived;
     public event EventHandler<NeoPushMessage>? MessageOpened;
 
+    // An application without the plugin binds the dispatcher here: the events of Java are read from then on.
+    internal static AndroidPush Create(NeoDispatcher? dispatcher)
+    {
+        var push = new AndroidPush();
+        if (dispatcher is not null) ((INeoPushDispatcherBinding)push).Bind(dispatcher);
+        return push;
+    }
+
+    internal bool IsBound => _events is not null;
+
     void INeoPushDispatcherBinding.Bind(NeoDispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
