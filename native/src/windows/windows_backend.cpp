@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -152,7 +153,9 @@ std::string narrow(const wchar_t* value) {
 void append_protocol_number(std::wstring& output, double value);
 DWORD drag_started_in_view_browser(const neoastra_view_t* view) noexcept;
 const std::string* own_page_drag(const neoastra_view_t* view) noexcept;
+bool app_page_drag(IDataObject* data, std::string& value) noexcept;
 bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept;
+bool drop_app_page_drag(neoastra_view_t* view, POINTL point, DWORD keys, const std::string& data) noexcept;
 std::string page_drag_data(IDataObject* data, DWORD allowed) noexcept;
 bool forward_page_drag(neoastra_view_t* view, const wchar_t* type, POINTL point, DWORD keys, const std::string& data, std::shared_ptr<bool> done = {}) noexcept;
 
@@ -164,9 +167,10 @@ DWORD page_drop_effect(DWORD allowed) noexcept {
 }
 
 // Replaces WebView2's OLE drop targets on the windows of a view. External file, text, and URL drops go to the host.
-// The page gets, through the DevTools protocol, the drags that started in it (which NeoAstra runs, see
-// begin_page_drag) and the external drags with none of those formats (custom MIME types): WebView2's own target,
-// which lives in its browser process, is withdrawn while external drops are not allowed, in-page drops included.
+// The page gets, through the DevTools protocol, the drags that started in it or in another view of the application
+// (which NeoAstra runs, see begin_page_drag) and the external drags with none of those formats (custom MIME types):
+// WebView2's own target, which lives in its browser process, is withdrawn while external drops are not allowed,
+// in-page drops included.
 class view_drop_target final : public IDropTarget {
 public:
     view_drop_target(neoastra_view_t* view, HWND window) : view_(view), window_(window) { }
@@ -198,11 +202,22 @@ public:
         valid_ = data && (SUCCEEDED(data->QueryGetData(&files)) || SUCCEEDED(data->QueryGetData(&text)) || SUCCEEDED(data->QueryGetData(&url)));
         page_ = false;
         own_ = false;
+        app_ = false;
         if (const auto* own = own_page_drag(view)) {
             // A drag of this page, run by NeoAstra: the page has its original data.
             valid_ = false;
             own_ = true;
             page_data_ = *own;
+            page_ = forward_page_drag(view, L"dragEnter", point, keys, page_data_);
+            last_point_ = point;
+            *effect = page_ ? page_drop_effect(*effect) : DROPEFFECT_NONE;
+            return S_OK;
+        }
+        if (data && app_page_drag(data, page_data_)) {
+            // A drag of the page of another view of the application, run by NeoAstra: this page has its original data,
+            // HTML included, rather than its text and URL taken as an external drop of the host.
+            valid_ = false;
+            app_ = true;
             page_ = forward_page_drag(view, L"dragEnter", point, keys, page_data_);
             last_point_ = point;
             *effect = page_ ? page_drop_effect(*effect) : DROPEFFECT_NONE;
@@ -252,6 +267,7 @@ public:
         if (page_ && !own_) (void)forward_page_drag(view, L"dragCancel", last_point_, 0, page_data_);
         page_ = false;
         own_ = false;
+        app_ = false;
         page_data_.clear();
         valid_ = false;
         return S_OK;
@@ -264,8 +280,11 @@ public:
         if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) { *effect = DROPEFFECT_NONE; return S_OK; }
         if (page_) {
             page_ = false;
-            const auto forwarded = own_ ? drop_page_drag(view, point, keys) : forward_page_drag(view, L"drop", point, keys, page_data_);
+            const auto forwarded = own_ ? drop_page_drag(view, point, keys)
+                                 : app_ ? drop_app_page_drag(view, point, keys, page_data_)
+                                        : forward_page_drag(view, L"drop", point, keys, page_data_);
             own_ = false;
+            app_ = false;
             page_data_.clear();
             *effect = forwarded ? page_drop_effect(*effect) : DROPEFFECT_NONE;
             return S_OK;
@@ -350,6 +369,7 @@ private:
     bool valid_{};
     bool page_{};
     bool own_{};
+    bool app_{};
     std::string page_data_;
     POINTL last_point_{};
 };
@@ -2780,6 +2800,39 @@ const std::string* own_page_drag(const neoastra_view_t* view) noexcept {
     return state && state->page_drag_active ? &state->page_drag_data : nullptr;
 }
 
+// The page drag that NeoAstra runs in this process, while its loop runs (see run_page_drag). Its data object carries
+// a nonce of the drag in a format of its own, by which a view of another window of the application, on any thread,
+// recognizes the drag and gives its page the original data. The data stays here: what another process could put in
+// that format cannot pass for a page drag, as it does not know the nonce of the drag that runs.
+constexpr wchar_t app_page_drag_format[] = L"NeoAstra Page Drag";
+struct app_page_drag_record { std::mutex lock; std::string nonce; std::string data; };
+app_page_drag_record& running_app_page_drag() noexcept {
+    static app_page_drag_record value;
+    return value;
+}
+
+bool app_page_drag(IDataObject* data, std::string& value) noexcept {
+    try {
+        std::string nonce;
+        if (!read_global_text(data, static_cast<CLIPFORMAT>(RegisterClipboardFormatW(app_page_drag_format)), nonce) || nonce.empty()) return false;
+        auto& running = running_app_page_drag();
+        std::lock_guard guard(running.lock);
+        if (running.nonce.empty() || running.nonce != nonce) return false;
+        value = running.data;
+        return true;
+    } catch (...) { return false; }
+}
+
+// Waits for the page to have its drop, for at most two seconds, so that the drag ends in its source after it.
+void wait_for_page_drop(const std::shared_ptr<bool>& done) noexcept {
+    const auto deadline = GetTickCount64() + 2000;
+    MSG message{};
+    while (!*done && GetTickCount64() < deadline) {
+        if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        else MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+}
+
 // The loop of the page drag waits here for the page to have its drop: once it returns, the drag ends in the page.
 bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept {
     auto* state = view ? static_cast<windows_view*>(view->platform) : nullptr;
@@ -2789,12 +2842,15 @@ bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept {
     state = static_cast<windows_view*>(view->platform);
     if (!state) return false;
     state->page_drag_dropped = true;
-    const auto deadline = GetTickCount64() + 2000;
-    MSG message{};
-    while (!*done && GetTickCount64() < deadline) {
-        if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
-        else MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-    }
+    wait_for_page_drop(done);
+    return true;
+}
+
+// A drag of another view dropped on this one: its loop ends it in its own page once this returns.
+bool drop_app_page_drag(neoastra_view_t* view, POINTL point, DWORD keys, const std::string& data) noexcept {
+    auto done = std::make_shared<bool>(false);
+    if (!forward_page_drag(view, L"drop", point, keys, data, done)) return false;
+    wait_for_page_drop(done);
     return true;
 }
 
@@ -2821,11 +2877,19 @@ void run_page_drag(neoastra_view_t* view) noexcept {
         source.Attach(new (std::nothrow) page_drop_source());
         POINT cursor{};
         if (allowed && object && source && (GetAsyncKeyState(button) & 0x8000)) {
+            // The nonce by which the other views of the application recognize this drag (see app_page_drag).
+            GUID guid{};
+            wchar_t nonce[40]{};
+            const bool marked = SUCCEEDED(CoCreateGuid(&guid)) && StringFromGUID2(guid, nonce, 40) > 0 &&
+                                set_global_data(object.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(app_page_drag_format)), nonce, (wcslen(nonce) + 1) * sizeof(wchar_t));
+            auto& running = running_app_page_drag();
+            if (marked) { std::lock_guard guard(running.lock); running.nonce = narrow(nonce); running.data = data; }
             state->page_drag_data = data;
             state->page_drag_active = true;
             state->page_drag_dropped = false;
             DWORD effect{};
             (void)DoDragDrop(object.Get(), source.Get(), allowed, &effect);
+            if (marked) { std::lock_guard guard(running.lock); running.nonce.clear(); running.data.clear(); }
             state = static_cast<windows_view*>(view->platform); // The view may have been closed during the loop.
             const bool dropped = state && state->page_drag_dropped;
             if (state) { state->page_drag_active = false; state->page_drag_data.clear(); }

@@ -14,6 +14,7 @@ public sealed class WindowsDropTargetTests
 {
     private const int DropEffectCopy = 1;
     private const int DropEffectMove = 2;
+    private const short ClipboardFormatUnicodeText = 13;
     private const short ClipboardFormatHDrop = 15;
     private const string CustomType = "application/x-neoastra-test";
 
@@ -99,6 +100,25 @@ public sealed class WindowsDropTargetTests
                         CollectionAssert.AreEqual(new[] { Path.GetFullPath(file) }, drop.Values);
                         await Task.Delay(200, timeout.Token);
                         Assert.AreEqual("1", await view.EvaluateScriptAsync("globalThis.events.filter(value => value.startsWith('drop:')).length", timeout.Token), "An external file drop stays with the host.");
+
+                        // The mark of a page drag of the application, without the nonce of a drag that runs: anyone can
+                        // write that format, so it must not turn an external text drop into a drop of the page.
+                        stage = "external text with the format of a page drag";
+                        var forged = new TestDataObject();
+                        forged.Add("NeoAstra Page Drag", Encoding.Unicode.GetBytes("{6B29FC40-CA47-1067-B31D-00DD010662DA}\0"));
+                        forged.Add(ClipboardFormatUnicodeText, Encoding.Unicode.GetBytes("forged\0"));
+                        effect = DropEffectCopy | DropEffectMove;
+                        Assert.AreEqual(0, dropTarget.DragEnter(forged, 0, point, ref effect));
+                        Assert.AreEqual(DropEffectCopy, effect);
+                        effect = DropEffectCopy | DropEffectMove;
+                        Assert.AreEqual(0, dropTarget.Drop(forged, 0, point, ref effect));
+                        Assert.AreEqual(DropEffectCopy, effect);
+                        await WaitUntilAsync(() => !hostDrops.IsEmpty, timeout.Token);
+                        Assert.IsTrue(hostDrops.TryDequeue(out drop));
+                        Assert.AreEqual(0, drop.Kind);
+                        CollectionAssert.AreEqual(new[] { "forged" }, drop.Values);
+                        await Task.Delay(200, timeout.Token);
+                        Assert.AreEqual("1", await view.EvaluateScriptAsync("globalThis.events.filter(value => value.startsWith('drop:')).length", timeout.Token), "An external text drop stays with the host.");
                         Marshal.ReleaseComObject(dropTarget);
                     }
                     finally { application.ForceShutdown(); }
@@ -198,7 +218,8 @@ public sealed class WindowsDropTargetTests
                             await Task.Delay(20, timeout.Token);
                         Assert.AreEqual("true", await view.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token),
                             "The page saw no drop: " + await view.EvaluateScriptAsync("globalThis.trace.join(' ') + ' lastOver ' + globalThis.lastOver + '(' + globalThis.lastOverAt + ') ratio ' + globalThis.ratio + ' target ' + JSON.stringify(document.getElementById('target').getBoundingClientRect())", timeout.Token) + " host drops: " + hostDrops.Count + " log: " + string.Join(" | ", logged.Select(static value => value.Message)));
-                        Assert.AreEqual("\"drop:payload|tab-7\"", await view.EvaluateScriptAsync("globalThis.events.find(value => value.startsWith('drop:'))", timeout.Token));
+                        Assert.AreEqual("true", await view.EvaluateScriptAsync("globalThis.events.includes('drop:payload|tab-7|<b>Tab</b>')", timeout.Token),
+                            "The drop lacks data of the drag: " + await view.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token));
                         StringAssert.Contains(await view.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token), "enter:");
                         Assert.IsTrue(hostDrops.IsEmpty, "An in-page drag that carries text must not reach the host as an inbound drop.");
                     }
@@ -218,6 +239,120 @@ public sealed class WindowsDropTargetTests
         try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(50)); }
         catch (TimeoutException) { Assert.Fail($"The real drag test hung during {stage}."); }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested) { Assert.Fail($"The real drag test timed out during {stage}: the page saw no drop."); }
+        catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The Windows native runtime is not staged."); }
+        finally { try { Directory.Delete(userData, recursive: true); } catch { } }
+        if (inconclusive is not null) Assert.Inconclusive(inconclusive);
+    }
+
+    // A drag of a page dropped on the view of another window: that page gets the drop with the data of the drag, its text
+    // and HTML included, rather than its host an external text drop. Takes the real mouse, as the test above.
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task RealMouseDragOfADraggableElementReachesThePageOfAnotherWindow()
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("NEOASTRA_TEST_REAL_INPUT") != "1")
+        {
+            Assert.Inconclusive("Set NEOASTRA_TEST_REAL_INPUT=1 to let this test drive the mouse of a Windows desktop.");
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stage = "startup";
+        string? inconclusive = null;
+        var userData = Path.Combine(Path.GetTempPath(), "neoastra-real-drag-" + Guid.NewGuid().ToString("N"));
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                // Screen, client, and page coordinates all in device pixels.
+                SetThreadDpiAwarenessContext(-4);
+                NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra cross-window drag test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                {
+                    var pressed = false;
+                    GetCursorPos(out var original);
+                    try
+                    {
+                        var sourceWindow = application.CreateWindow(new NeoWindowOptions { Label = "source-window", Title = "Drag source", X = 20, Y = 80, Width = 800, Height = 400, StartupLocation = NeoWindowStartupLocation.Manual });
+                        var targetWindow = application.CreateWindow(new NeoWindowOptions { Label = "target-window", Title = "Drag target", X = 860, Y = 80, Width = 800, Height = 400, StartupLocation = NeoWindowStartupLocation.Manual });
+                        var sourceParent = sourceWindow.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                        var targetParent = targetWindow.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                        foreach (var window in new[] { sourceWindow, targetWindow }) window.Show();
+                        foreach (var parent in new[] { sourceParent, targetParent }) SetWindowPos(parent, -1, 0, 0, 0, 0, 0x0001 | 0x0002); // Topmost.
+                        SetForegroundWindow(sourceParent);
+                        stage = "browser creation";
+                        await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
+                        {
+                            UserDataRoot = userData,
+                            CustomSchemes = [NeoCustomScheme.Application("app", new DragPageProvider())],
+                        });
+                        await using var sourceView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(sourceWindow), new NeoAstraOptions { ViewLabel = "source-view" });
+                        await using var targetView = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(targetWindow), new NeoAstraOptions { ViewLabel = "target-view" });
+                        var hostDrops = new ConcurrentQueue<int>();
+                        sourceView.NativeDropReceived += (kind, _, _) => hostDrops.Enqueue(kind);
+                        targetView.NativeDropReceived += (kind, _, _) => hostDrops.Enqueue(kind);
+                        foreach (var view in new[] { sourceView, targetView })
+                        {
+                            await view.NavigateAsync(new Uri("app://neoastra/index.html"));
+                            await WaitAsync(view, "globalThis.ready === true", timeout.Token);
+                        }
+                        var source = await ScreenCenterAsync(sourceView, sourceParent, "source", timeout.Token);
+                        var target = await ScreenCenterAsync(targetView, targetParent, "target", timeout.Token);
+                        if (!IsWithin(sourceParent, source) || !IsWithin(targetParent, target))
+                        {
+                            inconclusive = $"Another window covers the test windows; the mouse was left alone (source {source.X},{source.Y}, target {target.X},{target.Y}).";
+                            return;
+                        }
+
+                        stage = "real mouse drag to another window";
+                        MoveMouse(source);
+                        await Task.Delay(100, timeout.Token);
+                        SendButton(0x0002);
+                        pressed = true;
+                        for (var step = 1; step <= 45; step++)
+                        {
+                            var next = step <= 40 ? new Point { X = source.X + (target.X - source.X) * step / 40, Y = source.Y + (target.Y - source.Y) * step / 40 } : target;
+                            MoveMouse(next);
+                            await Task.Delay(step <= 40 ? 15 : 30, timeout.Token);
+                            if (GetCursorPos(out var now) && (Math.Abs(now.X - next.X) > 2 || Math.Abs(now.Y - next.Y) > 2))
+                            {
+                                inconclusive = "The mouse was moved by someone else during the drag; the test let go.";
+                                return;
+                            }
+                        }
+                        SendButton(0x0004);
+                        pressed = false;
+                        for (var index = 0; index < 150 && await targetView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token) != "true"; index++)
+                            await Task.Delay(20, timeout.Token);
+                        Assert.AreEqual("true", await targetView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token),
+                            "The page of the other window saw no drop: " + await targetView.EvaluateScriptAsync("globalThis.trace.join(' ')", timeout.Token) + " source: " + await sourceView.EvaluateScriptAsync("globalThis.trace.join(' ')", timeout.Token) + " host drops: " + hostDrops.Count);
+                        // Compared in the page: the JSON of a script result escapes '<'.
+                        Assert.AreEqual("true", await targetView.EvaluateScriptAsync("globalThis.events.includes('drop:payload|tab-7|<b>Tab</b>')", timeout.Token),
+                            "The drop lacks data of the drag: " + await targetView.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token));
+                        StringAssert.Contains(await targetView.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token), "text/html");
+                        // The drag ends in its own page, which saw no drop of its own.
+                        for (var index = 0; index < 100 && await sourceView.EvaluateScriptAsync("globalThis.trace.some(value => value.startsWith('dragend'))", timeout.Token) != "true"; index++)
+                            await Task.Delay(20, timeout.Token);
+                        Assert.AreEqual("true", await sourceView.EvaluateScriptAsync("globalThis.trace.some(value => value.startsWith('dragend'))", timeout.Token), "The source page saw no dragend.");
+                        Assert.AreEqual("false", await sourceView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token));
+                        Assert.IsTrue(hostDrops.IsEmpty, "A drag of a page of the application must not reach the host as an inbound drop.");
+                    }
+                    finally
+                    {
+                        if (pressed) SendButton(0x0004);
+                        SetCursorPos(original.X, original.Y);
+                        application.ForceShutdown();
+                    }
+                });
+                completion.TrySetResult();
+            }
+            catch (Exception exception) { completion.TrySetException(exception); }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(50)); }
+        catch (TimeoutException) { Assert.Fail($"The cross-window drag test hung during {stage}."); }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested) { Assert.Fail($"The cross-window drag test timed out during {stage}."); }
         catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The Windows native runtime is not staged."); }
         finally { try { Directory.Delete(userData, recursive: true); } catch { } }
         if (inconclusive is not null) Assert.Inconclusive(inconclusive);
@@ -331,6 +466,7 @@ public sealed class WindowsDropTargetTests
             document.getElementById('source').addEventListener('dragstart', event => {
                 event.dataTransfer.setData('text/plain', 'payload');
                 event.dataTransfer.setData('application/x-neoastra-test', 'tab-7');
+                event.dataTransfer.setData('text/html', '<b>Tab</b>');
                 event.dataTransfer.effectAllowed = 'move';
             });
             const target = document.getElementById('target');
@@ -338,7 +474,8 @@ public sealed class WindowsDropTargetTests
             target.addEventListener('dragover', event => event.preventDefault());
             target.addEventListener('drop', event => {
                 event.preventDefault();
-                globalThis.events.push('drop:' + event.dataTransfer.getData('text/plain') + '|' + event.dataTransfer.getData('application/x-neoastra-test'));
+                const html = event.dataTransfer.getData('text/html');
+                globalThis.events.push('drop:' + event.dataTransfer.getData('text/plain') + '|' + event.dataTransfer.getData('application/x-neoastra-test') + (html ? '|' + html : ''));
             });
             globalThis.ready = true;
             </script>
