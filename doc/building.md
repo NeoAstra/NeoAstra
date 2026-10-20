@@ -70,7 +70,7 @@ Run the dependency-free benchmark harness with:
 dotnet run --project src/NeoAstra.Benchmarks -c Release -- --run --quick
 ```
 
-Omit `--quick` for the bounded default sample, or use `--iterations`, `--lifecycle-iterations`, `--timeout-seconds`, and `--idle-seconds` to tune it. Each `RESULT`/`SKIP` identifies the backend and platform. Results include browser-engine, native-backend, OS-scheduling, and machine effects; environment/view timing must not be interpreted as NeoAstra controlling engine startup, and memory/idle-CPU figures currently cover only the host process. Use same-machine, same-engine regression baselines rather than absolute comparisons across platforms.
+Omit `--quick` for the bounded default sample, or use `--iterations`, `--lifecycle-iterations`, `--timeout-seconds`, and `--idle-seconds` to tune it. Add `--rpc-only` to run only the RPC host measurements (small invoke latency and allocation, concurrent invokes, event and channel throughput) over in-memory sessions: no application, window or browser is created, and the throughput measurements send through a simulated UI thread whose turns cost about 20 microseconds each, as a view binding sends through the UI thread. Each `RESULT`/`SKIP` identifies the backend and platform. Results include browser-engine, native-backend, OS-scheduling, and machine effects; environment/view timing must not be interpreted as NeoAstra controlling engine startup, and memory/idle-CPU figures currently cover only the host process. Use same-machine, same-engine regression baselines rather than absolute comparisons across platforms.
 
 ## Native builds
 

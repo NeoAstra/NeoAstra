@@ -20,9 +20,23 @@ internal static class Program
         if (!BenchmarkOptions.TryParse(args, out var options))
         {
             Console.Error.WriteLine(
-                "Usage: dotnet run --project src/NeoAstra.Benchmarks -c Release -- --run [--quick] " +
+                "Usage: dotnet run --project src/NeoAstra.Benchmarks -c Release -- --run [--quick] [--rpc-only] " +
                 "[--iterations <1-10000>] [--lifecycle-iterations <1-100>] [--timeout-seconds <5-300>] [--idle-seconds <1-10>]");
             return 2;
+        }
+
+        if (options.RpcOnly)
+        {
+            try
+            {
+                return RunRpcOnlyAsync(options).GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine("FAIL benchmarks");
+                Console.Error.WriteLine(exception);
+                return 1;
+            }
         }
 
         try
@@ -41,6 +55,16 @@ internal static class Program
             Console.Error.WriteLine(exception);
             return 1;
         }
+    }
+
+    // The RPC host alone, over in-memory sessions: no application, window or browser is created.
+    private static async Task<int> RunRpcOnlyAsync(BenchmarkOptions options)
+    {
+        Console.WriteLine($"MODE rpc-only quick={options.Quick.ToString().ToLowerInvariant()} iterations={options.Iterations} timeout={options.Timeout.TotalSeconds:F0}s");
+        var reporter = new BenchmarkReporter("in-memory", $"{System.Runtime.InteropServices.RuntimeInformation.OSDescription}/{System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}");
+        await new RpcBenchmarks(options.Iterations, options.Timeout, reporter.Measurement).RunAsync();
+        Console.WriteLine("DONE benchmark run completed");
+        return 0;
     }
 
     private static async ValueTask RunAsync(NeoApplication application, BenchmarkOptions options)
@@ -106,7 +130,7 @@ internal static class Program
             {
                 await WarmUpViewAsync(environment, window, bridgeMode);
                 await MeasureDispatcherAsync();
-                await MeasureRpcDispatchAsync();
+                await new RpcBenchmarks(options.Iterations, options.Timeout, Reporter.Measurement).RunAsync();
                 await MeasureViewCreationAsync(environment, window);
 
                 await using var view = await environment.CreateWebViewAsync(
@@ -171,40 +195,6 @@ internal static class Program
                 "us/op",
                 options.Iterations,
                 "background managed thread -> native UI dispatch -> managed callback completion");
-        }
-
-        private async ValueTask MeasureRpcDispatchAsync()
-        {
-            var count = Math.Max(10, options.Iterations);
-            var builder = new NeoRpcBuilder(new NeoRpcOptions
-            {
-                MaximumRetainedRequestIds = count + 16,
-                MaximumConcurrentInvocations = 2,
-                MaximumConcurrentInvocationsPerSession = 1,
-                AuthorizationService = BenchmarkAuthorization.Instance,
-            });
-            builder.AddCommand<RpcEchoRequest, RpcEchoResponse>(
-                "benchmark.echo",
-                static (request, _, _) => ValueTask.FromResult(new RpcEchoResponse(request.Value)),
-                BenchmarkRpcJsonContext.Default.RpcEchoRequest,
-                BenchmarkRpcJsonContext.Default.RpcEchoResponse,
-                new NeoRpcCommandOptions { Permission = "benchmark:echo" });
-            await using var host = builder.Build();
-            var completed = 0;
-            await using var session = host.OpenSession(
-                new NeoRpcSessionIdentity("benchmark", "benchmark-document"),
-                (_, _) => { completed++; return ValueTask.CompletedTask; });
-
-            await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"warmup\",\"command\":\"benchmark.echo\",\"args\":{\"value\":1}}");
-            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-            var stopwatch = Stopwatch.StartNew();
-            for (var index = 0; index < count; index++)
-                await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"rpc-{index}\",\"command\":\"benchmark.echo\",\"args\":{{\"value\":{index}}}}}");
-            stopwatch.Stop();
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-            if (completed != count + 1) throw new InvalidOperationException("The RPC benchmark lost a terminal result.");
-            Reporter.Measurement("rpc small invoke round-trip", MicrosecondsPerOperation(stopwatch.Elapsed, count), "us/op", count, "JSON parse + source-generated metadata dispatch + serialization + in-memory send");
-            Reporter.Measurement("rpc small invoke allocation", allocated / (double)count, "B/op", count, "managed current-thread allocation; excludes browser and native transport");
         }
 
         private async ValueTask MeasureManagedNativeCallsAsync(
@@ -531,10 +521,12 @@ internal static class Program
         }
     }
 
-    private sealed class BenchmarkReporter(NeoRuntimeInfo runtime)
+    private sealed class BenchmarkReporter(string backend, string platform)
     {
-        private readonly string _backend = Quote(runtime.BackendName);
-        private readonly string _platform = Quote($"{runtime.OperatingSystem}/{runtime.Architecture}");
+        private readonly string _backend = Quote(backend);
+        private readonly string _platform = Quote(platform);
+
+        internal BenchmarkReporter(NeoRuntimeInfo runtime) : this(runtime.BackendName, $"{runtime.OperatingSystem}/{runtime.Architecture}") { }
 
         internal void Measurement(
             string category,
@@ -628,6 +620,7 @@ internal static class Program
 
     private sealed record BenchmarkOptions(
         bool Quick,
+        bool RpcOnly,
         int Iterations,
         int LifecycleIterations,
         TimeSpan Timeout,
@@ -636,6 +629,7 @@ internal static class Program
         internal static bool TryParse(string[] args, out BenchmarkOptions options)
         {
             var quick = false;
+            var rpcOnly = false;
             var sawRun = false;
             int? iterations = null;
             int? lifecycleIterations = null;
@@ -651,6 +645,9 @@ internal static class Program
                         break;
                     case "--quick" when !quick:
                         quick = true;
+                        break;
+                    case "--rpc-only" when !rpcOnly:
+                        rpcOnly = true;
                         break;
                     case "--iterations" when TryReadInt(args, ref index, 1, 10_000, out var parsedIterations):
                         iterations = parsedIterations;
@@ -672,6 +669,7 @@ internal static class Program
 
             options = new BenchmarkOptions(
                 quick,
+                rpcOnly,
                 iterations ?? (quick ? 20 : 100),
                 lifecycleIterations ?? (quick ? 3 : 10),
                 TimeSpan.FromSeconds(timeoutSeconds),
