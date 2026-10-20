@@ -301,10 +301,10 @@ internal sealed class NeoTransportCoordinator
 
     internal void ExpireHandshake(long generation)
     {
+        // A held hello waits for the end of its navigation, which a slow load delays: it stays held and is answered then,
+        // and the document keeps its renderer ID, so that a hello it sends again is also answered.
         if (_closed || generation != _navigationGeneration || _active is not null || _pendingHello is null) return;
-        RememberClosedRendererDocumentId(_pendingHello.Value.RendererDocumentId);
-        _pendingHello = null;
-        AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "handshake_timeout", "The transport handshake timed out.");
+        AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "handshake_timeout", "The transport handshake is still waiting for the navigation of its document to end.");
     }
 
     private bool TryReadEnvelope(JsonElement root, out string rendererDocumentId, out JsonElement frame)
@@ -371,8 +371,9 @@ internal sealed class NeoTransportCoordinator
         {
             if (_active is not null || _revokedUntilNavigation) ReplaceDocument();
             // Which document sent it is known only once the navigation ends.
+            var waiting = _pendingHello is not null;
             _pendingHello = hello;
-            ScheduleHandshakeTimeout(_navigationGeneration);
+            if (!waiting) ScheduleHandshakeTimeout(_navigationGeneration);
             return;
         }
         AcceptHello(hello);

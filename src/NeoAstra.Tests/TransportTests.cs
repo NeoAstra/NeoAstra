@@ -219,6 +219,27 @@ public sealed class TransportTests
     }
 
     [TestMethod]
+    public void HelloOfADocumentThatLoadsLongerThanTheHandshakeTimeoutIsStillAnswered()
+    {
+        // A native library that does not report the commit holds the hello until the navigation ends.
+        var sent = new List<string>();
+        var diagnostics = new List<NeoTransportDiagnosticEventArgs>();
+        var coordinator = CreateCoordinator(sent, diagnostics);
+        coordinator.NavigationStarted();
+        coordinator.Receive(Envelope(coordinator, "slow-document", Hello()));
+
+        coordinator.ExpireHandshake(1);
+        Assert.IsTrue(diagnostics.Any(value => value.Code == "handshake_timeout"));
+        coordinator.NavigationCompleted(succeeded: true);
+
+        Assert.IsTrue(coordinator.IsConnected, "The host's timeout does not end the handshake of a document that still loads.");
+        Assert.HasCount(1, sent);
+        using var ack = JsonDocument.Parse(sent[0]);
+        Assert.AreEqual("hello_ack", ack.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+        Assert.AreEqual("slow-document", ack.RootElement.GetProperty("rendererDocumentId").GetString());
+    }
+
+    [TestMethod]
     public void HostRevokedSessionNotifiesItsDocumentAndOnlyANavigationReconnects()
     {
         var sent = new List<string>();
