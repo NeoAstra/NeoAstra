@@ -993,6 +993,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     private bool TryAdmitRate(long arrival)
     {
+        // No rate is enforced unless the application configures one.
+        if (_host.Options.RequestRatePerSecond == 0) return true;
         lock (_rateLock)
         {
             // Frames are processed in the order they arrived: a stamp older than the last one charged counts as the same moment.

@@ -447,11 +447,14 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
         return builder.ToString();
     }
 
+    // The default of NeoPermissionDeclaration.MaximumConcurrency, which is also the default limit of a command.
+    private const int DeclarationMaximumConcurrency = 1024;
+
     private static void EmitApplicationRegistration(StringBuilder builder, IReadOnlyList<ServiceModel> services, IReadOnlyList<EventModel> events, string hash)
     {
         var permissions = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        // The largest explicit command limit and timeout of a permission above the declaration defaults (8 and 30 seconds),
-        // so its grant admits them.
+        // The largest explicit command limit and timeout of a permission above the declaration defaults (1,024, the default
+        // of NeoPermissionDeclaration.MaximumConcurrency, and 30 seconds), so its grant admits them.
         var permissionConcurrency = new Dictionary<string, int>(StringComparer.Ordinal);
         var permissionTimeout = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var service in services)
@@ -461,7 +464,7 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
                 if (method.Permission == null) continue;
                 if (!permissions.TryGetValue(method.Permission, out var commands)) permissions.Add(method.Permission, commands = new SortedSet<string>(StringComparer.Ordinal));
                 commands.Add(service.Name + "." + method.Name);
-                if (method.MaximumConcurrency > 8 && (!permissionConcurrency.TryGetValue(method.Permission, out var current) || method.MaximumConcurrency > current))
+                if (method.MaximumConcurrency > DeclarationMaximumConcurrency && (!permissionConcurrency.TryGetValue(method.Permission, out var current) || method.MaximumConcurrency > current))
                     permissionConcurrency[method.Permission] = method.MaximumConcurrency;
                 if (method.TimeoutMilliseconds > 30000 && (!permissionTimeout.TryGetValue(method.Permission, out var longest) || method.TimeoutMilliseconds > longest))
                     permissionTimeout[method.Permission] = method.TimeoutMilliseconds;

@@ -127,14 +127,11 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
         }
     }
 
-    private static NeoRpcHost CreateHost(out NeoRpcEvent<RpcEchoResponse> changed, int queuedEvents = 64)
+    private static NeoRpcHost CreateHost(out NeoRpcEvent<RpcEchoResponse> changed, int queuedEvents = 1024)
     {
+        // The defaults of a trusted desktop application: no rate limit, and concurrency well above what the benchmark uses.
         var builder = new NeoRpcBuilder(new NeoRpcOptions
         {
-            // A benchmark measures the host, not its admission policy: no rate denial or abuse closure may happen.
-            RequestRatePerSecond = 100_000,
-            RequestRateBurst = 1_000_000,
-            AbuseClosureThreshold = 10_000,
             MaximumQueuedEventsPerSubscription = queuedEvents,
             AuthorizationService = BenchmarkAuthorization.Instance,
         });
@@ -143,12 +140,12 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
             static (request, _, _) => ValueTask.FromResult(new RpcEchoResponse(request.Value)),
             BenchmarkRpcJsonContext.Default.RpcEchoRequest,
             BenchmarkRpcJsonContext.Default.RpcEchoResponse,
-            new NeoRpcCommandOptions { Permission = "benchmark:echo", MaximumConcurrency = 4096 });
+            new NeoRpcCommandOptions { Permission = "benchmark:echo" });
         builder.AddChannelCommand<RpcEchoRequest, RpcEchoResponse>(
             StreamCommand,
             static (request, _, _) => ValueTask.FromResult(new NeoRpcChannel<RpcEchoResponse>(Items(request.Value), BenchmarkRpcJsonContext.Default.RpcEchoResponse)),
             BenchmarkRpcJsonContext.Default.RpcEchoRequest,
-            new NeoRpcCommandOptions { Permission = "benchmark:echo", MaximumConcurrency = 4096 });
+            new NeoRpcCommandOptions { Permission = "benchmark:echo" });
         changed = builder.AddEvent(ChangedEvent, BenchmarkRpcJsonContext.Default.RpcEchoResponse, new NeoRpcEventOptions { Permission = "benchmark:echo" });
         return builder.Build();
 

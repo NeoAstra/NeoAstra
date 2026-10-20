@@ -1617,8 +1617,8 @@ public sealed class RpcTests
     [TestMethod]
     public void CommandConcurrencyDefaultsAreBounded()
     {
-        Assert.AreEqual(8, new NeoRpcOptions().DefaultCommandMaximumConcurrency);
-        Assert.AreEqual(8, new NeoRpcCommandOptions().MaximumConcurrency);
+        Assert.AreEqual(1024, new NeoRpcOptions().DefaultCommandMaximumConcurrency);
+        Assert.AreEqual(1024, new NeoRpcCommandOptions().MaximumConcurrency);
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 0 }));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 4097 }));
         _ = new NeoRpcBuilder(new NeoRpcOptions { DefaultCommandMaximumConcurrency = 1 });
@@ -1631,7 +1631,7 @@ public sealed class RpcTests
     }
 
     [TestMethod]
-    [DataRow(8, null, 9, 8, DisplayName = "The default host admits 8 calls of a command without its own limit")]
+    [DataRow(8, null, 9, 8, DisplayName = "A host default of 8 admits 8 calls of a command without its own limit")]
     [DataRow(64, null, 16, 16, DisplayName = "A larger host default admits more than 8 calls")]
     [DataRow(64, 2, 4, 2, DisplayName = "A command's own smaller limit wins over the host default")]
     [DataRow(2, 4, 4, 4, DisplayName = "A command's own larger limit wins over the host default")]

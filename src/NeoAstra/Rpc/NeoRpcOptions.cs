@@ -4,16 +4,21 @@
 namespace NeoAstra.Rpc;
 
 /// <summary>Configures bounded RPC dispatch and error handling.</summary>
+/// <remarks>
+/// The defaults are those of a trusted local desktop application (<see cref="NeoSecurityProfile.ProductionLocalApp"/>, the default
+/// profile): heavy legitimate use of many windows and tabs never reaches a limit, and no request rate is enforced. Every limit is
+/// a safety rail that an application hosting less trusted content can tighten.
+/// </remarks>
 public sealed class NeoRpcOptions
 {
     /// <summary>Gets or sets the deterministic generated application contract hash advertised in invocation contexts.</summary>
     public string ContractHash { get; set; } = string.Empty;
     /// <summary>Gets or sets the maximum simultaneous invocations across all sessions.</summary>
     /// <remarks>The value must be greater than <see cref="MaximumConcurrentInvocationsPerSession"/> so admission can reserve capacity for another view.</remarks>
-    public int MaximumConcurrentInvocations { get; set; } = 256;
+    public int MaximumConcurrentInvocations { get; set; } = 8192;
     /// <summary>Gets or sets the maximum simultaneous invocations in one document session.</summary>
     /// <remarks>The value must be less than <see cref="MaximumConcurrentInvocations"/>.</remarks>
-    public int MaximumConcurrentInvocationsPerSession { get; set; } = 32;
+    public int MaximumConcurrentInvocationsPerSession { get; set; } = 1024;
     /// <summary>Gets or sets the maximum tracked request identities per session, including active IDs and completed fingerprints.</summary>
     /// <remarks>Defaults to 16,777,216 as a last-resort admission bound. Storage is allocated on demand; completed history is separately bounded by <see cref="MaximumCompletedRequestIds"/>. New unique requests evict the oldest completed fingerprints when full. Active invocations (even after cancellation or timeout) and pending/active subscriptions are never evicted.</remarks>
     public int MaximumRetainedRequestIds { get; set; } = 16_777_216;
@@ -21,7 +26,7 @@ public sealed class NeoRpcOptions
     /// <remarks>Defaults to 4,096 and is also constrained by <see cref="MaximumRetainedRequestIds"/>. Completed ID strings and request-state objects are released immediately; only fixed-size SHA-256 fingerprints are retained, oldest first. IDs must not be reused; this bounded history is not a durable exactly-once guarantee.</remarks>
     public int MaximumCompletedRequestIds { get; set; } = 4096;
     /// <summary>Gets or sets the maximum simultaneous invocations of one command, across all sessions, for a command that does not set <see cref="NeoRpcCommandOptions.MaximumConcurrency"/>.</summary>
-    /// <remarks>Defaults to 8 and must be between 1 and 4096. An invocation beyond the limit of its command is refused with <see cref="NeoRpcErrorCodes.TooManyRequests"/>.</remarks>
+    /// <remarks>Defaults to 1,024 and must be between 1 and 4096. An invocation beyond the limit of its command is refused with <see cref="NeoRpcErrorCodes.TooManyRequests"/>.</remarks>
     public int DefaultCommandMaximumConcurrency { get; set; } = NeoRpcCommandOptions.DefaultMaximumConcurrency;
     /// <summary>Gets or sets the default command timeout.</summary>
     public TimeSpan InvocationTimeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -41,30 +46,31 @@ public sealed class NeoRpcOptions
     /// <summary>Gets or sets the maximum JSON nesting depth.</summary>
     public int MaximumJsonDepth { get; set; } = 32;
     /// <summary>Gets or sets the maximum queued event count per subscription.</summary>
-    public int MaximumQueuedEventsPerSubscription { get; set; } = 64;
+    public int MaximumQueuedEventsPerSubscription { get; set; } = 1024;
     /// <summary>Gets or sets the maximum serialized bytes queued by one subscription. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>
     public int MaximumQueuedEventBytesPerSubscription { get; set; } = int.MaxValue;
     /// <summary>Gets or sets the maximum subscriptions in one session.</summary>
-    public int MaximumSubscriptionsPerSession { get; set; } = 128;
+    public int MaximumSubscriptionsPerSession { get; set; } = 1024;
     /// <summary>Gets or sets the maximum open channels in one session.</summary>
-    public int MaximumChannelsPerSession { get; set; } = 32;
+    public int MaximumChannelsPerSession { get; set; } = 256;
     /// <summary>Gets or sets the maximum unacknowledged channel items.</summary>
-    public int MaximumUnacknowledgedChannelItems { get; set; } = 16;
+    public int MaximumUnacknowledgedChannelItems { get; set; } = 64;
     /// <summary>Gets or sets the maximum resources owned by one session.</summary>
-    public int MaximumResourcesPerSession { get; set; } = 64;
+    public int MaximumResourcesPerSession { get; set; } = 1024;
     /// <summary>Gets or sets the maximum resources owned by one view across document sessions.</summary>
-    public int MaximumResourcesPerView { get; set; } = 256;
+    public int MaximumResourcesPerView { get; set; } = 4096;
     /// <summary>Gets or sets the maximum resources owned by the application.</summary>
-    public int MaximumResources { get; set; } = 4096;
+    public int MaximumResources { get; set; } = 65_536;
     /// <summary>Gets or sets maximum declared resource bytes per document session.</summary>
     public long MaximumResourceBytesPerSession { get; set; } = 64 * 1024 * 1024;
     /// <summary>Gets or sets maximum declared resource bytes across the application.</summary>
     public long MaximumResourceBytes { get; set; } = 1024L * 1024 * 1024;
-    /// <summary>Gets or sets sustained accepted invocation/subscription frames per second in one document session.</summary>
-    public int RequestRatePerSecond { get; set; } = 100;
-    /// <summary>Gets or sets the bounded per-session request burst.</summary>
+    /// <summary>Gets or sets sustained accepted invocation/subscription frames per second in one document session, or 0 for no rate limit.</summary>
+    /// <remarks>Defaults to 0: a trusted local application is not rate limited, and <see cref="RequestRateBurst"/> and <see cref="AbuseClosureThreshold"/> do not apply. A positive value, up to 100,000, enables the limit.</remarks>
+    public int RequestRatePerSecond { get; set; }
+    /// <summary>Gets or sets the bounded per-session request burst when <see cref="RequestRatePerSecond"/> is positive; it must then be at least that rate.</summary>
     public int RequestRateBurst { get; set; } = 200;
-    /// <summary>Gets or sets the number of seconds with request-rate denials after which the offending document session is closed.</summary>
+    /// <summary>Gets or sets the number of seconds with request-rate denials after which the offending document session is closed, when <see cref="RequestRatePerSecond"/> is positive.</summary>
     /// <remarks>
     /// The denials of one second count once, however many there are, and one such second is forgotten for each second
     /// without a denial: a single burst never closes a session, while a page that keeps sending more than its rate for
@@ -118,8 +124,8 @@ public sealed class NeoRpcOptions
         if (MaximumResources <= MaximumResourcesPerView || MaximumResources > 10_000_000) throw new ArgumentOutOfRangeException(nameof(MaximumResources));
         if (MaximumResourceBytesPerSession is < 1024 or > 16L * 1024 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumResourceBytesPerSession));
         if (MaximumResourceBytes <= MaximumResourceBytesPerSession || MaximumResourceBytes > 1024L * 1024 * 1024 * 1024) throw new ArgumentOutOfRangeException(nameof(MaximumResourceBytes));
-        if (RequestRatePerSecond is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(RequestRatePerSecond));
-        if (RequestRateBurst < RequestRatePerSecond || RequestRateBurst > 1_000_000) throw new ArgumentOutOfRangeException(nameof(RequestRateBurst));
+        if (RequestRatePerSecond is < 0 or > 100_000) throw new ArgumentOutOfRangeException(nameof(RequestRatePerSecond));
+        if (RequestRateBurst is < 1 or > 1_000_000 || RequestRateBurst < RequestRatePerSecond) throw new ArgumentOutOfRangeException(nameof(RequestRateBurst));
         if (AbuseClosureThreshold is < 1 or > 10_000) throw new ArgumentOutOfRangeException(nameof(AbuseClosureThreshold));
         ArgumentNullException.ThrowIfNull(SecurityProfile);
         SecurityProfile.Validate(Release, DevelopmentOrigin, AllowRemoteDevelopmentOrigin);
@@ -173,7 +179,7 @@ public sealed class NeoRpcOptions
 /// <summary>Configures one registered command.</summary>
 public sealed class NeoRpcCommandOptions
 {
-    internal const int DefaultMaximumConcurrency = 8;
+    internal const int DefaultMaximumConcurrency = 1024;
     private int? _maximumConcurrency;
 
     /// <summary>Gets or sets the optional permission checked before dispatch.</summary>
@@ -186,7 +192,7 @@ public sealed class NeoRpcCommandOptions
     /// <summary>Gets or sets the maximum simultaneous invocations of this command across all sessions.</summary>
     /// <remarks>
     /// When this is not set, the command uses <see cref="NeoRpcOptions.DefaultCommandMaximumConcurrency"/> of its host, and the getter
-    /// returns 8, the default of that option. A set value must be between 1 and 4096 and wins over the host default.
+    /// returns 1,024, the default of that option. A set value must be between 1 and 4096 and wins over the host default.
     /// </remarks>
     public int MaximumConcurrency { get => _maximumConcurrency ?? DefaultMaximumConcurrency; set => _maximumConcurrency = value; }
 

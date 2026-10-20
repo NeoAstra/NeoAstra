@@ -115,7 +115,9 @@ public sealed class NeoPermissionDeclaration
     /// <summary>Gets the safe default command timeout.</summary>
     public TimeSpan DefaultTimeout { get; init; } = TimeSpan.FromSeconds(30);
     /// <summary>Gets the safe command-specific concurrency limit.</summary>
-    public int MaximumConcurrency { get; init; } = 8;
+    /// <remarks>Defaults to 1,024, the default limit of a command (<see cref="NeoRpcOptions.DefaultCommandMaximumConcurrency"/>), so that a command without its own limit fits its permission.</remarks>
+    // A literal: NeoAstra.Tool compiles this file without the RPC options.
+    public int MaximumConcurrency { get; init; } = 1024;
     /// <summary>Gets the audit redaction policy.</summary>
     public NeoAuditRedaction Redaction { get; init; } = NeoAuditRedaction.Full;
     /// <summary>Gets bounded documentation for tooling.</summary>

@@ -151,7 +151,7 @@ The check and the event are the work of the native library. `NeoEnvironment.Runt
 
 ## Abuse controls and diagnostics
 
-`NeoRpcOptions` bounds payload, parse depth, request-ID retention, global/session/command concurrency (`DefaultCommandMaximumConcurrency` for commands without their own limit), token-bucket request rate/burst, abuse closure threshold, resources, resource bytes, channels, channel buffers, and default/permission timeouts. Counters are synchronized; reservations are released in `finally`; cancellation/disposal races yield one terminal response and reclaim resources. Policy exhaustion returns stable retryable errors and repeated abuse closes the session.
+`NeoRpcOptions` bounds payload, parse depth, request-ID retention, global/session/command concurrency (`DefaultCommandMaximumConcurrency` for commands without their own limit), an optional token-bucket request rate/burst (off by default: see the [default limits](rpc-and-bindings.md#default-limits) of a trusted desktop application) and its abuse closure threshold, resources, resource bytes, channels, channel buffers, and default/permission timeouts. Counters are synchronized; reservations are released in `finally`; cancellation/disposal races yield one terminal response and reclaim resources. Policy exhaustion returns stable retryable errors, and flooding over a configured rate for `AbuseClosureThreshold` seconds in a row closes the session; a single burst never does.
 
 Session and host disposal are idempotent shared operations: every concurrent caller awaits the same teardown task. Abuse-triggered closure also awaits that operation, so resource and scoped-service cleanup cannot be observed as complete early by another disposer.
 

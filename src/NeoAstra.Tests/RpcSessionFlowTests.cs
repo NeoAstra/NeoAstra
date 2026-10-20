@@ -119,6 +119,80 @@ public sealed class RpcSessionFlowTests
         Assert.AreEqual(1, session.CountAbuseDenial(start + 60 * second), "Denials scattered over a long session never add up.");
     }
 
+    [TestMethod]
+    public void TheDefaults_AreThoseOfATrustedDesktopApp()
+    {
+        var options = new NeoRpcOptions();
+        Assert.AreSame(NeoSecurityProfile.ProductionLocalApp, options.SecurityProfile);
+        Assert.AreEqual(0, options.RequestRatePerSecond, "No request rate is enforced.");
+        Assert.AreEqual(8192, options.MaximumConcurrentInvocations);
+        Assert.AreEqual(1024, options.MaximumConcurrentInvocationsPerSession);
+        Assert.AreEqual(1024, options.DefaultCommandMaximumConcurrency);
+        Assert.AreEqual(1024, new NeoPermissionDeclaration("documents:open", 1, ["documents.open"], NeoPermissionRisk.Low, NeoScopeFamily.None).MaximumConcurrency,
+            "A command without its own limit fits the default declaration of its permission.");
+        Assert.AreEqual(1024, options.MaximumSubscriptionsPerSession);
+        Assert.AreEqual(256, options.MaximumChannelsPerSession);
+        Assert.AreEqual(64, options.MaximumUnacknowledgedChannelItems);
+        Assert.AreEqual(1024, options.MaximumQueuedEventsPerSubscription);
+        Assert.AreEqual(1024, options.MaximumResourcesPerSession);
+        Assert.AreEqual(4096, options.MaximumResourcesPerView);
+        Assert.AreEqual(65_536, options.MaximumResources);
+        _ = new NeoRpcBuilder(options);
+        _ = new NeoRpcBuilder(new NeoRpcOptions { RequestRatePerSecond = 0, RequestRateBurst = 1 });
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { RequestRatePerSecond = -1 }));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoRpcBuilder(new NeoRpcOptions { RequestRatePerSecond = 300, RequestRateBurst = 200 }));
+    }
+
+    [TestMethod]
+    public async Task TheDefaults_AdmitEveryInvokeOfABurstOf5000()
+    {
+        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        builder.AddCommand<Request, Response>("flow.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "burst-session"), (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+        var start = Stopwatch.GetTimestamp();
+        for (var index = 0; index < 5000; index++)
+            await session.ReceiveAsync(Invoke($"burst-{index}", "flow.echo", "{\"id\":\"x\"}"), null, true, start, CancellationToken.None);
+        Assert.HasCount(5000, frames);
+        Assert.IsTrue(frames.All(static frame => ErrorCode(frame) is null), "No frame of the burst is refused.");
+        Assert.AreEqual(1, host.ActiveSessionCount);
+    }
+
+    [TestMethod]
+    public async Task TheDefaults_Admit1000ConcurrentCallsOfOneCommandInOneSession()
+    {
+        const int calls = 1000;
+        var entered = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        builder.AddCommand<Request, Response>("flow.wait", async (request, _, _) =>
+        {
+            Interlocked.Increment(ref entered);
+            await release.Task;
+            return new Response(request.Id, "view");
+        }, RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", "concurrent-session"), (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+        var invocations = Enumerable.Range(0, calls).Select(index => session.ReceiveAsync(Invoke($"call-{index}", "flow.wait", "{\"id\":\"x\"}")).AsTask()).ToArray();
+        try
+        {
+            await WaitUntilAsync(() => Volatile.Read(ref entered) == calls || !frames.IsEmpty);
+            Assert.IsEmpty(frames, "No call is refused.");
+            Assert.AreEqual(calls, Volatile.Read(ref entered));
+            Assert.AreEqual(calls, session.ActiveInvocationCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Task.WhenAll(invocations).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.HasCount(calls, frames);
+        Assert.IsTrue(frames.All(static frame => ErrorCode(frame) is null));
+    }
+
     // A rate an application configures as a safety rail: 100 frames a second, a burst of 200, closure after 20 seconds.
     private static NeoRpcOptions RateLimited(INeoRpcDiagnosticSink? diagnostics = null)
         => new() { RequestRatePerSecond = 100, RequestRateBurst = 200, AbuseClosureThreshold = 20, DiagnosticSink = diagnostics };
