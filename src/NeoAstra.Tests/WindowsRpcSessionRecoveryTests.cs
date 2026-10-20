@@ -67,7 +67,9 @@ public sealed class WindowsRpcSessionRecoveryTests
                         _ = await view.EvaluateScriptAsync("globalThis.ping(); globalThis.ping(); true", timeout.Token);
                         await WaitAsync(view, "globalThis.closes.length === 1", timeout.Token);
                         Assert.AreEqual("\"rpc_session_closed\"", await view.EvaluateScriptAsync("globalThis.closes[0]", timeout.Token));
-                        Assert.AreEqual("[\"too_many_requests\"]", await view.EvaluateScriptAsync("globalThis.results.filter(frame => !frame.ok).map(frame => frame.error.code)", timeout.Token));
+                        // The second call is refused over the rate; the first is answered, or canceled by the closure.
+                        var failures = await view.EvaluateScriptAsync("globalThis.results.filter(frame => !frame.ok).map(frame => frame.error.code).sort().join(',')", timeout.Token);
+                        Assert.IsTrue(failures is "\"too_many_requests\"" or "\"operation_canceled,too_many_requests\"", $"Only the call over the rate is refused, and the first is answered or canceled ({failures}).");
                         var answered = await view.EvaluateScriptAsync("globalThis.results.length", timeout.Token);
                         Assert.IsTrue(answered is "1" or "2", $"Each call is answered at most once ({answered}).");
 
