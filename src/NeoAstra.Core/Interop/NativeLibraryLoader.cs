@@ -11,7 +11,7 @@ internal static class NativeLibraryLoader
 {
     internal const uint ExpectedAbiMajor = NeoNativeAbi.Major;
     private static readonly object Sync = new();
-    private static readonly List<string> AttemptedPaths = [];
+    private static readonly List<NeoNativeLibraryProbe> Probes = [];
     private static nint _loadedHandle;
     private static bool _validated;
 
@@ -35,9 +35,7 @@ internal static class NativeLibraryLoader
                 var minor = NativeMethods.neoastra_get_abi_version_minor();
                 if (!NeoNativeAbi.IsCompatible(major, minor))
                 {
-                    throw new NeoAstraNativeLibraryException(
-                        $"The loaded {NativeMethods.LibraryName} native ABI is {major}.{minor}; managed NeoAstra requires ABI major {ExpectedAbiMajor}. " +
-                        "Install the paired RID asset or set NEOASTRA_NATIVE_LIBRARY to its full path.");
+                    throw CreateAbiException(major, minor);
                 }
 
                 _validated = true;
@@ -46,25 +44,83 @@ internal static class NativeLibraryLoader
             {
                 throw;
             }
-            catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException or EntryPointNotFoundException)
-            {
-                throw CreateLoadException(ex);
-            }
             catch (Exception ex)
             {
-                throw CreateLoadException(ex);
+                // Usually DllNotFoundException or BadImageFormatException from the .NET default probing that runs
+                // after the resolver, or EntryPointNotFoundException from a library of another version.
+                throw CreateLoadException([.. Probes], ex);
             }
         }
     }
 
-    private static NeoAstraNativeLibraryException CreateLoadException(Exception innerException)
+    /// <summary>Loads the library from the first of <paramref name="candidates"/> that loads, the way the resolver does.</summary>
+    /// <param name="candidates">The paths to try, in order.</param>
+    /// <returns>The handle of the loaded library.</returns>
+    /// <exception cref="NeoAstraNativeLibraryException">No candidate could be loaded; the exception describes each attempt.</exception>
+    internal static nint LoadFrom(IEnumerable<string> candidates)
     {
-        var attempts = AttemptedPaths.Count == 0
-            ? "No development probe paths were available."
-            : $"Probed:{Environment.NewLine}  {string.Join($"{Environment.NewLine}  ", AttemptedPaths)}";
+        var probes = new List<NeoNativeLibraryProbe>();
+        var handle = Probe(candidates, probes);
+        return handle != 0 ? handle : throw CreateLoadException(probes, null);
+    }
+
+    private static NeoAstraNativeLibraryException CreateLoadException(IReadOnlyList<NeoNativeLibraryProbe> probes, Exception? innerException) =>
+        NativeLibraryDiagnostics.CreateException(
+            probes,
+            innerException,
+            NativeLibraryDiagnostics.CurrentPlatform,
+            RuntimeInformation.ProcessArchitecture,
+            RuntimeInformation.RuntimeIdentifier,
+            RuntimeInformation.OSDescription);
+
+    private static NeoAstraNativeLibraryException CreateAbiException(uint major, uint minor)
+    {
+        var platform = NativeLibraryDiagnostics.CurrentPlatform;
+        var asset = $"runtimes/{NativeLibraryDiagnostics.GetPortableRuntimeIdentifier(platform, RuntimeInformation.ProcessArchitecture)}/native/{NativeLibraryDiagnostics.GetFileName(platform)}";
+        var loaded = Probes.LastOrDefault(static probe => probe.Result == NeoNativeLibraryProbeResult.Loaded);
         return new NeoAstraNativeLibraryException(
-            $"Could not load a compatible '{NativeMethods.LibraryName}' native library for {RuntimeInformation.RuntimeIdentifier} ({RuntimeInformation.ProcessArchitecture}). " +
-            $"Package its RID-specific native asset, place it beside the application, or set NEOASTRA_NATIVE_LIBRARY to its full path. {attempts}", innerException);
+            $"The loaded {NativeMethods.LibraryName} native ABI is {major}.{minor}; managed NeoAstra requires ABI major {ExpectedAbiMajor}. " +
+            (loaded is null ? string.Empty : $"It was loaded from '{loaded.Path}'. ") +
+            $"Install the paired RID asset ({asset} of the same NeoAstra.Core package) or set NEOASTRA_NATIVE_LIBRARY to its full path.",
+            [.. Probes],
+            [$"Replace the library with the {asset} of the same NeoAstra.Core package version as the managed assemblies, or set NEOASTRA_NATIVE_LIBRARY to its full path."],
+            RuntimeInformation.RuntimeIdentifier,
+            RuntimeInformation.ProcessArchitecture,
+            RuntimeInformation.OSDescription,
+            null);
+    }
+
+    private static nint Probe(IEnumerable<string> candidates, List<NeoNativeLibraryProbe> probes)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in candidates)
+        {
+            if (!seen.Add(path))
+            {
+                continue;
+            }
+
+            // Loading an absolute path that does not exist fails anyway; skipping it avoids an exception per probe.
+            if (Path.IsPathFullyQualified(path) && !File.Exists(path))
+            {
+                probes.Add(new NeoNativeLibraryProbe(path, NeoNativeLibraryProbeResult.NotFound));
+                continue;
+            }
+
+            try
+            {
+                var handle = NativeLibrary.Load(path);
+                probes.Add(new NeoNativeLibraryProbe(path, NeoNativeLibraryProbeResult.Loaded));
+                return handle;
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or BadImageFormatException)
+            {
+                // NativeLibrary.TryLoad would drop this message, which carries dlerror() or the Win32 error.
+                probes.Add(NativeLibraryDiagnostics.Inspect(path, ex));
+            }
+        }
+
+        return 0;
     }
 
     private static nint Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
@@ -81,20 +137,10 @@ internal static class NativeLibraryLoader
                 return _loadedHandle;
             }
 
-            foreach (var path in GetCandidatePaths())
-            {
-                if (!AttemptedPaths.Contains(path, StringComparer.OrdinalIgnoreCase))
-                {
-                    AttemptedPaths.Add(path);
-                }
-
-                if (NativeLibrary.TryLoad(path, out _loadedHandle))
-                {
-                    return _loadedHandle;
-                }
-            }
-
-            return 0;
+            // Returning 0 lets the .NET default probing run next; EnsureLoaded reports both.
+            Probes.Clear();
+            _loadedHandle = Probe(GetCandidatePaths(), Probes);
+            return _loadedHandle;
         }
     }
 
@@ -106,11 +152,9 @@ internal static class NativeLibraryLoader
             yield return Path.GetFullPath(explicitPath);
         }
 
-        var fileName = OperatingSystem.IsWindows()
-            ? "neoastra_native.dll"
-            : OperatingSystem.IsMacOS() ? "libneoastra_native.dylib" : "libneoastra_native.so";
+        var fileName = NativeLibraryDiagnostics.GetFileName(NativeLibraryDiagnostics.CurrentPlatform);
         var baseDirectory = AppContext.BaseDirectory;
-        var portableRid = $"{(OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")}-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}";
+        var portableRid = NativeLibraryDiagnostics.GetPortableRuntimeIdentifier(NativeLibraryDiagnostics.CurrentPlatform, RuntimeInformation.ProcessArchitecture);
         yield return Path.Combine(baseDirectory, fileName);
         yield return Path.Combine(baseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", fileName);
         yield return Path.Combine(baseDirectory, "runtimes", portableRid, "native", fileName);

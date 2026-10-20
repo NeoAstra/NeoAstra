@@ -444,7 +444,9 @@ of an environment on the same root that is not private.
 
 - NeoAstra does not bundle WebView2, WKWebView, WebKitGTK, GTK, or a .NET runtime. Missing or
   incompatible platform libraries can prevent the native library or browser backend from loading;
-  install the dependencies described in [platform support](platform-support.md).
+  install the dependencies described in [platform support](platform-support.md). The exception of a
+  failed load names each path tried, the loader error, and the fix; see
+  [troubleshooting](platform-support.md#troubleshooting).
 - Application and browser operations begin on the platform UI thread. An attached host must continue
   pumping that thread through asynchronous disposal; NeoAstra will not tear down COM, Cocoa, or GTK
   objects on the wrong thread after the host loop has stopped.
