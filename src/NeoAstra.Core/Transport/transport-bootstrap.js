@@ -41,10 +41,11 @@
     return length;
   };
 
+  // The host bounds every envelope it sends by the same limit before posting it: measuring it again here would
+  // only cost a serialization, and a throw from this listener would drop an answer the client is waiting for.
   const receiveEnvelope = value => {
     if (!value || typeof value !== "object" || value.__neoastraTransport !== 1 ||
         value.hostViewBinding !== hostViewBinding || value.rendererDocumentId !== rendererDocumentId) return;
-    byteLength(value);
     if (!value.frame || typeof value.frame !== "object" || Array.isArray(value.frame)) return;
     receiveHandler?.(value.frame);
   };

@@ -50,6 +50,20 @@ function createBootstrap(respond = handler => queueMicrotask(() => handler(runti
 
 test.afterEach(() => delete globalThis[transportKey]);
 
+// Settles a promise that must not stay pending, or reports that it did.
+function outcome(promise, milliseconds = 200) {
+  return Promise.race([
+    promise.then(value => ({ value }), error => ({ error })),
+    new Promise(resolve => setTimeout(() => resolve({ pending: true }), milliseconds)),
+  ]);
+}
+
+function nest(count, leaf) {
+  let value = leaf;
+  for (let index = 0; index < count; index++) value = { value };
+  return value;
+}
+
 test("runtime-sized frame limits accept large payloads in both directions", async () => {
   const maximumFrameBytes = 2 ** 31 - 1;
   const bootstrap = createBootstrap((handler, frame) => {
@@ -215,4 +229,83 @@ test("connection validates framing, byte size, depth, receive ownership, and clo
   assert.equal(connection.closed.aborted, true);
   assert.equal(connection.closeReason, "client_close");
   assert.throws(() => connection.send({ neoastra: 1, kind: "invoke" }), error => error.code === "connection_closed");
+});
+
+test("inbound depth counts nested objects and arrays like the host, not primitive leaves", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const connection = await client.connect();
+  let next = 0;
+  const rpc = new client.NeoRpcClient(connection, { idFactory: () => `depth-${++next}` });
+
+  // The frame object is the first of the 32 negotiated levels: a value of 31 nested objects fills them.
+  const objects = rpc.invoke("deep.read", {});
+  bootstrap.receive({ neoastra: 1, kind: "result", id: "depth-1", ok: true, value: nest(31, "leaf") });
+  assert.deepEqual(await outcome(objects), { value: nest(31, "leaf") });
+
+  let array = [1];
+  for (let index = 1; index < 31; index++) array = [array];
+  const arrays = rpc.invoke("deep.read", {});
+  bootstrap.receive({ neoastra: 1, kind: "result", id: "depth-2", ok: true, value: array });
+  assert.deepEqual(await outcome(arrays), { value: array });
+
+  // One more level is refused, and the call it answers fails instead of staying pending.
+  const tooDeep = rpc.invoke("deep.read", {});
+  bootstrap.receive({ neoastra: 1, kind: "result", id: "depth-3", ok: true, value: nest(32, "leaf") });
+  const refused = await outcome(tooDeep);
+  assert.equal(refused.error?.code, "invalid_frame");
+  assert.equal(refused.error.retryable, false);
+  connection.close();
+});
+
+test("outbound depth keeps the level of the envelope the host reads with the same limit", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const connection = await client.connect();
+  // The host parses the envelope around the frame with the negotiated depth: a frame may use 31 levels.
+  connection.send({ neoastra: 1, kind: "invoke", value: nest(29, {}) });
+  connection.send({ neoastra: 1, kind: "invoke", value: nest(30, "leaf") });
+  assert.throws(() => connection.send({ neoastra: 1, kind: "invoke", value: nest(30, {}) }), error => error.code === "invalid_frame");
+  assert.throws(() => connection.send({ neoastra: 1, kind: "invoke", value: nest(30, [1]) }), error => error.code === "invalid_frame");
+  connection.close();
+});
+
+test("a frame the client rejects fails the call, channel or subscription it answers", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const diagnostics = [];
+  client.onDiagnostic(value => diagnostics.push(value));
+  const connection = await client.connect();
+  let next = 0;
+  const rpc = new client.NeoRpcClient(connection, { idFactory: () => `rejected-${++next}` });
+  const deep = nest(40, "leaf");
+
+  // A channel item: the channel fails and the host is asked to close it, rather than waiting for an ack.
+  const opening = rpc.invokeChannel("documents.stream", {});
+  bootstrap.receive({ neoastra: 1, kind: "result", id: "rejected-1", ok: true, value: { channel: "ch-1" } });
+  const iterator = (await outcome(opening)).value[Symbol.asyncIterator]();
+  bootstrap.receive({ neoastra: 1, kind: "channel_item", channel: "ch-1", sequence: 1, value: "first" });
+  bootstrap.receive({ neoastra: 1, kind: "channel_item", channel: "ch-1", sequence: 2, value: deep });
+  assert.deepEqual(await outcome(iterator.next()), { value: { done: false, value: "first" } });
+  assert.equal((await outcome(iterator.next())).error?.code, "invalid_frame");
+  assert.equal(bootstrap.sent.filter(frame => frame.kind === "channel_close" && frame.channel === "ch-1").length, 1);
+
+  // An event: it is skipped, and the subscription keeps delivering the next ones.
+  const values = [];
+  const subscribing = rpc.subscribe("documents.changed", value => values.push(value));
+  bootstrap.receive({ neoastra: 1, kind: "subscribed", id: "rejected-2" });
+  assert.equal(typeof (await outcome(subscribing)).value, "function");
+  bootstrap.receive({ neoastra: 1, kind: "event", subscription: "rejected-2", sequence: 1, value: "a" });
+  bootstrap.receive({ neoastra: 1, kind: "event", subscription: "rejected-2", sequence: 2, value: deep });
+  bootstrap.receive({ neoastra: 1, kind: "event", subscription: "rejected-2", sequence: 3, value: "c" });
+  assert.deepEqual(values, ["a", "c"]);
+
+  // A subscription acknowledgement: the subscription fails and the host is asked to drop it.
+  const failing = rpc.subscribe("documents.other", () => {});
+  bootstrap.receive({ neoastra: 1, kind: "subscribed", id: "rejected-3", error: deep });
+  assert.equal((await outcome(failing)).error?.code, "invalid_frame");
+  assert.equal(bootstrap.sent.filter(frame => frame.kind === "unsubscribe" && frame.id === "rejected-3").length, 1);
+
+  assert.equal(diagnostics.filter(value => value.code === "invalid_frame" && /depth/.test(value.message)).length, 3);
+  connection.close();
 });

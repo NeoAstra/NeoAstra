@@ -83,6 +83,18 @@ test("bootstrap reports envelope byte-limit failures with a stable code", () => 
     error => error.code === "payload_too_large");
 });
 
+test("bootstrap delivers inbound frames without measuring them again, since the host bounded them", () => {
+  const fixture = runBackend("webview2", "windows", 256);
+  const received = [];
+  fixture.transport.setReceiveHandler(value => received.push(value));
+  fixture.transport.send({ neoastra: 1, kind: "hello" });
+  const envelope = fixture.outbound[0];
+  // A frame over the bootstrap's own count still reaches the client, which fails what it answers if it must.
+  fixture.listeners.get("webview:message")({ data: { ...envelope, frame: { neoastra: 1, kind: "result", id: "req-1", ok: true, value: "x".repeat(512) } } });
+  assert.equal(received.length, 1);
+  assert.equal(received[0].id, "req-1");
+});
+
 test("bootstrap source is compatible with restrictive script CSP", () => {
   assert.doesNotMatch(template, /\beval\s*\(|\bnew\s+Function\b|import\s*\(/);
   assert.doesNotMatch(template, /https?:\/\//);

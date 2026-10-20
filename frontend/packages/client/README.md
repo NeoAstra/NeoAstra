@@ -26,7 +26,9 @@ Generated bindings use the public `invoke` and `subscribe` functions. For direct
 subscriptions, acknowledged async channels, and session-owned resource close over one connected
 transport. An already-aborted call sends no invoke frame. `timeoutMilliseconds` bounds both invocation
 completion and the pending `subscribe` acknowledgement; a subscription timeout sends one idempotent
-`unsubscribe` and rejects with the stable `timeout` code.
+`unsubscribe` and rejects with the stable `timeout` code. A host frame the client refuses, such as one
+deeper than the negotiated JSON depth (counted like `System.Text.Json`: objects and arrays only), fails
+the call, channel or pending subscription it answers with `invalid_frame` rather than leaving it pending.
 Generated bindings attach their deterministic contract hash; a configured host rejects stale generated
 bindings with the stable `protocol_mismatch` code before application dispatch.
 

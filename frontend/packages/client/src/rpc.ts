@@ -1,5 +1,5 @@
 import { NeoAstraClientError, type NeoAstraConnection, connect } from "./index.js";
-import { isRecord } from "./shared.js";
+import { isRecord, type NeoAstraRejectedFrame } from "./shared.js";
 
 export interface NeoRpcCallOptions {
   /** Cancels an invocation, an opened channel observation, or a pending subscription handshake. */
@@ -83,7 +83,7 @@ export class NeoRpcClient {
     const maximum = options.maximumBufferedChannelItems ?? 64;
     if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 4096) throw new RangeError("maximumBufferedChannelItems must be between 1 and 4096.");
     this.maximumBufferedChannelItems = maximum;
-    this.removeReceive = connection.setReceiveHandler(frame => this.receive(frame));
+    this.removeReceive = connection.setReceiveHandler(frame => this.receive(frame), frame => this.receiveRejected(frame));
     this.connectionClosed = () => this.failAll(new NeoRpcError({ code: "connection_closed", message: "The RPC connection closed.", retryable: true }));
     connection.closed.addEventListener("abort", this.connectionClosed, { once: true });
     if (connection.closed.aborted || connection.state !== "connected") {
@@ -285,11 +285,7 @@ export class NeoRpcClient {
     if (waiter !== undefined) waiter.resolve(value);
     else if (state.values.length < this.maximumBufferedChannelItems) state.values.push(value);
     else {
-      state.error = new NeoRpcError({ code: "too_many_requests", message: "The frontend channel buffer limit was exhausted.", retryable: false });
-      state.closed = true;
-      this.cleanupChannel(state);
-      for (const pending of state.waiters.splice(0)) pending.reject(state.error);
-      try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: frame.channel })); } catch { }
+      this.failChannel(frame.channel, state, new NeoRpcError({ code: "too_many_requests", message: "The frontend channel buffer limit was exhausted.", retryable: false }), true);
       return;
     }
     try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_ack", channel: frame.channel, sequence: frame.sequence })); } catch { }
@@ -305,6 +301,53 @@ export class NeoRpcClient {
     const terminal: IteratorResult<unknown> = { done: true, value: undefined };
     for (const waiter of state.waiters.splice(0)) {
       if (state.error !== undefined) waiter.reject(state.error); else waiter.resolve(terminal);
+    }
+  }
+
+  // The transport dropped a frame it refused: fail what it answers rather than leave it waiting for it.
+  private receiveRejected(frame: NeoAstraRejectedFrame): void {
+    const error = new NeoRpcError({ code: frame.error.code, message: frame.error.message, retryable: false });
+    switch (frame.kind) {
+      case "result": {
+        const pending = frame.id === undefined ? undefined : this.pending.get(frame.id);
+        if (pending === undefined) return;
+        this.pending.delete(frame.id!); pending.cleanup();
+        pending.reject(error);
+        break;
+      }
+      case "subscribed": {
+        const pending = frame.id === undefined ? undefined : this.pendingSubscriptions.get(frame.id);
+        if (pending === undefined) return;
+        this.pendingSubscriptions.delete(frame.id!);
+        try { this.connection.send(Object.freeze({ neoastra: 1, kind: "unsubscribe", id: frame.id })); } catch { }
+        pending.reject(error);
+        break;
+      }
+      case "event": {
+        // An event has no error path: it is skipped, and the next events of the subscription keep their sequence.
+        const state = frame.subscription === undefined ? undefined : this.subscriptions.get(frame.subscription);
+        if (state !== undefined && frame.sequence === state.sequence + 1) state.sequence = frame.sequence;
+        break;
+      }
+      case "channel_item":
+      case "channel_complete":
+      case "channel_error": {
+        const state = frame.channel === undefined ? undefined : this.channels.get(frame.channel);
+        if (state === undefined || state.closed) return;
+        // An item leaves the host channel waiting for its acknowledgement: ask the host to close it.
+        this.failChannel(frame.channel!, state, error, frame.kind === "channel_item");
+        break;
+      }
+    }
+  }
+
+  private failChannel<T>(id: string, state: ChannelState<T>, error: Error, notifyHost: boolean): void {
+    state.error = error;
+    state.closed = true;
+    this.cleanupChannel(state);
+    for (const pending of state.waiters.splice(0)) pending.reject(error);
+    if (notifyHost) {
+      try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: id })); } catch { }
     }
   }
 

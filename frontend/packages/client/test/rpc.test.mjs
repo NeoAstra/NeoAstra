@@ -308,3 +308,12 @@ test("client close settles and clears every owned state exactly once", async () 
   client.close();
   assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel" || frame.kind === "unsubscribe" || frame.kind === "channel_close").length, terminalFrames);
 });
+
+test("the mock transport fails a call whose result is deeper than its negotiated depth", async () => {
+  const transport = createMockClient({ maximumJsonDepth: 4 });
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => "deep-result" });
+  const pending = client.invoke("documents.tree", {});
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "deep-result", ok: true, value: { a: { b: { c: {} } } } });
+  await assert.rejects(pending, error => error instanceof NeoRpcError && error.code === "invalid_frame" && !error.retryable);
+  client.close();
+});

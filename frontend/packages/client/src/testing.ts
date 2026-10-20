@@ -13,10 +13,13 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   SUPPORTED_FEATURES,
-  assertApplicationFrame,
+  assertInboundFrame,
+  assertOutboundFrame,
+  describeRejectedFrame,
   isRecord,
   parseCloseReason,
   type NeoAstraConnectionState,
+  type NeoAstraRejectedFrame,
 } from "./shared.js";
 
 export interface MockScheduler {
@@ -165,6 +168,7 @@ class MockConnection implements NeoAstraConnection {
   private currentState: NeoAstraConnectionState = "connected";
   private reason: string | undefined;
   private receiveHandler: ((frame: Readonly<Record<string, unknown>>) => void) | undefined;
+  private rejectedHandler: ((frame: NeoAstraRejectedFrame) => void) | undefined;
 
   constructor(
     readonly runtimeInfo: NeoAstraRuntimeInfo,
@@ -184,14 +188,19 @@ class MockConnection implements NeoAstraConnection {
 
   send(frame: unknown): void {
     if (this.currentState !== "connected") throw new NeoAstraClientError("connection_closed", "The mock connection is closed.");
-    assertApplicationFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+    assertOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
     this.record(Object.freeze({ ...(frame as Record<string, unknown>) }));
   }
 
-  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void): () => void {
+  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void, rejected?: (frame: NeoAstraRejectedFrame) => void): () => void {
     if (this.receiveHandler !== undefined) throw new NeoAstraClientError("internal_transport_error", "A receive handler is already registered.");
     this.receiveHandler = handler;
-    return () => { if (this.receiveHandler === handler) this.receiveHandler = undefined; };
+    this.rejectedHandler = rejected;
+    return () => {
+      if (this.receiveHandler !== handler) return;
+      this.receiveHandler = undefined;
+      this.rejectedHandler = undefined;
+    };
   }
 
   close(): void {
@@ -216,7 +225,16 @@ class MockConnection implements NeoAstraConnection {
       return;
     }
     try {
-      assertApplicationFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+      assertInboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+    } catch (error) {
+      const value = error instanceof NeoAstraClientError
+        ? error
+        : new NeoAstraClientError("internal_transport_error", "The mock transport failed to validate an inbound frame.");
+      this.diagnose({ level: "warning", code: value.code, message: value.message, correlationId: value.correlationId });
+      try { this.rejectedHandler?.(describeRejectedFrame(frame, value)); } catch { }
+      return;
+    }
+    try {
       this.receiveHandler?.(frame);
     } catch (error) {
       const value = error instanceof NeoAstraClientError
@@ -237,6 +255,7 @@ class MockConnection implements NeoAstraConnection {
     this.currentState = "closed";
     this.reason = reason;
     this.receiveHandler = undefined;
+    this.rejectedHandler = undefined;
     this.controller.abort(new NeoAstraClientError("connection_closed", "The mock connection is closed."));
   }
 }
@@ -347,7 +366,7 @@ export function createMockRpcHarness(options: MockTransportOptions = {}): MockRp
       return () => { if (receiver === handler) receiver = undefined; };
     },
     send(frame) {
-      assertApplicationFrame(frame, options.maximumFrameBytes ?? DEFAULT_MAXIMUM_FRAME_BYTES, options.maximumJsonDepth ?? 32);
+      assertOutboundFrame(frame, options.maximumFrameBytes ?? DEFAULT_MAXIMUM_FRAME_BYTES, options.maximumJsonDepth ?? 32);
       const value = Object.freeze({ ...(frame as Record<string, unknown>) });
       frames.push(value);
       queueMicrotask(() => dispatch(value));

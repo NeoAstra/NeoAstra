@@ -78,6 +78,23 @@ use; the strictest applicable limit wins, and view limits include envelope overh
 and overflow policy, concurrency, request rates, timeouts, and JSON nesting-depth limits are unchanged.
 For deeply nested DTOs, configure `NeoTransportOptions.MaximumJsonDepth`,
 `NeoRpcOptions.MaximumJsonDepth`, and the application's `JsonSerializerContext` options together.
+
+The client counts JSON depth as `System.Text.Json` counts `MaxDepth` on the host: each object or array
+is one level, the frame object included, and a string, number, boolean or null adds none. With the
+default depth of 32, a frame may hold 31 nested objects below its own. The host sends the depth it
+uses (`NeoTransportOptions.MaximumJsonDepth`) in the handshake. A frame the host sends may use every
+level. A frame the page sends may use one level less, because the host reads the envelope around it
+with the same limit; `send` throws `invalid_frame` for a deeper frame instead of letting the host drop
+it. The walk allocates nothing and stops at the limit.
+
+A frame from the host that the client refuses (deeper than the negotiated depth, or a reserved kind)
+is dropped with a warning diagnostic, and never silently: the second argument of
+`setReceiveHandler(handler, rejected)` receives its top-level identity (`kind`, `id`, `channel`,
+`subscription`, `sequence`) and the error. `NeoRpcClient` uses it to fail what the frame answers with
+the same code, for example `invalid_frame`: the pending call rejects, a channel fails and is closed on
+the host, a pending subscription rejects and is unsubscribed, and an event is skipped so that the next
+events of its subscription keep arriving. The bootstrap does not measure inbound envelopes again: the
+host bounds each envelope it sends by `MaximumMessageSize` before posting it.
 Application frames are never accepted before a handshake. Production
 diagnostics contain stable codes and bounded metadata, never frame bodies, arguments, file paths, raw
 exceptions, or secrets.
