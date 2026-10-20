@@ -170,6 +170,21 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public async Task Push_RegistersWithoutAskingTheUser()
+    {
+        // Silent messages need no permission: the registration then leaves the question of the system to the application.
+        var registration = NeoDesktopResult<NeoPushRegistration>.Success(new("token", NeoPushService.Apns, false));
+        Assert.AreEqual("token", (await new NeoFakePush { Registration = registration }.RegisterWithoutAskingAsync()).Value!.Token);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await NeoPush.CreateSystem(new NeoFakeNotifications()).RegisterWithoutAskingAsync()).Status);
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra.Push", "Android"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var ios = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "IosPush.cs"));
+        StringAssert.Contains(ios, "_canDisplay = ask ? await AuthorizeAsync(dispatcher, cancellationToken).ConfigureAwait(false) : await CanDisplayAsync(cancellationToken).ConfigureAwait(false);");
+        var java = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Android", "com", "neoastra", "push", "NeoAstraPush.java"));
+        StringAssert.Contains(java, "case \"register\": register(context, input.optBoolean(\"ask\", true), output); return;");
+    }
+
+    [TestMethod]
     public void Push_LetsTheApplicationDecideTheForegroundPresentation()
     {
         // iOS keeps the completion handler of willPresent until the decision; Java waits a few seconds for it in the foreground.

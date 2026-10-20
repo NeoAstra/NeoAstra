@@ -55,7 +55,7 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
 
     @Override public void call(Context context, JSONObject input, JSONObject output) throws Exception {
         switch (input.getString("operation")) {
-            case "register": register(context, output); return;
+            case "register": register(context, input.optBoolean("ask", true), output); return;
             case "next": {
                 JSONObject event = EVENTS.poll(Math.max(0, Math.min(30_000, input.optLong("timeout", 20_000))), TimeUnit.MILLISECONDS);
                 if (event == null) output.put("status", "NotFound"); else output.put("status", "Success").put("event", event);
@@ -77,10 +77,10 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
         }
     }
 
-    // Asks once to show notifications, from Android 13, and waits for the token of Firebase.
-    private static void register(Context context, JSONObject output) throws Exception {
+    // Asks once to show notifications, from Android 13, unless the application registers without asking, and waits for the token of Firebase.
+    private static void register(Context context, boolean ask, JSONObject output) throws Exception {
         if (!configured(context)) { output.put("status", "Unsupported").put("code", "not-configured"); return; }
-        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (ask && Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             && declared(context, Manifest.permission.POST_NOTIFICATIONS) && !context.getSharedPreferences(NAME, Context.MODE_PRIVATE).getBoolean("requested", false)) {
             context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit().putBoolean("requested", true).commit();
             NeoAstraServices.requestPermissions(Manifest.permission.POST_NOTIFICATIONS);

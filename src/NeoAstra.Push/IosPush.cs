@@ -92,14 +92,17 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
 
     private readonly object _sync = new();
     private readonly INeoExternalNotificationSource? _source;
+    private readonly INeoNotifications? _notifications;
     private NeoDispatcher? _dispatcher;
     private TaskCompletionSource<(string? Token, string? Error)>? _registration;
     private string? _token;
     private bool _canDisplay;
     private int _disposed;
 
-    private IosPush(INeoExternalNotificationSource? source, NeoDispatcher? dispatcher)
+    private IosPush(INeoNotifications? notifications, NeoDispatcher? dispatcher)
     {
+        var source = notifications as INeoExternalNotificationSource;
+        _notifications = notifications;
         _source = source;
         _dispatcher = dispatcher;
         Support = source is null
@@ -134,23 +137,20 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
     }
     private Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? _presentation;
 
-    internal static INeoPush Create(INeoNotifications notifications, NeoDispatcher? dispatcher) => new IosPush(notifications as INeoExternalNotificationSource, dispatcher);
+    internal static INeoPush Create(INeoNotifications notifications, NeoDispatcher? dispatcher) => new IosPush(notifications, dispatcher);
 
     void INeoPushDispatcherBinding.Bind(NeoDispatcher dispatcher) { ArgumentNullException.ThrowIfNull(dispatcher); _dispatcher ??= dispatcher; }
 
-    public async ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default)
+    public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) => RegisterAsync(ask: true, cancellationToken);
+
+    public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default) => RegisterAsync(ask: false, cancellationToken);
+
+    private async ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(bool ask, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var dispatcher = _dispatcher ?? throw new InvalidOperationException("The iOS push service must be bound to the UI dispatcher before use.");
-        // Showing the notifications of the messages needs the permission of the user; iOS asks once and then answers at once.
-        var authorization = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handle = GCHandle.Alloc(authorization);
-        try
-        {
-            await Invoke(dispatcher, () => RequestAuthorization(handle), cancellationToken).ConfigureAwait(false);
-            _canDisplay = await authorization.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException) { _canDisplay = false; }
+        // APNs registers the application without the permission of the user, which only showing the notifications needs.
+        _canDisplay = ask ? await AuthorizeAsync(dispatcher, cancellationToken).ConfigureAwait(false) : await CanDisplayAsync(cancellationToken).ConfigureAwait(false);
         TaskCompletionSource<(string? Token, string? Error)> registration;
         lock (_sync) registration = _registration ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
         await Invoke(dispatcher, () => Send(Send(Class("UIApplication"), "sharedApplication"), "registerForRemoteNotifications"), cancellationToken).ConfigureAwait(false);
@@ -166,6 +166,22 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         catch (TimeoutException) { return NeoPush.Failure(NeoDesktopStatus.Failed, NeoPush.TimeoutCode); }
         finally { lock (_sync) if (ReferenceEquals(_registration, registration)) _registration = null; }
     }
+
+    // iOS asks once and then answers at once.
+    private static async Task<bool> AuthorizeAsync(NeoDispatcher dispatcher, CancellationToken cancellationToken)
+    {
+        var authorization = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handle = GCHandle.Alloc(authorization);
+        try
+        {
+            await Invoke(dispatcher, () => RequestAuthorization(handle), cancellationToken).ConfigureAwait(false);
+            return await authorization.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException) { return false; }
+    }
+
+    private async Task<bool> CanDisplayAsync(CancellationToken cancellationToken)
+        => _notifications is not null && await _notifications.GetPermissionStatusAsync(cancellationToken).ConfigureAwait(false) == NeoNotificationPermissionStatus.Granted;
 
     public ValueTask DisposeAsync()
     {

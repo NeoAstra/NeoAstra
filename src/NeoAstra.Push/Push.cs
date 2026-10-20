@@ -74,6 +74,15 @@ public interface INeoPush
     /// when the push service does not answer.
     /// </returns>
     ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers the device at its push service and returns its token without asking the user to show notifications, such as for
+    /// an application that receives silent messages before the user decides; <see cref="NeoPushRegistration.CanDisplay"/> says
+    /// what the user allowed so far, and <see cref="RegisterAsync"/> asks later.
+    /// </summary>
+    /// <param name="cancellationToken">Stops waiting for the push service.</param>
+    /// <returns>The registration, with the statuses and codes of <see cref="RegisterAsync"/>.</returns>
+    ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>Creates the statically selected push adapter.</summary>
@@ -115,7 +124,7 @@ public sealed class NeoFakePush : INeoPush
     /// <inheritdoc />
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Emulated, 1, 0, "In-memory test push service.");
 
-    /// <summary>Gets or sets the result that <see cref="RegisterAsync"/> answers.</summary>
+    /// <summary>Gets or sets the result that <see cref="RegisterAsync"/> and <see cref="RegisterWithoutAskingAsync"/> answer.</summary>
     public NeoDesktopResult<NeoPushRegistration> Registration { get; set; } = NeoPush.Failure(NeoDesktopStatus.Failed, NeoPush.TimeoutCode);
 
     /// <inheritdoc />
@@ -135,6 +144,9 @@ public sealed class NeoFakePush : INeoPush
 
     /// <inheritdoc />
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(Registration); }
+
+    /// <inheritdoc />
+    public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default) => RegisterAsync(cancellationToken);
 
     /// <summary>Reports a new token as the push service would.</summary>
     /// <param name="registration">The registration.</param>
@@ -158,6 +170,7 @@ internal sealed class UnsupportedPush(string details) : INeoPush
     public event EventHandler<NeoPushMessage>? MessageOpened { add { } remove { } }
     public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation { get; set; }
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoPush.Failure(NeoDesktopStatus.Unsupported, null)); }
+    public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default) => RegisterAsync(cancellationToken);
 }
 
 // What iOS binds to the UI dispatcher of the application when the plugin attaches.

@@ -69,7 +69,10 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     }
 
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default)
-        => new(Task.Run(Register, cancellationToken).WaitAsync(cancellationToken));
+        => new(Task.Run(() => Register(ask: true), cancellationToken).WaitAsync(cancellationToken));
+
+    public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default)
+        => new(Task.Run(() => Register(ask: false), cancellationToken).WaitAsync(cancellationToken));
 
     public async ValueTask DisposeAsync()
     {
@@ -81,9 +84,9 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
         _stopping.Dispose();
     }
 
-    private static NeoDesktopResult<NeoPushRegistration> Register()
+    private static NeoDesktopResult<NeoPushRegistration> Register(bool ask)
     {
-        using var response = Call("register", null);
+        using var response = Call("register", writer => writer.WriteBoolean("ask", ask));
         var root = response.RootElement;
         var status = Status(root);
         if (status != NeoDesktopStatus.Success) return NeoPush.Failure(status, root.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String ? code.GetString() : null);
