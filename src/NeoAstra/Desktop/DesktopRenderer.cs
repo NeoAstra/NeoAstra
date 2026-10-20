@@ -492,7 +492,13 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         var titleBar = window.GetTitleBarLayout();
         return new(window.Title, window.Position, window.ClientSize, window.MinimumClientSize, window.MaximumClientSize,
             window.IsVisible, window.IsFocused, window.IsClosed, window.ScaleFactor, window.State, window.HasDecorations, window.IsResizable,
-            window.IsAlwaysOnTop, taskbarVisible, window.IsModal, new(titleBar.Style, titleBar.Height, titleBar.LeftInset, titleBar.RightInset));
+            window.IsAlwaysOnTop, taskbarVisible, window.IsModal, new(titleBar.Style, titleBar.Height, titleBar.LeftInset, titleBar.RightInset), DisplayId(window));
+    }
+    // The identifier of the display of the window, as the snapshots of desktop.system.displays name it.
+    private static string? DisplayId(NeoWindow window)
+    {
+        try { return window.Display is { } display ? NeoDisplaySnapshot.FromDisplay(display).Id : null; }
+        catch (Exception exception) when (exception is InvalidOperationException or NeoAstraException) { return null; }
     }
     private ValueTask<DesktopStatusResult> SetWindowTitleAsync(DesktopTextRequest request, NeoRpcContext context, CancellationToken token)
     {
@@ -562,7 +568,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     }
     private void WatchWindow(NeoWindow window)
     {
-        var watch = new WindowWatch((_, _) => PublishWindowState(window), (_, _) => PublishWindowState(window), (_, _) => UnwatchWindow(window));
+        var watch = new WindowWatch((_, _) => PublishWindowState(window), (_, _) => PublishWindowState(window), (_, _) => PublishWindowState(window), (_, _) => UnwatchWindow(window));
         lock (_sync) if (_disposed || window.IsClosed || !_windowWatches.TryAdd(window, watch)) return;
         watch.Attach(window);
     }
@@ -840,10 +846,10 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         internal EventHandler ClosedHandler { get; set; } = null!;
     }
     private sealed record PendingClose(string SessionId, long Generation, TaskCompletionSource<bool> Completion);
-    private sealed record WindowWatch(EventHandler<NeoWindowStateChangedEventArgs> StateHandler, EventHandler FocusHandler, EventHandler ClosedHandler)
+    private sealed record WindowWatch(EventHandler<NeoWindowStateChangedEventArgs> StateHandler, EventHandler FocusHandler, EventHandler<NeoWindowDisplayChangedEventArgs> DisplayHandler, EventHandler ClosedHandler)
     {
-        internal void Attach(NeoWindow window) { window.StateChanged += StateHandler; window.FocusChanged += FocusHandler; window.Closed += ClosedHandler; }
-        internal void Detach(NeoWindow window) { window.StateChanged -= StateHandler; window.FocusChanged -= FocusHandler; window.Closed -= ClosedHandler; }
+        internal void Attach(NeoWindow window) { window.StateChanged += StateHandler; window.FocusChanged += FocusHandler; window.DisplayChanged += DisplayHandler; window.Closed += ClosedHandler; }
+        internal void Detach(NeoWindow window) { window.StateChanged -= StateHandler; window.FocusChanged -= FocusHandler; window.DisplayChanged -= DisplayHandler; window.Closed -= ClosedHandler; }
     }
 }
 
@@ -879,7 +885,7 @@ internal sealed record DesktopTextRequest(string Value);
 internal sealed record DesktopPointRequest(int X, int Y);
 internal sealed record DesktopSizeRequest(int Width, int Height);
 internal sealed record DesktopWindowTitleBarLayout(NeoWindowTitleBarStyle Style, int Height, int LeftInset, int RightInset);
-internal sealed record DesktopWindowSnapshot(string Title, NeoPoint Position, NeoSize Size, NeoSize MinimumSize, NeoSize MaximumSize, bool Visible, bool Focused, bool Closed, double ScaleFactor, NeoWindowState State, bool Decorations, bool Resizable, bool AlwaysOnTop, bool? TaskbarVisible, bool Modal, DesktopWindowTitleBarLayout TitleBar);
+internal sealed record DesktopWindowSnapshot(string Title, NeoPoint Position, NeoSize Size, NeoSize MinimumSize, NeoSize MaximumSize, bool Visible, bool Focused, bool Closed, double ScaleFactor, NeoWindowState State, bool Decorations, bool Resizable, bool AlwaysOnTop, bool? TaskbarVisible, bool Modal, DesktopWindowTitleBarLayout TitleBar, string? DisplayId);
 internal sealed record DesktopWindowTitleBarRequest(NeoWindowTitleBarStyle Style, int Height, string? SymbolColor, string? BackgroundColor);
 internal sealed record DesktopWindowResizeRequest(NeoWindowResizeEdge Edge);
 internal sealed record DesktopWindowStateResult(DesktopWindowSnapshot Value);

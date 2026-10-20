@@ -76,6 +76,17 @@ GTK 4 cannot place a window and does not tell where it is: a position is kept bu
 places windows. `MoveToDisplay` throws `NotSupportedException` there, and
 `NeoApplication.GetWindowCapability(NeoWindowCapability.Placement)` reports `NeoSupportLevel.None`.
 
+## Displays for a page
+
+`NeoSystemInfoService` of the `NeoAstra` package, which a page reads with `system.displays()` and follows with
+`system.onDisplaysChanged` under the `system-info:displays` permission, takes the displays of `NeoApplication.GetDisplays()` when
+it is given the dispatcher of the application: the same identifiers and names, in logical units (on Windows each coordinate of a
+display is divided by its scale), reported when the platform tells of a change. The window snapshot of `window.state()` and
+`window.onStateChanged`, under `window:management`, carries the `displayId` of the display of the window among them, and a change
+of display publishes a new snapshot. Without the dispatcher, or with a native library from before displays, the service reads the
+displays with its own presenters every two seconds, as it did: Win32 monitors on Windows, CoreGraphics on macOS (with the bounds
+for work area), and `xrandr` under X11.
+
 ## Saving and restoring a layout
 
 `NeoWindowStateController` of the `NeoAstra` package saves, with the bounds of a window, the identifier and the work area of its

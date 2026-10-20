@@ -95,9 +95,11 @@ public sealed class DesktopServicesTests
             Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.ParseColor(malformed));
         var snapshotJson = JsonSerializer.Serialize(
             new DesktopWindowStateResult(new("Title", default, new(800, 600), default, default, true, true, false, 1, NeoWindowState.Maximized, true, true, false, true, false,
-                new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138))),
+                new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138), "display-1")),
             DesktopRendererJsonContext.Default.DesktopWindowStateResult);
         StringAssert.Contains(snapshotJson, "\"titleBar\":{\"style\":\"Overlay\",\"height\":32,\"leftInset\":0,\"rightInset\":138}");
+        // A page finds the display of its window among the displays by its identifier.
+        StringAssert.Contains(snapshotJson, "\"displayId\":\"display-1\"");
         var titleBarRequest = JsonSerializer.Deserialize("{\"style\":\"Hidden\",\"height\":40,\"symbolColor\":\"#ffffff\"}", DesktopRendererJsonContext.Default.DesktopWindowTitleBarRequest);
         Assert.AreEqual(new DesktopWindowTitleBarRequest(NeoWindowTitleBarStyle.Hidden, 40, "#ffffff", null), titleBarRequest);
 

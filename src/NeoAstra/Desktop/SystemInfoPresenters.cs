@@ -42,11 +42,11 @@ internal static partial class NeoSystemInfoPlatform
         catch { return Array.Empty<NeoDisplaySnapshot>(); }
     }
 
-    internal static async ValueTask<NeoSystemPlatformSnapshot> ReadAsync()
+    internal static async ValueTask<NeoSystemPlatformSnapshot> ReadAsync(bool readDisplays = true)
     {
-        if (OperatingSystem.IsWindows()) return new(ReadWindowsTheme(), ReadWindowsDisplays());
-        if (OperatingSystem.IsMacOS()) return new(await ReadMacThemeAsync().ConfigureAwait(false), ReadMacDisplays());
-        if (OperatingSystem.IsLinux()) return await ReadLinuxAsync().ConfigureAwait(false);
+        if (OperatingSystem.IsWindows()) return new(ReadWindowsTheme(), readDisplays ? ReadWindowsDisplays() : Array.Empty<NeoDisplaySnapshot>());
+        if (OperatingSystem.IsMacOS()) return new(await ReadMacThemeAsync().ConfigureAwait(false), readDisplays ? ReadMacDisplays() : Array.Empty<NeoDisplaySnapshot>());
+        if (OperatingSystem.IsLinux()) return await ReadLinuxAsync(readDisplays).ConfigureAwait(false);
         return new(new(NeoSystemTheme.Unknown, null, null, null), Array.Empty<NeoDisplaySnapshot>());
     }
 
@@ -151,7 +151,7 @@ internal static partial class NeoSystemInfoPlatform
         return normalized is 0 or 90 or 180 or 270 ? normalized : null;
     }
 
-    private static async ValueTask<NeoSystemPlatformSnapshot> ReadLinuxAsync()
+    private static async ValueTask<NeoSystemPlatformSnapshot> ReadLinuxAsync(bool readDisplays)
     {
         var gsettings = DesktopProcess.FindTrustedExecutable("/usr/bin/gsettings", "/usr/local/bin/gsettings");
         var theme = NeoSystemTheme.Unknown;
@@ -164,7 +164,7 @@ internal static partial class NeoSystemInfoPlatform
             reducedMotion = await ReadGSettingsBoolAsync(gsettings, "org.gnome.desktop.interface", "enable-animations", invert: true).ConfigureAwait(false);
             if (await ReadGSettingsBoolAsync(gsettings, "org.gnome.desktop.a11y.interface", "high-contrast", invert: false).ConfigureAwait(false) == true) theme = NeoSystemTheme.HighContrast;
         }
-        var displays = await ReadXrandrAsync().ConfigureAwait(false);
+        var displays = readDisplays ? await ReadXrandrAsync().ConfigureAwait(false) : Array.Empty<NeoDisplaySnapshot>();
         return new(new(theme, null, reducedMotion, null), displays);
     }
 

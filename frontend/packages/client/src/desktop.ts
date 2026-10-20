@@ -36,6 +36,8 @@ export interface DesktopWindowSnapshot {
   readonly visible: boolean; readonly focused: boolean; readonly closed: boolean; readonly scaleFactor: number; readonly state: DesktopWindowState;
   readonly decorations: boolean; readonly resizable: boolean; readonly alwaysOnTop: boolean; readonly taskbarVisible?: boolean; readonly modal: boolean;
   readonly titleBar: DesktopWindowTitleBarLayout;
+  /** The `id` of the display of the window among those of `system.displays()`, or null when the native library tells none. */
+  readonly displayId?: string | null;
 }
 export type DesktopWindowTitleBarStyle = "Default" | "Overlay" | "Hidden";
 export type DesktopWindowResizeEdge = "Left" | "Top" | "Right" | "Bottom" | "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight";

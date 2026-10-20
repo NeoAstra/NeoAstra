@@ -371,6 +371,37 @@ public sealed class DisplayTests
         }
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task SystemInfo_DisplaysAreThoseOfTheApplicationInLogicalUnits()
+    {
+        foreach (var aware in new[] { true, false })
+        {
+            await RunAsync(aware, async application =>
+            {
+                var message = aware ? "aware" : "unaware";
+                using var systemInfo = new global::NeoAstra.Desktop.SystemInfo.NeoSystemInfoService("test.displays", "Display Test", "1.0", application.Dispatcher);
+                var displays = application.GetDisplays();
+                // One answer for the displays: the identifiers and names of the application, in logical units.
+                Assert.AreEqual(displays.Count, systemInfo.Displays.Count, message);
+                for (var index = 0; index < displays.Count; index++)
+                {
+                    var display = displays[index];
+                    var snapshot = systemInfo.Displays[index];
+                    Assert.AreEqual(display.Id, snapshot.Id, message);
+                    Assert.AreEqual(display.Name, snapshot.Name, message);
+                    Assert.AreEqual(display.IsPrimary, snapshot.IsPrimary, message);
+                    Assert.AreEqual(display.ScaleFactor, snapshot.ScaleFactor, message);
+                    Assert.AreEqual((int)Math.Round(display.WorkArea.Width / display.ScaleFactor), snapshot.WorkArea.Width, message);
+                    Assert.AreEqual((int)Math.Round(display.Bounds.X / display.ScaleFactor), snapshot.Bounds.X, message);
+                }
+
+                Assert.AreEqual(application.GetWindowCapability(NeoWindowCapability.Displays), systemInfo.DisplaySupport, message);
+                await Task.CompletedTask;
+            });
+        }
+    }
+
     // Runs a body in an application of its own on a UI thread of its own, aware of display scaling or not.
     private static async Task RunAsync(bool aware, Func<NeoApplication, Task> body)
     {

@@ -42,7 +42,12 @@ public enum NeoStandardDirectory
 public sealed record NeoThemeSnapshot(NeoSystemTheme Theme, string? AccentColor, bool? ReducedMotion, bool? ReducedTransparency);
 
 /// <summary>Contains immutable display coordinates in logical desktop units.</summary>
-/// <param name="Id">Stable-in-session display ID.</param>
+/// <remarks>
+/// With the native library of an application, a snapshot is a <see cref="NeoDisplay"/> of <see cref="NeoApplication.GetDisplays"/>
+/// in logical units: on Windows, where a display is described in the pixels of each display for an application aware of display
+/// scaling, each coordinate is divided by the scale of its display, and elsewhere the units are the same.
+/// </remarks>
+/// <param name="Id">The display ID: the <see cref="NeoDisplay.Id"/> of the display with the native library of an application, which names it after a restart where the platform tells its monitor, and an ID that lasts for the session otherwise.</param>
 /// <param name="Bounds">Logical bounds.</param>
 /// <param name="WorkArea">Logical usable bounds.</param>
 /// <param name="ScaleFactor">Physical pixels per logical unit.</param>
@@ -51,6 +56,24 @@ public sealed record NeoThemeSnapshot(NeoSystemTheme Theme, string? AccentColor,
 /// <param name="RefreshRate">Optional refresh rate.</param>
 public sealed record NeoDisplaySnapshot(string Id, NeoRect Bounds, NeoRect WorkArea, double ScaleFactor, bool IsPrimary, int? OrientationDegrees, double? RefreshRate)
 {
+    /// <summary>Gets the name of the display shown to a user, or <see langword="null"/> where the presenter tells none.</summary>
+    public string? Name { get; init; }
+
+    // A display of the native library in logical units, as the snapshots of the presenters have them.
+    internal static NeoDisplaySnapshot FromDisplay(NeoDisplay display)
+    {
+        // On Windows a display counts in the units of the windows, the pixels of the display for an application aware of scaling.
+        var scale = OperatingSystem.IsWindows() ? display.ScaleFactor : 1d;
+        var id = display.Id.Length <= 128 && !display.Id.Any(char.IsControl) ? display.Id
+            : "display:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(display.Id)))[..32];
+        return new(id, Logical(display.Bounds), Logical(display.WorkArea), display.ScaleFactor is >= 0.25 and <= 16 ? display.ScaleFactor : 1, display.IsPrimary,
+            display.RotationDegrees, display.RefreshRate is >= 1 and <= 1000 ? display.RefreshRate : null) { Name = display.Name };
+
+        NeoRect Logical(NeoRect value) => scale == 1 ? value : new(
+            (int)Math.Round(value.X / scale), (int)Math.Round(value.Y / scale),
+            Math.Max(1, (int)Math.Round(value.Width / scale)), Math.Max(1, (int)Math.Round(value.Height / scale)));
+    }
+
     /// <summary>Converts a logical point to physical pixels using this display scale.</summary>
     /// <exception cref="InvalidOperationException">The snapshot has an invalid scale.</exception>
     /// <exception cref="OverflowException">The converted coordinate exceeds the portable integer range.</exception>
@@ -78,14 +101,26 @@ public sealed record NeoApplicationMetadata(string ApplicationId, string Applica
 public sealed class NeoSystemInfoService : IDisposable
 {
     private readonly NeoDispatcher? _dispatcher;
+    private readonly NeoApplication? _application;
     private readonly object _sync = new();
     private Timer? _coalescingTimer;
     private readonly Timer? _platformTimer;
     private NeoThemeSnapshot? _pendingTheme;
     private int _refreshing;
     private bool _disposed;
+    // Whether the displays come from the native library of the application, which reports their changes.
+    private volatile bool _applicationDisplays;
 
     /// <summary>Initializes system information for an explicit application identity.</summary>
+    /// <param name="applicationId">The application identifier.</param>
+    /// <param name="applicationName">The name of the application.</param>
+    /// <param name="applicationVersion">The version of the application.</param>
+    /// <param name="dispatcher">
+    /// The UI dispatcher of the application, which raises the change events, or <see langword="null"/>. With it, the displays are
+    /// those of <see cref="NeoApplication.GetDisplays"/>, read on the UI thread and reported when the platform tells of a change;
+    /// without it, or with a native library from before displays, they are read by the presenters of the platform every two seconds.
+    /// </param>
+    /// <exception cref="ArgumentException">The application metadata is malformed.</exception>
     public NeoSystemInfoService(string applicationId, string applicationName, string applicationVersion, NeoDispatcher? dispatcher = null)
         : this(applicationId, applicationName, applicationVersion, dispatcher, monitorPlatform: true)
     {
@@ -98,12 +133,23 @@ public sealed class NeoSystemInfoService : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationVersion);
         if (applicationName.Length > 256 || applicationName.Any(char.IsControl) || applicationVersion.Length > 64 || applicationVersion.Any(char.IsControl)) throw new ArgumentException("Application metadata is malformed.");
         _dispatcher = dispatcher;
+        _application = monitorPlatform ? dispatcher?.Application : null;
         Theme = NeoSystemInfoPlatform.ReadInitialTheme();
         Displays = NeoSystemInfoPlatform.ReadInitialDisplays();
         var locale = CultureInfo.CurrentUICulture.Name;
         Metadata = new(applicationId, applicationName, applicationVersion, RuntimeInformation.OSDescription, RuntimeInformation.ProcessArchitecture.ToString(), OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "cocoa" : OperatingSystem.IsLinux() ? "gtk" : "unknown", locale, Array.AsReadOnly(new[] { locale }));
         ThemeSupport = NeoSystemInfoPlatform.ThemeSupport;
         DisplaySupport = NeoSystemInfoPlatform.DisplaySupport;
+        if (_application is not null)
+        {
+            try
+            {
+                if (_application.ReadWindowCapability(NeoWindowCapability.Displays) is { IsSupported: true } support) DisplaySupport = support;
+                _application.DisplaysChanged += OnApplicationDisplaysChanged;
+                Dispatch(ReadApplicationDisplays);
+            }
+            catch (ObjectDisposedException) { }
+        }
         if (monitorPlatform && (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux()))
             _platformTimer = new Timer(static state => _ = ((NeoSystemInfoService)state!).RefreshPlatformAsync(), this, TimeSpan.Zero, TimeSpan.FromSeconds(2));
     }
@@ -172,21 +218,53 @@ public sealed class NeoSystemInfoService : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() { lock (_sync) { if (_disposed) return; _disposed = true; _pendingTheme = null; _platformTimer?.Dispose(); _coalescingTimer?.Dispose(); _coalescingTimer = null; ThemeChanged = null; DisplaysChanged = null; } }
+    public void Dispose()
+    {
+        lock (_sync) { if (_disposed) return; _disposed = true; _pendingTheme = null; _platformTimer?.Dispose(); _coalescingTimer?.Dispose(); _coalescingTimer = null; ThemeChanged = null; DisplaysChanged = null; }
+        if (_application is not null) _application.DisplaysChanged -= OnApplicationDisplaysChanged;
+    }
+
+    // Runs on the UI thread, where the application reads its displays.
+    private void ReadApplicationDisplays()
+    {
+        IReadOnlyList<NeoDisplay> displays;
+        try { displays = _application!.GetDisplays(); }
+        catch (Exception exception) when (exception is ObjectDisposedException or InvalidOperationException) { return; }
+        // A native library from before displays tells none, and the presenters go on.
+        if (displays.Count != 0) PublishApplicationDisplays(displays);
+    }
+
+    private void OnApplicationDisplaysChanged(object? sender, NeoDisplaysChangedEventArgs args)
+    {
+        if (args.Displays.Count != 0) PublishApplicationDisplays(args.Displays);
+    }
+
+    private void PublishApplicationDisplays(IReadOnlyList<NeoDisplay> displays)
+    {
+        var snapshots = displays.Select(NeoDisplaySnapshot.FromDisplay).ToArray();
+        bool changed;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _applicationDisplays = true;
+            changed = !snapshots.SequenceEqual(Displays);
+        }
+        if (changed) PublishDisplays(snapshots);
+    }
 
     private async Task RefreshPlatformAsync()
     {
         if (Interlocked.Exchange(ref _refreshing, 1) != 0) return;
         try
         {
-            var snapshot = await NeoSystemInfoPlatform.ReadAsync().ConfigureAwait(false);
+            var snapshot = await NeoSystemInfoPlatform.ReadAsync(readDisplays: !_applicationDisplays).ConfigureAwait(false);
             bool themeChanged;
             bool displaysChanged;
             lock (_sync)
             {
                 if (_disposed) return;
                 themeChanged = snapshot.Theme != Theme;
-                displaysChanged = snapshot.Displays.Count != 0 && !snapshot.Displays.SequenceEqual(Displays);
+                displaysChanged = !_applicationDisplays && snapshot.Displays.Count != 0 && !snapshot.Displays.SequenceEqual(Displays);
             }
             if (themeChanged) PublishTheme(snapshot.Theme);
             if (displaysChanged) PublishDisplays(snapshot.Displays);
