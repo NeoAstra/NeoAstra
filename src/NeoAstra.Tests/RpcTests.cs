@@ -2,6 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -1806,7 +1807,14 @@ public sealed class RpcTests
         Assert.AreEqual(1, terminal.Length, id);
         Assert.AreEqual(errorCode, ErrorCode(terminal[0]), id);
     }
-    private static async Task WaitUntilAsync(Func<bool> predicate) { for (var i = 0; i < 100 && !predicate(); i++) await Task.Delay(5); Assert.IsTrue(predicate()); }
+    // Delivery crosses several thread-pool hops: a loaded CI runner can take far longer than the usual few milliseconds,
+    // so the wait is bounded by time, not by a count of short delays.
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        var deadline = Stopwatch.GetTimestamp() + 10 * Stopwatch.Frequency;
+        while (!predicate() && Stopwatch.GetTimestamp() < deadline) await Task.Delay(5);
+        Assert.IsTrue(predicate());
+    }
     private static async IAsyncEnumerable<Response> Items(string value) { yield return new(value, "1"); await Task.Yield(); yield return new(value, "2"); }
 
     private sealed class DenyAuthorization : INeoRpcAuthorizationService { public ValueTask<NeoRpcAuthorizationResult> AuthorizeAsync(NeoRpcAuthorizationRequest request, CancellationToken cancellationToken) => ValueTask.FromResult(request.Permission == "secure:read" ? NeoRpcAuthorizationResult.DenyPermission() : NeoRpcAuthorizationResult.Allow()); }
