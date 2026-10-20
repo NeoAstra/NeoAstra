@@ -942,26 +942,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
     }
 
     private NeoRpcContext CreateContext(string correlationId, CancellationToken cancellationToken, Uri? sourceOrigin, bool isMainFrame)
-    {
-        var identity = new NeoRpcSessionIdentity(_identity.ViewLabel, _identity.DocumentSessionId)
-        {
-            SourceOrigin = sourceOrigin,
-            IsMainFrame = isMainFrame,
-            WholeViewTrust = _identity.WholeViewTrust,
-            Platform = _identity.Platform,
-            DocumentId = _identity.DocumentId,
-            ProtocolMinor = _identity.ProtocolMinor,
-            Features = _identity.Features,
-            ContractHash = _identity.ContractHash,
-            Services = _identity.Services,
-            Dispatcher = _identity.Dispatcher,
-        };
-        global::NeoAstra.NeoAstra? view = null;
-        NeoWindow? window = null;
-        _view?.TryGetTarget(out view);
-        _window?.TryGetTarget(out window);
-        return new(identity, correlationId, cancellationToken, _resources, view, window);
-    }
+        // The session snapshot and its weak references are shared: a context neither copies nor validates them again.
+        => new(_identity, sourceOrigin, isMainFrame, correlationId, cancellationToken, _resources, _view, _window);
 
     private RequestIdState? RememberRequestId(string id, out NeoRpcError error)
     {
@@ -1240,7 +1222,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
     {
         value = string.Empty;
         return TryString(root, property, out value) && value.Length <= _host.Options.MaximumIdLength &&
-               value.All(static character => character is >= (char)0x21 and <= (char)0x7e);
+               !value.AsSpan().ContainsAnyExceptInRange((char)0x21, (char)0x7e);
     }
 
     private static bool IsProtocolFrame(JsonElement root)
@@ -1294,7 +1276,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
         return string.IsNullOrWhiteSpace(sanitized) ? "The command failed." : sanitized;
     }
 
-    private static string NewCorrelationId() => Convert.ToHexString(Guid.NewGuid().ToByteArray()).ToLowerInvariant();
+    // 32 lowercase hexadecimal characters, in one allocation.
+    private static string NewCorrelationId() => Guid.NewGuid().ToString("N");
 
     private sealed class RequestIdState(string id, RequestIdFingerprint fingerprint)
     {
@@ -1336,7 +1319,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
             _sendCancellation = sendCancellation;
             _linked = new CancellationTokenSource();
             _sessionRegistration = session.Register(static state => ((InvocationState)state!).CancelFromSource(timedOut: false), this);
-            _receiveRegistration = receive.Register(static state => ((InvocationState)state!).CancelFromSource(timedOut: false), this);
+            // A view binding receives with the token of the session itself: one registration is enough.
+            if (!receive.Equals(session)) _receiveRegistration = receive.Register(static state => ((InvocationState)state!).CancelFromSource(timedOut: false), this);
             _timeoutRegistration = _timeout.Token.Register(static state => ((InvocationState)state!).CancelFromSource(timedOut: true), this);
             _timeout.CancelAfter(timeout);
         }

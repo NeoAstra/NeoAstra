@@ -241,6 +241,49 @@ public sealed class RpcSessionFlowTests
     }
 
     [TestMethod]
+    public async Task TheContextOfACall_CarriesTheSessionAndTheSenderOfItsFrame()
+    {
+        var contexts = new ConcurrentQueue<NeoRpcContext>();
+        var builder = new NeoRpcBuilder(new NeoRpcOptions { ContractHash = "contract" });
+        builder.AddCommand<Request, Response>("flow.context", (request, context, _) => { contexts.Enqueue(context); return ValueTask.FromResult(new Response(request.Id, "view")); },
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response);
+        await using var host = builder.Build();
+        var frames = new ConcurrentQueue<string>();
+        var identity = new NeoRpcSessionIdentity("context-view", "context-session")
+        {
+            SourceOrigin = new Uri("https://initial.example"), IsMainFrame = true, WholeViewTrust = true, DocumentId = "document",
+            ProtocolMinor = 3, Features = ["rpc"], ContractHash = "contract",
+        };
+        await using var session = host.OpenSession(identity, (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; });
+        const string invoke = "{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"ID\",\"command\":\"flow.context\",\"contract\":\"contract\",\"args\":{\"id\":\"x\"}}";
+        await session.ReceiveAsync(invoke.Replace("ID", "first"));
+        await session.ReceiveAsync(invoke.Replace("ID", "second"), new Uri("https://frame.example"), false);
+        await session.ReceiveAsync(invoke.Replace("ID", "bad\u007fid"));
+
+        var values = contexts.ToArray();
+        Assert.HasCount(2, values);
+        foreach (var context in values)
+        {
+            Assert.AreEqual("context-view", context.ViewLabel);
+            Assert.AreEqual("context-session", context.DocumentSessionId);
+            Assert.AreEqual("document", context.DocumentId);
+            Assert.IsTrue(context.WholeViewTrust);
+            Assert.AreEqual(3, context.ProtocolMinor);
+            CollectionAssert.AreEqual(new[] { "rpc" }, context.Features.ToArray());
+            Assert.AreEqual("contract", context.ContractHash);
+            Assert.IsFalse(context.TryGetView(out _));
+            Assert.IsFalse(context.TryGetWindow(out _));
+            StringAssert.Matches(context.CorrelationId, new System.Text.RegularExpressions.Regex("^[0-9a-f]{32}$"));
+        }
+        Assert.AreEqual(new Uri("https://initial.example"), values[0].SourceOrigin);
+        Assert.IsTrue(values[0].IsMainFrame);
+        Assert.AreEqual(new Uri("https://frame.example"), values[1].SourceOrigin, "The authenticated sender of a frame wins over the initial identity.");
+        Assert.IsFalse(values[1].IsMainFrame);
+        Assert.AreNotEqual(values[0].CorrelationId, values[1].CorrelationId);
+        Assert.AreEqual(NeoRpcErrorCodes.InvalidRequest, ErrorCode(frames.Last()), "An ID outside printable ASCII is refused.");
+    }
+
+    [TestMethod]
     public void TheDefaults_AreThoseOfATrustedDesktopApp()
     {
         var options = new NeoRpcOptions();
