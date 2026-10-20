@@ -59,6 +59,10 @@ has its own label, `NeoAstraOptions.ViewLabel`, which RPC and capabilities also 
 `NeoAstra.Window` leads from a view to the window that hosts it, for example from the `TargetView` of a page drag dropped on
 another window (see [drag and drop](desktop-services.md)); it is `null` for a view created in a native parent of the application.
 
+`NeoApplication.GetDisplays()` tells the displays in the units of `NeoWindow.Position`, `NeoWindow.Display` the display of a
+window, and `NeoWindow.Bounds` and `NeoWindow.MoveToDisplay` put a window on a display; `NeoApplication.GetWindowAt` finds the
+window at a point. See [displays and window placement](displays-and-window-placement.md).
+
 `NeoWindow.Title` changes the title of a window at any time, and a page with the `window:management` permission changes the title
 of its own window with `desktop.window.setTitle`. Keep it meaningful in a [chromeless window](chromeless-windows.md) as well: the
 title bar does not show it, but the system does, in the taskbar, the window switcher, and to assistive technology.

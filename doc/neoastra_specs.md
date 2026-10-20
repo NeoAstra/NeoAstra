@@ -2316,9 +2316,32 @@ public sealed class NeoApplication : IAsyncDisposable
     public NeoWindow CreateWindow(
         NeoWindowOptions? options = null);
 
+    public IReadOnlyList<NeoDisplay> GetDisplays();
+    public NeoDisplay? GetDisplayAt(NeoPoint point);
+    public NeoWindow? GetWindowAt(NeoPoint point);
+    public NeoWindow? GetWindowAt(NeoPoint point, NeoWindow? excluded);
+    public NeoCapabilityInfo GetWindowCapability(NeoWindowCapability capability);
+    public event EventHandler<NeoDisplaysChangedEventArgs>? DisplaysChanged;
+
     public void Shutdown(int exitCode = 0);
 }
+
+public sealed record NeoDisplay
+{
+    public string Id { get; }
+    public string Name { get; }
+    public NeoRect Bounds { get; }
+    public NeoRect WorkArea { get; }
+    public double ScaleFactor { get; }
+    public bool IsPrimary { get; }
+    public int? RotationDegrees { get; init; }
+    public double? RefreshRate { get; init; }
+    public bool IsIdPersistent { get; init; }
+    public bool IsWorkAreaReported { get; init; }
+}
 ```
+
+Displays are in the coordinates and units of `NeoWindow.Position`, so a window placed at the origin of a work area is on that display; see [displays and window placement](displays-and-window-placement.md).
 
 `Run` blocks the process main thread while the native event loop executes.
 
@@ -2382,7 +2405,12 @@ public sealed class NeoWindow : IAsyncDisposable
     public string Title { get; set; }
     public NeoPoint Position { get; set; }
     public NeoSize ClientSize { get; set; }
+    public NeoRect Bounds { get; set; }
     public NeoRect FrameBounds { get; }
+    public NeoDisplay? Display { get; }
+    public bool? IsOnCurrentVirtualDesktop { get; }
+    public string? VirtualDesktopId { get; }
+    public bool IsOnAllVirtualDesktops { get; set; }
     public NeoSize MinimumClientSize { get; set; }
     public NeoSize MaximumClientSize { get; set; }
     public bool IsVisible { get; }
@@ -2395,12 +2423,16 @@ public sealed class NeoWindow : IAsyncDisposable
     public event EventHandler? Closed;
     public event EventHandler<NeoWindowBoundsChangedEventArgs>? BoundsChanged;
     public event EventHandler<NeoWindowScaleFactorChangedEventArgs>? ScaleFactorChanged;
+    public event EventHandler<NeoWindowDisplayChangedEventArgs>? DisplayChanged;
     public event EventHandler? FocusChanged;
 
     public void Show();
     public void Hide();
     public void Activate();
     public void Close();
+    public void MoveToDisplay(NeoDisplay display);
+    public void MoveToDisplay(NeoDisplay display, NeoRect bounds);
+    public NeoVirtualDesktopMoveResult MoveToVirtualDesktop(string desktopId);
 
     public NeoNativeHandle GetNativeHandle(
         NeoNativeHandleKind kind);
@@ -2493,6 +2525,9 @@ public sealed class NeoAstra : IAsyncDisposable
     public void Stop();
     public void GoBack();
     public void GoForward();
+
+    public NeoPoint? ClientToScreen(NeoViewPoint point);
+    public NeoViewPoint? ScreenToClient(NeoPoint point);
 }
 ```
 

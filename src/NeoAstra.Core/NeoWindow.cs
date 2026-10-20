@@ -22,6 +22,7 @@ public sealed class NeoWindow : IAsyncDisposable
     private NeoWindowState _state;
     private NeoWindowTitleBar _titleBar;
     private NeoColor _backgroundColor;
+    private NeoDisplay? _display;
     private int _closed;
     private int _disposed;
 
@@ -40,6 +41,8 @@ public sealed class NeoWindow : IAsyncDisposable
         _state = options.State;
         Id = NativeMethods.neoastra_window_get_id(NativeHandle);
         _scaleFactor = ReadScaleFactor(1d);
+        // The display a window starts on is what a first change is told from.
+        try { _display = Display; } catch (Exception exception) when (exception is InvalidOperationException or NeoAstraException) { }
         _titleBar = options.TitleBar;
         _backgroundColor = options.BackgroundColor;
         // The creation flags carry only the style; the remaining title-bar settings need the full native call.
@@ -116,6 +119,202 @@ public sealed class NeoWindow : IAsyncDisposable
 
             var bounds = GetBounds();
             SetBounds(new NeoRect(bounds.X, bounds.Y, value.Width, value.Height));
+        }
+    }
+
+    /// <summary>Gets or sets the position and the client size of the window together, in the units of <see cref="ClientSize"/>.</summary>
+    /// <remarks>
+    /// <para>
+    /// The position of the rectangle is <see cref="Position"/> and its size <see cref="ClientSize"/>. Assigning both at once
+    /// moves and sizes the window in one request. A position is not applied with GTK.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension of the assigned value is not positive.</exception>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The value was assigned on another thread than the one of the window.</exception>
+    public NeoRect Bounds
+    {
+        get => GetBounds();
+        set
+        {
+            if (value.Width <= 0 || value.Height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "Client dimensions must be positive.");
+            }
+
+            SetBounds(value);
+        }
+    }
+
+    /// <summary>Gets the display that holds most of the window, also while it is hidden or minimized.</summary>
+    /// <remarks>
+    /// It is the display the platform says the window is on (<c>MonitorFromWindow</c> on Windows, <c>NSWindow.screen</c> on
+    /// macOS, the monitor of the surface with GTK), or else the one that the bounds of the window cover most, or else the primary
+    /// one. <see cref="DisplayChanged"/> tells when it changes. The value is <see langword="null"/> with a native library from
+    /// before displays.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The member was read on another thread than the one of the window.</exception>
+    public unsafe NeoDisplay? Display
+    {
+        get
+        {
+            ThrowIfDisposed();
+            var native = NeoDisplay.CreateNative();
+            NativeMethods.neoastra_result_t result;
+            try
+            {
+                result = NativeMethods.neoastra_window_get_display(NativeHandle, &native);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return null;
+            }
+
+            if (NativeError.Code(result) == NeoErrorCode.NotSupported) return null;
+            NativeError.ThrowIfFailed(result, default, "get window display");
+            return NeoDisplay.FromNative(native);
+        }
+    }
+
+    /// <summary>Moves the window onto a display, at the same place in its work area as on the display it is on, and with the same size in logical units.</summary>
+    /// <param name="display">The display to move to, as <see cref="NeoApplication.GetDisplays"/> returned it.</param>
+    /// <remarks>
+    /// <para>
+    /// The rectangle that the window shows (<see cref="FrameBounds"/>) keeps its offset from the top-left corner of the work area,
+    /// and is shrunk and moved as far as needed to be within the work area of <paramref name="display"/>. On Windows, where a
+    /// window counts in the pixels of its display, its size and that offset follow the ratio of the scales of the two displays.
+    /// A window that is maximized or fullscreen should be restored first.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="display"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">The backend cannot place a window (GTK).</exception>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the one of the window.</exception>
+    public void MoveToDisplay(NeoDisplay display)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        ThrowIfCannotPlace();
+        var bounds = GetBounds();
+        var frame = FrameBounds;
+        var current = Display;
+        var from = current?.WorkArea ?? display.WorkArea;
+        // A logical unit is the same on every display; a pixel of Windows is worth what the scale of its display says.
+        var ratio = OperatingSystem.IsWindows() && current is not null ? display.ScaleFactor / current.ScaleFactor : 1d;
+        long Scaled(long value) => (long)Math.Round(value * ratio);
+        long left = Scaled((long)frame.X - bounds.X), top = Scaled((long)frame.Y - bounds.Y);
+        long wider = Scaled((long)frame.Width - bounds.Width), higher = Scaled((long)frame.Height - bounds.Height);
+        var area = display.WorkArea;
+        var width = Math.Clamp(Scaled(frame.Width), 1, Math.Max(1, area.Width));
+        var height = Math.Clamp(Scaled(frame.Height), 1, Math.Max(1, area.Height));
+        var x = Math.Clamp(area.X + Scaled((long)frame.X - from.X), area.X, (long)area.X + area.Width - width);
+        var y = Math.Clamp(area.Y + Scaled((long)frame.Y - from.Y), area.Y, (long)area.Y + area.Height - height);
+        SetBounds(new NeoRect(Whole(x - left), Whole(y - top), (int)Math.Max(1, width - wider), (int)Math.Max(1, height - higher)));
+
+        static int Whole(long value) => (int)Math.Clamp(value, int.MinValue, int.MaxValue);
+    }
+
+    /// <summary>Moves and sizes the window on a display, with a position relative to the top-left corner of its work area.</summary>
+    /// <param name="display">The display to move to, as <see cref="NeoApplication.GetDisplays"/> returned it.</param>
+    /// <param name="bounds">
+    /// The position, from the top-left corner of the work area of <paramref name="display"/>, and the client size, in the units of
+    /// <see cref="ClientSize"/> on that display: on Windows the pixels of that display for an application aware of display scaling.
+    /// </param>
+    /// <remarks>
+    /// The position is that of the frame, as <see cref="Position"/> is: on Windows the borders of a resizable frame that are not
+    /// drawn are to the left of it, and <see cref="FrameBounds"/> tells what the window shows once placed.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="display"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A dimension of <paramref name="bounds"/> is not positive.</exception>
+    /// <exception cref="NotSupportedException">The backend cannot place a window (GTK).</exception>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the one of the window.</exception>
+    public void MoveToDisplay(NeoDisplay display, NeoRect bounds)
+    {
+        ArgumentNullException.ThrowIfNull(display);
+        if (bounds.Width <= 0 || bounds.Height <= 0) throw new ArgumentOutOfRangeException(nameof(bounds), "Client dimensions must be positive.");
+        ThrowIfCannotPlace();
+        var area = display.WorkArea;
+        SetBounds(new NeoRect((int)Math.Clamp((long)area.X + bounds.X, int.MinValue, int.MaxValue), (int)Math.Clamp((long)area.Y + bounds.Y, int.MinValue, int.MaxValue), bounds.Width, bounds.Height));
+    }
+
+    /// <summary>Gets whether the window is on the current virtual desktop, or <see langword="null"/> when the platform does not tell.</summary>
+    /// <remarks>
+    /// Windows tells it through <c>IVirtualDesktopManager</c> and macOS through <c>NSWindow.isOnActiveSpace</c>; GTK tells
+    /// nothing of virtual desktops. A window that was never shown may be on no desktop yet.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The member was read on another thread than the one of the window.</exception>
+    public bool? IsOnCurrentVirtualDesktop => ReadVirtualDesktop() is { } desktop && (desktop.Flags & VirtualDesktopCurrentKnown) != 0 ? (desktop.Flags & VirtualDesktopOnCurrent) != 0 : null;
+
+    /// <summary>Gets the opaque identifier of the virtual desktop of the window, or <see langword="null"/> when the platform does not tell it.</summary>
+    /// <remarks>
+    /// Windows tells it, a GUID in braces, for a window that has been shown; macOS has no public identifier of a Space and GTK
+    /// tells nothing of virtual desktops. The identifier can be given to <see cref="MoveToVirtualDesktop(string)"/> of another
+    /// window of the application.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The member was read on another thread than the one of the window.</exception>
+    public string? VirtualDesktopId => ReadVirtualDesktop() is { Id: { Length: > 0 } id } ? id : null;
+
+    /// <summary>Moves the window to a virtual desktop.</summary>
+    /// <param name="desktopId">The identifier of the desktop, as <see cref="VirtualDesktopId"/> of a window returned it.</param>
+    /// <returns>What became of the request: only Windows moves a window to another virtual desktop.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="desktopId"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="desktopId"/> is empty or white space.</exception>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the one of the window.</exception>
+    public NeoVirtualDesktopMoveResult MoveToVirtualDesktop(string desktopId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(desktopId);
+        ThrowIfDisposed();
+        using var utf8 = new Utf8String(desktopId);
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_window_move_to_virtual_desktop(NativeHandle, utf8.View);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return NeoVirtualDesktopMoveResult.NotSupported;
+        }
+
+        switch (NativeError.Code(result))
+        {
+            case NeoErrorCode.Success: return NeoVirtualDesktopMoveResult.Moved;
+            case NeoErrorCode.NotSupported: return NeoVirtualDesktopMoveResult.NotSupported;
+            case NeoErrorCode.InvalidArgument: return NeoVirtualDesktopMoveResult.DesktopNotFound;
+            case NeoErrorCode.InvalidState or NeoErrorCode.NativeFailure: return NeoVirtualDesktopMoveResult.Failed;
+            default:
+                NativeError.ThrowIfFailed(result, default, "move window to virtual desktop");
+                return NeoVirtualDesktopMoveResult.Failed;
+        }
+    }
+
+    /// <summary>Gets or sets whether the window is shown on every virtual desktop.</summary>
+    /// <remarks>macOS shows it on every Space (<c>NSWindowCollectionBehaviorCanJoinAllSpaces</c>); Windows and GTK cannot, and read <see langword="false"/>.</remarks>
+    /// <exception cref="NotSupportedException">The value was assigned where the platform or the loaded native library cannot show a window on every virtual desktop.</exception>
+    /// <exception cref="ObjectDisposedException">The window is closed or disposed.</exception>
+    /// <exception cref="InvalidOperationException">The value was assigned on another thread than the one of the window.</exception>
+    public unsafe bool IsOnAllVirtualDesktops
+    {
+        get
+        {
+            ThrowIfDisposed();
+            uint value;
+            // A native library from before the attribute refuses it, and does not show a window on every desktop.
+            return NativeError.Code(NativeMethods.neoastra_window_get_attribute(NativeHandle, NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, &value)) == NeoErrorCode.Success && value != 0;
+        }
+        set
+        {
+            ThrowIfDisposed();
+            var result = NativeMethods.neoastra_window_set_attribute(NativeHandle, NativeMethods.neoastra_window_attribute.NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, value ? 1u : 0u);
+            if (NativeError.Code(result) is NeoErrorCode.NotSupported or NeoErrorCode.InvalidArgument)
+            {
+                throw new NotSupportedException("The platform or the loaded native library cannot show a window on every virtual desktop.");
+            }
+
+            NativeError.ThrowIfFailed(result, default, "set window on all virtual desktops");
         }
     }
 
@@ -364,6 +563,14 @@ public sealed class NeoWindow : IAsyncDisposable
 
     /// <summary>Occurs when <see cref="ScaleFactor"/> changes, as when the window moves to a display with another scale.</summary>
     public event EventHandler<NeoWindowScaleFactorChangedEventArgs>? ScaleFactorChanged;
+
+    /// <summary>Occurs when <see cref="Display"/> becomes another display, as when the window is moved there or the display it was on is gone.</summary>
+    /// <remarks>
+    /// The platform tells it: a move or a change of scale on Windows, <c>windowDidChangeScreen</c> on macOS, the monitors that the
+    /// surface of the window enters and leaves with GTK, and a change of the displays on every platform. A native library from
+    /// before displays raises nothing.
+    /// </remarks>
+    public event EventHandler<NeoWindowDisplayChangedEventArgs>? DisplayChanged;
 
     /// <summary>Occurs when keyboard focus changes.</summary>
     public event EventHandler? FocusChanged;
@@ -677,6 +884,19 @@ public sealed class NeoWindow : IAsyncDisposable
         }
     }
 
+    internal void OnDisplayChanged()
+    {
+        // The native library tells of another display; what the window was on is what this event last told.
+        var old = _display;
+        NeoDisplay? display;
+        try { display = Display; }
+        catch { return; }
+        if (display is null) return;
+        _display = display;
+        if (display.Id == old?.Id) return;
+        try { DisplayChanged?.Invoke(this, new NeoWindowDisplayChangedEventArgs(old, display)); } catch { }
+    }
+
     internal void OnFocusChanged(bool focused)
     {
         if (_isFocused == focused) return;
@@ -751,6 +971,43 @@ public sealed class NeoWindow : IAsyncDisposable
         }
 
         static NativeMethods.neoastra_color ToNative(NeoColor color) => new() { red = color.Red, green = color.Green, blue = color.Blue, alpha = color.Alpha };
+    }
+
+    // NEOASTRA_VIRTUAL_DESKTOP_* of native/include/neoastra.h.
+    private const uint VirtualDesktopCurrentKnown = 1u << 0, VirtualDesktopOnCurrent = 1u << 1;
+
+    private unsafe (uint Flags, string Id)? ReadVirtualDesktop()
+    {
+        ThrowIfDisposed();
+        var native = new NativeMethods.neoastra_virtual_desktop_info_t(new NativeMethods.neoastra_virtual_desktop_info
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_virtual_desktop_info),
+            version = 1,
+        });
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_window_get_virtual_desktop(NativeHandle, &native);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+
+        // A platform without virtual desktops, or a window on none yet, tells nothing.
+        if (NativeError.Code(result) is NeoErrorCode.NotSupported or NeoErrorCode.InvalidState) return null;
+        NativeError.ThrowIfFailed(result, default, "get window virtual desktop");
+        return (native.Value.flags, Utf8String.Decode(native.Value.id));
+    }
+
+    private void ThrowIfCannotPlace()
+    {
+        ThrowIfDisposed();
+        // A native library from before window capabilities places windows as it always did.
+        if (Application.ReadWindowCapability(NeoWindowCapability.Placement) is { SupportLevel: NeoSupportLevel.None } capability)
+        {
+            throw new NotSupportedException(capability.Details ?? "The backend cannot place a window.");
+        }
     }
 
     private unsafe double ReadScaleFactor(double fallback)
