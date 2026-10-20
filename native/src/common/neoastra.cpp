@@ -797,6 +797,149 @@ void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_r
     decision->release();
 }
 
+namespace {
+int64_t overlap(const neoastra_rect_t& left, const neoastra_rect_t& right) noexcept {
+    const auto width = std::min<int64_t>(int64_t{left.x} + left.width, int64_t{right.x} + right.width) - std::max<int64_t>(left.x, right.x);
+    const auto height = std::min<int64_t>(int64_t{left.y} + left.height, int64_t{right.y} + right.height) - std::max<int64_t>(left.y, right.y);
+    return width > 0 && height > 0 ? width * height : 0;
+}
+
+bool contains(const neoastra_rect_t& rect, neoastra_point_t point) noexcept {
+    return point.x >= rect.x && point.y >= rect.y && int64_t{point.x} < int64_t{rect.x} + rect.width && int64_t{point.y} < int64_t{rect.y} + rect.height;
+}
+
+// The display that holds the point, or else the one whose bounds are nearest to it.
+size_t display_at(const std::vector<neo_display>& displays, neoastra_point_t point) noexcept {
+    size_t best{};
+    auto best_distance = std::numeric_limits<int64_t>::max();
+    for (size_t index = 0; index < displays.size(); ++index) {
+        const auto& bounds = displays[index].bounds;
+        const int64_t left = bounds.x, top = bounds.y, right = left + bounds.width - 1, bottom = top + bounds.height - 1;
+        const auto across = point.x < left ? left - point.x : point.x > right ? point.x - right : 0;
+        const auto down = point.y < top ? top - point.y : point.y > bottom ? point.y - bottom : 0;
+        const auto distance = across * across + down * down;
+        if (distance < best_distance) { best = index; best_distance = distance; }
+    }
+    return best;
+}
+
+// The displays of the platform, the primary one first, with one primary display and identifiers that differ from each other.
+std::vector<neo_display> read_displays(neoastra_app_t* app) {
+    std::vector<neo_display> displays;
+    neo_platform_get_displays(app, displays);
+    displays.erase(std::remove_if(displays.begin(), displays.end(), [](const neo_display& display) {
+        return display.bounds.width <= 0 || display.bounds.height <= 0;
+    }), displays.end());
+    if (displays.empty()) return displays;
+    auto primary = std::find_if(displays.begin(), displays.end(), [](const neo_display& display) { return (display.flags & NEOASTRA_DISPLAY_PRIMARY) != 0; });
+    // Without a primary display of the platform, the one that window positions are measured from is.
+    if (primary == displays.end()) primary = std::find_if(displays.begin(), displays.end(), [](const neo_display& display) { return contains(display.bounds, {0, 0}); });
+    if (primary == displays.end()) primary = displays.begin();
+    for (auto& display : displays) {
+        if (&display == &*primary) display.flags |= NEOASTRA_DISPLAY_PRIMARY; else display.flags &= ~NEOASTRA_DISPLAY_PRIMARY;
+        if (!(display.scale_factor > 0) || !std::isfinite(display.scale_factor)) display.scale_factor = 1.0;
+        if (!(display.refresh_rate > 0) || !std::isfinite(display.refresh_rate)) display.refresh_rate = 0;
+        // A work area is within the bounds; a platform that tells none has the bounds for it.
+        if ((display.flags & NEOASTRA_DISPLAY_WORK_AREA_REPORTED) == 0 || display.work_area.width <= 0 || display.work_area.height <= 0 || overlap(display.work_area, display.bounds) == 0) {
+            display.work_area = display.bounds;
+            display.flags &= ~NEOASTRA_DISPLAY_WORK_AREA_REPORTED;
+        }
+        if (!neo_valid_utf8(neo_string_view(display.name))) display.name.clear();
+        if (display.id.empty() || !neo_valid_utf8(neo_string_view(display.id))) { display.id = "display:" + std::to_string(display.handle); display.flags &= ~NEOASTRA_DISPLAY_ID_PERSISTENT; }
+        if (display.name.empty()) display.name = display.id;
+    }
+    std::stable_partition(displays.begin(), displays.end(), [](const neo_display& display) { return (display.flags & NEOASTRA_DISPLAY_PRIMARY) != 0; });
+    // Two identical monitors can share an identifier; the second one is told apart by its place in the list, which can change.
+    for (size_t index = 1; index < displays.size(); ++index) {
+        for (size_t other = 0; other < index; ++other) {
+            if (displays[other].id != displays[index].id) continue;
+            displays[index].id += "#" + std::to_string(index + 1);
+            displays[index].flags &= ~NEOASTRA_DISPLAY_ID_PERSISTENT;
+            other = static_cast<size_t>(-1);
+        }
+    }
+    return displays;
+}
+
+// What a change of the displays is told from.
+std::string describe_displays(const std::vector<neo_display>& displays) {
+    std::string value;
+    for (const auto& display : displays) {
+        value += display.id; value += '\n'; value += display.name; value += '\n';
+        for (const auto number : {display.bounds.x, display.bounds.y, display.bounds.width, display.bounds.height, display.work_area.x, display.work_area.y, display.work_area.width, display.work_area.height}) { value += std::to_string(number); value += ','; }
+        value += std::to_string(std::llround(display.scale_factor * 1000.0)); value += ',';
+        value += std::to_string(std::llround(display.refresh_rate * 1000.0)); value += ',';
+        value += std::to_string(display.rotation_degrees); value += ','; value += std::to_string(display.flags); value += '\n';
+    }
+    return value;
+}
+
+// The display of a window: the one the platform names, or else the one its bounds cover most, or else the primary one.
+size_t window_display(neoastra_window_t* window, const std::vector<neo_display>& displays, uint64_t handle) noexcept {
+    if (handle) {
+        for (size_t index = 0; index < displays.size(); ++index) if (displays[index].handle == handle) return index;
+    }
+    neoastra_rect_t bounds{};
+    { std::lock_guard lock(window->state_mutex); bounds = window->bounds; }
+    size_t best{};
+    int64_t best_overlap{};
+    for (size_t index = 0; index < displays.size(); ++index) {
+        const auto area = overlap(bounds, displays[index].bounds);
+        if (area > best_overlap) { best = index; best_overlap = area; }
+    }
+    return best;
+}
+
+void fill_display(const neo_display& display, neoastra_display_info_t* info) noexcept {
+    info->id = neo_string_view(display.id);
+    info->name = neo_string_view(display.name);
+    info->bounds = display.bounds;
+    info->work_area = display.work_area;
+    info->scale_factor = display.scale_factor;
+    info->refresh_rate = display.refresh_rate;
+    info->rotation_degrees = display.rotation_degrees;
+    info->flags = display.flags;
+}
+}
+
+void neo_window_display_changed(neoastra_window_t* window, bool force, bool report) noexcept {
+    neo_retain_guard owner(window);
+    if (!owner || !check_ui(window->app) || window->closed.load(std::memory_order_acquire) || window->ui_destroyed.load(std::memory_order_acquire) || !window->platform) return;
+    const auto handle = neo_platform_window_display_handle(window);
+    if (!force && window->display_known && (handle == window->display_handle || handle == 0)) return;
+    try {
+        // Read apart from the displays that the application handed out, whose strings stay valid.
+        const auto displays = read_displays(window->app);
+        if (displays.empty()) return;
+        const auto& display = displays[window_display(window, displays, handle)];
+        const auto known = window->display_known;
+        window->display_handle = handle;
+        window->display_known = true;
+        if (display.id == window->display_id) return;
+        window->display_id = display.id;
+        if (report && known) neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED, window->id);
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
+}
+
+void neo_app_displays_changed(neoastra_app_t* app) noexcept {
+    neo_retain_guard owner(app);
+    if (!owner || !check_ui(app) || !accepts_ui_objects(app)) return;
+    try {
+        auto current = describe_displays(read_displays(app));
+        const auto changed = current != app->reported_displays;
+        app->reported_displays = std::move(current);
+        if (changed) neo_emit_app(app, NEOASTRA_EVENT_DISPLAYS_CHANGED);
+        std::vector<neoastra_window_t*> windows;
+        {
+            std::lock_guard lock(app->windows_mutex);
+            windows.reserve(app->windows.size());
+            for (const auto& entry : app->windows) if (entry.second->retain()) windows.push_back(entry.second);
+        }
+        // A display that went away or changed its place can leave a window on another one without moving it.
+        for (auto* window : windows) { neo_window_display_changed(window, true); window->release(); }
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
+}
+
 extern "C" {
 
 uint32_t NEOASTRA_CALL neoastra_get_abi_version_major() { return NEOASTRA_ABI_VERSION_MAJOR; }
@@ -822,7 +965,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_DISPLAYS;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -922,6 +1065,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_create(const neoastra_app_options_t
         app->logs.set(options->log_callback,options->log_context);
         if(!neo_platform_initialize(app,error)){app->release();return error&&*error?(*error)->code:NEOASTRA_ERROR_BACKEND_UNAVAILABLE;}
         app->wake_ui=neo_platform_wake;
+        // A change is what differs from the displays there are now.
+        app->reported_displays=describe_displays(read_displays(app));
         neo_log(app, NEOASTRA_LOG_INFORMATION, "application", "Native application initialized");
         *output=app;
         return NEOASTRA_OK;
@@ -988,6 +1133,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t* app,c
         if(options->owner){window->owner=options->owner;window->owner->retain();}
         if(!neo_platform_window_create(window,options,error)){window->release();return error&&*error?(*error)->code:NEOASTRA_ERROR_NATIVE_FAILURE;}
         {std::lock_guard lock(app->windows_mutex);app->windows.emplace(window->id,window);window->was_registered=true;if(!app->main_window_id)app->main_window_id=window->id;}
+        // The display a window starts on is not a change.
+        neo_window_display_changed(window,true,false);
         *output=window;return NEOASTRA_OK;
     }catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}
 }
@@ -1005,8 +1152,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_window_get_maximum_size(const neoastra_
 neoastra_result_t NEOASTRA_CALL neoastra_window_set_maximum_size(neoastra_window_t* w,neoastra_size_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;if(value.width<0||value.height<0)return NEOASTRA_ERROR_INVALID_ARGUMENT;neoastra_size_t previous{};{std::lock_guard lock(w->state_mutex);if((value.width>0&&w->minimum_size.width>value.width)||(value.height>0&&w->minimum_size.height>value.height))return NEOASTRA_ERROR_INVALID_ARGUMENT;previous=w->maximum_size;w->maximum_size=value;}const auto result=neo_platform_window_set_size_constraints(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->maximum_size=previous;}return result;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_state(const neoastra_window_t* w,neoastra_window_state_t* value){if(!w||!value)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=w->state;return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_set_state(neoastra_window_t* w,neoastra_window_state_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||value>NEOASTRA_WINDOW_FULLSCREEN)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neoastra_window_state_t previous{};{std::lock_guard lock(w->state_mutex);previous=w->state;w->state=value;}const auto result=neo_platform_window_set_state(w);if(result!=NEOASTRA_OK){std::lock_guard lock(w->state_mutex);w->state=previous;}return result;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_get_attribute(const neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t* value){if(!w||!value||attribute>NEOASTRA_WINDOW_SHOW_IN_TASKBAR)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=(w->attributes&(1u<<attribute))!=0;return NEOASTRA_OK;}
-neoastra_result_t NEOASTRA_CALL neoastra_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t enabled){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||attribute>NEOASTRA_WINDOW_SHOW_IN_TASKBAR||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;{std::lock_guard lock(w->state_mutex);if(((w->attributes&(1u<<attribute))!=0)==(enabled!=0))return NEOASTRA_OK;}const auto result=neo_platform_window_set_attribute(w,attribute,enabled!=0);if(result==NEOASTRA_OK){std::lock_guard lock(w->state_mutex);if(enabled)w->attributes|=1u<<attribute;else w->attributes&=~(1u<<attribute);}return result;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_get_attribute(const neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t* value){if(!w||!value||attribute>NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS)return NEOASTRA_ERROR_INVALID_ARGUMENT;std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);*value=(w->attributes&(1u<<attribute))!=0;return NEOASTRA_OK;}
+neoastra_result_t NEOASTRA_CALL neoastra_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,uint32_t enabled){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||attribute>NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;{std::lock_guard lock(w->state_mutex);if(((w->attributes&(1u<<attribute))!=0)==(enabled!=0))return NEOASTRA_OK;}const auto result=neo_platform_window_set_attribute(w,attribute,enabled!=0);if(result==NEOASTRA_OK){std::lock_guard lock(w->state_mutex);if(enabled)w->attributes|=1u<<attribute;else w->attributes&=~(1u<<attribute);}return result;}
 neoastra_string_view_t NEOASTRA_CALL neoastra_window_get_title(const neoastra_window_t* w){if(!w)return {};std::lock_guard lock(const_cast<neoastra_window_t*>(w)->state_mutex);return neo_string_view(w->title);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_set_title(neoastra_window_t* w,neoastra_string_view_t value){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w||!neo_valid_utf8(value))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;try{{std::lock_guard lock(w->state_mutex);w->title=neo_string(value);}return neo_platform_window_set_title(w);}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t NEOASTRA_CALL neoastra_window_show(neoastra_window_t* w){neo_retain_guard owner(w);return !w?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(w->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_window_show(w,true);}
@@ -1020,6 +1167,97 @@ neoastra_result_t NEOASTRA_CALL neoastra_window_set_background_color(neoastra_wi
 neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_window_t* w){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;neo_window_request_close(w,NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC,true);return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t* w){neo_retain_guard owner(w);if(w&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!w)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(w->app))return NEOASTRA_ERROR_WRONG_THREAD;w->force_closing=true;return neo_platform_window_force_close(w);}
 neoastra_result_t NEOASTRA_CALL neoastra_window_get_native_handle(neoastra_window_t* w,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h){if(!w||!valid_struct(h,h?h->size:0,sizeof(*h)))return NEOASTRA_ERROR_INVALID_ARGUMENT;return neo_platform_window_get_handle(w,kind,h);}
+
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_display_count(neoastra_app_t* app, uint32_t* count) {
+    if (count) *count = 0;
+    neo_retain_guard owner(app);
+    if (!app || !count) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    try { app->displays = read_displays(app); } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+    *count = static_cast<uint32_t>(std::min<size_t>(app->displays.size(), UINT32_MAX));
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_display(neoastra_app_t* app, uint32_t index, neoastra_display_info_t* info) {
+    neo_retain_guard owner(app);
+    if (!app || !valid_struct(info, info ? info->size : 0, sizeof(*info))) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    if (index >= app->displays.size()) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    fill_display(app->displays[index], info);
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_display_at(neoastra_app_t* app, neoastra_point_t point, neoastra_display_info_t* info) {
+    neo_retain_guard owner(app);
+    if (!app || !valid_struct(info, info ? info->size : 0, sizeof(*info))) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    try {
+        auto displays = read_displays(app);
+        if (displays.empty()) return NEOASTRA_ERROR_NOT_SUPPORTED;
+        app->display_result = std::move(displays[display_at(displays, point)]);
+    } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+    fill_display(app->display_result, info);
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_window_capability(neoastra_app_t* app, neoastra_window_capability_t capability, neoastra_capability_info_t* info) {
+    if (!app || capability > NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS || !valid_struct(info, info ? info->size : 0, sizeof(*info))) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    info->support = NEOASTRA_SUPPORT_NONE; info->capability_version = 1; info->flags = 0; info->details = {};
+    neo_platform_window_capability(app, capability, info);
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_get_window_at(neoastra_app_t* app, neoastra_point_t point, neoastra_window_t* excluded, neoastra_window_t** window) {
+    if (window) *window = nullptr;
+    neo_retain_guard owner(app);
+    if (!app || !window || (excluded && excluded->app != app)) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    uint64_t id{};
+    const auto result = neo_platform_window_at(app, point, excluded, &id);
+    if (result != NEOASTRA_OK || id == 0) return result;
+    std::lock_guard lock(app->windows_mutex);
+    const auto found = app->windows.find(id);
+    if (found != app->windows.end() && found->second != excluded && found->second->retain()) *window = found->second;
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_window_get_display(neoastra_window_t* w, neoastra_display_info_t* info) {
+    neo_retain_guard owner(w);
+    if (!w || !valid_struct(info, info ? info->size : 0, sizeof(*info))) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner || w->closed.load(std::memory_order_acquire)) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(w->app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    try {
+        auto displays = read_displays(w->app);
+        if (displays.empty()) return NEOASTRA_ERROR_NOT_SUPPORTED;
+        w->app->display_result = std::move(displays[window_display(w, displays, w->platform ? neo_platform_window_display_handle(w) : 0)]);
+    } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+    fill_display(w->app->display_result, info);
+    return NEOASTRA_OK;
+}
+neoastra_result_t NEOASTRA_CALL neoastra_window_get_virtual_desktop(neoastra_window_t* w, neoastra_virtual_desktop_info_t* info) {
+    neo_retain_guard owner(w);
+    if (!w || !valid_struct(info, info ? info->size : 0, sizeof(*info))) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner || w->closed.load(std::memory_order_acquire) || !w->platform) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(w->app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    info->flags = 0; info->reserved = 0; info->id = {};
+    try {
+        uint32_t flags{};
+        std::string id;
+        const auto result = neo_platform_window_get_virtual_desktop(w, &flags, &id);
+        if (result != NEOASTRA_OK) return result;
+        w->virtual_desktop_id = std::move(id);
+        info->flags = flags & (NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN | NEOASTRA_VIRTUAL_DESKTOP_ON_CURRENT);
+        if ((info->flags & NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN) == 0) info->flags = 0;
+        info->id = neo_string_view(w->virtual_desktop_id);
+        return NEOASTRA_OK;
+    } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+}
+neoastra_result_t NEOASTRA_CALL neoastra_window_move_to_virtual_desktop(neoastra_window_t* w, neoastra_string_view_t id) {
+    neo_retain_guard owner(w);
+    if (!w || id.length == 0 || id.length > 256 || !neo_valid_utf8(id)) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner || w->closed.load(std::memory_order_acquire) || !w->platform) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(w->app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    try { return neo_platform_window_move_to_virtual_desktop(w, neo_string(id)); } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+}
 
 neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t* app,const neoastra_environment_options_t* options,neoastra_environment_created_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){
     if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
@@ -1167,6 +1405,21 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neo
 }
 neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t* v,double x,double y){neo_retain_guard owner(v);return !v||!std::isfinite(x)||!std::isfinite(y)?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_move_pointer(v,x,y);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:neo_platform_view_open_devtools(v);}
+namespace {
+neoastra_result_t convert_view_point(neoastra_view_t* view, bool to_screen, double x, double y, double* out_x, double* out_y) noexcept {
+    if (out_x) *out_x = 0;
+    if (out_y) *out_y = 0;
+    neo_retain_guard owner(view);
+    if (!view || !out_x || !out_y || !std::isfinite(x) || !std::isfinite(y)) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return NEOASTRA_ERROR_DISPOSED;
+    if (!check_ui(view->environment->app)) return NEOASTRA_ERROR_WRONG_THREAD;
+    const auto result = neo_platform_view_convert_point(view, to_screen, x, y, out_x, out_y);
+    if (result == NEOASTRA_OK && (!std::isfinite(*out_x) || !std::isfinite(*out_y))) { *out_x = 0; *out_y = 0; return NEOASTRA_ERROR_NATIVE_FAILURE; }
+    return result;
+}
+}
+neoastra_result_t NEOASTRA_CALL neoastra_view_point_to_screen(neoastra_view_t* v,double x,double y,double* screen_x,double* screen_y){return convert_view_point(v,true,x,y,screen_x,screen_y);}
+neoastra_result_t NEOASTRA_CALL neoastra_view_point_from_screen(neoastra_view_t* v,double screen_x,double screen_y,double* x,double* y){return convert_view_point(v,false,screen_x,screen_y,x,y);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t* v,const neoastra_capture_options_t* options,neoastra_buffer_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){
     if(outop)*outop=nullptr;
     if(!v||!cb||!valid_struct(options,options?options->size:0,sizeof(*options))||options->format>NEOASTRA_CAPTURE_FORMAT_JPEG||options->quality>100||options->full_page>1||options->region.width<0||options->region.height<0)return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid capture arguments");

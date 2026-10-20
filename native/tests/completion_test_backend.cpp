@@ -34,6 +34,13 @@ neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t*) noexcept
 neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t*, neoastra_title_bar_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+void neo_platform_get_displays(neoastra_app_t*, std::vector<neo_display>&) noexcept { }
+uint64_t neo_platform_window_display_handle(neoastra_window_t*) noexcept { return 0; }
+void neo_platform_window_capability(neoastra_app_t*, neoastra_window_capability_t, neoastra_capability_info_t*) noexcept { }
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t*, uint32_t*, std::string*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t*, const std::string&) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_window_at(neoastra_app_t*, neoastra_point_t, const neoastra_window_t*, uint64_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t*, bool, double, double, double*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 
 bool neo_platform_environment_create_async(neoastra_environment_t*, const neoastra_environment_options_t*, neo_platform_created_callback_t callback, void* context, neoastra_error_t**) noexcept {
     completion_test_backend::environment_callback = callback;

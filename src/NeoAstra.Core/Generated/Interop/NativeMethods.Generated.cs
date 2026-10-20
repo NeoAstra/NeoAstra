@@ -121,6 +121,9 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_WINDOW_FULLSCREEN = unchecked((uint)3),
         }
 
+        /// <summary>
+        /// ALL_VIRTUAL_DESKTOPS shows the window on every virtual desktop (a Space of macOS); NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS tells where a backend has it. A library from before it refuses it as an invalid argument.
+        /// </summary>
         public enum neoastra_window_attribute : uint
         {
             NEOASTRA_WINDOW_RESIZABLE = unchecked((uint)0),
@@ -130,6 +133,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_WINDOW_ALWAYS_ON_TOP = unchecked((uint)2),
 
             NEOASTRA_WINDOW_SHOW_IN_TASKBAR = unchecked((uint)3),
+
+            NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS = unchecked((uint)4),
         }
 
         public enum neoastra_window_resize_edge : uint
@@ -426,6 +431,16 @@ namespace NeoAstra.Interop.Generated
             /// A view event that follows an OPEN_EXTERNAL decision: the address is the uri, the value a neoastra_external_open_status_t, and the native code what the system reported when it could not open the address.
             /// </summary>
             NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED = unchecked((uint)38),
+
+            /// <summary>
+            /// An application event, without an object, when the displays, their bounds, work areas, scales, names, or the primary one changed.
+            /// </summary>
+            NEOASTRA_EVENT_DISPLAYS_CHANGED = unchecked((uint)39),
+
+            /// <summary>
+            /// A window event when the display that holds most of the window became another one, as neoastra_window_get_display tells.
+            /// </summary>
+            NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED = unchecked((uint)40),
         }
 
         public enum neoastra_capability : uint
@@ -495,6 +510,22 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_CAPABILITY_TLS_ERROR_DECISIONS = unchecked((uint)31),
 
             NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS = unchecked((uint)32),
+        }
+
+        /// <summary>
+        /// What a backend can do with displays and the placement of windows, which neoastra_app_get_window_capability tells. DISPLAYS: the displays and the display of a window; PLACEMENT: a position given to a window is where it goes; VIRTUAL_DESKTOPS: whether a window is on the current virtual desktop, and its identifier; VIRTUAL_DESKTOP_MOVE: neoastra_window_move_to_virtual_desktop; ALL_VIRTUAL_DESKTOPS: NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS.
+        /// </summary>
+        public enum neoastra_window_capability : uint
+        {
+            NEOASTRA_WINDOW_CAPABILITY_DISPLAYS = unchecked((uint)0),
+
+            NEOASTRA_WINDOW_CAPABILITY_PLACEMENT = unchecked((uint)1),
+
+            NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS = unchecked((uint)2),
+
+            NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE = unchecked((uint)3),
+
+            NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS = unchecked((uint)4),
         }
 
         public enum neoastra_log_level : uint
@@ -1335,6 +1366,56 @@ namespace NeoAstra.Interop.Generated
             public uint same_site;
         }
 
+        /// <summary>
+        /// A display, in the coordinates and units of the bounds of a window: measured from the top-left corner of the primary display with
+        /// the vertical axis pointing down, in logical units on macOS and with GTK and in the units that the system gives the process on
+        /// Windows (the pixels of the display for a process aware of display scaling). The work area is the part of the bounds that the
+        /// menu bar, the taskbar, the Dock, or the panels leave to windows. The scale factor is the number of pixels of the display for one
+        /// logical unit, as neoastra_window_get_scale_factor tells it for a window on the display. The refresh rate is in hertz, 0 when
+        /// unknown. The identifier and the name are UTF-8. Those of neoastra_app_get_display stay valid until the next call of
+        /// neoastra_app_get_display_count, and those of neoastra_app_get_display_at and neoastra_window_get_display until the next call of
+        /// either, on the UI thread of the application.
+        /// </summary>
+        public partial struct neoastra_display_info
+        {
+            public uint size;
+
+            public uint version;
+
+            public NativeMethods.neoastra_string_view_t id;
+
+            public NativeMethods.neoastra_string_view_t name;
+
+            public NativeMethods.neoastra_rect_t bounds;
+
+            public NativeMethods.neoastra_rect_t work_area;
+
+            public double scale_factor;
+
+            public double refresh_rate;
+
+            public uint rotation_degrees;
+
+            public uint flags;
+        }
+
+        /// <summary>
+        /// Where a window is among the virtual desktops. The identifier is opaque UTF-8, empty when unknown, and stays valid until the next
+        /// virtual-desktop call of the window on the UI thread.
+        /// </summary>
+        public partial struct neoastra_virtual_desktop_info
+        {
+            public uint size;
+
+            public uint version;
+
+            public uint flags;
+
+            public uint reserved;
+
+            public NativeMethods.neoastra_string_view_t id;
+        }
+
         public readonly partial record struct neoastra_struct_header_t(NativeMethods.neoastra_struct_header Value)
         {
             public static implicit operator NativeMethods.neoastra_struct_header (neoastra_struct_header_t from) => from.Value;
@@ -1349,6 +1430,9 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_point_t (NativeMethods.neoastra_point from) => new (from);
         }
 
+        /// <summary>
+        /// ALL_VIRTUAL_DESKTOPS shows the window on every virtual desktop (a Space of macOS); NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS tells where a backend has it. A library from before it refuses it as an invalid argument.
+        /// </summary>
         public readonly partial record struct neoastra_window_attribute_t(NativeMethods.neoastra_window_attribute Value)
         {
             public static implicit operator NativeMethods.neoastra_window_attribute (neoastra_window_attribute_t from) => from.Value;
@@ -1433,6 +1517,16 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator NativeMethods.neoastra_capability (neoastra_capability_t from) => from.Value;
 
             public static implicit operator neoastra_capability_t (NativeMethods.neoastra_capability from) => new (from);
+        }
+
+        /// <summary>
+        /// What a backend can do with displays and the placement of windows, which neoastra_app_get_window_capability tells. DISPLAYS: the displays and the display of a window; PLACEMENT: a position given to a window is where it goes; VIRTUAL_DESKTOPS: whether a window is on the current virtual desktop, and its identifier; VIRTUAL_DESKTOP_MOVE: neoastra_window_move_to_virtual_desktop; ALL_VIRTUAL_DESKTOPS: NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS.
+        /// </summary>
+        public readonly partial record struct neoastra_window_capability_t(NativeMethods.neoastra_window_capability Value)
+        {
+            public static implicit operator NativeMethods.neoastra_window_capability (neoastra_window_capability_t from) => from.Value;
+
+            public static implicit operator neoastra_window_capability_t (NativeMethods.neoastra_window_capability from) => new (from);
         }
 
         public readonly partial record struct neoastra_data_kind_t(ulong Value)
@@ -1597,6 +1691,34 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator NativeMethods.neoastra_cookie (neoastra_cookie_t from) => from.Value;
 
             public static implicit operator neoastra_cookie_t (NativeMethods.neoastra_cookie from) => new (from);
+        }
+
+        /// <summary>
+        /// A display, in the coordinates and units of the bounds of a window: measured from the top-left corner of the primary display with
+        /// the vertical axis pointing down, in logical units on macOS and with GTK and in the units that the system gives the process on
+        /// Windows (the pixels of the display for a process aware of display scaling). The work area is the part of the bounds that the
+        /// menu bar, the taskbar, the Dock, or the panels leave to windows. The scale factor is the number of pixels of the display for one
+        /// logical unit, as neoastra_window_get_scale_factor tells it for a window on the display. The refresh rate is in hertz, 0 when
+        /// unknown. The identifier and the name are UTF-8. Those of neoastra_app_get_display stay valid until the next call of
+        /// neoastra_app_get_display_count, and those of neoastra_app_get_display_at and neoastra_window_get_display until the next call of
+        /// either, on the UI thread of the application.
+        /// </summary>
+        public readonly partial record struct neoastra_display_info_t(NativeMethods.neoastra_display_info Value)
+        {
+            public static implicit operator NativeMethods.neoastra_display_info (neoastra_display_info_t from) => from.Value;
+
+            public static implicit operator neoastra_display_info_t (NativeMethods.neoastra_display_info from) => new (from);
+        }
+
+        /// <summary>
+        /// Where a window is among the virtual desktops. The identifier is opaque UTF-8, empty when unknown, and stays valid until the next
+        /// virtual-desktop call of the window on the UI thread.
+        /// </summary>
+        public readonly partial record struct neoastra_virtual_desktop_info_t(NativeMethods.neoastra_virtual_desktop_info Value)
+        {
+            public static implicit operator NativeMethods.neoastra_virtual_desktop_info (neoastra_virtual_desktop_info_t from) => from.Value;
+
+            public static implicit operator neoastra_virtual_desktop_info_t (NativeMethods.neoastra_virtual_desktop_info from) => new (from);
         }
 
         public readonly partial struct neoastra_environment_created_callback_t : IEquatable<neoastra_environment_created_callback_t>
@@ -1949,6 +2071,48 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_app_get_window(NativeMethods.neoastra_app_t arg0, ulong arg1, NativeMethods.neoastra_window_t* arg2);
 
+        /// <summary>
+        /// Reads the displays again and tells how many there are, at least one when the platform reports any. Must be called on the UI
+        /// thread; neoastra_app_get_display then reads them, the primary one first.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_get_display_count")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_get_display_count(NativeMethods.neoastra_app_t arg0, uint* arg1);
+
+        /// <summary>
+        /// One of the displays that neoastra_app_get_display_count read last, by index. The info must have its size and version set.
+        /// NEOASTRA_ERROR_INVALID_ARGUMENT for an index beyond the count. Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_get_display")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_get_display(NativeMethods.neoastra_app_t arg0, uint arg1, NativeMethods.neoastra_display_info_t* arg2);
+
+        /// <summary>
+        /// Reads the displays again and returns the one that holds the point, in the coordinates of the bounds of a window, or else the
+        /// one nearest to it. NEOASTRA_ERROR_NOT_SUPPORTED when the platform reports no display. Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_get_display_at")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_get_display_at(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_point_t arg1, NativeMethods.neoastra_display_info_t* arg2);
+
+        /// <summary>
+        /// What the backend can do with displays, the placement of windows, and virtual desktops.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_get_window_capability")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_get_window_capability(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_window_capability_t arg1, NativeMethods.neoastra_capability_info_t* arg2);
+
+        /// <summary>
+        /// The front-most window of the application whose frame (what neoastra_window_get_frame returns) holds the point, in the
+        /// coordinates of the bounds of a window, among its visible windows that are not minimized and are on the current virtual desktop.
+        /// The windows of other applications are not looked at. The excluded window, when not null, is passed over. The window is
+        /// retained, or null when none holds the point. NEOASTRA_ERROR_NOT_SUPPORTED where the backend knows neither where its windows
+        /// are nor their order (GTK). Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_get_window_at")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_get_window_at(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_point_t arg1, NativeMethods.neoastra_window_t arg2, NativeMethods.neoastra_window_t* arg3);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_id")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial ulong neoastra_window_get_id(NativeMethods.neoastra_window_t arg0);
@@ -2070,6 +2234,34 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_window_get_native_handle(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_native_handle_kind_t arg1, NativeMethods.neoastra_native_handle_t* arg2);
 
+        /// <summary>
+        /// Reads the displays again and returns the one that holds most of the window, also for a hidden window: the one the platform
+        /// says the window is on, or else the one its bounds cover most, or else the primary one. NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED
+        /// tells when it becomes another one. NEOASTRA_ERROR_NOT_SUPPORTED when the platform reports no display. Must be called on the
+        /// UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_display")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_display(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_display_info_t* arg1);
+
+        /// <summary>
+        /// Whether the window is on the current virtual desktop and the identifier of its desktop, as far as the platform tells.
+        /// NEOASTRA_ERROR_NOT_SUPPORTED where the platform tells neither, NEOASTRA_ERROR_INVALID_STATE while the platform tracks no
+        /// desktop for the window (a window that was never shown). Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_get_virtual_desktop")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_get_virtual_desktop(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_virtual_desktop_info_t* arg1);
+
+        /// <summary>
+        /// Moves the window to the virtual desktop of an identifier that neoastra_window_get_virtual_desktop returned.
+        /// NEOASTRA_ERROR_NOT_SUPPORTED where the platform cannot move a window, NEOASTRA_ERROR_INVALID_ARGUMENT for an identifier of no
+        /// desktop, NEOASTRA_ERROR_INVALID_STATE while the platform tracks no desktop for the window. Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_window_move_to_virtual_desktop")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_window_move_to_virtual_desktop(NativeMethods.neoastra_window_t arg0, NativeMethods.neoastra_string_view_t arg1);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_environment_create_async")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_environment_create_async(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_environment_options_t* arg1, NativeMethods.neoastra_environment_created_callback_t arg2, void* arg3, NativeMethods.neoastra_operation_t* arg4, NativeMethods.neoastra_error_t* arg5);
@@ -2181,6 +2373,20 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_open_devtools")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_open_devtools(NativeMethods.neoastra_view_t arg0);
+
+        /// <summary>
+        /// Converts a point of the view, in CSS pixels of its main viewport as a page reports clientX and clientY, to the coordinates and
+        /// units of the bounds of a window, and back: the bounds of the view in its window, the place of the client area of the window on
+        /// screen, the scale of its display, and the zoom of the view are counted in. NEOASTRA_ERROR_NOT_SUPPORTED where the backend does
+        /// not know where a window is on screen (GTK). Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_point_to_screen")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_point_to_screen(NativeMethods.neoastra_view_t arg0, double arg1, double arg2, double* arg3, double* arg4);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_point_from_screen")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_point_from_screen(NativeMethods.neoastra_view_t arg0, double arg1, double arg2, double* arg3, double* arg4);
 
         /// <summary>
         /// Completes with the encoded image of what the view currently shows. Its pixel size is the captured size in CSS pixels times the zoom and device scale of the view.

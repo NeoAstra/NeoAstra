@@ -8,6 +8,7 @@
 #import <Security/Security.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -17,7 +18,7 @@
 
 namespace {
 // `wake_pending` is true, under the platform mutex, while a drain block waits on the main queue: that one block stands for all queued work.
-struct cocoa_app { id previous_delegate; id delegate; neoastra_decision_t* termination_decision{}; bool wake_pending{}; };
+struct cocoa_app { id previous_delegate; id delegate; neoastra_decision_t* termination_decision{}; bool wake_pending{}; id screen_observer; };
 struct cocoa_window;
 struct cocoa_environment { WKProcessPool* process_pool; WKWebsiteDataStore* data_store; };
 struct cocoa_profile { WKWebsiteDataStore* data_store; };
@@ -333,7 +334,8 @@ void sync_bounds(neoastra_window_t* value,NSWindow* window){if(!window)return;co
 - (void)windowWillClose:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(owner){auto* state=static_cast<cocoa_window*>(value->platform);if(state&&state->modal_active&&state->window.sheetParent){NSWindow* native=state->window;state->modal_active=false;[native.sheetParent endSheet:native];state=static_cast<cocoa_window*>(value->platform);}if(state)state->window=nil;neo_window_closed(value);} }
 - (void)windowDidResize:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(!owner)return;auto* state=static_cast<cocoa_window*>(value->platform);if(!state)return;NSWindow* window=state->window;sync_bounds(value,window);neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_RESIZED,value->id);if((window.styleMask&NSWindowStyleMaskFullScreen)!=0)report_window_state(value,NEOASTRA_WINDOW_FULLSCREEN);else if(window.miniaturized)report_window_state(value,NEOASTRA_WINDOW_MINIMIZED);else report_window_state(value,window.zoomed?NEOASTRA_WINDOW_MAXIMIZED:NEOASTRA_WINDOW_NORMAL); }
 - (void)windowDidChangeBackingProperties:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(!owner)return;auto* state=static_cast<cocoa_window*>(value->platform);if(state&&state->window)neo_window_set_scale_factor(value,state->window.backingScaleFactor); }
-- (void)windowDidMove:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(!owner)return;auto* state=static_cast<cocoa_window*>(value->platform);if(state)sync_bounds(value,state->window);neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_MOVED,value->id); }
+- (void)windowDidMove:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(!owner)return;auto* state=static_cast<cocoa_window*>(value->platform);if(state)sync_bounds(value,state->window);neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_MOVED,value->id);neo_window_display_changed(value); }
+- (void)windowDidChangeScreen:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(owner)neo_window_display_changed(value); }
 - (void)windowDidBecomeKey:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(owner)neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,value->id,nullptr,nullptr,1); }
 - (void)windowDidResignKey:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(owner)neo_emit_app(value->app,NEOASTRA_EVENT_WINDOW_FOCUS_CHANGED,value->id,nullptr,nullptr,0); }
 - (void)windowDidMiniaturize:(NSNotification*)notification { (void)notification;auto* value=self.nativeWindow;neo_retain_guard owner(value);if(owner)report_window_state(value,NEOASTRA_WINDOW_MINIMIZED); }
@@ -469,8 +471,11 @@ WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app,const std::string&
 }
 }
 
-bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t**) noexcept {@autoreleasepool{[NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];auto* state=new cocoa_app{};state->previous_delegate=NSApp.delegate;NeoApplicationDelegate* delegate=[NeoApplicationDelegate new];delegate.nativeApplication=app;delegate.previousDelegate=state->previous_delegate;state->delegate=delegate;NSApp.delegate=delegate;app->platform=state;return true;}}
-void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<cocoa_app*>(app->platform);if(state){if(state->termination_decision){auto* decision=state->termination_decision;state->termination_decision=nullptr;decision->completion=nullptr;decision->completion_context=nullptr;decision->abandon();decision->release();}((NeoApplicationDelegate*)state->delegate).nativeApplication=nullptr;if(NSApp.delegate==state->delegate)NSApp.delegate=state->previous_delegate;delete state;}app->platform=nullptr;}
+bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t**) noexcept {@autoreleasepool{[NSApplication sharedApplication];[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];auto* state=new cocoa_app{};state->previous_delegate=NSApp.delegate;NeoApplicationDelegate* delegate=[NeoApplicationDelegate new];delegate.nativeApplication=app;delegate.previousDelegate=state->previous_delegate;state->delegate=delegate;NSApp.delegate=delegate;app->platform=state;
+    // Posted on the main thread when a display comes, goes, or changes its frame, its visible frame, or its scale; without a queue the block runs there at once.
+    state->screen_observer=[NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification*){neo_app_displays_changed(app);}];
+    return true;}}
+void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<cocoa_app*>(app->platform);if(state){if(state->termination_decision){auto* decision=state->termination_decision;state->termination_decision=nullptr;decision->completion=nullptr;decision->completion_context=nullptr;decision->abandon();decision->release();}if(state->screen_observer){[NSNotificationCenter.defaultCenter removeObserver:state->screen_observer];state->screen_observer=nil;}((NeoApplicationDelegate*)state->delegate).nativeApplication=nullptr;if(NSApp.delegate==state->delegate)NSApp.delegate=state->previous_delegate;delete state;}app->platform=nullptr;}
 bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept {dispatch_async(dispatch_get_main_queue(),^{neo_destroy_app_on_ui(app);});return true;}
 int32_t neo_platform_run(neoastra_app_t* app) noexcept {@autoreleasepool{[NSApp run];return app->exit_code.load();}}
 void neo_platform_quit(neoastra_app_t*) noexcept {dispatch_async(dispatch_get_main_queue(),^{[NSApp stop:nil];NSEvent* event=[NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];[NSApp postEvent:event atStart:NO];});}
@@ -551,7 +556,10 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexc
     }
     return NEOASTRA_OK;
 }
-neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window,neoastra_window_attribute_t attribute,bool enabled) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;switch(attribute){case NEOASTRA_WINDOW_RESIZABLE:{auto style=state->window.styleMask;if(enabled)style|=NSWindowStyleMaskResizable;else style&=~NSWindowStyleMaskResizable;state->window.styleMask=style;break;}case NEOASTRA_WINDOW_DECORATED:{auto style=state->window.styleMask;if(enabled)style|=NSWindowStyleMaskTitled;else style&=~NSWindowStyleMaskTitled;state->window.styleMask=style;if(window->platform!=state)return NEOASTRA_ERROR_DISPOSED;if(enabled&&window->title_bar.style!=NEOASTRA_TITLE_BAR_DEFAULT)apply_title_bar(window,state);if(window->platform!=state)return NEOASTRA_ERROR_DISPOSED;sync_bounds(window,state->window);break;}case NEOASTRA_WINDOW_ALWAYS_ON_TOP:state->window.level=enabled?NSFloatingWindowLevel:NSNormalWindowLevel;break;case NEOASTRA_WINDOW_SHOW_IN_TASKBAR:return NEOASTRA_ERROR_NOT_SUPPORTED;default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}}
+neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window,neoastra_window_attribute_t attribute,bool enabled) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;switch(attribute){case NEOASTRA_WINDOW_RESIZABLE:{auto style=state->window.styleMask;if(enabled)style|=NSWindowStyleMaskResizable;else style&=~NSWindowStyleMaskResizable;state->window.styleMask=style;break;}case NEOASTRA_WINDOW_DECORATED:{auto style=state->window.styleMask;if(enabled)style|=NSWindowStyleMaskTitled;else style&=~NSWindowStyleMaskTitled;state->window.styleMask=style;if(window->platform!=state)return NEOASTRA_ERROR_DISPOSED;if(enabled&&window->title_bar.style!=NEOASTRA_TITLE_BAR_DEFAULT)apply_title_bar(window,state);if(window->platform!=state)return NEOASTRA_ERROR_DISPOSED;sync_bounds(window,state->window);break;}case NEOASTRA_WINDOW_ALWAYS_ON_TOP:state->window.level=enabled?NSFloatingWindowLevel:NSNormalWindowLevel;break;case NEOASTRA_WINDOW_SHOW_IN_TASKBAR:return NEOASTRA_ERROR_NOT_SUPPORTED;case NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS:{
+        // A window that joins every Space cannot also move to the active one, which AppKit refuses with an exception.
+        auto behavior=state->window.collectionBehavior;if(enabled){behavior|=NSWindowCollectionBehaviorCanJoinAllSpaces;behavior&=~NSWindowCollectionBehaviorMoveToActiveSpace;}else behavior&=~NSWindowCollectionBehaviorCanJoinAllSpaces;
+        @try{state->window.collectionBehavior=behavior;}@catch(NSException*){return NEOASTRA_ERROR_NATIVE_FAILURE;}break;}default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;NSEvent* event=NSApp.currentEvent;
     // A renderer request arrives after the press; the drag is only valid while that press is still held.
     if(!event||(event.type!=NSEventTypeLeftMouseDown&&event.type!=NSEventTypeLeftMouseDragged)||(NSEvent.pressedMouseButtons&1u)==0)return NEOASTRA_ERROR_INVALID_STATE;
@@ -784,3 +792,101 @@ neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra
     return NEOASTRA_OK;
 }}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WKWEBVIEW&&kind!=NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;handle->kind=kind;handle->value=(__bridge void*)state->webview;return NEOASTRA_OK;}
+
+namespace {
+CGDirectDisplayID screen_display(NSScreen* screen) {NSNumber* number=screen.deviceDescription[@"NSScreenNumber"];return [number isKindOfClass:NSNumber.class]?number.unsignedIntValue:0;}
+// AppKit frames start at the bottom-left corner of the primary display, and the bounds of a window at its top-left corner.
+neoastra_rect_t top_left_rect(NSRect frame,CGFloat top) {return {(int32_t)lround(NSMinX(frame)),(int32_t)lround(top-NSMaxY(frame)),(int32_t)lround(NSWidth(frame)),(int32_t)lround(NSHeight(frame))};}
+}
+
+// The first screen is the one with the menu bar, whose bottom-left corner is the origin of AppKit, and the primary display.
+void neo_platform_get_displays(neoastra_app_t*,std::vector<neo_display>& displays) noexcept {@autoreleasepool{
+    try{
+        displays.clear();
+        NSArray<NSScreen*>* screens=NSScreen.screens;
+        if(!screens.count)return;
+        const CGFloat top=NSHeight(screens[0].frame);
+        for(NSUInteger index=0;index<screens.count;++index){
+            NSScreen* screen=screens[index];
+            const auto number=screen_display(screen);
+            neo_display display;
+            display.handle=number;
+            display.bounds=top_left_rect(screen.frame,top);
+            // The visible frame leaves out the menu bar and the Dock.
+            display.work_area=top_left_rect(screen.visibleFrame,top);
+            display.flags=NEOASTRA_DISPLAY_WORK_AREA_REPORTED|(index==0?NEOASTRA_DISPLAY_PRIMARY:0u);
+            display.scale_factor=screen.backingScaleFactor;
+            display.name=utf8(screen.localizedName);
+            if(number){
+                // The vendor, model, and serial numbers of the monitor name it after a restart; a display without them lasts for the session.
+                const auto vendor=CGDisplayVendorNumber(number),model=CGDisplayModelNumber(number),serial=CGDisplaySerialNumber(number);
+                char text[48]{};
+                std::snprintf(text,sizeof(text),"cg:%08x-%08x-%08x",static_cast<unsigned>(vendor),static_cast<unsigned>(model),static_cast<unsigned>(serial));
+                display.id=text;
+                if(vendor||model)display.flags|=NEOASTRA_DISPLAY_ID_PERSISTENT;
+                else display.id+=":"+std::to_string(number);
+                const auto rotation=((static_cast<long>(lround(CGDisplayRotation(number)))%360)+360)%360;
+                if(rotation==0||rotation==90||rotation==180||rotation==270){display.rotation_degrees=static_cast<uint32_t>(rotation);display.flags|=NEOASTRA_DISPLAY_ROTATION_REPORTED;}
+                if(CGDisplayModeRef mode=CGDisplayCopyDisplayMode(number)){display.refresh_rate=CGDisplayModeGetRefreshRate(mode);CGDisplayModeRelease(mode);}
+            }
+            // A built-in panel reports no rate in its display mode.
+            if(display.refresh_rate<=0&&screen.maximumFramesPerSecond>0)display.refresh_rate=static_cast<double>(screen.maximumFramesPerSecond);
+            displays.push_back(std::move(display));
+        }
+    }catch(...){displays.clear();}
+}}
+
+// A window that is not on screen has no screen.
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return 0;NSScreen* screen=state->window.screen;return screen?screen_display(screen):0;}}
+
+void neo_platform_window_capability(neoastra_app_t*,neoastra_window_capability_t capability,neoastra_capability_info_t* info) noexcept {
+    static const std::string displays="NSScreen frames and visible frames in the top-left coordinates of window bounds, in points; identifiers from the vendor, model, and serial numbers of CoreGraphics";
+    static const std::string placement="AppKit keeps the title bar of a titled window below the menu bar, so a requested position can be adjusted";
+    static const std::string desktops="NSWindow.isOnActiveSpace tells whether a window is on the active Space; macOS has no public identifier of a Space";
+    static const std::string move="macOS has no public API to move a window to another Space";
+    static const std::string all_desktops="NSWindowCollectionBehaviorCanJoinAllSpaces shows a window on every Space";
+    switch(capability){
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS:info->support=NEOASTRA_SUPPORT_NATIVE;info->details=neo_string_view(displays);break;
+        case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT:info->support=NEOASTRA_SUPPORT_NATIVE;info->details=neo_string_view(placement);break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:info->support=NEOASTRA_SUPPORT_LIMITED;info->details=neo_string_view(desktops);break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE:info->details=neo_string_view(move);break;
+        case NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS:info->support=NEOASTRA_SUPPORT_NATIVE;info->details=neo_string_view(all_desktops);break;
+        default:break;
+    }
+}
+
+// A Space has no public identifier, so only whether the window is on the active one is told.
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* window,uint32_t* flags,std::string*) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;*flags|=NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN|(state->window.isOnActiveSpace?NEOASTRA_VIRTUAL_DESKTOP_ON_CURRENT:0u);return NEOASTRA_OK;}}
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* window,const std::string&) noexcept {auto* state=static_cast<cocoa_window*>(window->platform);return !state||!state->window?NEOASTRA_ERROR_DISPOSED:NEOASTRA_ERROR_NOT_SUPPORTED;}
+
+// The windows of the application, front first; a window on another Space is not on screen.
+neoastra_result_t neo_platform_window_at(neoastra_app_t* app,neoastra_point_t point,const neoastra_window_t* excluded,uint64_t* found) noexcept {@autoreleasepool{
+    for(NSWindow* native in NSApp.orderedWindows){
+        if(!native.visible||native.miniaturized||!native.isOnActiveSpace)continue;
+        if(![native.delegate isKindOfClass:NeoWindowDelegate.class])continue;
+        auto* window=((NeoWindowDelegate*)native.delegate).nativeWindow;
+        if(!window||window==excluded||window->app!=app||!window->platform)continue;
+        neoastra_rect_t frame{};
+        if(neo_platform_window_get_frame(window,&frame)!=NEOASTRA_OK)continue;
+        if(point.x>=frame.x&&point.y>=frame.y&&int64_t{point.x}<int64_t{frame.x}+frame.width&&int64_t{point.y}<int64_t{frame.y}+frame.height){*found=window->id;break;}
+    }
+    return NEOASTRA_OK;
+}}
+
+// CSS pixels become view units through the page zoom and the magnification of a pinch, the view and its window place them on
+// screen, and the screen point is turned to the top-left coordinates of window bounds.
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view,bool to_screen,double x,double y,double* out_x,double* out_y) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    WKWebView* web=state->webview;NSWindow* window=web.window;if(!window)return NEOASTRA_ERROR_INVALID_STATE;
+    const CGFloat zoom=(web.pageZoom>0?web.pageZoom:1)*(web.magnification>0?web.magnification:1);
+    const CGFloat top=primary_display_height();
+    if(to_screen){
+        const NSPoint local=NSMakePoint(x*zoom,web.isFlipped?y*zoom:NSHeight(web.bounds)-y*zoom);
+        const NSPoint screen=[window convertPointToScreen:[web convertPoint:local toView:nil]];
+        *out_x=screen.x;*out_y=top-screen.y;
+    }else{
+        const NSPoint local=[web convertPoint:[window convertPointFromScreen:NSMakePoint(x,top-y)] fromView:nil];
+        *out_x=local.x/zoom;*out_y=(web.isFlipped?local.y:NSHeight(web.bounds)-local.y)/zoom;
+    }
+    return NEOASTRA_OK;
+}}

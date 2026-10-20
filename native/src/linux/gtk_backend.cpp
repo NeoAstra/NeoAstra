@@ -14,9 +14,14 @@
 #include <utility>
 #include <vector>
 
+// Of the X11 backend of GDK, which GTK may be built without: null where it is absent.
+extern "C" __attribute__((weak)) void gdk_x11_monitor_get_workarea(GdkMonitor* monitor, GdkRectangle* workarea);
+
 namespace {
-struct gtk_app { GMainContext* context{}; GMainLoop* loop{}; GSource* wake_source{}; };
-struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; GdkSurface* surface{}; gulong laid_out{}; };
+// `monitors` is the list of the monitors of the display, and `watched` the monitors whose changes are listened to, each held.
+// `display_source` reads the displays once GTK is done telling of a change.
+struct gtk_app { GMainContext* context{}; GMainLoop* loop{}; GSource* wake_source{}; GListModel* monitors{}; gulong monitors_changed{}; std::vector<GdkMonitor*> watched; GSource* display_source{}; };
+struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{NEOASTRA_WINDOW_NORMAL}; GdkSurface* surface{}; gulong laid_out{}; gulong entered_monitor{}; gulong left_monitor{}; };
 struct gtk_scheme_context { neoastra_environment_t* environment{}; };
 struct gtk_environment { WebKitWebContext* context{}; WebKitNetworkSession* session{}; gulong download_started{}; std::vector<gtk_scheme_context*> schemes; };
 struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{}; };
@@ -325,7 +330,9 @@ void window_laid_out(GdkSurface*,int,int,void* data){
     bool changed{};{std::lock_guard lock(window->state_mutex);changed=window->bounds.width!=width||window->bounds.height!=height;window->bounds.width=width;window->bounds.height=height;}
     if(changed)neo_emit_app(window->app,NEOASTRA_EVENT_WINDOW_RESIZED,window->id);
 }
-void unwatch_window_size(gtk_window* state) noexcept {if(!state->surface)return;g_signal_handler_disconnect(state->surface,state->laid_out);g_object_unref(state->surface);state->surface=nullptr;state->laid_out=0;}
+void unwatch_window_size(gtk_window* state) noexcept {if(!state->surface)return;g_signal_handler_disconnect(state->surface,state->laid_out);if(state->entered_monitor)g_signal_handler_disconnect(state->surface,state->entered_monitor);if(state->left_monitor)g_signal_handler_disconnect(state->surface,state->left_monitor);g_object_unref(state->surface);state->surface=nullptr;state->laid_out=0;state->entered_monitor=0;state->left_monitor=0;}
+// The surface of a window enters and leaves the monitors it is shown on.
+void window_monitor_changed(GdkSurface*,GdkMonitor*,void* data){neo_window_display_changed(static_cast<neoastra_window_t*>(data));}
 // The surface says when a size is settled, after the window gave its widgets their place. A window gets its surface when it is first
 // shown and keeps it while hidden, and the surface is held so that the handler can be removed whatever became of the window.
 void window_realized(GtkWidget* widget,void* data){
@@ -333,6 +340,7 @@ void window_realized(GtkWidget* widget,void* data){
     auto* surface=gtk_native_get_surface(GTK_NATIVE(widget));if(surface==state->surface)return;
     unwatch_window_size(state);if(!surface)return;
     state->surface=GDK_SURFACE(g_object_ref(surface));state->laid_out=g_signal_connect_after(surface,"layout",G_CALLBACK(window_laid_out),window);
+    state->entered_monitor=g_signal_connect(surface,"enter-monitor",G_CALLBACK(window_monitor_changed),window);state->left_monitor=g_signal_connect(surface,"leave-monitor",G_CALLBACK(window_monitor_changed),window);
 }
 // GTK counts a display in whole pixels for each logical unit.
 void window_scale_changed(GObject* object,GParamSpec*,void* data){auto* window=static_cast<neoastra_window_t*>(data);neo_retain_guard owner(window);if(!owner)return;neo_window_set_scale_factor(window,gtk_widget_get_scale_factor(GTK_WIDGET(object)));}
@@ -707,8 +715,38 @@ struct clear_context { neoastra_completion_callback_t callback{};void* context{}
 void clear_finished(GObject* object,GAsyncResult* result,void* data){std::unique_ptr<clear_context> completion(static_cast<clear_context*>(data));GError* error{};const auto success=webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(object),result,&error);const auto requested=success?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;neoastra_error_t* native_error=error?make_error(requested,error->message,error->code):nullptr;neoastra_result_t actual{};if(completion->operation->try_complete(requested,actual))completion->callback(completion->context,actual,actual==requested?native_error:nullptr);if(error)g_error_free(error);if(native_error)native_error->release();completion->operation->release();}
 }
 
-bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t** error) noexcept {if(!gtk_init_check()){neo_fail(error,NEOASTRA_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();state->loop=g_main_loop_new(state->context,FALSE);if(!state->loop){g_main_context_unref(state->context);delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK main-loop allocation failed");return false;}app->platform=state;return true;}
-void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state)return;if(state->wake_source){g_source_destroy(state->wake_source);g_source_unref(state->wake_source);state->wake_source=nullptr;}if(state->loop)g_main_loop_unref(state->loop);if(state->context)g_main_context_unref(state->context);delete state;app->platform=nullptr;}
+namespace {
+void unwatch_monitors(gtk_app* state,neoastra_app_t* app) noexcept {for(auto* monitor:state->watched){g_signal_handlers_disconnect_by_data(monitor,app);g_object_unref(monitor);}state->watched.clear();}
+void watch_monitors(neoastra_app_t* app) noexcept;
+gboolean read_changed_displays(void* data){
+    auto* app=static_cast<neoastra_app_t*>(data);
+    if(auto* state=static_cast<gtk_app*>(app->platform);state&&state->display_source){g_source_unref(state->display_source);state->display_source=nullptr;}
+    watch_monitors(app);neo_app_displays_changed(app);return G_SOURCE_REMOVE;
+}
+void displays_changed_soon(neoastra_app_t* app) noexcept {
+    auto* state=static_cast<gtk_app*>(app->platform);if(!state||state->display_source)return;
+    state->display_source=g_idle_source_new();g_source_set_callback(state->display_source,read_changed_displays,app,nullptr);g_source_attach(state->display_source,state->context);
+}
+void monitor_changed(GObject*,GParamSpec*,void* data){displays_changed_soon(static_cast<neoastra_app_t*>(data));}
+void monitors_changed(GListModel*,guint,guint,guint,void* data){displays_changed_soon(static_cast<neoastra_app_t*>(data));}
+// The monitors that are in the list now are listened to, and those that left it are let go.
+void watch_monitors(neoastra_app_t* app) noexcept {
+    auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->monitors)return;
+    unwatch_monitors(state,app);
+    const auto count=g_list_model_get_n_items(state->monitors);
+    for(guint index=0;index<count;++index){
+        auto* monitor=GDK_MONITOR(g_list_model_get_item(state->monitors,index));if(!monitor)continue;
+        try{state->watched.push_back(monitor);}catch(...){g_object_unref(monitor);continue;}
+        g_signal_connect(monitor,"notify",G_CALLBACK(monitor_changed),app);
+    }
+}
+}
+
+bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t** error) noexcept {if(!gtk_init_check()){neo_fail(error,NEOASTRA_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();state->loop=g_main_loop_new(state->context,FALSE);if(!state->loop){g_main_context_unref(state->context);delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK main-loop allocation failed");return false;}app->platform=state;
+    // A monitor that comes or goes changes the list, and one that changes its geometry, scale, or work area notifies.
+    if(auto* display=gdk_display_get_default()){state->monitors=G_LIST_MODEL(g_object_ref(gdk_display_get_monitors(display)));state->monitors_changed=g_signal_connect(state->monitors,"items-changed",G_CALLBACK(monitors_changed),app);}
+    watch_monitors(app);return true;}
+void neo_platform_shutdown(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state)return;unwatch_monitors(state,app);if(state->monitors){g_signal_handler_disconnect(state->monitors,state->monitors_changed);g_object_unref(state->monitors);state->monitors=nullptr;}if(state->display_source){g_source_destroy(state->display_source);g_source_unref(state->display_source);state->display_source=nullptr;}if(state->wake_source){g_source_destroy(state->wake_source);g_source_unref(state->wake_source);state->wake_source=nullptr;}if(state->loop)g_main_loop_unref(state->loop);if(state->context)g_main_context_unref(state->context);delete state;app->platform=nullptr;}
 bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(!state||!state->context)return false;auto* source=g_idle_source_new();if(!source)return false;g_source_set_callback(source,destroy_app_on_main,app,nullptr);const auto id=g_source_attach(source,state->context);g_source_unref(source);return id!=0;}
 int32_t neo_platform_run(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(state&&state->loop)g_main_loop_run(state->loop);return app->exit_code.load();}
 void neo_platform_quit(neoastra_app_t* app) noexcept {auto* state=static_cast<gtk_app*>(app->platform);if(state&&state->loop)g_main_loop_quit(state->loop);}
@@ -748,7 +786,7 @@ neoastra_result_t neo_platform_window_set_size_constraints(neoastra_window_t* wi
 neoastra_result_t neo_platform_window_set_state(neoastra_window_t* window) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;if(!gtk_widget_get_visible(state->widget))return NEOASTRA_OK;auto* value=GTK_WINDOW(state->widget);switch(window->state){
     // The order matters: a window that is told to leave the fullscreen state after the maximized one keeps the size of its screen.
     case NEOASTRA_WINDOW_NORMAL:gtk_window_unfullscreen(value);gtk_window_unmaximize(value);gtk_window_unminimize(value);break;case NEOASTRA_WINDOW_MINIMIZED:gtk_window_minimize(value);break;case NEOASTRA_WINDOW_MAXIMIZED:gtk_window_maximize(value);break;case NEOASTRA_WINDOW_FULLSCREEN:gtk_window_fullscreen(value);break;default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}
-neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window,neoastra_window_attribute_t attribute,bool enabled) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;auto* value=GTK_WINDOW(state->widget);switch(attribute){case NEOASTRA_WINDOW_RESIZABLE:gtk_window_set_resizable(value,enabled);break;case NEOASTRA_WINDOW_DECORATED:gtk_window_set_decorated(value,enabled);break;case NEOASTRA_WINDOW_ALWAYS_ON_TOP:case NEOASTRA_WINDOW_SHOW_IN_TASKBAR:return NEOASTRA_ERROR_NOT_SUPPORTED;default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}
+neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window,neoastra_window_attribute_t attribute,bool enabled) noexcept {auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;auto* value=GTK_WINDOW(state->widget);switch(attribute){case NEOASTRA_WINDOW_RESIZABLE:gtk_window_set_resizable(value,enabled);break;case NEOASTRA_WINDOW_DECORATED:gtk_window_set_decorated(value,enabled);break;case NEOASTRA_WINDOW_ALWAYS_ON_TOP:case NEOASTRA_WINDOW_SHOW_IN_TASKBAR:case NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS:return NEOASTRA_ERROR_NOT_SUPPORTED;default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept {
     auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return NEOASTRA_ERROR_DISPOSED;
     GdkToplevel* toplevel{};GdkDevice* device{};double x{},y{};
@@ -904,3 +942,77 @@ neoastra_result_t neo_platform_view_capture(neoastra_view_t* view,const neoastra
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* handle) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW&&kind!=NEOASTRA_NATIVE_HANDLE_GTK_WIDGET)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;handle->kind=kind;handle->value=state->widget;return NEOASTRA_OK;}
+
+namespace {
+struct monitor_reference { void operator()(GdkMonitor* monitor) const noexcept { g_object_unref(monitor); } };
+// The X11 backend of GDK tells the work area of a monitor; the X11 headers are not included, whose macros would clash with this file.
+bool x11_monitor(GdkMonitor* monitor) noexcept { const auto type=g_type_from_name("GdkX11Monitor");return type&&G_TYPE_CHECK_INSTANCE_TYPE(monitor,type)&&gdk_x11_monitor_get_workarea; }
+bool x11_display() noexcept { auto* display=gdk_display_get_default();const auto type=g_type_from_name("GdkX11Display");return display&&type&&G_TYPE_CHECK_INSTANCE_TYPE(display,type); }
+}
+
+// GDK counts monitors in logical units, measured from the origin of the layout of the desktop, and tells no primary one: the one
+// at that origin is taken for it.
+void neo_platform_get_displays(neoastra_app_t*,std::vector<neo_display>& displays) noexcept {
+    try{
+        displays.clear();
+        auto* display=gdk_display_get_default();if(!display)return;
+        auto* monitors=gdk_display_get_monitors(display);
+        const auto count=g_list_model_get_n_items(monitors);
+        for(guint index=0;index<count;++index){
+            std::unique_ptr<GdkMonitor,monitor_reference> monitor(GDK_MONITOR(g_list_model_get_item(monitors,index)));
+            if(!monitor||!gdk_monitor_is_valid(monitor.get()))continue;
+            neo_display value;
+            value.handle=static_cast<uint64_t>(reinterpret_cast<uintptr_t>(monitor.get()));
+            GdkRectangle geometry{};gdk_monitor_get_geometry(monitor.get(),&geometry);
+            value.bounds={geometry.x,geometry.y,geometry.width,geometry.height};
+            value.work_area=value.bounds;
+            // Wayland has no work area for a client to read.
+            if(x11_monitor(monitor.get())){GdkRectangle area{};gdk_x11_monitor_get_workarea(monitor.get(),&area);value.work_area={area.x,area.y,area.width,area.height};value.flags|=NEOASTRA_DISPLAY_WORK_AREA_REPORTED;}
+            // The scale of a widget is the whole number of the monitor, which is what a window reports.
+            value.scale_factor=gdk_monitor_get_scale_factor(monitor.get());
+            if(const auto rate=gdk_monitor_get_refresh_rate(monitor.get());rate>0)value.refresh_rate=rate/1000.0;
+            const char* connector=gdk_monitor_get_connector(monitor.get());
+            const char* manufacturer=gdk_monitor_get_manufacturer(monitor.get());
+            const char* model=gdk_monitor_get_model(monitor.get());
+            // The connector names the connection of the monitor after a restart, and the manufacturer and the model the monitor.
+            if(connector||manufacturer||model){
+                value.id=std::string("gtk:")+(manufacturer?manufacturer:"")+":"+(model?model:"")+":"+(connector?connector:"");
+                if(connector)value.flags|=NEOASTRA_DISPLAY_ID_PERSISTENT;
+            }
+#if GTK_CHECK_VERSION(4,10,0)
+            if(const char* description=gdk_monitor_get_description(monitor.get()))value.name=description;
+#endif
+            if(value.name.empty())value.name=model?model:connector?connector:"";
+            displays.push_back(std::move(value));
+        }
+    }catch(...){displays.clear();}
+}
+
+// A surface is on the monitors that the compositor or the X server reports, and a window has no surface before it is shown.
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept {
+    auto* state=static_cast<gtk_window*>(window->platform);if(!state||!state->widget)return 0;
+    auto* surface=gtk_native_get_surface(GTK_NATIVE(state->widget));if(!surface)return 0;
+    auto* monitor=gdk_display_get_monitor_at_surface(gdk_surface_get_display(surface),surface);
+    return monitor?static_cast<uint64_t>(reinterpret_cast<uintptr_t>(monitor)):0;
+}
+
+void neo_platform_window_capability(neoastra_app_t*,neoastra_window_capability_t capability,neoastra_capability_info_t* info) noexcept {
+    static const std::string x11_displays="GdkMonitor geometry and work areas in logical units, and the connector, manufacturer, and model as identifier; GTK tells no primary display, so the one at the origin is, and no rotation";
+    static const std::string wayland_displays="GdkMonitor geometry in logical units, and the connector, manufacturer, and model as identifier; Wayland tells no work area, so it is the bounds, GTK tells no primary display, so the one at the origin is, and no rotation";
+    static const std::string placement="GTK 4 cannot place a window and does not tell where it is: a position is kept but not applied, and the compositor places windows on Wayland";
+    static const std::string desktops="GTK 4 tells nothing of virtual desktops (workspaces)";
+    switch(capability){
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS:info->support=NEOASTRA_SUPPORT_LIMITED;info->details=neo_string_view(x11_display()?x11_displays:wayland_displays);break;
+        case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT:info->details=neo_string_view(placement);break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE:
+        case NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS:info->details=neo_string_view(desktops);break;
+        default:break;
+    }
+}
+
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* window,uint32_t*,std::string*) noexcept {auto* state=static_cast<gtk_window*>(window->platform);return !state||!state->widget?NEOASTRA_ERROR_DISPOSED:NEOASTRA_ERROR_NOT_SUPPORTED;}
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* window,const std::string&) noexcept {auto* state=static_cast<gtk_window*>(window->platform);return !state||!state->widget?NEOASTRA_ERROR_DISPOSED:NEOASTRA_ERROR_NOT_SUPPORTED;}
+// GTK 4 tells neither where a window is nor the order of windows on screen.
+neoastra_result_t neo_platform_window_at(neoastra_app_t*,neoastra_point_t,const neoastra_window_t*,uint64_t*) noexcept {return NEOASTRA_ERROR_NOT_SUPPORTED;}
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view,bool,double,double,double*,double*) noexcept {auto* state=static_cast<gtk_view*>(view->platform);return !state||!state->widget?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}

@@ -266,6 +266,20 @@ enum class neo_app_state : uint32_t { created, running, stopping, stopped };
 struct neo_ui_ref_counted;
 struct neo_operation_completion;
 
+// A display as a backend reads it. The handle names it for the backend during the session (an HMONITOR, a CGDirectDisplayID, a
+// GdkMonitor), and the rest is what neoastra_display_info_t tells.
+struct neo_display {
+    uint64_t handle{};
+    std::string id;
+    std::string name;
+    neoastra_rect_t bounds{};
+    neoastra_rect_t work_area{};
+    double scale_factor{1.0};
+    double refresh_rate{};
+    uint32_t rotation_degrees{};
+    uint32_t flags{};
+};
+
 struct neoastra_app final : neo_ref_counted {
     bool embedded{};
     std::atomic<bool> quit_requested{false};
@@ -298,6 +312,11 @@ struct neoastra_app final : neo_ref_counted {
     std::mutex windows_mutex;
     std::unordered_map<uint64_t, neoastra_window_t*> windows;
     uint64_t main_window_id{};
+    // UI-thread-only: the displays that neoastra_app_get_display_count read last, the display that neoastra_app_get_display_at or
+    // neoastra_window_get_display returned last, whose strings these functions hand out, and what was last reported of the displays.
+    std::vector<neo_display> displays;
+    neo_display display_result;
+    std::string reported_displays;
     void* platform{};
     ~neoastra_app() override;
 
@@ -436,6 +455,12 @@ struct neoastra_window final : neo_ui_ref_counted {
     neoastra_decision_t* pending_close{}; // UI-thread-only retained decision.
     bool force_closing{}; // UI-thread-only; permits one platform close without renegotiation.
     std::vector<neoastra_view_t*> views; // UI-thread-only weak references.
+    // UI-thread-only: the backend handle and the identifier of the display the window was last on, and the identifier of its
+    // virtual desktop that neoastra_window_get_virtual_desktop handed out.
+    uint64_t display_handle{};
+    std::string display_id;
+    bool display_known{};
+    std::string virtual_desktop_id;
     void* platform{};
     explicit neoastra_window(neoastra_app_t* value) : neo_ui_ref_counted(value, 1), app(value) { }
     ~neoastra_window() override;
@@ -853,6 +878,12 @@ void neo_window_closed(neoastra_window_t* window, bool publish = true) noexcept;
 void neo_window_set_scale_factor(neoastra_window_t* window, double scale_factor, bool report = true) noexcept;
 void neo_window_request_close(neoastra_window_t* window, neoastra_window_close_reason_t reason,
                               bool cancellation_permitted = true) noexcept;
+// Reads the displays again on the UI thread and reports NEOASTRA_EVENT_DISPLAYS_CHANGED when they differ from what was reported
+// last, then the windows that are on another display than before. Backends call it when the platform says the displays changed.
+void neo_app_displays_changed(neoastra_app_t* app) noexcept;
+// Reports NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED when the window is on another display than before. Unless forced, it reads the
+// displays only when the backend handle of the display of the window changed, so that a backend can call it on every move.
+void neo_window_display_changed(neoastra_window_t* window, bool force = false, bool report = true) noexcept;
 
 bool neo_platform_initialize(neoastra_app_t* app, neoastra_error_t** error) noexcept;
 void neo_platform_shutdown(neoastra_app_t* app) noexcept;
@@ -882,6 +913,19 @@ neoastra_result_t neo_platform_window_set_background_color(neoastra_window_t* wi
 // Fills the effective height and native-control insets; style and colors are already populated.
 neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* window, neoastra_title_bar_t* value) noexcept;
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept;
+// Replaces the displays with those of the platform, in the units of the bounds of a window. Called on the UI thread.
+void neo_platform_get_displays(neoastra_app_t* app, std::vector<neo_display>& displays) noexcept;
+// The handle of the display that the platform says holds most of the window, or 0 when it does not tell.
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept;
+// Sets the support and the details (a static string) of a window capability.
+void neo_platform_window_capability(neoastra_app_t* app, neoastra_window_capability_t capability, neoastra_capability_info_t* info) noexcept;
+// Sets NEOASTRA_VIRTUAL_DESKTOP_* flags and the identifier of the desktop of the window.
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* window, uint32_t* flags, std::string* id) noexcept;
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* window, const std::string& id) noexcept;
+// Sets the identifier of the front-most window of the application at the point, or 0. NEOASTRA_ERROR_NOT_SUPPORTED where unknown.
+neoastra_result_t neo_platform_window_at(neoastra_app_t* app, neoastra_point_t point, const neoastra_window_t* excluded, uint64_t* id) noexcept;
+// Converts between CSS pixels of the view and the coordinates of window bounds; `to_screen` tells the direction.
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool to_screen, double x, double y, double* out_x, double* out_y) noexcept;
 
 using neo_platform_created_callback_t = void (*)(void* context, neoastra_error_t* error) noexcept;
 bool neo_platform_environment_create_async(neoastra_environment_t* environment, const neoastra_environment_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept;
