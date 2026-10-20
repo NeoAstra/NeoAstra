@@ -148,7 +148,7 @@ public sealed class RpcSessionFlowTests
     {
         var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "channel_item"));
         var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 16 });
-        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Endless(), RpcTestJsonContext.Default.Response)),
+        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Endless(gate.Held), RpcTestJsonContext.Default.Response)),
             RpcTestJsonContext.Default.Request);
         await using var host = builder.Build();
         await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "channel-withdraw-session"),
@@ -166,10 +166,12 @@ public sealed class RpcSessionFlowTests
         Assert.IsLessThan(16, held);
         Assert.AreEqual(0, session.QueuedOutboundFrameCount);
 
-        static async IAsyncEnumerable<Response> Endless([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        // The items after the first come while it is held in its batch: they queue behind it, whatever the speed of the writer.
+        static async IAsyncEnumerable<Response> Endless(Task held, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            for (var index = 0; !cancellationToken.IsCancellationRequested; index++) yield return new Response(index.ToString(), "view");
-            await Task.CompletedTask;
+            yield return new Response("0", "view");
+            await held.WaitAsync(cancellationToken).ConfigureAwait(false);
+            for (var index = 1; !cancellationToken.IsCancellationRequested; index++) yield return new Response(index.ToString(), "view");
         }
     }
 

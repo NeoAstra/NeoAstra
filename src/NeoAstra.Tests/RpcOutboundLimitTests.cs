@@ -138,8 +138,11 @@ public sealed class RpcOutboundLimitTests
     [DataRow("deep", NeoRpcErrorCodes.SerializationFailed, DisplayName = "An item deeper than the transport accepts")]
     public async Task AChannelItemTheViewCannotReceive_FailsItsChannelWithTheReason(string item, string code)
     {
+        // The item that fails comes once the one before it reached the page: a channel that fails withdraws the items it
+        // still has queued, and the writer may not have taken the first one yet.
+        var firstDelivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var builder = new NeoRpcBuilder(new NeoRpcOptions());
-        builder.AddChannelCommand<Request, JsonElement>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<JsonElement>(Items(item), CapabilityTestJsonContext.Default.JsonElement)),
+        builder.AddChannelCommand<Request, JsonElement>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<JsonElement>(Items(item, firstDelivered.Task), CapabilityTestJsonContext.Default.JsonElement)),
             RpcTestJsonContext.Default.Request, Trusted);
         builder.AddCommand<Request, Response>("flow.echo", static (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
             RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
@@ -154,7 +157,11 @@ public sealed class RpcOutboundLimitTests
                 {
                     var frame = batch[index].ToString();
                     if (frame.Contains("refused", StringComparison.Ordinal)) (refusals ??= new NeoRpcFrameRefusal[batch.Count])[index] = NeoRpcFrameRefusal.TooLarge;
-                    else frames.Enqueue(frame);
+                    else
+                    {
+                        frames.Enqueue(frame);
+                        if (Kind(frame) == "channel_item") firstDelivered.TrySetResult();
+                    }
                 }
                 return ValueTask.FromResult(refusals);
             }, null, null, NeoRpcOutboundLimits.Of(512, 4));
@@ -169,9 +176,10 @@ public sealed class RpcOutboundLimitTests
         Assert.IsNull(ErrorCode(Single(frames, "after")), "The session keeps serving.");
         Assert.IsFalse(session.Closed.IsCancellationRequested);
 
-        static async IAsyncEnumerable<JsonElement> Items(string item, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        static async IAsyncEnumerable<JsonElement> Items(string item, Task firstDelivered, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             yield return JsonDocument.Parse("\"first\"").RootElement;
+            await firstDelivered.WaitAsync(cancellationToken).ConfigureAwait(false);
             yield return JsonDocument.Parse(item switch
             {
                 "refused" => "\"refused\"",
