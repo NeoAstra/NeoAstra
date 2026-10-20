@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import test from "node:test";
-import { NeoRpcClient, NeoRpcError } from "../dist/index.js";
+import { NeoRpcClient, NeoRpcError, invoke } from "../dist/index.js";
 import { createMockClient, createMockRpcHarness } from "../dist/testing.js";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -307,4 +307,79 @@ test("client close settles and clears every owned state exactly once", async () 
   transport.close();
   client.close();
   assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel" || frame.kind === "unsubscribe" || frame.kind === "channel_close").length, terminalFrames);
+});
+
+test("the mock transport fails a call whose result is deeper than its negotiated depth", async () => {
+  const transport = createMockClient({ maximumJsonDepth: 4 });
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => "deep-result" });
+  const pending = client.invoke("documents.tree", {});
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "deep-result", ok: true, value: { a: { b: { c: {} } } } });
+  await assert.rejects(pending, error => error instanceof NeoRpcError && error.code === "invalid_frame" && !error.retryable);
+  client.close();
+});
+
+test("a channel result that arrives after its invocation was aborted or timed out closes the host channel", async () => {
+  const transport = createMockClient();
+  let next = 0;
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => `late-${++next}` });
+  const controller = new AbortController();
+  const opening = client.invokeChannel("documents.stream", {}, { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(opening, error => error.code === "operation_canceled");
+  // The host committed the channel before it read the cancel: nothing observes it, so it is closed at once.
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-1", ok: true, value: { channel: "ch-1" } });
+  transport.injectInbound({ neoastra: 1, kind: "channel_item", channel: "ch-1", sequence: 1, value: "unread" });
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1"]);
+  assert.equal(transport.outboundFrames.some(frame => frame.kind === "channel_ack"), false);
+
+  await assert.rejects(client.invokeChannel("documents.stream", {}, { timeoutMilliseconds: 5 }), error => error.code === "timeout");
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-2", ok: true, value: { channel: "ch-2" } });
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-2", ok: true, value: { channel: "ch-2" } });
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1", "ch-2"]);
+  client.close();
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1", "ch-2"]);
+});
+
+test("an invocation timeout sends cancel and rejects with the retryable timeout code", async () => {
+  const transport = createMockClient();
+  let next = 0;
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => `timed-${++next}` });
+  transport.outboundFrames.length = 0;
+  await assert.rejects(
+    client.invoke("documents.slow", {}, { timeoutMilliseconds: 5 }),
+    error => error instanceof NeoRpcError && error.code === "timeout" && error.retryable === true);
+  assert.deepEqual(transport.outboundFrames.map(frame => [frame.kind, frame.id]), [["invoke", "timed-1"], ["cancel", "timed-1"]]);
+
+  // A late result changes nothing, and an abort by the application keeps its own code.
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "timed-1", ok: true, value: 1 });
+  const controller = new AbortController();
+  const aborted = client.invoke("documents.slow", {}, { signal: controller.signal, timeoutMilliseconds: 10_000 });
+  controller.abort();
+  await assert.rejects(aborted, error => error.code === "operation_canceled" && error.retryable === false);
+  assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel").length, 2);
+  client.close();
+});
+
+test("rpcClient stops retrying a handshake that never completes after three attempts", async () => {
+  // This process has not connected yet: the default client is created by the first call below.
+  const transportKey = Symbol.for("@neoastra/client/transport/v1");
+  let hellos = 0;
+  Object.defineProperty(globalThis, transportKey, {
+    configurable: true,
+    value: {
+      metadata: { platform: "windows", backend: "webview2", viewLabel: "main", wholeViewTrust: false, maximumFrameBytes: 1024, maximumDiagnosticQueue: 100, handshakeTimeoutMilliseconds: 5 },
+      send(frame) { if (frame.kind === "hello") hellos++; },
+      setReceiveHandler() { return () => {}; },
+    },
+  });
+  try {
+    // Each attempt costs one hello and one handshake timeout; past the third, the failure stays cached.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await assert.rejects(invoke("documents.read", {}), error => error.code === "handshake_timeout" && error.retryable);
+      assert.equal(hellos, attempt);
+    }
+    await assert.rejects(invoke("documents.read", {}), error => error.code === "handshake_timeout");
+    await tick();
+    assert.equal(hellos, 3);
+  } finally { delete globalThis[transportKey]; }
 });

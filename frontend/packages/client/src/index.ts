@@ -5,14 +5,17 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   SUPPORTED_FEATURES,
-  assertApplicationFrame,
+  assertInboundFrame,
+  checkOutboundFrame,
+  describeRejectedFrame,
   isRecord,
   parseCloseReason,
   type NeoAstraConnectionState,
+  type NeoAstraRejectedFrame,
 } from "./shared.js";
 
 export { NeoAstraClientError } from "./shared.js";
-export type { NeoAstraConnectionState } from "./shared.js";
+export type { NeoAstraConnectionState, NeoAstraRejectedFrame } from "./shared.js";
 
 export interface NeoAstraRuntimeInfo {
   readonly available: true;
@@ -49,7 +52,12 @@ export interface NeoAstraConnection {
   readonly closeReason?: string;
   hasFeature(feature: string): boolean;
   send(frame: unknown): void;
-  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void): () => void;
+  /**
+   * Registers the single receiver of application frames. `rejected`, when given, is told about an inbound frame
+   * the client refused (for example deeper than the negotiated JSON depth), with its top-level identity, so the
+   * call, channel or subscription it answers can fail instead of waiting forever; the frame itself is dropped.
+   */
+  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void, rejected?: (frame: NeoAstraRejectedFrame) => void): () => void;
   close(): void;
 }
 
@@ -65,7 +73,8 @@ interface BootstrapMetadata {
 
 interface BootstrapTransport {
   readonly metadata: BootstrapMetadata;
-  send(frame: Readonly<Record<string, unknown>>): void;
+  /** `json` is the frame already serialized by the client, so that the bootstrap does not serialize it again. */
+  send(frame: Readonly<Record<string, unknown>>, json?: string): void;
   setReceiveHandler(handler: (frame: unknown) => void): () => void;
 }
 
@@ -253,6 +262,7 @@ class Connection implements NeoAstraConnection {
   readonly closed: AbortSignal;
   private readonly abortController = new AbortController();
   private receiveHandler: ((frame: Readonly<Record<string, unknown>>) => void) | undefined;
+  private rejectedHandler: ((frame: NeoAstraRejectedFrame) => void) | undefined;
   private currentState: NeoAstraConnectionState = "connected";
   private reason: string | undefined;
 
@@ -276,19 +286,25 @@ class Connection implements NeoAstraConnection {
 
   send(frame: unknown): void {
     if (this.currentState !== "connected") throw new NeoAstraClientError("connection_closed", "The transport connection is closed.");
-    assertApplicationFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+    const json = checkOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
     try {
-      this.bootstrap.send(frame);
+      this.bootstrap.send(frame as Record<string, unknown>, json);
     } catch (error) {
       throw normalizeError(error);
     }
   }
 
-  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void): () => void {
+  setReceiveHandler(handler: (frame: Readonly<Record<string, unknown>>) => void, rejected?: (frame: NeoAstraRejectedFrame) => void): () => void {
     if (typeof handler !== "function") throw new TypeError("A receive handler is required.");
+    if (rejected !== undefined && typeof rejected !== "function") throw new TypeError("The rejected-frame handler must be a function.");
     if (this.receiveHandler !== undefined) throw new NeoAstraClientError("internal_transport_error", "A receive handler is already registered.");
     this.receiveHandler = handler;
-    return () => { if (this.receiveHandler === handler) this.receiveHandler = undefined; };
+    this.rejectedHandler = rejected;
+    return () => {
+      if (this.receiveHandler !== handler) return;
+      this.receiveHandler = undefined;
+      this.rejectedHandler = undefined;
+    };
   }
 
   close(): void {
@@ -317,7 +333,15 @@ class Connection implements NeoAstraConnection {
       return;
     }
     try {
-      assertApplicationFrame(value, this.maximumFrameBytes, this.maximumJsonDepth);
+      assertInboundFrame(value, this.maximumJsonDepth);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      emitDiagnostic({ level: "warning", code: normalized.code, message: normalized.message, correlationId: normalized.correlationId });
+      // The frame is dropped, but what it answers is told so, rather than waiting for an answer that never comes.
+      try { this.rejectedHandler?.(describeRejectedFrame(value, normalized)); } catch { }
+      return;
+    }
+    try {
       this.receiveHandler?.(Object.freeze({ ...value }));
     } catch (error) {
       const normalized = normalizeError(error);
@@ -332,6 +356,7 @@ class Connection implements NeoAstraConnection {
     state = "closed";
     this.removeReceive();
     this.receiveHandler = undefined;
+    this.rejectedHandler = undefined;
     this.abortController.abort(new NeoAstraClientError("connection_closed", message));
   }
 }
