@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework><PackageType>Template</PackageType><IncludeBuildOutput>false</IncludeBuildOutput><SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking><PackageId>NeoAstra.Templates</PackageId><Description>.NET project templates for NeoAstra desktop apps with vanilla TypeScript, React, or Vue frontends and typed .NET/JavaScript RPC.</Description><PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression><PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile></PropertyGroup>
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><IsPackable>true</IsPackable><PackageType>Template</PackageType><IncludeBuildOutput>false</IncludeBuildOutput><SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking><PackageId>NeoAstra.Templates</PackageId><Description>.NET project templates for NeoAstra desktop apps with vanilla TypeScript, React, or Vue frontends and typed .NET/JavaScript RPC.</Description><PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression><PackageReadmeFile>frontend-tooling-and-assets.md</PackageReadmeFile></PropertyGroup>
   <PropertyGroup>
     <PackageTags>neoastra;desktop;dotnet-new;templates;typescript;react;vue;webview</PackageTags>
   </PropertyGroup>
