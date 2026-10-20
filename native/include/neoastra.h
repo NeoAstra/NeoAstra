@@ -320,10 +320,13 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_v
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t*, neoastra_string_view_t, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t*, neoastra_string_view_t, const neoastra_script_options_t*, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t*, neoastra_string_view_t);
+/* Posts a message to the page. With a nonzero json, the message must be one JSON value (RFC 8259), which the page receives parsed;
+   anything else is refused with NEOASTRA_ERROR_INVALID_ARGUMENT. With a zero json, the page receives the message as a string. The
+   WebKit backends give the message to the page as a string literal of their script, parsed by JSON.parse: it is never script. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t*, neoastra_string_view_t, uint32_t, neoastra_error_t**);
 /* Posts count messages to the page in order, as neoastra_view_post_message posts each with the same json flag, in one call:
-   WebView2 posts them one after the other, and WKWebView and WebKitGTK dispatch them all with one script, so that the messages
-   of a batch must all be valid JSON when json is nonzero. Nothing is posted when an argument is invalid. *posted, when not null,
+   WebView2 posts them one after the other, and WKWebView and WebKitGTK dispatch them all with one script. Every message is checked
+   first, and nothing is posted when one is invalid (not UTF-8, or not JSON with a nonzero json). *posted, when not null,
    is the number of messages posted: all of them on success, those before the one the engine refused on a failure. A library
    has it when it reports NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_messages(neoastra_view_t*, const neoastra_string_view_t*, uint32_t, uint32_t, uint32_t*, neoastra_error_t**);

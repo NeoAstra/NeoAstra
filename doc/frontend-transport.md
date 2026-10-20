@@ -136,7 +136,11 @@ its UI thread, as UTF-8 that the native library reads in place. A native library
 posts them one after the other, each a message of its own as before, while WKWebView and WebKitGTK
 dispatch them all, in order, with one evaluated script instead of one script for each frame. A call
 holds at most 256 frames and 4 MiB of them (a larger frame goes alone), so that this script stays
-bounded. With a native library from before it, the host posts the frames one by one. The page receives
+bounded. With a native library from before it, the host posts the frames one by one. Either export
+checks that a message posted as JSON is one JSON value before the engine sees it, and refuses anything else
+(`NEOASTRA_ERROR_INVALID_ARGUMENT`, and nothing of a batch is posted); the WebKit backends put each message in
+their script as an escaped string literal that `JSON.parse` reads, so that a message is never taken for
+script and an object key such as `__proto__` stays a property, as with WebView2. The page receives
 the same frames in the same order either way; on WebKit, the listeners of the frames of one script run
 one after the other, before the promise continuations they start, which `NeoRpcClient` does not depend
 on: it registers a subscription or a channel when it handles the frame that opens it.

@@ -222,6 +222,153 @@ inline bool neo_bridge_message_allowed_for(const std::vector<neo_custom_scheme_r
         neo_bridge_access_allowed_for(custom_schemes, bridge_origins, policy, uri);
 }
 
+// Whether text, which the caller checked is UTF-8, is one JSON value as RFC 8259 defines it, with whitespace around it and
+// nothing else. A message posted as JSON is checked with it before any backend sees it: WebView2 parses it again, and the
+// WebKit backends hand it to JSON.parse of the page, which then cannot fail on it. Nesting is followed without recursion.
+inline bool neo_valid_json(std::string_view text) noexcept {
+    try {
+        std::string open;
+        size_t index = 0;
+        const size_t size = text.size();
+        const auto skip_space = [&] {
+            while (index < size && (text[index] == ' ' || text[index] == '\t' || text[index] == '\n' || text[index] == '\r')) index++;
+        };
+        const auto hex = [](char value) {
+            return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
+        };
+        const auto string = [&] {
+            if (index >= size || text[index] != '"') return false;
+            for (index++; index < size; index++) {
+                const auto value = static_cast<unsigned char>(text[index]);
+                if (value == '"') { index++; return true; }
+                if (value < 0x20) return false;
+                if (value != '\\') continue;
+                if (++index >= size) return false;
+                const auto escape = text[index];
+                if (escape == 'u') {
+                    if (size - index < 5 || !hex(text[index + 1]) || !hex(text[index + 2]) || !hex(text[index + 3]) || !hex(text[index + 4])) return false;
+                    index += 4;
+                } else if (escape != '"' && escape != '\\' && escape != '/' && escape != 'b' && escape != 'f' && escape != 'n' && escape != 'r' && escape != 't') {
+                    return false;
+                }
+            }
+            return false;
+        };
+        const auto digits = [&] {
+            const auto start = index;
+            while (index < size && text[index] >= '0' && text[index] <= '9') index++;
+            return index > start;
+        };
+        const auto number = [&] {
+            if (text[index] == '-') index++;
+            if (index >= size) return false;
+            if (text[index] == '0') index++;
+            else if (!digits()) return false;
+            if (index < size && text[index] == '.') { index++; if (!digits()) return false; }
+            if (index < size && (text[index] == 'e' || text[index] == 'E')) {
+                index++;
+                if (index < size && (text[index] == '+' || text[index] == '-')) index++;
+                if (!digits()) return false;
+            }
+            return true;
+        };
+        const auto literal = [&](std::string_view word) {
+            if (text.substr(index, word.size()) != word) return false;
+            index += word.size();
+            return true;
+        };
+        const auto key = [&] {
+            skip_space();
+            if (!string()) return false;
+            skip_space();
+            if (index >= size || text[index] != ':') return false;
+            index++;
+            return true;
+        };
+        while (true) {
+            skip_space();
+            if (index >= size) return false;
+            const auto value = text[index];
+            if (value == '{' || value == '[') {
+                index++;
+                skip_space();
+                if (index < size && text[index] == (value == '{' ? '}' : ']')) index++;
+                else {
+                    open.push_back(value);
+                    if (value == '{' && !key()) return false;
+                    continue;
+                }
+            } else if (value == '"') {
+                if (!string()) return false;
+            } else if (value == '-' || (value >= '0' && value <= '9')) {
+                if (!number()) return false;
+            } else if (!literal("true") && !literal("false") && !literal("null")) {
+                return false;
+            }
+            // The value ends what it was in: the next element follows a comma, or the containers it ends close.
+            while (true) {
+                skip_space();
+                if (open.empty()) return index == size;
+                if (index >= size) return false;
+                const auto container = open.back();
+                if (text[index] == ',') {
+                    index++;
+                    if (container == '{' && !key()) return false;
+                    break;
+                }
+                if (text[index] != (container == '{' ? '}' : ']')) return false;
+                open.pop_back();
+                index++;
+            }
+        }
+    } catch (...) {
+        return false;
+    }
+}
+
+// Appends UTF-8 text as a JavaScript string literal that evaluates to it: quotes, backslashes, control characters, the line and
+// paragraph separators, and the angle brackets are escaped, so that the text is data wherever the script goes.
+inline void neo_append_js_string(std::string& script, std::string_view text) {
+    static constexpr char digits[] = "0123456789abcdef";
+    script.reserve(script.size() + text.size() + 2);
+    script.push_back('"');
+    size_t copied = 0;
+    for (size_t index = 0; index < text.size(); index++) {
+        const auto value = static_cast<unsigned char>(text[index]);
+        const bool separator = value == 0xE2 && index + 2 < text.size() && static_cast<unsigned char>(text[index + 1]) == 0x80 &&
+            (static_cast<unsigned char>(text[index + 2]) == 0xA8 || static_cast<unsigned char>(text[index + 2]) == 0xA9);
+        if (!separator && value != '"' && value != '\\' && value >= 0x20 && value != 0x7F && value != '<' && value != '>') continue;
+        script.append(text.data() + copied, index - copied);
+        if (value == '"') script += "\\\"";
+        else if (value == '\\') script += "\\\\";
+        else if (separator) {
+            script += static_cast<unsigned char>(text[index + 2]) == 0xA8 ? "\\u2028" : "\\u2029";
+            index += 2;
+        } else {
+            const char escape[] = {'\\', 'u', '0', '0', digits[value >> 4], digits[value & 15]};
+            script.append(escape, sizeof(escape));
+        }
+        copied = index + 1;
+    }
+    script.append(text.data() + copied, text.size() - copied);
+    script.push_back('"');
+}
+
+// The script by which a WebKit backend dispatches one posted message to the page; a batch is these scripts one after the
+// other, in one evaluation. The message is a string literal, never script: JSON is parsed by JSON.parse, as WebView2 parses
+// it, and any other text is given as the string it is, as WebView2 gives it.
+inline void neo_append_post_script(std::string& script, std::string_view message, bool json) {
+    script += "window.dispatchEvent(new CustomEvent('neoastramessage',{detail:";
+    if (json) {
+        script += "JSON.parse(";
+        neo_append_js_string(script, message);
+        script += ")";
+    } else {
+        neo_append_js_string(script, message);
+    }
+    script += "}));";
+}
+
 enum class neo_decision_state : uint32_t { pending, deferred, completed, timed_out, abandoned };
 
 struct neoastra_decision final : neo_ref_counted {
@@ -708,6 +855,11 @@ inline neoastra_decision::~neoastra_decision() {
 
 inline neoastra_string_view_t neo_string_view(const std::string& text) noexcept {
     return {reinterpret_cast<const uint8_t*>(text.data()), static_cast<uint64_t>(text.size())};
+}
+
+// The bytes of a view as text, where they lie; the length of a view that the caller checked fits a size_t.
+inline std::string_view neo_view_text(neoastra_string_view_t text) noexcept {
+    return text.length == 0 ? std::string_view() : std::string_view(reinterpret_cast<const char*>(text.data), static_cast<size_t>(text.length));
 }
 
 inline uint64_t neo_timestamp_ns() noexcept {

@@ -84,6 +84,17 @@ public sealed class WindowsRpcFrameTests
                         await WaitAsync(view, "globalThis.events.length === 200", timeout.Token);
                         Assert.AreEqual("true", await view.EvaluateScriptAsync("globalThis.events.every((value, i) => value === (i + 1) + ':e' + i)", timeout.Token));
 
+                        stage = "native post contract";
+                        // A native library with the batch export checks that what it posts as JSON is JSON before the engine
+                        // sees it, the batch as a whole: the WebKit backends then never take text for script.
+                        if (environment.RuntimeInfo.PostsMessageBatches)
+                        {
+                            Assert.AreEqual(NeoErrorCode.InvalidArgument, PostNative(view, single: true, "{"));
+                            Assert.AreEqual(NeoErrorCode.InvalidArgument, PostNative(view, single: true, "1);alert(1);("));
+                            Assert.AreEqual(NeoErrorCode.InvalidArgument, PostNative(view, single: false, "{\"neoastra\":1}", "{\"neoastra\":1"));
+                            Assert.AreEqual(NeoErrorCode.Success, PostNative(view, single: false, "{\"neoastra\":1}", "[1,\"\u2028</script>\"]"));
+                        }
+
                         stage = "window close";
                         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                         window.Closed += (_, _) => closed.TrySetResult();
@@ -105,6 +116,32 @@ public sealed class WindowsRpcFrameTests
         catch (TimeoutException) { Assert.Fail($"RPC frame test hung during {stage}."); }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested) { Assert.Fail($"RPC frame test timed out during {stage}."); }
         catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The Windows native runtime is not staged."); }
+    }
+
+    // Posts messages as JSON with the native library, one with neoastra_view_post_message, several with
+    // neoastra_view_post_messages, which must post none of them when it refuses one.
+    private static unsafe NeoErrorCode PostNative(global::NeoAstra.NeoAstra view, bool single, params string[] messages)
+    {
+        var bytes = messages.Select(Encoding.UTF8.GetBytes).ToArray();
+        var pins = bytes.Select(static value => System.Runtime.InteropServices.GCHandle.Alloc(value, System.Runtime.InteropServices.GCHandleType.Pinned)).ToArray();
+        try
+        {
+            var views = stackalloc global::NeoAstra.Interop.Generated.NativeMethods.neoastra_string_view_t[bytes.Length];
+            for (var index = 0; index < bytes.Length; index++) views[index] = global::NeoAstra.Interop.Utf8String.ViewOf((byte*)pins[index].AddrOfPinnedObject(), bytes[index].Length);
+            global::NeoAstra.Interop.Generated.NativeMethods.neoastra_error_t error = default;
+            uint posted = uint.MaxValue;
+            var result = single
+                ? global::NeoAstra.Interop.Generated.NativeMethods.neoastra_view_post_message(view.NativeHandle, views[0], 1, &error)
+                : global::NeoAstra.Interop.Generated.NativeMethods.neoastra_view_post_messages(view.NativeHandle, views, (uint)bytes.Length, 1, &posted, &error);
+            if (error.Handle != 0) new global::NeoAstra.Interop.SafeErrorHandle(error.Handle).Dispose();
+            var code = global::NeoAstra.Interop.NativeError.Code(result);
+            if (!single) Assert.AreEqual(code == NeoErrorCode.Success ? (uint)bytes.Length : 0u, posted, "A refused batch posts nothing.");
+            return code;
+        }
+        finally
+        {
+            foreach (var pin in pins) pin.Free();
+        }
     }
 
     // One, two, and three UTF-8 bytes, and a surrogate pair: the frames are UTF-8 until WebView2 widens them.

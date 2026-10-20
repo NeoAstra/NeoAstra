@@ -990,6 +990,59 @@ void test_bridge_origin_trust() {
     assert(neo_bridge_message_allowed_for(custom_schemes, {}, NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW, 4, false, "1", ""));
 }
 
+// What a JavaScript engine reads from a string literal of neo_append_js_string: the escapes it writes, decoded.
+std::string decode_js_string(std::string_view literal) {
+    assert(literal.size() >= 2 && literal.front() == '"' && literal.back() == '"');
+    std::string text;
+    for (size_t index = 1; index + 1 < literal.size(); index++) {
+        const auto value = literal[index];
+        assert(value != '"' && value != '<' && value != '>' && static_cast<unsigned char>(value) >= 0x20 && value != 0x7F);
+        if (value != '\\') { text.push_back(value); continue; }
+        const auto escape = literal[++index];
+        if (escape == '"' || escape == '\\') { text.push_back(escape); continue; }
+        assert(escape == 'u');
+        const auto code = std::stoul(std::string(literal.substr(index + 1, 4)), nullptr, 16);
+        index += 4;
+        if (code < 0x80) text.push_back(static_cast<char>(code));
+        else {
+            assert(code == 0x2028 || code == 0x2029);
+            text += code == 0x2028 ? "\xE2\x80\xA8" : "\xE2\x80\xA9";
+        }
+    }
+    return text;
+}
+
+void test_posted_message_scripts() {
+    // JSON as RFC 8259 defines it, and nothing else.
+    for (const std::string_view valid : {"0", "-0", "12", "1.5e+3", "-12.0E-2", "1E9", "\"\"", "\"a\\u00e9\\n\\/\\\"\"", "\"\xE2\x80\xA8\xC3\xA9\"",
+             "true", "false", "null", "[]", "{}", " \t[1, {\"a\":[true,null,-1]}]\r\n ", "{\"a\":{\"b\":{}},\"a\":2}"})
+        assert(neo_valid_json(valid));
+    for (const std::string_view invalid : {"", " ", "01", "-01", "1.", ".5", "+1", "-", "1e", "1e+", "tru", "nul", "True", "NaN", "'a'", "[1,]", "{\"a\":1,}",
+             "{\"a\"}", "{a:1}", "[1 2]", "\"\\x\"", "\"\\u12g4\"", "\"\\u12\"", "\"\x01\"", "\"unterminated", "{} {}", "1);alert(1);(", "{\"a\":1]",
+             "[1}", "/*c*/1", "\"a\"x", "[", "{", "{\"a\":", "\f1"})
+        assert(!neo_valid_json(invalid));
+    const std::string deep = std::string(100000, '[') + std::string(100000, ']');
+    assert(neo_valid_json(deep) && !neo_valid_json(deep.substr(1)) && !neo_valid_json(deep.substr(0, deep.size() - 1)));
+
+    // A message is a string literal of the script, never script.
+    std::string script;
+    neo_append_post_script(script, "{\"a\":1}", true);
+    assert(script == "window.dispatchEvent(new CustomEvent('neoastramessage',{detail:JSON.parse(\"{\\\"a\\\":1}\")}));");
+    script.clear();
+    neo_append_post_script(script, "1);alert(1);(\"</script>\\\n\x01\xE2\x80\xA8\xE2\x80\xA9\xC3\xA9", false);
+    assert(script == "window.dispatchEvent(new CustomEvent('neoastramessage',{detail:\"1);alert(1);(\\\"\\u003c/script\\u003e\\\\\\u000a\\u0001\\u2028\\u2029\xC3\xA9\"}));");
+    const std::string_view pieces[] = {"a", "\"", "\\", "<", ">", "\n", "\x7F", "\x1F", "\xE2\x80\xA8", "\xE2\x80\xA9", "\xE2\x80\xA7", "\xE2\x82\xAC", "\xF0\x9F\x98\x80", "'", "`", "${", "</script>", std::string_view("\0", 1)};
+    unsigned seed = 1729;
+    for (int round = 0; round < 2000; round++) {
+        std::string text;
+        const auto length = (seed = seed * 1103515245u + 12345u) % 24;
+        for (unsigned index = 0; index < length; index++) text += pieces[(seed = seed * 1103515245u + 12345u) % std::size(pieces)];
+        std::string literal;
+        neo_append_js_string(literal, text);
+        assert(decode_js_string(literal) == text);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1025,5 +1078,6 @@ int main() {
     test_custom_scheme_provider_release_once_and_exception_containment();
     test_external_web_addresses();
     test_bridge_origin_trust();
+    test_posted_message_scripts();
     return 0;
 }
