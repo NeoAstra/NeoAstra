@@ -121,7 +121,12 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         if (previous is not null) _ = CompleteTeardownAsync(previous, teardownCompletion!);
         if (next is not null) WatchSession(next);
         if (openFailure is not null)
+        {
             _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, $"The platform RPC binding could not open its document session ({FailureName(openFailure)}).");
+            // The transport answers the hello of that document: without a revocation, its calls would wait for answers
+            // nobody sends. The transport is announcing the session now, so the revocation runs after that.
+            PostRevocation(snapshot!.Value.DocumentSessionId);
+        }
     }
 
     private static NeoRpcSession Open(NeoRpcHost host, global::NeoAstra.NeoAstra view, NeoTransportSessionSnapshot snapshot)
@@ -226,15 +231,20 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         // A session replaced by a navigation or detached by disposal was closed by the transport itself.
         lock (_gate) if (!ReferenceEquals(_session, session)) return;
+        PostRevocation(session.DocumentSessionId);
+    }
+
+    private void PostRevocation(string documentSessionId)
+    {
         if (_application is null)
         {
-            _ = Task.Run(() => RevokeTransportSession(session));
+            _ = Task.Run(() => RevokeTransportSession(documentSessionId));
             return;
         }
         try
         {
             // The transport is owned by the UI thread, and this runs on whichever thread closed the session.
-            _application.Dispatcher.Post(() => RevokeTransportSession(session));
+            _application.Dispatcher.Post(() => RevokeTransportSession(documentSessionId));
         }
         catch
         {
@@ -243,10 +253,10 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         }
     }
 
-    private void RevokeTransportSession(NeoRpcSession session)
+    private void RevokeTransportSession(string documentSessionId)
     {
         bool revoked;
-        try { revoked = _closeTransportSession(session.DocumentSessionId); }
+        try { revoked = _closeTransportSession(documentSessionId); }
         catch { revoked = false; }
         // The transport no longer has that session when a navigation or view disposal already replaced it.
         if (revoked)
