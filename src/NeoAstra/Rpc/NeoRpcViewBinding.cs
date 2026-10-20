@@ -144,8 +144,12 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
 
     // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
     // trip each, and the UI thread only writes their envelope and posts them.
-    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, IReadOnlyList<string> frames)
-        => await view.Environment.Application.Dispatcher.InvokeAsync(() => view.PostTrustedMessages(frames)).ConfigureAwait(false);
+    // Every frame was posted when this returns: PostTrustedMessages throws for a frame it refuses.
+    private static async ValueTask<NeoRpcFrameRefusal[]?> SendBatchAsync(global::NeoAstra.NeoAstra view, IReadOnlyList<string> frames)
+    {
+        await view.Environment.Application.Dispatcher.InvokeAsync(() => view.PostTrustedMessages(frames)).ConfigureAwait(false);
+        return null;
+    }
 
     private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string json, CancellationToken cancellationToken)
     {

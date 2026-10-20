@@ -162,7 +162,7 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
         session = host.OpenSessionCore(
             new NeoRpcSessionIdentity("benchmark", $"benchmark-{Guid.NewGuid():N}"),
             static (_, _) => throw new InvalidOperationException("A view session sends in batches."),
-            frames => new ValueTask(ui.InvokeAsync(() => page.Receive(frames, session!))),
+            async frames => { await ui.InvokeAsync(() => page.Receive(frames, session!)); return null; },
             null,
             null);
         return session;

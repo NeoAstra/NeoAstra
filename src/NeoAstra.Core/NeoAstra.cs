@@ -38,6 +38,7 @@ public sealed class NeoAstra : IAsyncDisposable
         _decisionTimeout = options.DecisionTimeout;
         _viewLabel = options.ViewLabel;
         Profile = options.Profile;
+        TransportLimits = (options.MaximumMessageSize, options.Transport.MaximumJsonDepth);
         RegisterEventCallback();
         if (options.BridgePolicy != NeoBridgePolicy.Disabled)
         {
@@ -51,6 +52,10 @@ public sealed class NeoAstra : IAsyncDisposable
         }
         environment.Application.RegisterView(this);
     }
+
+    // The limits the transport advertises to the page in its hello_ack, snapshotted as the transport does: the largest
+    // envelope a message may be, and the deepest frame the page accepts. An RPC session refuses frames beyond them.
+    internal (uint MaximumMessageSize, int MaximumJsonDepth) TransportLimits { get; }
 
     /// <summary>Gets the last source URI reported by the backend.</summary>
     public Uri? Source => _source;

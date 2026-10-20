@@ -33,6 +33,7 @@ public sealed class RpcSessionFlowTests
             {
                 batches.Enqueue([.. frames]);
                 if (batches.Count == 1) { firstSent.TrySetResult(); await releaseFirst.Task; }
+                return null;
             }, null, null);
 
         var first = session.ReceiveAsync(Invoke("first", "flow.echo", "{\"id\":\"first\"}")).AsTask();
@@ -481,7 +482,7 @@ public sealed class RpcSessionFlowTests
         internal void Release() => _release.TrySetResult();
         public void Dispose() => Release();
 
-        internal async ValueTask SendAsync(IReadOnlyList<string> frames)
+        internal async ValueTask<NeoRpcFrameRefusal[]?> SendAsync(IReadOnlyList<string> frames)
         {
             Interlocked.Increment(ref _batches);
             foreach (var frame in frames) _frames.Enqueue(frame);
@@ -492,6 +493,7 @@ public sealed class RpcSessionFlowTests
             }
             // A turn of a UI thread is not free: frames queued while a batch is posted leave in the next one.
             await Task.Yield();
+            return null;
         }
     }
 

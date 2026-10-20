@@ -17,12 +17,20 @@ namespace NeoAstra.Rpc;
 /// <returns>A task representing delivery acceptance.</returns>
 /// <remarks>
 /// Throwing <see cref="OperationCanceledException"/> after <paramref name="cancellationToken"/> is canceled withdraws only that frame,
-/// so the connection must still be able to carry later frames. Any other failure is a transport failure and closes the session.
+/// so the connection must still be able to carry later frames. Throwing <see cref="NeoRpcException"/> with the code
+/// <see cref="NeoRpcErrorCodes.PayloadTooLarge"/> refuses only that frame, as too large for the connection: the call, subscription,
+/// or channel it belongs to fails, and the session keeps serving. Any other failure is a transport failure and closes the session.
 /// </remarks>
 public delegate ValueTask NeoRpcSendFrame(string json, CancellationToken cancellationToken);
 
 // Sends frames a session queued, in order, in one call: a view posts them in one turn of its UI thread.
-internal delegate ValueTask NeoRpcSendFrames(IReadOnlyList<string> frames);
+internal enum NeoRpcFrameRefusal : byte { None = 0, TooLarge = 1, Refused = 2 }
+// Returns null when every frame was posted, or an array with exactly frames.Count entries: None = posted,
+// TooLarge = that frame alone was not posted because its envelope exceeds the view's MaximumMessageSize,
+// Refused = that frame alone was not posted for another reason and the connection still carries later frames.
+// The frames after a refused one are still attempted, in order. Throwing = the transport failed: every frame
+// of the batch fails and the session closes (as today).
+internal delegate ValueTask<NeoRpcFrameRefusal[]?> NeoRpcSendFrames(IReadOnlyList<string> frames);
 
 /// <summary>Owns an immutable command registry and all active document RPC sessions.</summary>
 public sealed class NeoRpcHost : IAsyncDisposable
@@ -86,7 +94,11 @@ public sealed class NeoRpcHost : IAsyncDisposable
     internal NeoRpcSession OpenSessionCore(NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window)
         => OpenSessionCore(identity, send, null, view, window);
 
+    // A session of a view refuses what the transport of that view cannot carry.
     internal NeoRpcSession OpenSessionCore(NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window)
+        => OpenSessionCore(identity, send, sendBatch, view, window, view is null ? NeoRpcOutboundLimits.None : NeoRpcOutboundLimits.Of(view.TransportLimits.MaximumMessageSize, view.TransportLimits.MaximumJsonDepth));
+
+    internal NeoRpcSession OpenSessionCore(NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window, NeoRpcOutboundLimits limits)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(send);
@@ -94,7 +106,7 @@ public sealed class NeoRpcHost : IAsyncDisposable
         lock (_lifecycleLock)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            var session = new NeoRpcSession(this, snapshot, send, sendBatch, view, window, _shutdown.Token);
+            var session = new NeoRpcSession(this, snapshot, send, sendBatch, view, window, limits, _shutdown.Token);
             if (!_sessions.TryAdd(snapshot.DocumentSessionId, session))
             {
                 session.DisposeWithoutCallback();
@@ -199,10 +211,11 @@ public sealed class NeoRpcHost : IAsyncDisposable
     internal async ValueTask<int> PublishAsync(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool>? recipient, CancellationToken cancellationToken)
     {
         var accepted = 0;
+        var depth = -1;
         foreach (var session in _sessions.Values)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (session.TryPublish(descriptor, json, recipient)) accepted++;
+            if (session.TryPublish(descriptor, json, recipient, ref depth)) accepted++;
         }
         await Task.CompletedTask.ConfigureAwait(false);
         return accepted;
@@ -275,6 +288,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private long _nextChannelId;
     private long _unknownCancelCount;
     private int _subscriptionSlots;
+    private readonly NeoRpcOutboundLimits _limits;
     private readonly object _rateLock = new();
     private readonly long _openedTimestamp;
     private double _rateTokens;
@@ -283,16 +297,17 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private long _lastAbuseSecond;
 
     internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
-        : this(host, identity, send, null, view, window, shutdown)
+        : this(host, identity, send, null, view, window, NeoRpcOutboundLimits.None, shutdown)
     {
     }
 
-    internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window, CancellationToken shutdown)
+    internal NeoRpcSession(NeoRpcHost host, NeoRpcSessionIdentity identity, NeoRpcSendFrame send, NeoRpcSendFrames? sendBatch, global::NeoAstra.NeoAstra? view, NeoWindow? window, NeoRpcOutboundLimits limits, CancellationToken shutdown)
     {
         _host = host;
         _identity = identity;
         _send = send;
         _sendBatch = sendBatch;
+        _limits = limits;
         _view = view is null ? null : new(view);
         _window = window is null ? null : new(window);
         _closed = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
@@ -518,13 +533,20 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool>? recipient)
+    // The depth of the event is measured once for every session that needs it.
+    internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool>? recipient, ref int measuredDepth)
     {
         var accepted = false;
         foreach (var subscription in _subscriptions.Values)
         {
             if (!ReferenceEquals(subscription.Descriptor, descriptor)) continue;
             if (recipient is not null && !recipient(CreateContext(NewCorrelationId(), _closedToken, subscription.SourceOrigin, subscription.IsMainFrame))) continue;
+            // The page would drop it without a word: the subscription fails instead of missing it silently.
+            if (_limits.IsTooDeep(json, ref measuredDepth))
+            {
+                subscription.Fail(new NeoRpcFrameRefusedException(NeoRpcErrorCodes.SerializationFailed, "The event is nested deeper than the transport of the view accepts."));
+                continue;
+            }
             accepted |= subscription.Enqueue(json);
         }
         return accepted;
@@ -545,7 +567,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     // The last event of what a pump took from its queue is awaited, so that one subscription holds at most one batch of
     // events in the session queue and its own bounded queue applies its overflow policy; the others only queue.
-    private ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, bool awaitDelivery, CancellationToken cancellationToken)
+    // A frame too large for the view is refused before it is queued (NeoRpcFrameRefusedException), and so is a channel item
+    // nested deeper than its transport accepts; one the view refuses when it is posted is reported to its owner.
+    private ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, bool awaitDelivery, IStreamFrameOwner owner, CancellationToken cancellationToken)
     {
         var frame = BuildFrame(writer =>
         {
@@ -556,18 +580,27 @@ public sealed class NeoRpcSession : IAsyncDisposable
             writer.WritePropertyName("value"); writer.WriteRawValue(json, skipInputValidation: true);
             writer.WriteEndObject();
         });
+        if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
         if (awaitDelivery) return SendRawAsync(frame, cancellationToken);
-        QueueStreamFrame(frame, cancellationToken);
+        QueueStreamFrame(frame, cancellationToken, owner);
         return ValueTask.CompletedTask;
     }
 
     // Channel items are only queued: the unacknowledged-item credits of the channel bound how many are in flight.
-    private void QueueChannelItem(string channelId, long sequence, byte[] json, CancellationToken cancellationToken)
-        => QueueStreamFrame(BuildFrame(writer =>
+    private void QueueChannelItem(string channelId, long sequence, byte[] json, IStreamFrameOwner owner, CancellationToken cancellationToken)
+    {
+        if (_limits.IsTooDeep(json)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.SerializationFailed, "A channel item is nested deeper than the transport of the view accepts.");
+        var frame = BuildFrame(writer =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "channel_item"); writer.WriteString("channel", channelId);
             writer.WriteNumber("sequence", sequence); writer.WritePropertyName("value"); writer.WriteRawValue(json, true); writer.WriteEndObject();
-        }), cancellationToken);
+        });
+        if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+        QueueStreamFrame(frame, cancellationToken, owner);
+    }
+
+    private void DiagnoseRefusedStream(NeoRpcFrameRefusedException refusal, string what)
+        => _host.Diagnose(NeoRpcDiagnosticLevel.Warning, refusal.Code, $"An RPC {what} could not be delivered to its view and was closed: {refusal.Message}");
 
     internal ValueTask SendChannelTerminalAsync(string channelId, string kind, NeoRpcError? error, CancellationToken cancellationToken)
         => SendRawAsync(BuildFrame(writer =>
@@ -1049,8 +1082,16 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _host.ExitInvocation(_identity.ViewLabel);
     }
 
-    private ValueTask SendSuccessResultAsync(string id, CommandResult result, string correlationId)
+    // A result the page could not receive fails its call alone, with an answer: its caller learns why, and the session
+    // keeps serving the others. The page drops a frame deeper than its transport accepts without answering anything.
+    private async ValueTask SendSuccessResultAsync(string id, CommandResult result, string correlationId)
     {
+        if (result is ValueCommandResult deep && _limits.IsTooDeep(deep.Json))
+        {
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.SerializationFailed, "An RPC result was nested deeper than the transport of its view accepts and was replaced by an error.", correlationId);
+            await SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.SerializationFailed, "The command result is nested deeper than the transport of the view accepts.", correlationId)).ConfigureAwait(false);
+            return;
+        }
         var frame = BuildFrame(writer =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", true); writer.WritePropertyName("value");
@@ -1060,11 +1101,21 @@ public sealed class NeoRpcSession : IAsyncDisposable
         var maximum = _host.Options.MaximumResultBytes;
         if (maximum != int.MaxValue && Encoding.UTF8.GetByteCount(frame) > maximum)
         {
-            // The call fails alone: its caller learns why, and the session keeps serving the others.
             _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC result exceeded the configured byte limit and was replaced by an error.", correlationId);
-            return SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.PayloadTooLarge, "The command result exceeds the configured size limit.", correlationId));
+            await SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.PayloadTooLarge, "The command result exceeds the configured size limit.", correlationId)).ConfigureAwait(false);
+            return;
         }
-        return SendRawAsync(frame, CancellationToken.None, allowClosing: true);
+        try
+        {
+            if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+            await SendRawAsync(frame, CancellationToken.None, allowClosing: true).ConfigureAwait(false);
+        }
+        catch (NeoRpcFrameRefusedException refusal)
+        {
+            // Refused before it was sent, or by the view when it was posted: the answer is the reason instead.
+            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, refusal.Code, "An RPC result could not be delivered to its view and was replaced by an error.", correlationId);
+            await SendTerminalErrorResultAsync(id, FrameworkError(refusal.Code, refusal.Message, correlationId)).ConfigureAwait(false);
+        }
     }
 
     private ValueTask SendChannelResultAsync(string id, string channelId)
@@ -1111,11 +1162,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     // Queues a frame of a stream (an event or a channel item) without waiting for it to be sent: the frames of a stream
     // leave in batches instead of one round trip each. Nobody waits for it, so it is withdrawn when its token is canceled
-    // before the writer takes it, and a failure of the transport closes the session, which ends its stream.
-    private void QueueStreamFrame(string json, CancellationToken cancellationToken)
+    // before the writer takes it, a failure of the transport closes the session, which ends its stream, and a refusal of
+    // the frame alone is reported to its stream.
+    private void QueueStreamFrame(string json, CancellationToken cancellationToken, IStreamFrameOwner owner)
     {
         if (Volatile.Read(ref _disposed) != 0 || cancellationToken.IsCancellationRequested) return;
-        if (TryQueue(new OutboundFrame(json, cancellationToken, awaited: false))) StartWriter();
+        if (TryQueue(new OutboundFrame(json, cancellationToken, awaited: false, owner))) StartWriter();
     }
 
     private bool TryQueue(OutboundFrame frame)
@@ -1132,8 +1184,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
     }
 
     // The one writer of the session: it takes every frame waiting and sends them in order, in one call when the
-    // transport takes a batch. A frame withdrawn before it was taken is skipped. A failure of the transport fails the
-    // frames it held and closes the session, as a failed send did.
+    // transport takes a batch. A frame withdrawn before it was taken is skipped. A frame the view refuses alone (too
+    // large for its messages) fails its own call, subscription, or channel; a failure of the transport fails the frames
+    // it held and closes the session, as a failed send did.
     private async Task WriteAsync()
     {
         var batch = new List<OutboundFrame>();
@@ -1159,15 +1212,22 @@ public sealed class NeoRpcSession : IAsyncDisposable
             {
                 var frames = new string[batch.Count];
                 for (var index = 0; index < frames.Length; index++) frames[index] = batch[index].Json;
+                NeoRpcFrameRefusal[]? refusals;
                 try
                 {
-                    await sendBatch(frames).ConfigureAwait(false);
-                    foreach (var frame in batch) frame.Complete();
+                    refusals = await sendBatch(frames).ConfigureAwait(false);
+                    if (refusals is not null && refusals.Length != frames.Length) throw new InvalidOperationException("The view reported refusals for a different number of frames.");
                 }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
                     foreach (var frame in batch) frame.Fail(exception);
+                    continue;
+                }
+                for (var index = 0; index < batch.Count; index++)
+                {
+                    if (refusals is null || refusals[index] == NeoRpcFrameRefusal.None) batch[index].Complete();
+                    else batch[index].Refuse(new NeoRpcFrameRefusedException(refusals[index]));
                 }
 
                 continue;
@@ -1183,6 +1243,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
                 // transport did not fail. Session teardown cancels every caller token too.
                 catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Cancel(exception.CancellationToken); }
+                // The connection refused this frame alone, as too large for it.
+                catch (NeoRpcException exception) when (exception.Code == NeoRpcErrorCodes.PayloadTooLarge) { frame.Refuse(new NeoRpcFrameRefusedException(NeoRpcFrameRefusal.TooLarge)); }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
@@ -1201,8 +1263,15 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // The most frames one write takes: one turn of a UI thread stays bounded.
     private const int MaximumOutboundBatch = 256;
 
-    // A frame that a caller awaits has a completion; a frame of a stream has none, and nothing observes its outcome.
-    private sealed class OutboundFrame(string json, CancellationToken token, bool awaited)
+    // The subscription or channel of a stream frame, told when the view refused that frame alone.
+    private interface IStreamFrameOwner
+    {
+        void OnFrameRefused(NeoRpcFrameRefusedException refusal);
+    }
+
+    // A frame that a caller awaits has a completion; a frame of a stream has none, and nothing observes its outcome but
+    // the stream it belongs to, when the view refuses it.
+    private sealed class OutboundFrame(string json, CancellationToken token, bool awaited, IStreamFrameOwner? owner = null)
     {
         private int _state; // 0 queued, 1 taken by the writer, 2 withdrawn by its caller
         public string Json { get; } = json;
@@ -1216,6 +1285,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
         public void Complete() => Done?.TrySetResult();
         public void Cancel(CancellationToken cancellationToken) => Done?.TrySetCanceled(cancellationToken);
         public void Fail(Exception exception) => Done?.TrySetException(exception);
+        public void Refuse(NeoRpcFrameRefusedException refusal)
+        {
+            if (Done is not null) Done.TrySetException(refusal);
+            else owner?.OnFrameRefused(refusal);
+        }
     }
 
     private bool TryValidId(JsonElement root, string property, out string value)
@@ -1365,7 +1439,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    private sealed class SubscriptionState
+    private sealed class SubscriptionState : IStreamFrameOwner
     {
         private const int Pending = 0;
         private const int Active = 1;
@@ -1443,6 +1517,16 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
         }
         internal void Close() { Interlocked.Exchange(ref _state, Closed); Cancel(); }
+
+        // An event the view cannot receive fails the subscription: the page would otherwise miss it without a word.
+        internal void Fail(NeoRpcFrameRefusedException refusal)
+        {
+            if (_token.IsCancellationRequested) return;
+            _session.DiagnoseRefusedStream(refusal, "subscription");
+            Close();
+        }
+
+        void IStreamFrameOwner.OnFrameRefused(NeoRpcFrameRefusedException refusal) => Fail(refusal);
         internal void DisposePending()
         {
             if (Volatile.Read(ref _started) == 0) { Dispose(); _session.CompleteRequestId(_requestId); }
@@ -1497,10 +1581,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
                         continue;
                     }
                     for (var index = 0; index < taken.Count; index++)
-                        await _session.SendEventAsync(_id, ++_sequence, taken[index], awaitDelivery: index == taken.Count - 1, _token).ConfigureAwait(false);
+                        await _session.SendEventAsync(_id, ++_sequence, taken[index], awaitDelivery: index == taken.Count - 1, this, _token).ConfigureAwait(false);
                     taken.Clear();
                 }
             }
+            catch (NeoRpcFrameRefusedException refusal) { Fail(refusal); }
             catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
             catch (Exception) { Close(); }
             finally { wake.Dispose(); _session.RemoveSubscription(_id, this); Dispose(); _session.CompleteRequestId(_requestId); }
@@ -1515,7 +1600,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         internal abstract void Close();
     }
 
-    private sealed class ChannelState<T> : ChannelState
+    private sealed class ChannelState<T> : ChannelState, IStreamFrameOwner
     {
         private readonly NeoRpcSession _session;
         private readonly string _id;
@@ -1526,6 +1611,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private readonly Task _completion;
         private long _sent;
         private long _acknowledged;
+        private NeoRpcFrameRefusedException? _refusal;
         internal ChannelState(NeoRpcSession session, string id, NeoRpcChannel<T> channel)
         {
             _session = session; _id = id; _channel = channel;
@@ -1556,6 +1642,15 @@ public sealed class NeoRpcSession : IAsyncDisposable
             catch (ObjectDisposedException) { }
             finally { _start.TrySetResult(false); }
         }
+
+        // An item the view cannot receive fails the channel with the reason, sent as its terminal error.
+        private void Refuse(NeoRpcFrameRefusedException refusal)
+        {
+            if (Interlocked.CompareExchange(ref _refusal, refusal, null) is null) _session.DiagnoseRefusedStream(refusal, "channel");
+            Close();
+        }
+
+        void IStreamFrameOwner.OnFrameRefused(NeoRpcFrameRefusedException refusal) => Refuse(refusal);
         private async Task PumpAsync()
         {
             NeoRpcError? error = null;
@@ -1570,9 +1665,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     await _credits.WaitAsync(_closed.Token).ConfigureAwait(false);
                     var bytes = JsonSerializer.SerializeToUtf8Bytes(item, _channel.ItemTypeInfo);
                     var sequence = Interlocked.Increment(ref _sent);
-                    _session.QueueChannelItem(_id, sequence, bytes, _closed.Token);
+                    _session.QueueChannelItem(_id, sequence, bytes, this, _closed.Token);
                 }
             }
+            catch (NeoRpcFrameRefusedException refusal) { Refuse(refusal); }
             catch (OperationCanceledException) when (_closed.IsCancellationRequested) { }
             catch (Exception)
             {
@@ -1591,6 +1687,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                         _session._host.Diagnose(NeoRpcDiagnosticLevel.Error, "channel_cleanup_failed", "A channel service lease failed to dispose safely.", error.Value.CorrelationId);
                     }
                     // Abandoning an unstarted result must not send: a reentrant close may be inside the result send itself.
+                    if (error is null && Volatile.Read(ref _refusal) is { } refused) error = FrameworkError(refused.Code, refused.Message, NewCorrelationId());
                     try { if (started && !_session._closed.IsCancellationRequested) await _session.SendChannelTerminalAsync(_id, error is null ? "channel_complete" : "channel_error", error, _session._closedToken).ConfigureAwait(false); } catch { }
                 }
                 finally
@@ -1601,4 +1698,79 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
         }
     }
+}
+
+// What the transport of a view carries: the largest frame, its envelope taken out, and the deepest value a frame may hold.
+// Depth is counted as System.Text.Json and the client count it: objects and arrays, the root included. The value of a frame
+// is nested in the frame object, so it may use one level less than the transport.
+internal readonly record struct NeoRpcOutboundLimits(int MaximumFrameBytes, int MaximumValueDepth)
+{
+    // {"__neoastraTransport":1,"hostViewBinding":"<32 hex>","rendererDocumentId":"<id>","frame":<frame>} is 111 bytes and the
+    // renderer document ID, of at least one character: a frame refused against this least envelope could never be delivered,
+    // and one that fits it but not the envelope of its document is refused by the view when it is posted.
+    internal const int MinimumEnvelopeBytes = 112;
+
+    internal static NeoRpcOutboundLimits None { get; } = new(int.MaxValue, int.MaxValue);
+
+    internal static NeoRpcOutboundLimits Of(uint maximumMessageSize, int maximumJsonDepth)
+        => new((int)Math.Clamp((long)maximumMessageSize - MinimumEnvelopeBytes, 0, int.MaxValue), Math.Max(0, maximumJsonDepth - 1));
+
+    internal bool IsTooLarge(string frame)
+    {
+        // A UTF-16 character is at most three UTF-8 bytes (a surrogate pair is four for two): most frames need no count.
+        if (frame.Length <= MaximumFrameBytes / 3) return false;
+        return frame.Length > MaximumFrameBytes || Encoding.UTF8.GetByteCount(frame) > MaximumFrameBytes;
+    }
+
+    internal bool IsTooDeep(ReadOnlySpan<byte> value)
+    {
+        // Nesting deeper than the limit takes two bytes for each level: a shorter value cannot.
+        if (value.Length <= 2 * (long)MaximumValueDepth + 1) return false;
+        var reader = new Utf8JsonReader(value, new JsonReaderOptions { MaxDepth = MaximumJsonReadDepth });
+        try
+        {
+            while (reader.Read())
+                if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray && reader.CurrentDepth >= MaximumValueDepth) return true;
+        }
+        catch (JsonException) { return true; }
+        return false;
+    }
+
+    // Measured once for an event that several sessions, with limits of their own, may receive.
+    internal bool IsTooDeep(byte[] value, ref int measuredDepth)
+    {
+        if (value.Length <= 2 * (long)MaximumValueDepth + 1) return false;
+        if (measuredDepth < 0) measuredDepth = MeasureDepth(value);
+        return measuredDepth > MaximumValueDepth;
+    }
+
+    internal static int MeasureDepth(ReadOnlySpan<byte> value)
+    {
+        var reader = new Utf8JsonReader(value, new JsonReaderOptions { MaxDepth = MaximumJsonReadDepth });
+        var depth = 0;
+        try
+        {
+            while (reader.Read())
+                if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray && reader.CurrentDepth >= depth) depth = reader.CurrentDepth + 1;
+        }
+        catch (JsonException) { return int.MaxValue; }
+        return depth;
+    }
+
+    // Deeper than any transport accepts (128), and what the host serialized itself is valid JSON.
+    private const int MaximumJsonReadDepth = 256;
+}
+
+// A frame that the host refused before sending it, or that the view refused alone: the call, subscription, or channel it
+// belongs to fails with a safe code and message, and the session keeps serving.
+internal sealed class NeoRpcFrameRefusedException(string code, string message) : Exception(message)
+{
+    internal NeoRpcFrameRefusedException(NeoRpcFrameRefusal refusal)
+        : this(refusal == NeoRpcFrameRefusal.TooLarge ? NeoRpcErrorCodes.PayloadTooLarge : NeoRpcErrorCodes.InternalError,
+            refusal == NeoRpcFrameRefusal.TooLarge ? TooLargeMessage : "The view refused the frame.")
+    {
+    }
+
+    internal const string TooLargeMessage = "The frame exceeds the maximum message size of the view.";
+    internal string Code { get; } = code;
 }

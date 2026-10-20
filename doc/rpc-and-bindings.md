@@ -142,6 +142,16 @@ Request deserialization, application execution, and response serialization are s
 
 `NeoRpcOptions.MaximumFrameBytes` bounds the frames a page sends, and `NeoRpcOptions.MaximumResultBytes` bounds the result frame of a successful call (both default to `int.MaxValue`, no bound). A result whose serialized frame is larger fails that call alone: its caller gets `payload_too_large` with the correlation ID of the invocation, the host writes a `payload_too_large` warning, and the session keeps serving later calls. Channel items and events are streamed and are not bounded by it; `MaximumQueuedEventBytesPerSubscription` bounds what a subscription queues. Return large data as a channel or a resource instead.
 
+A session of a view also refuses what the transport of that view cannot carry: a frame larger than `NeoAstraOptions.MaximumMessageSize` less the transport envelope (at least 112 bytes), or one nested deeper than `NeoTransportOptions.MaximumJsonDepth`, the depth the page receives in its handshake and counts as System.Text.Json does (objects and arrays, the frame object included, so a value may use one level less). The page would drop such a frame without answering, so the host never sends it, and only the call, subscription or channel it belongs to fails; the session keeps serving:
+
+| Frame | Too large | Too deep |
+|---|---|---|
+| Result | the call is answered with `payload_too_large` | the call is answered with `serialization_failed` |
+| Event | the subscription is closed | the subscription is closed, and the publication does not count it |
+| Channel item | the channel ends with a `channel_error` of `payload_too_large` | the channel ends with a `channel_error` of `serialization_failed` |
+
+Each case writes a warning with that code. A subscription has no frame to tell its page that it ended: the page stops receiving its events, as with the `Fail` overflow policy. The host checks the size against the shortest envelope, so a frame within a few hundred bytes of the limit can still be refused by the view when it is posted; that refusal fails its call, subscription or channel the same way. A `NeoRpcSendFrame` of a session opened directly can do the same for one frame by throwing `NeoRpcException` with the code `payload_too_large`; any other exception still closes the session.
+
 Events are ordered per subscription and use declaration-owned `DropOldest`, `DropNewest`, `Coalesce`, or `Fail` overflow. Bounded JSON channels use monotonic sequence numbers and acknowledgements to bound unacknowledged transport items. The frontend acknowledges admission into its buffer, not consumption by the application iterator: a slow reader can still exhaust its bounded buffer and receive `too_many_requests`. Applications that observe durable work need a snapshot/resynchronization policy rather than treating the channel as a lossless event log. Resources are opaque session-owned handles closed by `resource_close` or teardown. These channel/resource frames reserve room for a future scalable binary extension.
 
 Channel capacity is reserved before the result ID is sent; enumeration starts only after successful
