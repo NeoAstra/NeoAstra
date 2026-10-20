@@ -40,6 +40,25 @@ public sealed class WindowsTransportNavigationTests
         });
     }
 
+    [TestMethod]
+    public async Task DisposingAViewPostsTheCloseOfItsSessionWithoutATransportError()
+    {
+        await RunAsync(async (application, view, rpc, timeout) =>
+        {
+            var diagnostics = new ConcurrentQueue<NeoTransportDiagnosticEventArgs>();
+            view.TransportDiagnostic += (_, diagnostic) => diagnostics.Enqueue(diagnostic);
+            await view.NavigateAsync(new Uri("app://neoastra/index.html"));
+            await WaitAsync(view, "globalThis.ready === true", timeout);
+            Assert.IsNotNull(view.TransportSession);
+
+            await view.DisposeAsync();
+
+            Assert.IsFalse(diagnostics.Any(static diagnostic => diagnostic.Level == NeoTransportDiagnosticLevel.Error),
+                string.Join(", ", diagnostics.Select(static diagnostic => diagnostic.Code)));
+            await WaitUntilAsync(() => rpc.ActiveSessionCount == 0, timeout);
+        });
+    }
+
     private static async Task RunAsync(Func<NeoApplication, global::NeoAstra.NeoAstra, NeoRpcHost, CancellationToken, Task> body)
     {
         if (!OperatingSystem.IsWindows())

@@ -941,13 +941,21 @@ public sealed class NeoAstra : IAsyncDisposable
         try { TransportSessionChanged?.Invoke(session); } catch { }
     }
 
-    private void SendRawMessage(string json) => PostNativeMessage(json, "post transport message");
+    // The transport also posts the close of its session while the view is being disposed, before the native view is
+    // released, so it checks the native handle rather than the disposal of the view.
+    private void SendRawMessage(string json)
+    {
+        ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
+        PostNativeMessage(new(_handle.DangerousGetHandle()), json, "post transport message");
+    }
 
-    private unsafe void PostNativeMessage(string json, string operation)
+    private void PostNativeMessage(string json, string operation) => PostNativeMessage(NativeHandle, json, operation);
+
+    private static unsafe void PostNativeMessage(NativeMethods.neoastra_view_t view, string json, string operation)
     {
         using var nativeJson = new Utf8String(json);
         NativeMethods.neoastra_error_t error = default;
-        var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
+        var result = NativeMethods.neoastra_view_post_message(view, nativeJson.View, 1, &error);
         NativeError.ThrowIfFailed(result, error, operation, CancellationToken.None);
     }
 
