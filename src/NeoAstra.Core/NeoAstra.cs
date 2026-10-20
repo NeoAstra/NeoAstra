@@ -611,7 +611,12 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Gets the immutable application-unique label assigned at creation, or <see langword="null"/> when none was assigned.</summary>
     public string? ViewLabel => _viewLabel;
 
-    internal NeoWindow? OwnedWindow => _host.Window;
+    /// <summary>Gets the window that hosts this view, or <see langword="null"/> when the view was created in a native parent of the application (<see cref="NeoAstraHost.FromNativeParent"/> and the other <c>From</c> methods of <see cref="NeoAstraHost"/>).</summary>
+    /// <remarks>
+    /// A view created with <see cref="NeoAstraHost.FillWindow"/> keeps its window for its whole life, so a view reported by an event,
+    /// such as the <see cref="NeoPageDragEndedEventArgs.TargetView"/> of a page drag dropped on another window, leads to that window.
+    /// </remarks>
+    public NeoWindow? Window => _host.Window;
 
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
 

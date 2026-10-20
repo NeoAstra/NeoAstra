@@ -125,7 +125,7 @@ public sealed partial class NeoAutomation : IAsyncDisposable
                 _selectionNote = null;
             }
 
-            if (bringToFront && page.View.OwnedWindow is { IsClosed: false } window)
+            if (bringToFront && page.View.Window is { IsClosed: false } window)
             {
                 if (!window.IsVisible) window.Show();
                 window.Activate();
@@ -190,7 +190,7 @@ public sealed partial class NeoAutomation : IAsyncDisposable
                 if (_pages.Count == 1) return false;
             }
 
-            if (page.View.OwnedWindow is { IsClosed: false } window)
+            if (page.View.Window is { IsClosed: false } window)
             {
                 var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 void OnClosed(object? sender, EventArgs args) => closed.TrySetResult();
@@ -346,7 +346,7 @@ public sealed partial class NeoAutomation : IAsyncDisposable
             }
         }
 
-        var size = template.View.OwnedWindow is { IsClosed: false } source ? source.ClientSize : new NeoSize(1024, 768);
+        var size = template.View.Window is { IsClosed: false } source ? source.ClientSize : new NeoSize(1024, 768);
         var window = Application.CreateWindow(new NeoWindowOptions { Title = "NeoAstra", Width = Math.Max(size.Width, 320), Height = Math.Max(size.Height, 240) });
         NeoAstra view;
         try

@@ -395,7 +395,7 @@ public sealed class NeoMenuService : IAsyncDisposable, INeoApplicationBoundDeskt
         }
         else if (targetId.StartsWith("context:", StringComparison.Ordinal) && _application.TryGetView(targetId[8..], out var view) && view is not null)
         {
-            void Handler() => OwnerDestroyed(targetId); EventHandler windowClosed = (_, _) => OwnerDestroyed(targetId); view.Disposing += Handler; if (view.OwnedWindow is not null) view.OwnedWindow.Closed += windowClosed; _ownerDetach[targetId] = () => { view.Disposing -= Handler; if (view.OwnedWindow is not null) view.OwnedWindow.Closed -= windowClosed; };
+            void Handler() => OwnerDestroyed(targetId); EventHandler windowClosed = (_, _) => OwnerDestroyed(targetId); view.Disposing += Handler; if (view.Window is not null) view.Window.Closed += windowClosed; _ownerDetach[targetId] = () => { view.Disposing -= Handler; if (view.Window is not null) view.Window.Closed -= windowClosed; };
         }
     }
 

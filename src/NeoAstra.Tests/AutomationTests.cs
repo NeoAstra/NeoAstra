@@ -1080,7 +1080,7 @@ public sealed class AutomationTests
             Assert.AreNotEqual((20, 10), await ResizeAsync(20, 10));
 
             // A window that is maximized is restored for the size.
-            view.OwnedWindow!.State = NeoWindowState.Maximized;
+            view.Window!.State = NeoWindowState.Maximized;
             await ExpectAsync(640, 480, everySize, "from a maximized window");
         }, perMonitorDpiAware: true);
     }

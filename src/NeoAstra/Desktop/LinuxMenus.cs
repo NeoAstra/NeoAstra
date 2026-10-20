@@ -287,7 +287,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
         NeoAstra? view = null;
         if (id == "application") window = app.MainWindow ?? throw new InvalidOperationException("An application menu requires a main window.");
         else if (id.StartsWith("window:", StringComparison.Ordinal)) { if (!app.TryGetWindow(id[7..], out window) || window is null) throw new ArgumentException("The window menu target does not exist.", nameof(id)); }
-        else if (id.StartsWith("context:", StringComparison.Ordinal)) { if (!app.TryGetView(id[8..], out view) || view?.OwnedWindow is null) throw new ArgumentException("The context menu target does not exist.", nameof(id)); window = view.OwnedWindow; }
+        else if (id.StartsWith("context:", StringComparison.Ordinal)) { if (!app.TryGetView(id[8..], out view) || view?.Window is null) throw new ArgumentException("The context menu target does not exist.", nameof(id)); window = view.Window; }
         else throw new ArgumentException("A native menu target must be 'application', 'window:<label>', or 'context:<view-label>'.", nameof(id));
         var kind = id.StartsWith("context:", StringComparison.Ordinal) ? TargetKind.Context : id == "application" ? TargetKind.Application : TargetKind.Window;
         var nativeWindow = window.GetNativeHandle(NeoNativeHandleKind.GtkWindow).Value;
@@ -301,7 +301,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     private static NeoAstra? ResolveRoleView(NeoApplication application, NeoWindow window, out nint widget)
     {
         var candidates = new List<RoleCandidate>();
-        foreach (var candidate in application.GetRegisteredViews()) if (TryGetWidget(candidate, out var candidateWidget)) candidates.Add(new(candidate, candidate.OwnedWindow, candidate.ViewLabel, candidateWidget));
+        foreach (var candidate in application.GetRegisteredViews()) if (TryGetWidget(candidate, out var candidateWidget)) candidates.Add(new(candidate, candidate.Window, candidate.ViewLabel, candidateWidget));
         var selected = LinuxRoleTargetSelection.Select(candidates, window, static value => value.Owner, static value => value.Label, static value => value.Widget);
         widget = selected?.Widget ?? 0;
         return selected?.View;
@@ -320,7 +320,7 @@ internal sealed unsafe partial class LinuxMenuPresenter(NeoCommandService comman
     {
         widget = 0;
         var app = _application;
-        if (app is null || target.View is null || !ReferenceEquals(target.View.OwnedWindow, target.ManagedWindow)) return false;
+        if (app is null || target.View is null || !ReferenceEquals(target.View.Window, target.ManagedWindow)) return false;
         if (target.Kind == TargetKind.Context)
         {
             if (!app.GetRegisteredViews().Any(view => ReferenceEquals(view, target.View))) return false;

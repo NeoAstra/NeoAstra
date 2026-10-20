@@ -212,7 +212,7 @@ internal sealed unsafe partial class WindowsMenuPresenter(NeoCommandService comm
         var app = _application ?? throw new InvalidOperationException("The native menu presenter must be bound to an application.");
         if (id == "application") return new(id, TargetKind.Application, WindowHandle(app.MainWindow ?? throw new InvalidOperationException("An application menu requires a main window.")));
         if (id.StartsWith("window:", StringComparison.Ordinal)) { if (!app.TryGetWindow(id[7..], out var window) || window is null) throw new ArgumentException("The window menu target does not exist.", nameof(id)); return new(id, TargetKind.Window, WindowHandle(window)); }
-        if (id.StartsWith("context:", StringComparison.Ordinal)) { if (!app.TryGetView(id[8..], out var view) || view?.OwnedWindow is null) throw new ArgumentException("The context menu target does not exist.", nameof(id)); return new(id, TargetKind.Context, WindowHandle(view.OwnedWindow)); }
+        if (id.StartsWith("context:", StringComparison.Ordinal)) { if (!app.TryGetView(id[8..], out var view) || view?.Window is null) throw new ArgumentException("The context menu target does not exist.", nameof(id)); return new(id, TargetKind.Context, WindowHandle(view.Window)); }
         throw new ArgumentException("A native menu target must be 'application', 'window:<label>', or 'context:<view-label>'.", nameof(id));
     }
 

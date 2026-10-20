@@ -49,6 +49,20 @@ it from lookup and window counts before destruction, including when a worker-thr
 platform teardown on the UI thread. Application shutdown also unregisters windows whose handles are
 still retained; retaining a handle does not keep its platform window available after shutdown.
 
+## Windows and their views
+
+An application with several windows names them. `NeoWindowOptions.Label` gives a window an application-unique label when it is
+created; it never changes, a second open window cannot take it, and a window that closed gives it back.
+`NeoApplication.TryGetWindow(label, out window)` finds an open window by its label, and `NeoWindow.Id` is a stable number. A view
+has its own label, `NeoAstraOptions.ViewLabel`, which RPC and capabilities also go by.
+
+`NeoAstra.Window` leads from a view to the window that hosts it, for example from the `TargetView` of a page drag dropped on
+another window (see [drag and drop](desktop-services.md)); it is `null` for a view created in a native parent of the application.
+
+`NeoWindow.Title` changes the title of a window at any time, and a page with the `window:management` permission changes the title
+of its own window with `desktop.window.setTitle`. Keep it meaningful in a [chromeless window](chromeless-windows.md) as well: the
+title bar does not show it, but the system does, in the taskbar, the window switcher, and to assistive technology.
+
 ## Reentrant native callbacks
 
 Event handlers may unsubscribe and dispose their view or window synchronously. Native event delivery

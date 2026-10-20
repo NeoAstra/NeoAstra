@@ -456,7 +456,7 @@ public sealed class NeoAutomationPage
     private async Task<NeoSize?> ResizeCoreAsync(NeoSize wanted, CancellationToken cancellationToken)
     {
         ThrowIfClosed();
-        var window = View.OwnedWindow ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
+        var window = View.Window ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
         if (window.State != NeoWindowState.Normal)
         {
             // A window that leaves another state takes a moment to have the size it had before, and so does its page.

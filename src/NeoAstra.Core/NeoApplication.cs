@@ -1065,7 +1065,7 @@ public sealed class NeoApplication : IAsyncDisposable
         foreach (var view in views)
         {
             try { view.NotifyApplicationShutdown(); }
-            catch (Exception exception) { ReportLifecycleFailure("application.stopping", exception, view.OwnedWindow?.Id ?? 0); }
+            catch (Exception exception) { ReportLifecycleFailure("application.stopping", exception, view.Window?.Id ?? 0); }
         }
     }
 

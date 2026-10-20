@@ -145,7 +145,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             (json, cancellationToken) => SendAsync(view, documentSessionId, json, cancellationToken),
             frames => SendBatchAsync(view, documentSessionId, frames),
             view,
-            view.OwnedWindow);
+            view.Window);
     }
 
     // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
