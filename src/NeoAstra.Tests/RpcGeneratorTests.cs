@@ -61,6 +61,20 @@ public sealed class RpcGeneratorTests
     }
 
     [TestMethod]
+    public void GeneratedPermissionAdmitsTheLongestTimeoutOfItsMethods()
+    {
+        // A permission declaration admits 30 seconds by default; a method that may run longer raises it, or Build fails.
+        var longer = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", TimeoutMilliseconds = 60000)]"));
+        Assert.AreEqual(0, longer.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, longer.Diagnostics));
+        StringAssert.Contains(longer.Generated, "global::NeoAstra.Rpc.NeoScopeFamily.None) { DefaultTimeout = global::System.TimeSpan.FromMilliseconds(60000) },");
+        var both = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", TimeoutMilliseconds = 45000, MaximumConcurrency = 64)]"));
+        Assert.AreEqual(0, both.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, both.Diagnostics));
+        StringAssert.Contains(both.Generated, "global::NeoAstra.Rpc.NeoScopeFamily.None) { MaximumConcurrency = 64, DefaultTimeout = global::System.TimeSpan.FromMilliseconds(45000) },");
+        var within = Run(ValidSource.Replace("Permission = \"test:invoke\")]", "Permission = \"test:invoke\", TimeoutMilliseconds = 30000)]"));
+        Assert.IsFalse(within.Generated.Contains("DefaultTimeout", StringComparison.Ordinal), "A timeout within the declaration default keeps the default declaration.");
+    }
+
+    [TestMethod]
     public void GeneratorDiagnosesDuplicateCommandsAndMissingSerializerMetadata()
     {
         var duplicate = Run(ValidSource.Replace("[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]", "[NeoRpcMethod(\"open\", Permission = \"test:invoke\")]\n    public ValueTask<Response> Again(Request request) => ValueTask.FromResult(new Response());\n    [NeoRpcMethod(\"open\", Permission = \"test:invoke\")]"));

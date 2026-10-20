@@ -450,8 +450,10 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
     private static void EmitApplicationRegistration(StringBuilder builder, IReadOnlyList<ServiceModel> services, IReadOnlyList<EventModel> events, string hash)
     {
         var permissions = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        // The largest explicit command limit of a permission above the declaration default (8), so its grant admits that limit.
+        // The largest explicit command limit and timeout of a permission above the declaration defaults (8 and 30 seconds),
+        // so its grant admits them.
         var permissionConcurrency = new Dictionary<string, int>(StringComparer.Ordinal);
+        var permissionTimeout = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var service in services)
         {
             foreach (var method in service.Methods)
@@ -461,6 +463,8 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
                 commands.Add(service.Name + "." + method.Name);
                 if (method.MaximumConcurrency > 8 && (!permissionConcurrency.TryGetValue(method.Permission, out var current) || method.MaximumConcurrency > current))
                     permissionConcurrency[method.Permission] = method.MaximumConcurrency;
+                if (method.TimeoutMilliseconds > 30000 && (!permissionTimeout.TryGetValue(method.Permission, out var longest) || method.TimeoutMilliseconds > longest))
+                    permissionTimeout[method.Permission] = method.TimeoutMilliseconds;
             }
         }
         foreach (var item in events)
@@ -488,7 +492,15 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
                 builder.Append('"').Append(Escape(command)).Append('"');
             }
             builder.Append(" }, global::NeoAstra.Rpc.NeoPermissionRisk.Low, global::NeoAstra.Rpc.NeoScopeFamily.None)");
-            if (permissionConcurrency.TryGetValue(permission.Key, out var concurrency)) builder.Append(" { MaximumConcurrency = ").Append(concurrency).Append(" }");
+            var hasConcurrency = permissionConcurrency.TryGetValue(permission.Key, out var concurrency);
+            var hasTimeout = permissionTimeout.TryGetValue(permission.Key, out var timeout);
+            if (hasConcurrency || hasTimeout)
+            {
+                builder.Append(" {");
+                if (hasConcurrency) builder.Append(" MaximumConcurrency = ").Append(concurrency).Append(hasTimeout ? "," : string.Empty);
+                if (hasTimeout) builder.Append(" DefaultTimeout = global::System.TimeSpan.FromMilliseconds(").Append(timeout).Append(')');
+                builder.Append(" }");
+            }
             builder.AppendLine(",");
         }
         builder.AppendLine("        }, configure);");
