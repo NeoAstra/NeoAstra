@@ -247,7 +247,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly NeoRpcSendFrames? _sendBatch;
     // Every outbound frame (answers, events, channel items) waits in one ordered queue, and one writer sends what has
     // queued: a view posts it in one turn of its UI thread instead of one dispatcher round trip per frame.
-    private readonly Channel<OutboundFrame> _outbound = Channel.CreateUnbounded<OutboundFrame>(new UnboundedChannelOptions { SingleReader = true });
+    // Two readers: the writer, and teardown withdrawing what is still queued while the writer may still be running.
+    private readonly Channel<OutboundFrame> _outbound = Channel.CreateUnbounded<OutboundFrame>(new UnboundedChannelOptions { SingleReader = false });
     private int _queuedOutbound;
     private int _writing;
     private readonly WeakReference<global::NeoAstra.NeoAstra>? _view;
