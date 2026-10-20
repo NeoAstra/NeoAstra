@@ -24,7 +24,7 @@ public sealed class DocumentsService
 internal partial class ApplicationJsonContext : JsonSerializerContext;
 ```
 
-The `NeoAstra` package carries `NeoAstra.Generator` as an analyzer automatically; applications must not add a generator package reference. Generated extensions support a direct singleton instance and an AOT-safe factory with `ApplicationSingleton`, `PerView`, `PerDocumentSession`, or `PerInvocation` lifetime. Owned work is canceled before scope disposal. Build without DI:
+The `NeoAstra` package carries `NeoAstra.Generator` as an analyzer automatically; applications must not add a generator package reference. Generated extensions support a direct singleton instance and an AOT-safe factory with `ApplicationSingleton`, `PerView`, `PerDocumentSession`, or `PerInvocation` lifetime. A `PerView` instance belongs to the view instance of the binding, not to its label: a window that reopens with the label of one still tearing down gets its own instance. Owned work is canceled before scope disposal. Build without DI:
 
 ```csharp
 var builder = new NeoRpcBuilder(options).AddDocumentsService(new DocumentsService());

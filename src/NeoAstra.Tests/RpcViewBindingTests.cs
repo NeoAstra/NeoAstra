@@ -74,6 +74,61 @@ public sealed class RpcViewBindingTests
         Assert.IsFalse(duringTransition);
     }
 
+    [TestMethod]
+    public async Task PerViewServicesBelongToTheViewInstance_NotToItsLabel()
+    {
+        var activator = new NeoRpcServiceActivator<CountingService>(_ => new CountingService(), NeoRpcServiceLifetime.PerView);
+        var builder = new NeoRpcBuilder(new NeoRpcOptions());
+        builder.AddServiceActivator(activator);
+        builder.AddCommand<Request, Response>("service.which",
+            async (request, context, _) => await activator.InvokeAsync(context, service => ValueTask.FromResult(new Response(service.Id.ToString(System.Globalization.CultureInfo.InvariantCulture), context.ViewLabel))),
+            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
+        await using var host = builder.Build();
+        // A window closed and a new one opened with the same view label, while the old binding still tears down.
+        var closingView = CreateDetachedView("tab");
+        var newView = CreateDetachedView("tab");
+
+        var closing = await WhichServiceAsync(host, closingView, "closing-document");
+        var reopened = await WhichServiceAsync(host, newView, "new-document");
+        Assert.AreNotEqual(closing.Id, reopened.Id, "The new view does not share the service of the view it replaces.");
+
+        await host.CloseViewServicesAsync(closingView.RpcServiceScope);
+        Assert.IsTrue(closing.Disposed);
+        Assert.IsFalse(reopened.Disposed, "Closing the services of the old view leaves those of the new one.");
+        Assert.AreEqual(reopened.Id, (await WhichServiceAsync(host, newView, "new-document-2")).Id);
+    }
+
+    private static async Task<CountingService> WhichServiceAsync(NeoRpcHost host, global::NeoAstra.NeoAstra view, string documentSessionId)
+    {
+        var frames = new ConcurrentQueue<string>();
+        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity(view.ViewLabel!, documentSessionId),
+            (json, _) => { frames.Enqueue(json); return ValueTask.CompletedTask; }, view, null);
+        await session.ReceiveAsync(Invoke("which", "service.which", "{\"id\":\"which\"}")).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var id = int.Parse(JsonDocument.Parse(frames.Single()).RootElement.GetProperty("value").GetProperty("title").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+        return CountingService.All[id];
+    }
+
+    private sealed class CountingService : IAsyncDisposable
+    {
+        internal static readonly ConcurrentDictionary<int, CountingService> All = new();
+        private static int s_next;
+
+        public CountingService()
+        {
+            Id = Interlocked.Increment(ref s_next);
+            All[Id] = this;
+        }
+
+        public int Id { get; }
+        public bool Disposed { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static global::NeoAstra.NeoAstra CreateDetachedView(string viewLabel)
     {
         var view = (global::NeoAstra.NeoAstra)RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));

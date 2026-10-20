@@ -16,7 +16,9 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
     private readonly NeoRpcServiceFactory<TService> _factory;
     private readonly NeoRpcServiceLifetime _lifetime;
     private readonly Dictionary<string, ScopeEntry> _sessions = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ScopeEntry> _views = new(StringComparer.Ordinal);
+    // Keyed by the service scope of the view of the session when it has one, so that a new view that reuses the label of
+    // a view still being torn down gets services of its own; by the view label otherwise. A string key compares ordinally.
+    private readonly Dictionary<object, ScopeEntry> _views = new();
     private readonly object _lifecycleLock = new();
     private ScopeEntry? _singleton;
     private int _disposed;
@@ -96,13 +98,13 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
         finally { lock (_lifecycleLock) if (_sessions.TryGetValue(documentSessionId, out var current) && ReferenceEquals(current, entry)) _sessions.Remove(documentSessionId); }
     }
 
-    async ValueTask INeoRpcServiceLifetimeOwner.CloseViewAsync(string viewLabel)
+    async ValueTask INeoRpcServiceLifetimeOwner.CloseViewAsync(object viewScope)
     {
         ScopeEntry? entry;
-        lock (_lifecycleLock) _views.TryGetValue(viewLabel, out entry);
+        lock (_lifecycleLock) _views.TryGetValue(viewScope, out entry);
         if (entry is null) return;
         try { await entry.CloseAsync().ConfigureAwait(false); }
-        finally { lock (_lifecycleLock) if (_views.TryGetValue(viewLabel, out var current) && ReferenceEquals(current, entry)) _views.Remove(viewLabel); }
+        finally { lock (_lifecycleLock) if (_views.TryGetValue(viewScope, out var current) && ReferenceEquals(current, entry)) _views.Remove(viewScope); }
     }
 
     async ValueTask IAsyncDisposable.DisposeAsync()
@@ -125,14 +127,14 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
             return _lifetime switch
             {
                 NeoRpcServiceLifetime.ApplicationSingleton => _singleton ??= new ScopeEntry(this),
-                NeoRpcServiceLifetime.PerView => GetOrAdd(_views, context.ViewLabel),
+                NeoRpcServiceLifetime.PerView => GetOrAdd(_views, context.TryGetView(out var view) && view is not null ? view.RpcServiceScope : context.ViewLabel),
                 NeoRpcServiceLifetime.PerDocumentSession => GetOrAdd(_sessions, context.DocumentSessionId),
                 _ => throw new InvalidOperationException("Transient services are resolved only inside an invocation."),
             };
         }
     }
 
-    private ScopeEntry GetOrAdd(Dictionary<string, ScopeEntry> scopes, string key)
+    private ScopeEntry GetOrAdd<TKey>(Dictionary<TKey, ScopeEntry> scopes, TKey key) where TKey : notnull
     {
         if (scopes.TryGetValue(key, out var entry)) return entry;
         entry = new ScopeEntry(this);
@@ -220,5 +222,5 @@ public sealed class NeoRpcServiceActivator<TService> : INeoRpcServiceLifetimeOwn
 internal interface INeoRpcServiceLifetimeOwner : IAsyncDisposable
 {
     ValueTask CloseSessionAsync(string documentSessionId);
-    ValueTask CloseViewAsync(string viewLabel);
+    ValueTask CloseViewAsync(object viewScope);
 }

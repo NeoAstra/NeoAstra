@@ -190,9 +190,10 @@ public sealed class NeoRpcHost : IAsyncDisposable
         foreach (var lifetime in _serviceLifetimes) await lifetime.CloseSessionAsync(documentSessionId).ConfigureAwait(false);
     }
 
-    internal async ValueTask CloseViewServicesAsync(string viewLabel)
+    // The scope of per-view services: the view of a view binding, or the label of a view whose sessions have none.
+    internal async ValueTask CloseViewServicesAsync(object viewScope)
     {
-        foreach (var lifetime in _serviceLifetimes) await lifetime.CloseViewAsync(viewLabel).ConfigureAwait(false);
+        foreach (var lifetime in _serviceLifetimes) await lifetime.CloseViewAsync(viewScope).ConfigureAwait(false);
     }
 
     internal async ValueTask<int> PublishAsync(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool> recipient, CancellationToken cancellationToken)

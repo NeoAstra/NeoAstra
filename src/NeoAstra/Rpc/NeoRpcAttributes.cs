@@ -213,6 +213,11 @@ public enum NeoRpcServiceLifetime
     /// <summary>One instance is retained by the application RPC host.</summary>
     ApplicationSingleton,
     /// <summary>One instance is retained for each view.</summary>
+    /// <remarks>
+    /// With a view binding, the instance belongs to the view instance and is disposed after the binding is: a view
+    /// created later with the same label, while the previous one still tears down, gets an instance of its own. A session
+    /// opened without a view gets the instance of its view label.
+    /// </remarks>
     PerView,
     /// <summary>One instance is retained for each document session.</summary>
     PerDocumentSession,

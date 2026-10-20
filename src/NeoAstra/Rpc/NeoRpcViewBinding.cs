@@ -78,7 +78,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         }
         var currentTeardown = session is null ? Task.CompletedTask : DisposeContainedAsync(session);
         await Task.WhenAll(teardowns.Append(currentTeardown)).ConfigureAwait(false);
-        await _host.CloseViewServicesAsync(_view.ViewLabel!).ConfigureAwait(false);
+        await _host.CloseViewServicesAsync(_view.RpcServiceScope).ConfigureAwait(false);
     }
 
     private void OnSessionChanged(NeoTransportSessionSnapshot? snapshot)

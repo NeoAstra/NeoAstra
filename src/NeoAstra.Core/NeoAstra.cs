@@ -29,6 +29,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private bool _canGoForward;
     private bool _historyNavigationOff;
     private int _disposed;
+    private object? _rpcServiceScope;
 
     internal NeoAstra(NeoEnvironment environment, SafeViewHandle handle, NeoAstraHost host, NeoAstraOptions options)
     {
@@ -615,6 +616,10 @@ public sealed class NeoAstra : IAsyncDisposable
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
 
     internal TimeSpan DecisionTimeout => _decisionTimeout;
+
+    // Identifies the per-view RPC services of this view instance, without keeping the view alive: a view created later
+    // with the same label gets services of its own.
+    internal object RpcServiceScope => Volatile.Read(ref _rpcServiceScope) ?? Interlocked.CompareExchange(ref _rpcServiceScope, new object(), null) ?? _rpcServiceScope!;
 
     // Browser automation answers the dialogs of the views it drives; the handler of the application stays in place
     // and gets the dialogs back when automation lets go of the view.
