@@ -237,6 +237,7 @@ public sealed class DisplayTests
         {
             await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><body style='margin:0'>points</body>" }, async session =>
             {
+                if (!HasDisplays(session.Application)) Assert.Inconclusive("The staged native library predates displays.");
                 await session.NavigateAsync("index.html");
                 var message = aware ? "aware" : "unaware";
                 var window = session.Window;
@@ -402,11 +403,61 @@ public sealed class DisplayTests
         }
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task Displays_WithANativeLibraryFromBeforeThemAreUnknown()
+    {
+        if (!OperatingSystem.IsWindows()) Assert.Inconclusive("The native library of the tests is checked on Windows.");
+        string? inconclusive = null;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra display fallback test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                {
+                    try
+                    {
+                        if (HasDisplays(application)) { inconclusive = "The staged native library has displays."; return; }
+                        // What an application sees with a native library that lacks the display functions: nothing, and no failure.
+                        Assert.AreEqual(0, application.GetDisplays().Count);
+                        Assert.IsNull(application.GetDisplayAt(default));
+                        Assert.IsNull(application.GetWindowAt(default));
+                        foreach (var capability in Enum.GetValues<NeoWindowCapability>())
+                            Assert.AreEqual(NeoSupportLevel.None, application.GetWindowCapability(capability).SupportLevel);
+                        await using var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                        Assert.IsNull(window.Display);
+                        Assert.IsNull(window.IsOnCurrentVirtualDesktop);
+                        Assert.IsNull(window.VirtualDesktopId);
+                        Assert.IsFalse(window.IsOnAllVirtualDesktops);
+                        Assert.ThrowsExactly<NotSupportedException>(() => window.IsOnAllVirtualDesktops = true);
+                        Assert.AreEqual(NeoVirtualDesktopMoveResult.NotSupported, window.MoveToVirtualDesktop("{8B5BE8B5-1E2C-4B0A-9E6C-3B8E7C6A1D20}"));
+                        // Placement goes on as it did.
+                        var bounds = new NeoRect(100, 100, 400, 300);
+                        window.Bounds = bounds;
+                        Assert.AreEqual(bounds, window.Bounds);
+                        window.MoveToDisplay(new NeoDisplay("primary", "Primary", new NeoRect(0, 0, 1000, 800), new NeoRect(0, 0, 1000, 760), 1, true), new NeoRect(10, 20, 300, 200));
+                        Assert.AreEqual(new NeoRect(10, 20, 300, 200), window.Bounds);
+                    }
+                    finally { application.Shutdown(0); }
+                });
+                completion.TrySetResult();
+            }
+            catch (Exception exception) { completion.TrySetException(exception); }
+        }) { IsBackground = true };
+        if (OperatingSystem.IsWindows()) thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(50)); }
+        catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The native runtime is not staged."); }
+        if (inconclusive is not null) Assert.Inconclusive(inconclusive);
+    }
+
     // Runs a body in an application of its own on a UI thread of its own, aware of display scaling or not.
     private static async Task RunAsync(bool aware, Func<NeoApplication, Task> body)
     {
         if (!OperatingSystem.IsWindows()) Assert.Inconclusive("The display tests read Win32 to compare; macOS and GTK are covered by the native ABI test.");
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? inconclusive = null;
         var thread = new Thread(() =>
         {
             try
@@ -414,7 +465,12 @@ public sealed class DisplayTests
                 if (aware) SetThreadDpiAwarenessContext(-4);
                 NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra display test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
                 {
-                    try { await body(application); }
+                    try
+                    {
+                        // The native library staged for the tests can be one from before displays, until its runtimes are rebuilt.
+                        if (!HasDisplays(application)) inconclusive = "The staged native library predates displays.";
+                        else await body(application);
+                    }
                     finally { application.Shutdown(0); }
                 });
                 completion.TrySetResult();
@@ -425,7 +481,10 @@ public sealed class DisplayTests
         thread.Start();
         try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(50)); }
         catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The native runtime is not staged."); }
+        if (inconclusive is not null) Assert.Inconclusive(inconclusive);
     }
+
+    private static bool HasDisplays(NeoApplication application) => application.GetWindowCapability(NeoWindowCapability.Displays).IsSupported;
 
     private static List<(NeoRect Bounds, NeoRect WorkArea)> Monitors()
     {

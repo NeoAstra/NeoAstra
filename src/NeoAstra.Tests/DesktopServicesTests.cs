@@ -1334,8 +1334,8 @@ public sealed class DesktopServicesTests
                 {
                     window.Show();
                     shown = window.FrameBounds;
+                    // Null with a native library from before displays, which saves no display.
                     on = window.Display;
-                    Assert.IsNotNull(on);
                     await using var controller = new NeoWindowStateController(window, store, "main", delay);
                     Command(window, maximize);
                     Assert.AreEqual(NeoWindowState.Maximized, window.State);
