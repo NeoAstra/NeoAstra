@@ -31,15 +31,11 @@
     return error;
   };
 
-  const byteLength = value => {
-    let json;
-    try { json = JSON.stringify(value); }
-    catch { throw transportError("invalid_frame", "NeoAstra frames must be JSON serializable."); }
-    if (json === undefined) throw transportError("invalid_frame", "NeoAstra frames must be JSON values.");
-    const length = new TextEncoder().encode(json).byteLength;
-    if (length > maximumFrameBytes) throw transportError("payload_too_large", "NeoAstra frame exceeds the configured byte limit.");
-    return length;
-  };
+  const encoder = new TextEncoder();
+  // A UTF-16 code unit takes one to three UTF-8 bytes: the string is encoded only when its length cannot decide.
+  const exceedsBytes = (json, limit) => json.length * 3 > limit && (json.length > limit || encoder.encode(json).byteLength > limit);
+  // The envelope adds the same bytes around every frame: they are measured once.
+  const envelopeBytes = encoder.encode(JSON.stringify({ __neoastraTransport: 1, hostViewBinding, rendererDocumentId, frame: null })).byteLength - "null".length;
 
   // The host bounds every envelope it sends by the same limit before posting it: measuring it again here would
   // only cost a serialization, and a throw from this listener would drop an answer the client is waiting for.
@@ -65,16 +61,22 @@
 
   const transport = Object.freeze({
     metadata,
-    send(frame) {
+    // `json`, when given, is the frame as the client already serialized it. It only spares a second
+    // serialization: the host measures and parses what it receives on its own.
+    send(frame, json) {
       if (!frame || typeof frame !== "object" || Array.isArray(frame)) throw new Error("NeoAstra frames must be JSON objects.");
-      const envelope = {
+      if (typeof json !== "string") {
+        try { json = JSON.stringify(frame); }
+        catch { throw transportError("invalid_frame", "NeoAstra frames must be JSON serializable."); }
+        if (typeof json !== "string") throw transportError("invalid_frame", "NeoAstra frames must be JSON values.");
+      }
+      if (exceedsBytes(json, maximumFrameBytes - envelopeBytes)) throw transportError("payload_too_large", "NeoAstra frame exceeds the configured byte limit.");
+      postEnvelope({
         __neoastraTransport: 1,
         hostViewBinding,
         rendererDocumentId,
         frame,
-      };
-      byteLength(envelope);
-      postEnvelope(envelope);
+      });
     },
     setReceiveHandler(handler) {
       if (typeof handler !== "function") throw new TypeError("A receive handler is required.");

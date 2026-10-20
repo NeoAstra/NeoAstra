@@ -93,8 +93,15 @@ is dropped with a warning diagnostic, and never silently: the second argument of
 `subscription`, `sequence`) and the error. `NeoRpcClient` uses it to fail what the frame answers with
 the same code, for example `invalid_frame`: the pending call rejects, a channel fails and is closed on
 the host, a pending subscription rejects and is unsubscribed, and an event is skipped so that the next
-events of its subscription keep arriving. The bootstrap does not measure inbound envelopes again: the
-host bounds each envelope it sends by `MaximumMessageSize` before posting it.
+events of its subscription keep arriving.
+
+Neither the bootstrap nor the client measures an inbound frame again: the host bounds each envelope it
+sends by `MaximumMessageSize` before posting it, and also measures and parses each envelope it receives
+on its own. `send` serializes a frame once: the client checks its JSON against the negotiated byte limit
+and hands that JSON to the bootstrap with the frame, and the bootstrap adds the fixed size of the
+envelope to check the exact envelope bytes, so `send` throws `payload_too_large` rather than having the
+host drop the frame. Both encode the JSON in UTF-8 only when its length cannot decide (more than a third
+of the limit).
 Application frames are never accepted before a handshake. Production
 diagnostics contain stable codes and bounded metadata, never frame bodies, arguments, file paths, raw
 exceptions, or secrets.

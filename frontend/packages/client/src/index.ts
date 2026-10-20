@@ -6,7 +6,7 @@ import {
   PROTOCOL_MINOR,
   SUPPORTED_FEATURES,
   assertInboundFrame,
-  assertOutboundFrame,
+  checkOutboundFrame,
   describeRejectedFrame,
   isRecord,
   parseCloseReason,
@@ -73,7 +73,8 @@ interface BootstrapMetadata {
 
 interface BootstrapTransport {
   readonly metadata: BootstrapMetadata;
-  send(frame: Readonly<Record<string, unknown>>): void;
+  /** `json` is the frame already serialized by the client, so that the bootstrap does not serialize it again. */
+  send(frame: Readonly<Record<string, unknown>>, json?: string): void;
   setReceiveHandler(handler: (frame: unknown) => void): () => void;
 }
 
@@ -285,9 +286,9 @@ class Connection implements NeoAstraConnection {
 
   send(frame: unknown): void {
     if (this.currentState !== "connected") throw new NeoAstraClientError("connection_closed", "The transport connection is closed.");
-    assertOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+    const json = checkOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
     try {
-      this.bootstrap.send(frame);
+      this.bootstrap.send(frame as Record<string, unknown>, json);
     } catch (error) {
       throw normalizeError(error);
     }
@@ -332,7 +333,7 @@ class Connection implements NeoAstraConnection {
       return;
     }
     try {
-      assertInboundFrame(value, this.maximumFrameBytes, this.maximumJsonDepth);
+      assertInboundFrame(value, this.maximumJsonDepth);
     } catch (error) {
       const normalized = normalizeError(error);
       emitDiagnostic({ level: "warning", code: normalized.code, message: normalized.message, correlationId: normalized.correlationId });

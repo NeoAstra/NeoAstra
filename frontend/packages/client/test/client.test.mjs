@@ -31,8 +31,10 @@ function runtime(features = ["invoke", "cancel", "events"], overrides = {}) {
 function createBootstrap(respond = handler => queueMicrotask(() => handler(runtime()))) {
   let handler;
   const sent = [];
+  const sentJson = [];
   return {
     sent,
+    sentJson,
     metadata: {
       platform: "windows",
       backend: "webview2",
@@ -42,7 +44,7 @@ function createBootstrap(respond = handler => queueMicrotask(() => handler(runti
       maximumDiagnosticQueue: 100,
       handshakeTimeoutMilliseconds: 10_000,
     },
-    send(frame) { sent.push(frame); respond(handler, frame); },
+    send(frame, json) { sent.push(frame); sentJson.push(json); respond(handler, frame); },
     setReceiveHandler(value) { handler = value; return () => { if (handler === value) handler = undefined; }; },
     receive(frame) { handler?.(frame); },
   };
@@ -322,4 +324,22 @@ test("rpcClient retries the handshake after a retryable failure", async () => {
   assert.equal((await outcome(client.invoke("documents.read", {}))).value, "read");
   assert.equal(hellos, 2);
   // The bound on attempts is tested in rpc.test.mjs: rpcClient keeps one module-level client per test process.
+});
+
+test("send serializes a frame once and hands its JSON to the bootstrap", async () => {
+  const bootstrap = createBootstrap();
+  const client = await loadClient(bootstrap);
+  const connection = await client.connect();
+  const frame = { neoastra: 1, kind: "invoke", value: { text: "naïve", items: [1, 2, 3] } };
+  connection.send(frame);
+  assert.equal(bootstrap.sentJson.at(-1), JSON.stringify(frame));
+
+  // The byte count is exact near the limit, where the length alone cannot decide it.
+  const limit = 1024 * 1024;
+  const ascii = { neoastra: 1, kind: "invoke", value: "" };
+  ascii.value = "x".repeat(limit - JSON.stringify(ascii).length);
+  connection.send(ascii);
+  const multibyte = { neoastra: 1, kind: "invoke", value: "é".repeat(limit / 2) };
+  assert.throws(() => connection.send(multibyte), error => error.code === "payload_too_large");
+  connection.close();
 });

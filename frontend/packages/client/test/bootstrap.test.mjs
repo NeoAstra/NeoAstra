@@ -99,3 +99,24 @@ test("bootstrap source is compatible with restrictive script CSP", () => {
   assert.doesNotMatch(template, /\beval\s*\(|\bnew\s+Function\b|import\s*\(/);
   assert.doesNotMatch(template, /https?:\/\//);
 });
+
+test("bootstrap counts the exact envelope bytes on send, from the frame JSON the client already made", () => {
+  for (const padding of ["x", "é"]) {
+    const frameFor = length => ({ neoastra: 1, kind: "invoke", padding: padding.repeat(length) });
+    const probe = runBackend("webview2", "windows", 2 ** 31 - 1);
+    probe.transport.send(frameFor(0));
+    const envelopeBytes = length => new TextEncoder().encode(JSON.stringify({ ...probe.outbound[0], frame: frameFor(length) })).byteLength;
+    const fixture = runBackend("webview2", "windows", envelopeBytes(40));
+    const fits = frameFor(40);
+    const over = frameFor(41);
+    fixture.transport.send(fits);
+    fixture.transport.send(fits, JSON.stringify(fits));
+    assert.equal(fixture.outbound.length, 2, padding);
+    assert.throws(() => fixture.transport.send(over), error => error.code === "payload_too_large", padding);
+    assert.throws(() => fixture.transport.send(over, JSON.stringify(over)), error => error.code === "payload_too_large", padding);
+  }
+  // The JSON given by the client is used as is: the bootstrap does not serialize the frame again.
+  const fixture = runBackend("webview2", "windows", 1024);
+  fixture.transport.send({ neoastra: 1, kind: "invoke", value: { toJSON() { throw new Error("serialized again"); } } }, "{\"neoastra\":1,\"kind\":\"invoke\"}");
+  assert.equal(fixture.outbound.length, 1);
+});

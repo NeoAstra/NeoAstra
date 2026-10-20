@@ -113,6 +113,10 @@ npm ci
 npm run check
 ```
 
+`npm run bench` builds the package and measures the page side of the transport, the real bootstrap
+and the built client without a browser, on a frame of 10,000 objects in each direction
+(`BENCH_ITEMS` and `BENCH_ITERATIONS` change the size and the number of runs).
+
 ## CI and release workflows
 
 The [CI workflow](../.github/workflows/ci.yml) builds and tests on macOS and Linux, then runs

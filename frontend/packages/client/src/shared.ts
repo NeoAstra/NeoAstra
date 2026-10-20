@@ -31,34 +31,44 @@ export class NeoAstraClientError extends Error {
   }
 }
 
-export function frameByteLength(value: unknown): number {
+let encoder: TextEncoder | undefined;
+
+/** Tells whether a string takes more than `maximumBytes` in UTF-8, encoding it only when its length cannot decide. */
+export function exceedsUtf8Bytes(value: string, maximumBytes: number): boolean {
+  // A UTF-16 code unit takes one to three UTF-8 bytes (a surrogate pair, two units, takes four).
+  if (value.length * 3 <= maximumBytes) return false;
+  if (value.length > maximumBytes) return true;
+  return (encoder ??= new TextEncoder()).encode(value).byteLength > maximumBytes;
+}
+
+/**
+ * Checks a frame the page sends and returns its JSON, made once and handed to the bootstrap with the frame.
+ * The host reads the envelope around the frame with the same depth limit, so the frame keeps one level for it.
+ */
+export function checkOutboundFrame(value: unknown, maximumFrameBytes: number, maximumJsonDepth = DEFAULT_MAXIMUM_JSON_DEPTH): string {
+  assertFrameShape(value);
+  if (exceedsJsonDepth(value, maximumJsonDepth - 1)) throw depthError();
   let json: string;
   try {
     json = JSON.stringify(value);
   } catch {
     throw new NeoAstraClientError("invalid_frame", "The transport frame is not JSON serializable.");
   }
-  if (json === undefined) {
+  if (typeof json !== "string") {
     throw new NeoAstraClientError("invalid_frame", "The transport frame must be a JSON value.");
   }
-  return new TextEncoder().encode(json).byteLength;
-}
-
-/** Checks a frame the page sends. The host reads the envelope around it with the same depth limit, so the frame keeps one level for it. */
-export function assertOutboundFrame(value: unknown, maximumFrameBytes: number, maximumJsonDepth = DEFAULT_MAXIMUM_JSON_DEPTH): asserts value is Record<string, unknown> {
-  assertFrameShape(value);
-  if (exceedsJsonDepth(value, maximumJsonDepth - 1)) throw depthError();
-  if (frameByteLength(value) > maximumFrameBytes) {
+  if (exceedsUtf8Bytes(json, maximumFrameBytes)) {
     throw new NeoAstraClientError("payload_too_large", "The transport frame exceeds the negotiated byte limit.");
   }
+  return json;
 }
 
-/** Checks a frame the host sent, whose own depth is limited by the negotiated depth. */
-export function assertInboundFrame(value: unknown, maximumFrameBytes: number, maximumJsonDepth = DEFAULT_MAXIMUM_JSON_DEPTH): asserts value is Record<string, unknown> {
+/**
+ * Checks a frame the host sent, whose own depth is limited by the negotiated depth. Its size is not measured
+ * again: the host bounds every envelope it sends by the negotiated byte limit before posting it.
+ */
+export function assertInboundFrame(value: unknown, maximumJsonDepth = DEFAULT_MAXIMUM_JSON_DEPTH): asserts value is Record<string, unknown> {
   assertFrameShape(value);
-  if (frameByteLength(value) > maximumFrameBytes) {
-    throw new NeoAstraClientError("payload_too_large", "The transport frame exceeds the negotiated byte limit.");
-  }
   if (exceedsJsonDepth(value, maximumJsonDepth)) throw depthError();
 }
 

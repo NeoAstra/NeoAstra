@@ -14,7 +14,7 @@ import {
   PROTOCOL_MINOR,
   SUPPORTED_FEATURES,
   assertInboundFrame,
-  assertOutboundFrame,
+  checkOutboundFrame,
   describeRejectedFrame,
   isRecord,
   parseCloseReason,
@@ -188,7 +188,7 @@ class MockConnection implements NeoAstraConnection {
 
   send(frame: unknown): void {
     if (this.currentState !== "connected") throw new NeoAstraClientError("connection_closed", "The mock connection is closed.");
-    assertOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+    checkOutboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
     this.record(Object.freeze({ ...(frame as Record<string, unknown>) }));
   }
 
@@ -225,7 +225,7 @@ class MockConnection implements NeoAstraConnection {
       return;
     }
     try {
-      assertInboundFrame(frame, this.maximumFrameBytes, this.maximumJsonDepth);
+      assertInboundFrame(frame, this.maximumJsonDepth);
     } catch (error) {
       const value = error instanceof NeoAstraClientError
         ? error
@@ -366,7 +366,7 @@ export function createMockRpcHarness(options: MockTransportOptions = {}): MockRp
       return () => { if (receiver === handler) receiver = undefined; };
     },
     send(frame) {
-      assertOutboundFrame(frame, options.maximumFrameBytes ?? DEFAULT_MAXIMUM_FRAME_BYTES, options.maximumJsonDepth ?? 32);
+      checkOutboundFrame(frame, options.maximumFrameBytes ?? DEFAULT_MAXIMUM_FRAME_BYTES, options.maximumJsonDepth ?? 32);
       const value = Object.freeze({ ...(frame as Record<string, unknown>) });
       frames.push(value);
       queueMicrotask(() => dispatch(value));
