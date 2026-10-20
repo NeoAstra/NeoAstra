@@ -46,6 +46,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
     public event EventHandler<NeoNotificationActivation>? Activated;
     public event EventHandler<NeoExternalNotification>? ExternalReceived;
     public event EventHandler<NeoExternalNotification>? ExternalActivated;
+    public Func<NeoExternalNotification, CancellationToken, ValueTask<bool>>? ExternalPresentation { get; set; }
 
     void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; if (_attachOnBind && !_disposed) { if (_dispatcher.CheckAccess()) EnsureCenter(); else _ = _dispatcher.InvokeAsync(() => { if (!_disposed) EnsureCenter(); }); } }
 
@@ -223,9 +224,29 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void WillPresent(nint self, nint selector, nint center, nint notification, nint completion)
     {
-        try { if (Owners.ContainsKey(self) && External(notification) is { } external) Report(external.Id, null, external.Payload, activated: false); }
+        try
+        {
+            if (Owners.ContainsKey(self) && External(notification) is { } external)
+            {
+                Report(external.Id, null, external.Payload, activated: false);
+                // An owner that decides the presentation answers later: the completion handler waits, copied off the stack.
+                foreach (var owner in Owners.Values.Distinct())
+                    if (owner.ExternalPresentation is { } decide && owner._dispatcher is { } dispatcher && completion != 0)
+                    {
+                        var copied = Native._Block_copy(completion);
+                        if (copied != 0) { completion = 0; _ = MacNotificationTasks.PresentAsync(dispatcher, decide, new NeoExternalNotification(external.Id, null, external.Payload), copied); }
+                        break;
+                    }
+            }
+        }
         catch { }
-        finally { try { if (completion != 0) ((delegate* unmanaged[Cdecl]<nint, nuint, void>)((Block*)completion)->Invoke)((nint)completion, 0x1A); } catch { } }
+        finally { if (completion != 0) CompletePresentation(completion, show: true, copied: false); }
+    }
+    // UNNotificationPresentationOptionsBanner | List | Sound, or nothing.
+    internal static void CompletePresentation(nint completion, bool show, bool copied)
+    {
+        try { ((delegate* unmanaged[Cdecl]<nint, nuint, void>)((Block*)completion)->Invoke)(completion, show ? 0x1Au : 0u); } catch { }
+        finally { if (copied) Native._Block_release(completion); }
     }
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])] private static void DidReceive(nint self, nint selector, nint center, nint response, nint completion)
     {
@@ -330,6 +351,8 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
     private static partial class Native
     {
         [LibraryImport("/usr/lib/libSystem.B.dylib", StringMarshalling = StringMarshalling.Utf8)] internal static partial nint dlsym(nint handle, string symbol);
+        [LibraryImport("/usr/lib/libSystem.B.dylib")] internal static partial nint _Block_copy(nint block);
+        [LibraryImport("/usr/lib/libSystem.B.dylib")] internal static partial void _Block_release(nint block);
         [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_lookUpClass(byte* name); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_allocateClassPair(nint superclass, byte* name, nuint extra); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial void objc_registerClassPair(nint value); [LibraryImport("/usr/lib/libobjc.A.dylib")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool class_addMethod(nint type, nint selector, nint callback, byte* encoding); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint objc_getClass(byte* name); [LibraryImport("/usr/lib/libobjc.A.dylib")] internal static partial nint sel_registerName(byte* name);
         [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send2(nint target, nint selector, nint first, nint second); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send3(nint target, nint selector, nint first, nint second, nint third); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send4(nint target, nint selector, nint first, nint second, nint third, nuint fourth); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendPointerCount(nint target, nint selector, nint* values, nuint count); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendUtf8(nint target, nint selector, byte* value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoid(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoidArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendBlock(nint target, nint selector, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendAuthorization(nint target, nint selector, nuint options, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendRequest(nint target, nint selector, nint request, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendInterval(nint target, nint selector, double interval, byte repeats);
         internal static nint GetClass(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return objc_getClass(pointer); } internal static nint GetSelector(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return sel_registerName(pointer); }
@@ -338,6 +361,20 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
 
 internal static class MacNotificationTasks
 {
+    // The owner's decision for a notification in the foreground, on its dispatcher; one that is late or fails shows it.
+    internal static async Task PresentAsync(NeoDispatcher dispatcher, Func<NeoExternalNotification, CancellationToken, ValueTask<bool>> decide, NeoExternalNotification notification, nint completion)
+    {
+        var show = true;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            var decision = await dispatcher.InvokeAsync(() => decide(notification, timeout.Token).AsTask(), timeout.Token).ConfigureAwait(false);
+            show = await decision.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch { show = true; }
+        finally { MacNotifications.CompletePresentation(completion, show, copied: true); }
+    }
+
     internal static async Task<NeoDesktopStatus> ShowWithAuthorizationAsync(NeoDispatcher dispatcher, Func<Task<NeoNotificationPermissionStatus>> query, Func<Task<NeoNotificationPermissionStatus>> authorize, Func<Task<NeoDesktopStatus>> show, CancellationToken cancellationToken)
     {
         var permission = dispatcher.CheckAccess()

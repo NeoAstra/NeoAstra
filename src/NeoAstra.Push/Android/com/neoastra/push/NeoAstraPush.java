@@ -23,6 +23,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +49,9 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
     private static final AtomicInteger FOREGROUND = new AtomicInteger();
     private static volatile boolean resumedOnce;
     private static volatile JSONObject launch;
+    // The managed side decides whether a message that arrives in the foreground is shown (ForegroundPresentation).
+    private static volatile boolean deciding;
+    private static final ConcurrentHashMap<String, CompletableFuture<Boolean>> DECISIONS = new ConcurrentHashMap<>();
 
     @Override public void call(Context context, JSONObject input, JSONObject output) throws Exception {
         switch (input.getString("operation")) {
@@ -53,6 +59,13 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
             case "next": {
                 JSONObject event = EVENTS.poll(Math.max(0, Math.min(30_000, input.optLong("timeout", 20_000))), TimeUnit.MILLISECONDS);
                 if (event == null) output.put("status", "NotFound"); else output.put("status", "Success").put("event", event);
+                return;
+            }
+            case "filter": deciding = input.optBoolean("enabled", false); output.put("status", "Success"); return;
+            case "present": {
+                CompletableFuture<Boolean> decision = DECISIONS.remove(input.getString("id"));
+                if (decision != null) decision.complete(input.optBoolean("show", true));
+                output.put("status", decision == null ? "NotFound" : "Success");
                 return;
             }
             case "launch": {
@@ -93,7 +106,16 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
     static void received(Context context, RemoteMessage message) {
         try {
             JSONObject value = message(message);
-            post(new JSONObject().put("kind", "received").put("message", value));
+            // In the foreground the managed side may keep a message from being shown; it has a few seconds, then it is shown.
+            String id = deciding && FOREGROUND.get() > 0 ? UUID.randomUUID().toString() : null;
+            CompletableFuture<Boolean> decision = id == null ? null : new CompletableFuture<>();
+            if (decision != null) DECISIONS.put(id, decision);
+            post(new JSONObject().put("kind", "received").put("message", value).putOpt("decision", id));
+            if (decision != null) {
+                boolean show;
+                try { show = decision.get(4, TimeUnit.SECONDS); } catch (Exception exception) { show = true; } finally { DECISIONS.remove(id); }
+                if (!show) return;
+            }
             RemoteMessage.Notification notification = message.getNotification();
             if (notification != null) { if (FOREGROUND.get() > 0) show(context, message.getMessageId(), notification.getTitle(), notification.getBody(), null, value); }
             else {

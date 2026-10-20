@@ -38,6 +38,19 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     public event EventHandler<NeoPushMessage>? MessageReceived;
     public event EventHandler<NeoPushMessage>? MessageOpened;
 
+    // Java asks for the decision of a message that arrives in the foreground only while there is a function to decide it.
+    public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation
+    {
+        get => _presentation;
+        set
+        {
+            _presentation = value;
+            try { using var _ = Call("filter", writer => writer.WriteBoolean("enabled", value is not null)); }
+            catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { }
+        }
+    }
+    private Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? _presentation;
+
     // An application without the plugin binds the dispatcher here: the events of Java are read from then on.
     internal static AndroidPush Create(NeoDispatcher? dispatcher)
     {
@@ -104,13 +117,35 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
         Action? raise = value.GetProperty("kind").GetString() switch
         {
             "token" when value.GetProperty("token").GetString() is { } token => () => TokenChanged?.Invoke(this, new(token, NeoPushService.Firebase, false)),
-            "received" => () => MessageReceived?.Invoke(this, Message(value.GetProperty("message"))),
+            "received" => () =>
+            {
+                var message = Message(value.GetProperty("message"));
+                MessageReceived?.Invoke(this, message);
+                if (value.TryGetProperty("decision", out var decision) && decision.GetString() is { } id) _ = PresentAsync(id, message);
+            },
             "opened" => () => MessageOpened?.Invoke(this, Message(value.GetProperty("message"))),
             _ => null,
         };
         if (raise is null || _dispatcher is not { } dispatcher) return;
         try { _ = dispatcher.InvokeAsync(() => { if (!_stopping.IsCancellationRequested) try { raise(); } catch { } }); }
         catch (Exception exception) when (exception is ObjectDisposedException or InvalidOperationException) { }
+    }
+
+    // The decision goes back to Java, which waits a few seconds for it before it shows the message anyway.
+    private async Task PresentAsync(string id, NeoPushMessage message)
+    {
+        var show = true;
+        try
+        {
+            if (_presentation is { } decide)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3.5));
+                show = await decide(message, timeout.Token).AsTask().WaitAsync(timeout.Token).ConfigureAwait(true);
+            }
+        }
+        catch { show = true; }
+        try { using var _ = Call("present", writer => { writer.WriteString("id", id); writer.WriteBoolean("show", show); }); }
+        catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { }
     }
 
     internal static NeoPushMessage Message(JsonElement value)

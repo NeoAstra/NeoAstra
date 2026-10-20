@@ -59,6 +59,13 @@ public interface INeoPush
     /// <summary>Occurs when the user taps the notification of a message.</summary>
     event EventHandler<NeoPushMessage>? MessageOpened;
 
+    /// <summary>
+    /// Gets or sets what decides whether a message that arrives while the application is in the foreground is shown, such as
+    /// one about what the user already sees on screen; <see langword="null"/> shows every message. The function runs on the UI
+    /// dispatcher, and a message whose decision takes longer than a few seconds, or fails, is shown.
+    /// </summary>
+    Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation { get; set; }
+
     /// <summary>Asks the user once to show notifications, registers the device at its push service, and returns its token.</summary>
     /// <param name="cancellationToken">Stops waiting for the push service.</param>
     /// <returns>
@@ -124,6 +131,9 @@ public sealed class NeoFakePush : INeoPush
     public event EventHandler<NeoPushMessage>? MessageOpened;
 
     /// <inheritdoc />
+    public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation { get; set; }
+
+    /// <inheritdoc />
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(Registration); }
 
     /// <summary>Reports a new token as the push service would.</summary>
@@ -146,6 +156,7 @@ internal sealed class UnsupportedPush(string details) : INeoPush
     public event EventHandler<NeoPushRegistration>? TokenChanged { add { } remove { } }
     public event EventHandler<NeoPushMessage>? MessageReceived { add { } remove { } }
     public event EventHandler<NeoPushMessage>? MessageOpened { add { } remove { } }
+    public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation { get; set; }
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoPush.Failure(NeoDesktopStatus.Unsupported, null)); }
 }
 

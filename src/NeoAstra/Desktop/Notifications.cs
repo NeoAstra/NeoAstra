@@ -90,6 +90,13 @@ public interface INeoExternalNotificationSource
     event EventHandler<NeoExternalNotification>? ExternalReceived;
     /// <summary>Occurs on the UI dispatcher when the user taps a notification or one of its actions.</summary>
     event EventHandler<NeoExternalNotification>? ExternalActivated;
+
+    /// <summary>
+    /// Gets or sets what decides whether a notification that arrives while the application is in the foreground is shown;
+    /// <see langword="null"/> shows it. The function runs on the UI dispatcher, and a notification whose decision takes longer
+    /// than a few seconds, or fails, is shown.
+    /// </summary>
+    Func<NeoExternalNotification, CancellationToken, ValueTask<bool>>? ExternalPresentation { get; set; }
 }
 
 /// <summary>Provides bounded native notifications and early activation routing.</summary>

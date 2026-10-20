@@ -102,6 +102,19 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
     public event EventHandler<NeoPushMessage>? MessageReceived;
     public event EventHandler<NeoPushMessage>? MessageOpened;
 
+    // The notification service decides the presentation of what it did not show itself: a push message by this function, any
+    // other notification as before.
+    public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation
+    {
+        get => _presentation;
+        set
+        {
+            _presentation = value;
+            if (_source is not null) _source.ExternalPresentation = value is null ? null : (notification, cancellationToken) => Message(notification) is { } message ? value(message, cancellationToken) : ValueTask.FromResult(true);
+        }
+    }
+    private Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? _presentation;
+
     internal static INeoPush Create(INeoNotifications notifications, NeoDispatcher? dispatcher) => new IosPush(notifications as INeoExternalNotificationSource, dispatcher);
 
     void INeoPushDispatcherBinding.Bind(NeoDispatcher dispatcher) { ArgumentNullException.ThrowIfNull(dispatcher); _dispatcher ??= dispatcher; }

@@ -160,6 +160,25 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public void Push_LetsTheApplicationDecideTheForegroundPresentation()
+    {
+        // iOS keeps the completion handler of willPresent until the decision; Java waits a few seconds for it in the foreground.
+        Func<NeoPushMessage, CancellationToken, ValueTask<bool>> hide = static (_, _) => ValueTask.FromResult(false);
+        var fake = new NeoFakePush { ForegroundPresentation = hide };
+        Assert.AreSame(hide, fake.ForegroundPresentation);
+        var notifications = new MacNotifications("dev.neoastra.tests", attachOnBind: true);
+        Assert.IsNull(((INeoExternalNotificationSource)notifications).ExternalPresentation);
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra.Push", "Android"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var mac = File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "MacNotifications.cs"));
+        StringAssert.Contains(mac, "var copied = Native._Block_copy(completion);");
+        StringAssert.Contains(mac, "show ? 0x1Au : 0u");
+        var java = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Android", "com", "neoastra", "push", "NeoAstraPush.java"));
+        StringAssert.Contains(java, "String id = deciding && FOREGROUND.get() > 0");
+        StringAssert.Contains(java, "show = decision.get(4, TimeUnit.SECONDS)");
+    }
+
+    [TestMethod]
     public void AndroidPush_ShowsADataMessageAsTheManifestNamesItsKeys()
     {
         // Firebase shows no data message: the service shows it from the keys that the manifest names, a string resource for a key.
