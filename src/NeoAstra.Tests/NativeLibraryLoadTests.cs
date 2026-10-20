@@ -183,6 +183,8 @@ public sealed class NativeLibraryLoadTests
             var bytes = File.ReadAllBytes(FindRepositoryFile("src", "NeoAstra.Core", "runtimes", rid, "native", "neoastra_native.dll"));
             var imports = NativeLibraryDiagnostics.ReadPeImports(bytes);
             CollectionAssert.Contains(imports.ToArray(), "KERNEL32.dll", rid);
+            // The library carries its C and C++ runtime: no Visual C++ Redistributable is needed to load it.
+            Assert.IsFalse(imports.Any(static name => name.StartsWith("MSVCP", StringComparison.OrdinalIgnoreCase) || name.StartsWith("VCRUNTIME", StringComparison.OrdinalIgnoreCase)), $"{rid}: {string.Join(", ", imports)}");
             Assert.AreEqual(rid == "win-x64" ? Architecture.X64 : Architecture.Arm64, NativeLibraryDiagnostics.ReadImage(bytes).Architectures.Single(), rid);
         }
 
