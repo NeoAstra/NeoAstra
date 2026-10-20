@@ -31,7 +31,7 @@ public sealed class RpcSessionFlowTests
             (_, _) => throw new AssertFailedException("A view session sends in batches."),
             async frames =>
             {
-                batches.Enqueue([.. frames]);
+                batches.Enqueue([.. frames.Select(static frame => frame.ToString())]);
                 if (batches.Count == 1) { firstSent.TrySetResult(); await releaseFirst.Task; }
                 return null;
             }, null, null);
@@ -148,7 +148,7 @@ public sealed class RpcSessionFlowTests
     {
         var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "channel_item"));
         var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 16 });
-        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Endless(), RpcTestJsonContext.Default.Response)),
+        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Endless(gate.Held), RpcTestJsonContext.Default.Response)),
             RpcTestJsonContext.Default.Request);
         await using var host = builder.Build();
         await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "channel-withdraw-session"),
@@ -166,10 +166,12 @@ public sealed class RpcSessionFlowTests
         Assert.IsLessThan(16, held);
         Assert.AreEqual(0, session.QueuedOutboundFrameCount);
 
-        static async IAsyncEnumerable<Response> Endless([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        // The items after the first come while it is held in its batch: they queue behind it, whatever the speed of the writer.
+        static async IAsyncEnumerable<Response> Endless(Task held, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            for (var index = 0; !cancellationToken.IsCancellationRequested; index++) yield return new Response(index.ToString(), "view");
-            await Task.CompletedTask;
+            yield return new Response("0", "view");
+            await held.WaitAsync(cancellationToken).ConfigureAwait(false);
+            for (var index = 1; !cancellationToken.IsCancellationRequested; index++) yield return new Response(index.ToString(), "view");
         }
     }
 
@@ -482,8 +484,10 @@ public sealed class RpcSessionFlowTests
         internal void Release() => _release.TrySetResult();
         public void Dispose() => Release();
 
-        internal async ValueTask<NeoRpcFrameRefusal[]?> SendAsync(IReadOnlyList<string> frames)
+        internal async ValueTask<NeoRpcFrameRefusal[]?> SendAsync(IReadOnlyList<NeoTransportFrame> batch)
         {
+            // The frames are the session's: they are read while the batch is sent.
+            var frames = batch.Select(static frame => frame.ToString()).ToArray();
             Interlocked.Increment(ref _batches);
             foreach (var frame in frames) _frames.Enqueue(frame);
             if (hold(frames) && Interlocked.Exchange(ref _holding, 1) == 0)

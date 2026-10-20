@@ -280,7 +280,8 @@ internal abstract class CommandDescriptor
     internal void Exit() => Interlocked.Decrement(ref _active);
     internal abstract object DeserializeRequest(JsonElement args);
     internal abstract ValueTask<object?> InvokeHandlerAsync(object request, NeoRpcContext context, CancellationToken cancellationToken);
-    internal abstract CommandResult SerializeResult(object? result);
+    // A value result is serialized into the result frame of its call, whose ID it needs; the frame is released by the session.
+    internal abstract CommandResult SerializeResult(string id, object? result);
 }
 
 internal sealed class CommandDescriptor<TRequest, TResult>(
@@ -292,7 +293,7 @@ internal sealed class CommandDescriptor<TRequest, TResult>(
 {
     internal override object DeserializeRequest(JsonElement args) => args.Deserialize(requestTypeInfo) ?? throw new JsonException("An RPC request cannot be JSON null.");
     internal override async ValueTask<object?> InvokeHandlerAsync(object request, NeoRpcContext context, CancellationToken cancellationToken) => await handler((TRequest)request, context, cancellationToken).ConfigureAwait(false);
-    internal override CommandResult SerializeResult(object? result) => new ValueCommandResult(JsonSerializer.SerializeToUtf8Bytes((TResult)result!, resultTypeInfo));
+    internal override CommandResult SerializeResult(string id, object? result) => NeoRpcSession.BuildValueResult(id, (TResult)result!, resultTypeInfo);
 }
 
 internal sealed class VoidCommandDescriptor<TRequest>(
@@ -303,7 +304,7 @@ internal sealed class VoidCommandDescriptor<TRequest>(
 {
     internal override object DeserializeRequest(JsonElement args) => args.Deserialize(requestTypeInfo) ?? throw new JsonException("An RPC request cannot be JSON null.");
     internal override async ValueTask<object?> InvokeHandlerAsync(object request, NeoRpcContext context, CancellationToken cancellationToken) { await handler((TRequest)request, context, cancellationToken).ConfigureAwait(false); return null; }
-    internal override CommandResult SerializeResult(object? result) => VoidCommandResult.Instance;
+    internal override CommandResult SerializeResult(string id, object? result) => VoidCommandResult.Instance;
 }
 
 internal sealed class ChannelCommandDescriptor<TRequest, TItem>(
@@ -314,11 +315,12 @@ internal sealed class ChannelCommandDescriptor<TRequest, TItem>(
 {
     internal override object DeserializeRequest(JsonElement args) => args.Deserialize(requestTypeInfo) ?? throw new JsonException("An RPC request cannot be JSON null.");
     internal override async ValueTask<object?> InvokeHandlerAsync(object request, NeoRpcContext context, CancellationToken cancellationToken) => await handler((TRequest)request, context, cancellationToken).ConfigureAwait(false) ?? throw new InvalidOperationException("A channel command returned null.");
-    internal override CommandResult SerializeResult(object? result) => new ChannelCommandResult<TItem>((NeoRpcChannel<TItem>)result!);
+    internal override CommandResult SerializeResult(string id, object? result) => new ChannelCommandResult<TItem>((NeoRpcChannel<TItem>)result!);
 }
 
 internal abstract record CommandResult;
-internal sealed record ValueCommandResult(byte[] Json) : CommandResult;
+// The whole result frame of the call, and where its value lies in it.
+internal sealed record ValueCommandResult(NeoTransportFrame Frame, int ValueStart, int ValueLength) : CommandResult;
 internal sealed record VoidCommandResult : CommandResult { internal static VoidCommandResult Instance { get; } = new(); }
 internal interface IChannelCommandResult
 {

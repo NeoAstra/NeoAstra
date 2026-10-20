@@ -51,9 +51,10 @@ public sealed class RpcOutboundLimitTests
                 NeoRpcFrameRefusal[]? refusals = null;
                 for (var index = 0; index < batch.Count; index++)
                 {
-                    if (batch[index].Contains("\"ok\":true", StringComparison.Ordinal) && batch[index].Contains("big", StringComparison.Ordinal))
+                    var frame = batch[index].ToString();
+                    if (frame.Contains("\"ok\":true", StringComparison.Ordinal) && frame.Contains("big", StringComparison.Ordinal))
                         (refusals ??= new NeoRpcFrameRefusal[batch.Count])[index] = NeoRpcFrameRefusal.TooLarge;
-                    else frames.Enqueue(batch[index]);
+                    else frames.Enqueue(frame);
                 }
                 return ValueTask.FromResult(refusals);
             }, null, null);
@@ -137,8 +138,11 @@ public sealed class RpcOutboundLimitTests
     [DataRow("deep", NeoRpcErrorCodes.SerializationFailed, DisplayName = "An item deeper than the transport accepts")]
     public async Task AChannelItemTheViewCannotReceive_FailsItsChannelWithTheReason(string item, string code)
     {
+        // The item that fails comes once the one before it reached the page: a channel that fails withdraws the items it
+        // still has queued, and the writer may not have taken the first one yet.
+        var firstDelivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var builder = new NeoRpcBuilder(new NeoRpcOptions());
-        builder.AddChannelCommand<Request, JsonElement>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<JsonElement>(Items(item), CapabilityTestJsonContext.Default.JsonElement)),
+        builder.AddChannelCommand<Request, JsonElement>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<JsonElement>(Items(item, firstDelivered.Task), CapabilityTestJsonContext.Default.JsonElement)),
             RpcTestJsonContext.Default.Request, Trusted);
         builder.AddCommand<Request, Response>("flow.echo", static (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
             RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
@@ -151,8 +155,13 @@ public sealed class RpcOutboundLimitTests
                 NeoRpcFrameRefusal[]? refusals = null;
                 for (var index = 0; index < batch.Count; index++)
                 {
-                    if (batch[index].Contains("refused", StringComparison.Ordinal)) (refusals ??= new NeoRpcFrameRefusal[batch.Count])[index] = NeoRpcFrameRefusal.TooLarge;
-                    else frames.Enqueue(batch[index]);
+                    var frame = batch[index].ToString();
+                    if (frame.Contains("refused", StringComparison.Ordinal)) (refusals ??= new NeoRpcFrameRefusal[batch.Count])[index] = NeoRpcFrameRefusal.TooLarge;
+                    else
+                    {
+                        frames.Enqueue(frame);
+                        if (Kind(frame) == "channel_item") firstDelivered.TrySetResult();
+                    }
                 }
                 return ValueTask.FromResult(refusals);
             }, null, null, NeoRpcOutboundLimits.Of(512, 4));
@@ -167,9 +176,10 @@ public sealed class RpcOutboundLimitTests
         Assert.IsNull(ErrorCode(Single(frames, "after")), "The session keeps serving.");
         Assert.IsFalse(session.Closed.IsCancellationRequested);
 
-        static async IAsyncEnumerable<JsonElement> Items(string item, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        static async IAsyncEnumerable<JsonElement> Items(string item, Task firstDelivered, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             yield return JsonDocument.Parse("\"first\"").RootElement;
+            await firstDelivered.WaitAsync(cancellationToken).ConfigureAwait(false);
             yield return JsonDocument.Parse(item switch
             {
                 "refused" => "\"refused\"",
@@ -187,10 +197,10 @@ public sealed class RpcOutboundLimitTests
         var limits = NeoRpcOutboundLimits.Of(1024, 32);
         Assert.AreEqual(1024 - 112, limits.MaximumFrameBytes);
         Assert.AreEqual(31, limits.MaximumValueDepth);
-        Assert.IsFalse(limits.IsTooLarge(new string('x', 912)));
-        Assert.IsTrue(limits.IsTooLarge(new string('x', 913)));
-        Assert.IsTrue(limits.IsTooLarge(new string('é', 457)), "UTF-8 bytes are counted, not characters.");
-        Assert.IsFalse(NeoRpcOutboundLimits.None.IsTooLarge(new string('x', 100_000)));
+        Assert.IsFalse(limits.IsTooLarge(Frame(new string('x', 912))));
+        Assert.IsTrue(limits.IsTooLarge(Frame(new string('x', 913))));
+        Assert.IsTrue(limits.IsTooLarge(Frame(new string('é', 457))), "UTF-8 bytes are counted, not characters.");
+        Assert.IsFalse(NeoRpcOutboundLimits.None.IsTooLarge(Frame(new string('x', 100_000))));
         Assert.AreEqual(0, NeoRpcOutboundLimits.MeasureDepth("1"u8));
         Assert.AreEqual(1, NeoRpcOutboundLimits.MeasureDepth("{}"u8));
         Assert.AreEqual(3, NeoRpcOutboundLimits.MeasureDepth("{\"a\":[1,{\"b\":2}],\"c\":[]}"u8));
@@ -213,8 +223,10 @@ public sealed class RpcOutboundLimitTests
     private static NeoRpcSession OpenLimited(NeoRpcHost host, ConcurrentQueue<string> frames, uint maximumMessageSize, int maximumJsonDepth)
         => host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", $"limited-{Guid.NewGuid():N}"),
             (_, _) => throw new AssertFailedException("A view session sends in batches."),
-            batch => { foreach (var frame in batch) frames.Enqueue(frame); return ValueTask.FromResult<NeoRpcFrameRefusal[]?>(null); },
+            batch => { foreach (var frame in batch) frames.Enqueue(frame.ToString()); return ValueTask.FromResult<NeoRpcFrameRefusal[]?>(null); },
             null, null, NeoRpcOutboundLimits.Of(maximumMessageSize, maximumJsonDepth));
+
+    private static NeoTransportFrame Frame(string text) => NeoTransportFrame.FromString(text);
 
     private static string Invoke(string id, string value)
         => $"{{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"{id}\",\"command\":\"flow.echo\",\"args\":{{\"id\":\"{value}\"}}}}";

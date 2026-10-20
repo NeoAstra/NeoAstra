@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace NeoAstra.Tests;
@@ -15,7 +16,7 @@ public sealed class TransportTests
         var frame = "{\"neoastra\":1,\"kind\":\"invoke\",\"value\":\"" + new string('x', 17 * 1024 * 1024) + "\"}";
         var envelope = Envelope(coordinator, "large-document", frame);
         Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(envelope).Kind);
-        Assert.AreEqual(envelope, coordinator.WrapOutbound(frame));
+        Assert.AreEqual(envelope, WrapOutbound(coordinator, frame));
         Assert.AreEqual((uint)int.MaxValue, new NeoAstraOptions().MaximumMessageSize);
     }
 
@@ -230,18 +231,18 @@ public sealed class TransportTests
         var posted = new List<string>();
 
         // Session A wrote these frames before the navigation replaced its document.
-        var stale = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-1", [frame, frame], posted.Add);
+        var stale = PostTrustedFrames(coordinator, "session-1", [frame, frame], posted);
         Assert.IsTrue(stale.SessionClosed);
         Assert.IsEmpty(posted);
 
         // Nor are they posted raw while no document has a session: the page of the view would see them.
         coordinator.NavigationStarted();
         coordinator.NavigationCommitted();
-        Assert.IsTrue(global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-2", [frame], posted.Add).SessionClosed);
+        Assert.IsTrue(PostTrustedFrames(coordinator, "session-2", [frame], posted).SessionClosed);
         Assert.IsEmpty(posted);
 
         coordinator.Receive(Envelope(coordinator, "document-c", Hello()));
-        var current = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-3", [frame], posted.Add);
+        var current = PostTrustedFrames(coordinator, "session-3", [frame], posted);
         Assert.IsFalse(current.SessionClosed);
         Assert.HasCount(1, posted);
         using var envelope = JsonDocument.Parse(posted[0]);
@@ -260,7 +261,7 @@ public sealed class TransportTests
         var posted = new List<string>();
         string Frame(string id, int padding) => $"{{\"neoastra\":1,\"kind\":\"result\",\"id\":\"{id}\",\"ok\":true,\"value\":\"{new string('x', padding)}\"}}";
 
-        var result = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "fixed-session", [Frame("a", 1), Frame("big", 600), Frame("c", 1)], posted.Add);
+        var result = PostTrustedFrames(coordinator, "fixed-session", [Frame("a", 1), Frame("big", 600), Frame("c", 1)], posted);
 
         Assert.IsFalse(result.SessionClosed);
         CollectionAssert.AreEqual(new[] { 1 }, result.RejectedFrames!.ToArray());
@@ -408,6 +409,182 @@ public sealed class TransportTests
             Assert.HasCount(1, sent);
             Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "running-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
         }
+    }
+
+    [TestMethod]
+    public void TheEnvelopeOfATrustedFrame_IsTheBytesTheTransportWritesForItsOwnFrames()
+    {
+        // Renderer document IDs are the page's: escaping, characters beyond ASCII, and IDs longer than the room a frame
+        // keeps for its envelope give the same bytes as the writer of the envelope of the transport frames.
+        string[] documents = ["document", "doc<&>\"'\\+`", "caf\u00e9-\ud83d\ude00-\u2028", new string('x', 128), new string('\u00e9', 128)];
+        const string frame = "{\"neoastra\":1,\"kind\":\"result\",\"id\":\"1\",\"ok\":true,\"value\":{\"text\":\"\\u003Cb\\u003E \u00e9\"}}";
+        foreach (var document in documents)
+        {
+            var coordinator = CreateCoordinator([]);
+            coordinator.NavigationStarted();
+            coordinator.Receive($"{{\"__neoastraTransport\":1,\"hostViewBinding\":\"{coordinator.HostViewBinding}\",\"rendererDocumentId\":{JsonSerializer.Serialize(document)},\"frame\":{Hello()}}}");
+            coordinator.NavigationCompleted(succeeded: true);
+            Assert.IsTrue(coordinator.IsConnected, document);
+            var expected = ReferenceEnvelope(coordinator.HostViewBinding, document, frame);
+            var posted = new List<string>();
+            var trusted = NeoTransportFrame.FromString(frame);
+            try
+            {
+                Assert.IsFalse(global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "fixed-session", [trusted, trusted], messages =>
+                {
+                    foreach (var message in messages) posted.Add(Convert.ToHexString(message.Span));
+                }).SessionClosed);
+                Assert.AreEqual(frame, trusted.ToString(), "Wrapping a frame leaves the frame as it was.");
+            }
+            finally
+            {
+                trusted.Release();
+            }
+            CollectionAssert.AreEqual(new[] { Convert.ToHexString(expected), Convert.ToHexString(expected) }, posted, document);
+            Assert.AreEqual(Encoding.UTF8.GetString(expected), WrapOutbound(coordinator, frame), document);
+        }
+    }
+
+    [TestMethod]
+    public void AnEnvelopeIsRefusedByTheBytesOfTheWholeMessage()
+    {
+        var options = Options();
+        options.MaximumMessageSize = 512;
+        var coordinator = CreateCoordinator([], options: options);
+        Connect(coordinator, "document");
+        var prefix = ReferenceEnvelope(coordinator.HostViewBinding, "document", "").Length - 1;
+        // A frame of the given UTF-8 length, most of it two-byte characters.
+        static string Frame(int length) => "{\"neoastra\":1,\"kind\":\"result\",\"v\":\"" + new string('\u00e9', (length - 37) / 2) + new string('x', (length - 37) % 2) + "\"}";
+        Assert.AreEqual(512 - prefix - 1, Encoding.UTF8.GetByteCount(Frame(512 - prefix - 1)));
+        var posted = new List<string>();
+        var result = PostTrustedFrames(coordinator, "fixed-session", [Frame(512 - prefix - 1), Frame(512 - prefix)], posted);
+        CollectionAssert.AreEqual(new[] { 1 }, result.RejectedFrames!.ToArray());
+        Assert.HasCount(1, posted);
+        Assert.AreEqual(512, Encoding.UTF8.GetByteCount(posted[0]), "The largest envelope that fits is exactly the limit.");
+        Assert.ThrowsExactly<ArgumentException>(() => WrapOutbound(coordinator, Frame(512 - prefix)));
+    }
+
+    [TestMethod]
+    public void JsonPostedByTheApplication_IsValidatedOnce_AsJsonDocumentParseDid()
+    {
+        var options = Options();
+        options.Transport.MaximumJsonDepth = 4;
+        var coordinator = CreateCoordinator([], options: options);
+        // Without a session: any JSON value up to 64 levels, posted as it is.
+        Assert.AreEqual("[1,2]", WrapOutbound(coordinator, "[1,2]"));
+        Assert.AreEqual(" \"text\" ", WrapOutbound(coordinator, " \"text\" "));
+        Assert.AreEqual(new string('[', 64) + new string(']', 64), WrapOutbound(coordinator, new string('[', 64) + new string(']', 64)));
+        foreach (var invalid in new[] { "", " ", "{", "{} x", "1 2", "{\"a\":1,}", "/*c*/1", new string('[', 65) + new string(']', 65) })
+        {
+            Assert.Throws<JsonException>(() => WrapOutbound(coordinator, invalid), invalid);
+            Assert.Throws<JsonException>(() => JsonDocument.Parse(invalid).Dispose(), invalid);
+        }
+        Assert.Throws<ArgumentException>(() => NeoTransportFrame.FromString("\"\ud800\""), "A lone surrogate is refused, as JsonDocument.Parse refused it.");
+        Assert.Throws<ArgumentException>(() => JsonDocument.Parse("\"\ud800\"").Dispose());
+
+        // With a session: an object no deeper than the transport accepts, in its envelope.
+        Connect(coordinator, "document");
+        Assert.AreEqual(Encoding.UTF8.GetString(ReferenceEnvelope(coordinator.HostViewBinding, "document", "{\"a\":{\"b\":{\"c\":1}}}")), WrapOutbound(coordinator, "{\"a\":{\"b\":{\"c\":1}}}"));
+        Assert.AreEqual(Encoding.UTF8.GetString(ReferenceEnvelope(coordinator.HostViewBinding, "document", "{\"a\":{\"b\":{\"c\":{}}}}")), WrapOutbound(coordinator, "{\"a\":{\"b\":{\"c\":{}}}}"));
+        Assert.Throws<JsonException>(() => WrapOutbound(coordinator, "{\"a\":{\"b\":{\"c\":{\"d\":{}}}}}"));
+        Assert.Throws<JsonException>(() => WrapOutbound(coordinator, "[1]"));
+    }
+
+    [TestMethod]
+    public void AFrameGrowsAndMovesWithoutLosingWhatItHolds()
+    {
+        var frame = NeoTransportFrame.Create();
+        try
+        {
+            var text = string.Concat(Enumerable.Range(0, 5000).Select(static index => (char)('a' + index % 26)));
+            foreach (var character in text) frame.Write((byte)character);
+            Assert.AreEqual(text, frame.ToString());
+            var prefix = new string('p', NeoTransportFrame.EnvelopeReserve + 10);
+            Assert.AreEqual(prefix + text + "}", Encoding.UTF8.GetString(frame.Wrap(Encoding.UTF8.GetBytes(prefix)).Span));
+            Assert.AreEqual("ab" + text + "}", Encoding.UTF8.GetString(frame.Wrap("ab"u8).Span));
+            Assert.AreEqual(text, frame.ToString());
+        }
+        finally
+        {
+            frame.Release();
+            frame.Release();
+        }
+        Assert.ThrowsExactly<ObjectDisposedException>(() => frame.ToString(), "A released frame is not read.");
+    }
+
+    [TestMethod]
+    public void AMessageOfThePage_IsReadFromItsUtf8_AndEachConsumerOwnsItsFrame()
+    {
+        var view = (global::NeoAstra.NeoAstra)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(global::NeoAstra.NeoAstra));
+        var strings = new List<string>();
+        view.MessageReceived += (_, args) => strings.Add(args.Json);
+
+        // Without a transport, bytes that are not UTF-8 reach the application as the string of them did.
+        byte[] invalid = [(byte)'"', 0xff, (byte)'a', 0xc3, (byte)'"'];
+        view.DispatchWebMessage(invalid, null, true);
+        CollectionAssert.AreEqual(new[] { Encoding.UTF8.GetString(invalid) }, strings);
+
+        var coordinator = CreateCoordinator([]);
+        typeof(global::NeoAstra.NeoAstra).GetField("_transport", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(view, coordinator);
+        Connect(coordinator, "document");
+        var baseline = NeoTransportFrame.Outstanding;
+        var frames = new List<NeoTransportApplicationMessage>();
+        view.TransportApplicationMessageReceived += frames.Add;
+        view.TransportApplicationMessageReceived += frames.Add;
+        const string frame = "{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"1\",\"args\":{\"text\":\"caf\\u00e9\"}}";
+        view.DispatchWebMessage(Encoding.UTF8.GetBytes(Envelope(coordinator, "document", frame)), null, true);
+
+        Assert.HasCount(2, frames);
+        Assert.AreNotSame(frames[0].Frame, frames[1].Frame, "Each consumer gets a frame of its own to release.");
+        Assert.AreEqual(frame, frames[0].Frame.ToString());
+        Assert.AreEqual(frame, frames[1].Frame.ToString());
+        Assert.AreEqual("fixed-session", frames[0].Session.DocumentSessionId);
+        Assert.AreEqual(frame, strings[^1], "The application still receives the frame as a string.");
+        foreach (var message in frames) message.Frame.Release();
+        Assert.AreEqual(baseline, NeoTransportFrame.Outstanding);
+    }
+
+    // The envelope as the transport wrote it before it wrote frames in place: one Utf8JsonWriter, the frame as a raw value.
+    // An empty frame gives the prefix and the closing brace.
+    private static byte[] ReferenceEnvelope(string hostViewBinding, string rendererDocumentId, string frame)
+    {
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("__neoastraTransport", 1);
+            writer.WriteString("hostViewBinding", hostViewBinding);
+            writer.WriteString("rendererDocumentId", rendererDocumentId);
+            writer.WritePropertyName("frame");
+            if (frame.Length == 0) writer.WriteNullValue();
+            else writer.WriteRawValue(frame, skipInputValidation: true);
+            writer.WriteEndObject();
+        }
+        var bytes = buffer.WrittenSpan.ToArray();
+        return frame.Length == 0 ? [.. bytes[..^5], (byte)'}'] : bytes;
+    }
+
+    private static NeoTrustedPostResult PostTrustedFrames(NeoTransportCoordinator coordinator, string documentSessionId, string[] frames, List<string> posted)
+    {
+        var trusted = frames.Select(static frame => NeoTransportFrame.FromString(frame)).ToArray();
+        try
+        {
+            return global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, documentSessionId, trusted, messages =>
+            {
+                foreach (var message in messages) posted.Add(Encoding.UTF8.GetString(message.Span));
+            });
+        }
+        finally
+        {
+            foreach (var frame in trusted) frame.Release();
+        }
+    }
+
+    private static string WrapOutbound(NeoTransportCoordinator coordinator, string json)
+    {
+        var frame = NeoTransportFrame.FromString(json);
+        try { return Encoding.UTF8.GetString(coordinator.WrapOutbound(frame).Span); }
+        finally { frame.Release(); }
     }
 
     private static NeoTransportCoordinator CreateCoordinator(

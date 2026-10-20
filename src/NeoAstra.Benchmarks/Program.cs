@@ -143,6 +143,7 @@ internal static class Program
                 await MeasureJavaScriptRoundTripsAsync(view);
                 await MeasureLocalAssetsAsync(view, provider);
                 await MeasureMessagingAsync(view, bridgeMode);
+                await MeasureRpcToPageAsync(view, bridgeMode);
                 await MeasureRepeatedLifecycleAndMemoryAsync(environment, window);
                 await MeasureIdleCpuAsync();
             }
@@ -358,6 +359,86 @@ internal static class Program
                 "MiB/s",
                 largeCount,
                 "256 KiB JSON string payloads sent by local JavaScript to managed code");
+        }
+
+        // RPC frames from the host to a page, through a view binding and the native post of the view: events published as
+        // fast as the host takes them, and results of 200 KiB that the page asks for all at once. The page tells when it
+        // received everything with one frame of its own.
+        private async ValueTask MeasureRpcToPageAsync(NeoAstra.NeoAstra view, BridgeMode bridgeMode)
+        {
+            if (bridgeMode == BridgeMode.Disabled)
+            {
+                const string reason = "No safely authenticated bridge policy is available on this platform/backend.";
+                Reporter.Skip("rpc events to a page", reason);
+                Reporter.Skip("rpc 200 KiB results to a page", reason);
+                return;
+            }
+
+            var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumQueuedEventsPerSubscription = 65_536, AuthorizationService = BenchmarkAuthorization.Instance });
+            var changed = builder.AddEvent("benchmark.changed", BenchmarkPageJsonContext.Default.String);
+            var blob = new string('x', 200 * 1024);
+            builder.AddCommand<int, string>("benchmark.blob", (_, _, _) => ValueTask.FromResult(blob), BenchmarkPageJsonContext.Default.Int32, BenchmarkPageJsonContext.Default.String);
+            await using var host = builder.Build();
+            await using var binding = NeoRpcViewBinding.Bind(host, view);
+            await PageAsync("globalThis.__benchmarkSubscribe()");
+            var deadline = Stopwatch.StartNew();
+            while (await view.EvaluateScriptAsync("globalThis.__benchmarkSubscribed === true") != "true")
+            {
+                if (deadline.Elapsed >= options.Timeout) throw new TimeoutException("The benchmark page did not subscribe.");
+                await Task.Delay(10);
+            }
+
+            await PublishAsync(200);
+            var events = options.Quick ? 2_000 : 20_000;
+            var elapsed = await PublishAsync(events);
+            Reporter.Measurement("rpc events to a page", events / elapsed.TotalSeconds, "events/s", events,
+                "small events published by the host and received by a page subscription, through the view binding and the native post");
+
+            _ = await FetchAsync(2);
+            var results = options.Quick ? 20 : 100;
+            elapsed = await FetchAsync(results);
+            Reporter.Measurement("rpc 200 KiB results to a page", results * 200d / 1024d / elapsed.TotalSeconds, "MiB/s", results,
+                "200 KiB results of calls a page sends together, through the view binding and the native post");
+
+            async ValueTask<TimeSpan> PublishAsync(int count)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var done = WaitForPageAsync(() => PageAsync($"globalThis.__benchmarkExpectEvents({count})"));
+                await done.Started;
+                for (var index = 0; index < count; index++) await changed.PublishAsync("e");
+                await done.Completed;
+                return stopwatch.Elapsed;
+            }
+
+            async ValueTask<TimeSpan> FetchAsync(int count)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var done = WaitForPageAsync(() => PageAsync($"globalThis.__benchmarkFetch({count})"));
+                await done.Started;
+                await done.Completed;
+                return stopwatch.Elapsed;
+            }
+
+            Task PageAsync(string script) => view.EvaluateScriptAsync(script).AsTask().WaitAsync(options.Timeout);
+
+            // The frame the page sends when it received what it was told to expect.
+            (Task Started, Task Completed) WaitForPageAsync(Func<Task> start)
+            {
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnMessage(object? _, NeoWebMessageReceivedEventArgs message)
+                {
+                    if (message.Json.Contains("\"kind\":\"benchmark_done\"", StringComparison.Ordinal)) completion.TrySetResult();
+                }
+                view.MessageReceived += OnMessage;
+                var started = start();
+                return (started, Finish());
+
+                async Task Finish()
+                {
+                    try { await completion.Task.WaitAsync(options.Timeout); }
+                    finally { view.MessageReceived -= OnMessage; }
+                }
+            }
         }
 
         private async ValueTask<TimeSpan> MeasureMessageBurstAsync(
@@ -712,3 +793,7 @@ internal sealed class BenchmarkAuthorization : INeoRpcAuthorizationService
 [JsonSerializable(typeof(RpcEchoResponse))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class BenchmarkRpcJsonContext : JsonSerializerContext;
+
+[JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(int))]
+internal sealed partial class BenchmarkPageJsonContext : JsonSerializerContext;

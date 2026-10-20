@@ -7,3 +7,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("NeoAstra.Tests")]
 [assembly: InternalsVisibleTo("NeoAstra.NativeAotFixture")]
 [assembly: InternalsVisibleTo("NeoAstra.Tool")]
+// The RPC benchmarks drive the transport of a view without a browser.
+[assembly: InternalsVisibleTo("NeoAstra.Benchmarks")]

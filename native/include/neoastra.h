@@ -163,10 +163,12 @@ typedef uint64_t neoastra_data_kind_t;
    NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION; a library without it reports no kind and refuses that setting as an invalid argument.
    NAVIGATION_COMMIT says that this library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a main-frame navigation replaces the
    document, between NEOASTRA_EVENT_NAVIGATION_STARTED and the end of the navigation, and not for a navigation that leaves the document
-   in place (a download, an answer without content, a stopped or superseded navigation, or a same-document navigation). */
+   in place (a download, an answer without content, a stopped or superseded navigation, or a same-document navigation).
+   MESSAGE_BATCH says that this library has neoastra_view_post_messages. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
+#define NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH (UINT64_C(1) << 3)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)
@@ -318,7 +320,16 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_v
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t*, neoastra_string_view_t, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t*, neoastra_string_view_t, const neoastra_script_options_t*, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t*, neoastra_string_view_t);
+/* Posts a message to the page. With a nonzero json, the message must be one JSON value (RFC 8259), which the page receives parsed;
+   anything else is refused with NEOASTRA_ERROR_INVALID_ARGUMENT. With a zero json, the page receives the message as a string. The
+   WebKit backends give the message to the page as a string literal of their script, parsed by JSON.parse: it is never script. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t*, neoastra_string_view_t, uint32_t, neoastra_error_t**);
+/* Posts count messages to the page in order, as neoastra_view_post_message posts each with the same json flag, in one call:
+   WebView2 posts them one after the other, and WKWebView and WebKitGTK dispatch them all with one script. Every message is checked
+   first, and nothing is posted when one is invalid (not UTF-8, or not JSON with a nonzero json). *posted, when not null,
+   is the number of messages posted: all of them on success, those before the one the engine refused on a failure. A library
+   has it when it reports NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_messages(neoastra_view_t*, const neoastra_string_view_t*, uint32_t, uint32_t, uint32_t*, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t*, double*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_zoom_factor(neoastra_view_t*, double);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t*, neoastra_view_setting_t, uint32_t);

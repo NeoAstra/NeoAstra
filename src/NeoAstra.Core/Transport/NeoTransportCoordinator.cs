@@ -15,7 +15,38 @@ internal enum NeoTransportReceiveKind
     Application,
 }
 
-internal readonly record struct NeoTransportReceiveResult(NeoTransportReceiveKind Kind, string? ApplicationJson = null);
+// An application frame lies in the message at FrameStart, for FrameLength bytes.
+internal readonly record struct NeoTransportReceiveResult(NeoTransportReceiveKind Kind, int FrameStart = 0, int FrameLength = 0);
+
+internal enum NeoTransportEnvelopeKind
+{
+    // Not an envelope of the transport: a message of the application.
+    Legacy,
+    // An envelope dropped without a diagnostic.
+    Dropped,
+    InvalidJson,
+    // An envelope that fails its host view binding or its shape.
+    Invalid,
+    Valid,
+}
+
+internal enum NeoTransportFrameKind
+{
+    // The discriminator or the kind of the frame is missing or invalid.
+    Invalid,
+    Hello,
+    Close,
+    HelloAck,
+    Diagnostic,
+    Application,
+}
+
+internal readonly record struct NeoTransportEnvelope(
+    NeoTransportEnvelopeKind Kind,
+    string? RendererDocumentId = null,
+    NeoTransportFrameKind FrameKind = NeoTransportFrameKind.Invalid,
+    int FrameStart = 0,
+    int FrameLength = 0);
 
 internal sealed class NeoTransportCoordinator
 {
@@ -153,118 +184,238 @@ internal sealed class NeoTransportCoordinator
         _revokedUntilNavigation = false;
     }
 
+    // For callers that have a string, such as tests: the page gives UTF-8.
     internal NeoTransportReceiveResult Receive(string json)
     {
         if (_closed) return new(NeoTransportReceiveKind.Consumed);
         ArgumentNullException.ThrowIfNull(json);
-        if (Encoding.UTF8.GetByteCount(json) > _viewOptions.MaximumMessageSize)
+        return Receive(Encoding.UTF8.GetBytes(json));
+    }
+
+    // A message of the page, as the UTF-8 the native library gives, which must be valid UTF-8: one forward-only pass of a
+    // reader authenticates its envelope, checks its depth and its JSON, and finds where its frame lies, without building a
+    // document or copying anything. Only a hello is parsed further, to negotiate the session. An application frame is
+    // given back as where it lies in the message (FrameStart, FrameLength), to be parsed once by its consumer.
+    internal NeoTransportReceiveResult Receive(ReadOnlySpan<byte> utf8)
+    {
+        if (_closed) return new(NeoTransportReceiveKind.Consumed);
+        if ((ulong)utf8.Length > _viewOptions.MaximumMessageSize)
         {
             AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "payload_too_large", "A transport frame exceeded the configured byte limit.");
             return new(NeoTransportReceiveKind.Consumed);
         }
 
-        JsonDocument document;
-        try
+        var envelope = ReadEnvelope(utf8, _viewOptions.Transport.MaximumJsonDepth, HostViewBinding, _active?.RendererDocumentId);
+        switch (envelope.Kind)
         {
-            document = JsonDocument.Parse(json, new JsonDocumentOptions
-            {
-                MaxDepth = _viewOptions.Transport.MaximumJsonDepth,
-                CommentHandling = JsonCommentHandling.Disallow,
-                AllowTrailingCommas = false,
-            });
+            case NeoTransportEnvelopeKind.InvalidJson:
+                AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport message contained invalid or excessively deep JSON.");
+                return LooksLikeTransport(utf8) ? new(NeoTransportReceiveKind.Consumed) : new(NeoTransportReceiveKind.Legacy);
+            case NeoTransportEnvelopeKind.Legacy:
+                return new(NeoTransportReceiveKind.Legacy);
+            case NeoTransportEnvelopeKind.Dropped:
+                return new(NeoTransportReceiveKind.Consumed);
+            case NeoTransportEnvelopeKind.Invalid:
+                AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport envelope failed its host view binding or shape validation.");
+                return new(NeoTransportReceiveKind.Consumed);
         }
-        catch (JsonException)
+
+        var rendererDocumentId = envelope.RendererDocumentId!;
+        if (_closedRendererDocumentIdSet.Contains(rendererDocumentId))
         {
-            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport message contained invalid or excessively deep JSON.");
-            return LooksLikeTransport(json) ? new(NeoTransportReceiveKind.Consumed) : new(NeoTransportReceiveKind.Legacy);
+            AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A late frame for a closed document session was ignored.");
+            return new(NeoTransportReceiveKind.Consumed);
         }
-
-        using (document)
+        if (envelope.FrameKind == NeoTransportFrameKind.Invalid)
         {
-            var root = document.RootElement;
-            if (!TryReadEnvelope(root, out var rendererDocumentId, out var frame)) return new(NeoTransportReceiveKind.Legacy);
-            if (frame.ValueKind != JsonValueKind.Object) return new(NeoTransportReceiveKind.Consumed);
-            if (_closedRendererDocumentIdSet.Contains(rendererDocumentId))
-            {
-                AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A late frame for a closed document session was ignored.");
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-
-            if (!frame.TryGetProperty("neoastra", out var discriminator) || discriminator.ValueKind != JsonValueKind.Number ||
-                !discriminator.TryGetInt32(out var discriminatorValue) || discriminatorValue != 1 ||
-                !frame.TryGetProperty("kind", out var kindValue) || kindValue.ValueKind != JsonValueKind.String)
-            {
-                AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport frame has an invalid discriminator or kind.");
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-
-            var kind = kindValue.GetString()!;
-            if (kind == "hello")
-            {
-                HandleHello(rendererDocumentId, frame);
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-            if (kind == "close")
-            {
-                if (_active?.RendererDocumentId == rendererDocumentId) CloseActive("client_close", sendClose: false);
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-            if (_active is null)
-            {
-                AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "An application frame was rejected before transport handshake completion.");
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-            if (!string.Equals(_active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal))
-            {
-                AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A frame for an inactive document session was ignored.");
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-            if (kind is "hello_ack" or "diagnostic")
-            {
-                AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A client used a host-reserved transport frame kind.");
-                return new(NeoTransportReceiveKind.Consumed);
-            }
-
-            return new(NeoTransportReceiveKind.Application, frame.GetRawText());
+            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport frame has an invalid discriminator or kind.");
+            return new(NeoTransportReceiveKind.Consumed);
         }
+
+        var frame = utf8.Slice(envelope.FrameStart, envelope.FrameLength);
+        if (envelope.FrameKind == NeoTransportFrameKind.Hello)
+        {
+            // The frame is valid JSON within the depth limit already.
+            var reader = new Utf8JsonReader(frame, new JsonReaderOptions { MaxDepth = _viewOptions.Transport.MaximumJsonDepth });
+            using var hello = JsonDocument.ParseValue(ref reader);
+            HandleHello(rendererDocumentId, hello.RootElement);
+            return new(NeoTransportReceiveKind.Consumed);
+        }
+        if (envelope.FrameKind == NeoTransportFrameKind.Close)
+        {
+            if (_active?.RendererDocumentId == rendererDocumentId) CloseActive("client_close", sendClose: false);
+            return new(NeoTransportReceiveKind.Consumed);
+        }
+        if (_active is null)
+        {
+            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "An application frame was rejected before transport handshake completion.");
+            return new(NeoTransportReceiveKind.Consumed);
+        }
+        if (!string.Equals(_active.RendererDocumentId, rendererDocumentId, StringComparison.Ordinal))
+        {
+            AddDiagnostic(NeoTransportDiagnosticLevel.Debug, "late_frame", "A frame for an inactive document session was ignored.");
+            return new(NeoTransportReceiveKind.Consumed);
+        }
+        if (envelope.FrameKind is NeoTransportFrameKind.HelloAck or NeoTransportFrameKind.Diagnostic)
+        {
+            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A client used a host-reserved transport frame kind.");
+            return new(NeoTransportReceiveKind.Consumed);
+        }
+
+        return new(NeoTransportReceiveKind.Application, envelope.FrameStart, envelope.FrameLength);
     }
 
-    // A frame NeoAstra wrote itself (an RPC answer, event or channel item) is a valid JSON object already: only its
-    // envelope is written, on the thread that owns the transport state, without parsing it again. It is wrapped only
-    // for the document session that wrote it, while that session is the active one: the frame of a session that a
-    // navigation closed would otherwise reach the next document, whose channel IDs restart, or its page listeners.
-    internal NeoTransportOutboundStatus WrapOutboundTrusted(string documentSessionId, string json, out string? envelope)
+    // What the envelope of a message says, read as JsonDocument read it: the whole message must be valid JSON within the
+    // depth limit, a property given several times counts by its last occurrence, and names and strings compare unescaped.
+    // A message whose marker is a number but not an Int32 is dropped without a word, as JsonElement.GetInt32 threw for it.
+    // The renderer document ID is decoded only when it may be valid (at most 128 UTF-16 characters, which no more than six
+    // bytes each encode), and is not decoded at all when it is the known one, the ID of the active document. The kind of the
+    // frame is compared, not decoded.
+    internal static NeoTransportEnvelope ReadEnvelope(ReadOnlySpan<byte> utf8, int maximumDepth, string hostViewBinding, string? knownRendererDocumentId = null)
     {
-        envelope = null;
+        var marker = Marker.Missing;
+        var binding = false;
+        string? rendererDocumentId = null;
+        var frameStart = -1;
+        var frameLength = 0;
+        var frameKind = NeoTransportFrameKind.Invalid;
+        var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = maximumDepth });
+        try
+        {
+            reader.Read();
+            if (reader.TokenType != JsonTokenType.StartObject)
+            {
+                reader.Skip();
+                while (reader.Read()) { }
+                return new(NeoTransportEnvelopeKind.Legacy);
+            }
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals("__neoastraTransport"u8))
+                {
+                    reader.Read();
+                    marker = reader.TokenType != JsonTokenType.Number ? Marker.NotNumber
+                        : !reader.TryGetInt32(out var value) ? Marker.NotInt32
+                        : value == 1 ? Marker.One : Marker.Other;
+                }
+                else if (reader.ValueTextEquals("hostViewBinding"u8))
+                {
+                    reader.Read();
+                    binding = reader.TokenType == JsonTokenType.String && reader.ValueTextEquals(hostViewBinding);
+                }
+                else if (reader.ValueTextEquals("rendererDocumentId"u8))
+                {
+                    reader.Read();
+                    rendererDocumentId = reader.TokenType != JsonTokenType.String || reader.ValueSpan.Length > MaximumRendererDocumentIdLength * 6 ? null
+                        : knownRendererDocumentId is not null && reader.ValueTextEquals(knownRendererDocumentId) ? knownRendererDocumentId
+                        : reader.GetString() is { Length: > 0 and <= MaximumRendererDocumentIdLength } value ? value : null;
+                }
+                else if (reader.ValueTextEquals("frame"u8))
+                {
+                    reader.Read();
+                    frameStart = -1;
+                    if (reader.TokenType == JsonTokenType.StartObject)
+                    {
+                        frameStart = checked((int)reader.TokenStartIndex);
+                        frameKind = ReadFrame(ref reader);
+                        frameLength = checked((int)reader.BytesConsumed) - frameStart;
+                    }
+                }
+                else reader.Read();
+                reader.Skip();
+            }
+            while (reader.Read()) { }
+        }
+        // GetString and ValueTextEquals refuse bytes that are not UTF-8, which the caller is to have repaired already.
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            return new(NeoTransportEnvelopeKind.InvalidJson);
+        }
+        return marker switch
+        {
+            Marker.Missing or Marker.NotNumber or Marker.Other => new(NeoTransportEnvelopeKind.Legacy),
+            Marker.NotInt32 => new(NeoTransportEnvelopeKind.Dropped),
+            _ when !binding || rendererDocumentId is null || frameStart < 0 => new(NeoTransportEnvelopeKind.Invalid),
+            _ => new(NeoTransportEnvelopeKind.Valid, rendererDocumentId, frameKind, frameStart, frameLength),
+        };
+    }
+
+    // The discriminator and the kind of a frame, from its start to its end, its nested values skipped.
+    private static NeoTransportFrameKind ReadFrame(ref Utf8JsonReader reader)
+    {
+        var discriminator = false;
+        var kind = NeoTransportFrameKind.Invalid;
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            if (reader.ValueTextEquals("neoastra"u8))
+            {
+                reader.Read();
+                discriminator = reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var value) && value == 1;
+            }
+            else if (reader.ValueTextEquals("kind"u8))
+            {
+                reader.Read();
+                kind = reader.TokenType != JsonTokenType.String ? NeoTransportFrameKind.Invalid
+                    : reader.ValueTextEquals("hello"u8) ? NeoTransportFrameKind.Hello
+                    : reader.ValueTextEquals("close"u8) ? NeoTransportFrameKind.Close
+                    : reader.ValueTextEquals("hello_ack"u8) ? NeoTransportFrameKind.HelloAck
+                    : reader.ValueTextEquals("diagnostic"u8) ? NeoTransportFrameKind.Diagnostic
+                    : NeoTransportFrameKind.Application;
+            }
+            else reader.Read();
+            reader.Skip();
+        }
+        return discriminator ? kind : NeoTransportFrameKind.Invalid;
+    }
+
+    private const int MaximumRendererDocumentIdLength = 128;
+
+    private enum Marker { Missing, NotNumber, NotInt32, One, Other }
+
+    // A frame NeoAstra wrote itself (an RPC answer, event or channel item) is a valid JSON object already: only its
+    // envelope is written, on the thread that owns the transport state, around the frame where it lies, without parsing
+    // or copying it. It is wrapped only for the document session that wrote it, while that session is the active one: the
+    // frame of a session that a navigation closed would otherwise reach the next document, whose channel IDs restart, or
+    // its page listeners.
+    internal NeoTransportOutboundStatus WrapOutboundTrusted(string documentSessionId, NeoTransportFrame frame, out ReadOnlyMemory<byte> envelope)
+    {
+        envelope = default;
         if (_closed || _active is not { } active || !string.Equals(active.DocumentSessionId, documentSessionId, StringComparison.Ordinal))
         {
             return NeoTransportOutboundStatus.SessionClosed;
         }
-        var value = BuildEnvelope(active.RendererDocumentId, writer => writer.WriteRawValue(json, skipInputValidation: true));
-        if (Encoding.UTF8.GetByteCount(value) > _viewOptions.MaximumMessageSize) return NeoTransportOutboundStatus.TooLarge;
-        envelope = value;
+        if (!Fits(active, frame)) return NeoTransportOutboundStatus.TooLarge;
+        envelope = frame.Wrap(active.EnvelopePrefix);
         return NeoTransportOutboundStatus.Wrapped;
     }
 
-    internal string WrapOutbound(string json)
+    // The JSON an application posts (NeoAstra.PostMessageAsync), validated in one pass: a frame of the active session must
+    // be an object no deeper than the transport accepts, and is wrapped in its envelope; without a session it is posted as
+    // it is. JsonDocument.Parse took it no deeper than 64 levels in both cases. JSON it refuses throws JsonException, and an
+    // envelope over the configured message size ArgumentException.
+    internal ReadOnlyMemory<byte> WrapOutbound(NeoTransportFrame frame)
     {
-        if (_active is null || _closed) return json;
-        try
-        {
-            using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = _viewOptions.Transport.MaximumJsonDepth });
-            if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException("Transport frames must be JSON objects.");
-        }
-        catch (JsonException)
-        {
-            throw;
-        }
-        var envelope = BuildEnvelope(_active.RendererDocumentId, writer => writer.WriteRawValue(json, skipInputValidation: true));
-        if (Encoding.UTF8.GetByteCount(envelope) > _viewOptions.MaximumMessageSize)
-        {
-            throw new ArgumentException("The transport envelope exceeds the configured message size.", nameof(json));
-        }
-        return envelope;
+        var active = _closed ? null : _active;
+        ValidateJson(frame.Span, active is null ? DefaultMaximumJsonDepth : Math.Min(DefaultMaximumJsonDepth, _viewOptions.Transport.MaximumJsonDepth), requireObject: active is not null);
+        if (active is null) return frame.Memory;
+        if (!Fits(active, frame)) throw new ArgumentException("The transport envelope exceeds the configured message size.", "json");
+        return frame.Wrap(active.EnvelopePrefix);
     }
+
+    // What JsonDocument.Parse accepts, without building the document; a JsonException otherwise. Without a transport, a view
+    // posts what this allows.
+    internal static void ValidateJson(ReadOnlySpan<byte> utf8, int maximumDepth = DefaultMaximumJsonDepth, bool requireObject = false)
+    {
+        var reader = new Utf8JsonReader(utf8, new JsonReaderOptions { MaxDepth = maximumDepth });
+        reader.Read();
+        if (requireObject && reader.TokenType != JsonTokenType.StartObject) throw new JsonException("Transport frames must be JSON objects.");
+        while (reader.Read()) { }
+    }
+
+    private const int DefaultMaximumJsonDepth = 64;
+
+    private bool Fits(ActiveSession active, NeoTransportFrame frame)
+        => (long)active.EnvelopePrefix.Length + frame.Length + 1 <= _viewOptions.MaximumMessageSize;
 
     // Revokes the active session on the host's initiative, for example when the RPC session bound to it
     // closed. The document is told through a close frame so its client fails fast instead of waiting on a
@@ -309,24 +460,6 @@ internal sealed class NeoTransportCoordinator
         // and the document keeps its renderer ID, so that a hello it sends again is also answered.
         if (_closed || generation != _navigationGeneration || _active is not null || _pendingHello is null) return;
         AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "handshake_timeout", "The transport handshake is still waiting for the navigation of its document to end.");
-    }
-
-    private bool TryReadEnvelope(JsonElement root, out string rendererDocumentId, out JsonElement frame)
-    {
-        rendererDocumentId = string.Empty;
-        frame = default;
-        if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty("__neoastraTransport", out var marker) || marker.ValueKind != JsonValueKind.Number || marker.GetInt32() != 1) return false;
-        if (!root.TryGetProperty("hostViewBinding", out var hostView) || hostView.ValueKind != JsonValueKind.String ||
-            !string.Equals(hostView.GetString(), HostViewBinding, StringComparison.Ordinal) ||
-            !root.TryGetProperty("rendererDocumentId", out var rendererDocumentValue) || rendererDocumentValue.ValueKind != JsonValueKind.String ||
-            string.IsNullOrEmpty(rendererDocumentId = rendererDocumentValue.GetString()!) || rendererDocumentId.Length > 128 ||
-            !root.TryGetProperty("frame", out frame) || frame.ValueKind != JsonValueKind.Object)
-        {
-            AddDiagnostic(NeoTransportDiagnosticLevel.Warning, "invalid_frame", "A transport envelope failed its host view binding or shape validation.");
-            return true;
-        }
-        return true;
     }
 
     private void HandleHello(string rendererDocumentId, JsonElement frame)
@@ -416,7 +549,7 @@ internal sealed class NeoTransportCoordinator
     private void AcceptHello(PendingHello hello)
     {
         if (_closed || hello.NavigationGeneration != _navigationGeneration || _closedRendererDocumentIdSet.Contains(hello.RendererDocumentId)) return;
-        _active = new ActiveSession(hello.RendererDocumentId, _idFactory(), hello.ProtocolMinor, hello.Features);
+        _active = new ActiveSession(hello.RendererDocumentId, _idFactory(), hello.ProtocolMinor, hello.Features, BuildEnvelopePrefix(hello.RendererDocumentId));
         _sessionChanged?.Invoke(new NeoTransportSessionSnapshot(_active.DocumentSessionId, _active.ProtocolMinor, _active.Features, _viewOptions.BridgePolicy == NeoBridgePolicy.TrustEntireView));
         SendHelloAck(_active);
     }
@@ -494,6 +627,23 @@ internal sealed class NeoTransportCoordinator
             writer.WriteEndObject();
         });
 
+    // {"__neoastraTransport":1,"hostViewBinding":"…","rendererDocumentId":"…","frame": written by the writer of BuildEnvelope,
+    // with its escaping: the prefix, the frame and a closing brace are the bytes BuildEnvelope writes for that frame.
+    private byte[] BuildEnvelopePrefix(string rendererDocumentId)
+    {
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>(160);
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("__neoastraTransport", 1);
+            writer.WriteString("hostViewBinding", HostViewBinding);
+            writer.WriteString("rendererDocumentId", rendererDocumentId);
+            writer.WritePropertyName("frame");
+            writer.Flush();
+        }
+        return buffer.WrittenSpan.ToArray();
+    }
+
     private static string BuildJson(Action<Utf8JsonWriter> write)
     {
         using var stream = new MemoryStream();
@@ -533,7 +683,7 @@ internal sealed class NeoTransportCoordinator
         catch (ObjectDisposedException) { }
     }
 
-    private static bool LooksLikeTransport(string json) => json.Contains("__neoastraTransport", StringComparison.Ordinal);
+    private static bool LooksLikeTransport(ReadOnlySpan<byte> utf8) => utf8.IndexOf("__neoastraTransport"u8) >= 0;
 
     private static (string Platform, string Backend) GetPlatformMetadata(NeoRuntimeInfo runtimeInfo)
     {
@@ -544,7 +694,8 @@ internal sealed class NeoTransportCoordinator
     }
 
     private readonly record struct PendingHello(string RendererDocumentId, long NavigationGeneration, int ProtocolMinor, string[] Features);
-    private sealed record ActiveSession(string RendererDocumentId, string DocumentSessionId, int ProtocolMinor, string[] Features);
+    // EnvelopePrefix is the envelope of the frames of the session up to its frame, as BuildEnvelope writes it.
+    private sealed record ActiveSession(string RendererDocumentId, string DocumentSessionId, int ProtocolMinor, string[] Features, byte[] EnvelopePrefix);
 }
 
 internal enum NeoTransportOutboundStatus

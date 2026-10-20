@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using NeoAstra;
 using NeoAstra.Rpc;
 
 /// <summary>
@@ -21,6 +22,7 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
         await MeasureConcurrentInvokesAsync();
         await MeasureEventThroughputAsync();
         await MeasureChannelThroughputAsync();
+        await new RpcTransportBenchmarks(iterations, timeout, report).RunAsync();
     }
 
     private async ValueTask MeasureSmallInvokeAsync()
@@ -200,29 +202,30 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
             return completion.Task;
         }
 
-        internal void Receive(IReadOnlyList<string> frames, NeoRpcSession session)
+        internal void Receive(IReadOnlyList<NeoTransportFrame> frames, NeoRpcSession session)
         {
-            foreach (var frame in frames)
+            foreach (var value in frames)
             {
-                if (frame.Contains("\"kind\":\"result\"", StringComparison.Ordinal)) Interlocked.Increment(ref _results);
-                else if (frame.Contains("\"kind\":\"event\"", StringComparison.Ordinal))
+                var frame = value.Span;
+                if (frame.IndexOf("\"kind\":\"result\""u8) >= 0) Interlocked.Increment(ref _results);
+                else if (frame.IndexOf("\"kind\":\"event\""u8) >= 0)
                 {
                     if (Interlocked.Increment(ref _events) >= Volatile.Read(ref _eventsTarget)) Volatile.Read(ref _eventsReached)?.TrySetResult();
                 }
-                else if (frame.Contains("\"kind\":\"channel_item\"", StringComparison.Ordinal))
+                else if (frame.IndexOf("\"kind\":\"channel_item\""u8) >= 0)
                 {
-                    var ack = $"{{\"neoastra\":1,\"kind\":\"channel_ack\",\"channel\":\"{Read(frame, "\"channel\":\"", '"')}\",\"sequence\":{Read(frame, "\"sequence\":", ',')}}}";
+                    var ack = $"{{\"neoastra\":1,\"kind\":\"channel_ack\",\"channel\":\"{Read(frame, "\"channel\":\""u8, (byte)'"')}\",\"sequence\":{Read(frame, "\"sequence\":"u8, (byte)',')}}}";
                     ThreadPool.QueueUserWorkItem(static state => _ = state.Session.ReceiveAsync(state.Ack), (Session: session, Ack: ack), preferLocal: false);
                 }
-                else if (frame.Contains("\"kind\":\"channel_complete\"", StringComparison.Ordinal)) Volatile.Read(ref _channelComplete)?.TrySetResult();
-                else if (frame.Contains("\"kind\":\"channel_error\"", StringComparison.Ordinal)) Volatile.Read(ref _channelComplete)?.TrySetException(new InvalidOperationException("The benchmark channel failed."));
+                else if (frame.IndexOf("\"kind\":\"channel_complete\""u8) >= 0) Volatile.Read(ref _channelComplete)?.TrySetResult();
+                else if (frame.IndexOf("\"kind\":\"channel_error\""u8) >= 0) Volatile.Read(ref _channelComplete)?.TrySetException(new InvalidOperationException("The benchmark channel failed."));
             }
         }
 
-        private static string Read(string frame, string prefix, char end)
+        private static string Read(ReadOnlySpan<byte> frame, ReadOnlySpan<byte> prefix, byte end)
         {
-            var start = frame.IndexOf(prefix, StringComparison.Ordinal) + prefix.Length;
-            return frame[start..frame.IndexOf(end, start)];
+            var value = frame[(frame.IndexOf(prefix) + prefix.Length)..];
+            return System.Text.Encoding.UTF8.GetString(value[..value.IndexOf(end)]);
         }
     }
 

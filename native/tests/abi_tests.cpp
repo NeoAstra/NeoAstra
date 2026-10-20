@@ -95,7 +95,7 @@ static_assert(NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME == 1 && NEOASTRA_NAVIGATION
 static_assert(NEOASTRA_REQUEST_LINK_ACTIVATED == 4 && NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED == 8);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_MASK == 0xf0 && NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN == 0);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT == 0x10 && NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD == 0x20 && NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD == 0x30);
-static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4);
+static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4 && NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH == 8);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
@@ -172,6 +172,7 @@ int main() {
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT) != 0);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH) != 0);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);
@@ -266,6 +267,15 @@ int main() {
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    // A batch without a view posts nothing and says so.
+    const uint8_t message_bytes[] = {'{', '}'};
+    const neoastra_string_view_t messages[] = {{message_bytes, sizeof(message_bytes)}, {message_bytes, sizeof(message_bytes)}};
+    uint32_t posted = 7;
+    assert(neoastra_view_post_messages(nullptr, messages, 2, 1, &posted, &error) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(posted == 0 && error != nullptr);
+    neoastra_error_release(error);
+    error = nullptr;
+    assert(neoastra_view_post_messages(nullptr, nullptr, 0, 1, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     neoastra_capture_options_t capture{};
     capture.size = sizeof(capture);
     capture.version = 1;

@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading.Channels;
 
 namespace NeoAstra.Rpc;
@@ -29,8 +30,9 @@ internal enum NeoRpcFrameRefusal : byte { None = 0, TooLarge = 1, Refused = 2 }
 // TooLarge = that frame alone was not posted because its envelope exceeds the view's MaximumMessageSize,
 // Refused = that frame alone was not posted for another reason and the connection still carries later frames.
 // The frames after a refused one are still attempted, in order. Throwing = the transport failed: every frame
-// of the batch fails and the session closes (as today).
-internal delegate ValueTask<NeoRpcFrameRefusal[]?> NeoRpcSendFrames(IReadOnlyList<string> frames);
+// of the batch fails and the session closes (as today). The frames stay the session's: the callee reads them until its
+// task completes, and neither keeps nor releases them.
+internal delegate ValueTask<NeoRpcFrameRefusal[]?> NeoRpcSendFrames(IReadOnlyList<NeoTransportFrame> frames);
 
 /// <summary>Owns an immutable command registry and all active document RPC sessions.</summary>
 public sealed class NeoRpcHost : IAsyncDisposable
@@ -366,71 +368,101 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     // A frame is charged to the rate of the session when it arrived (a Stopwatch timestamp), not when it is processed:
     // a reader that falls behind does not turn a steady page into one over its rate.
-    internal async ValueTask ReceiveAsync(string json, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken cancellationToken)
+    // The string of the public API is encoded once, into a pooled buffer, unless it is over the frame limit. Its failures are
+    // those of the task, as when the string was parsed: the task is canceled for a canceled token.
+    internal ValueTask ReceiveAsync(string json, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        ArgumentNullException.ThrowIfNull(json);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Encoding.UTF8.GetByteCount(json) > _host.Options.MaximumFrameBytes)
-        {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC frame exceeded the configured byte limit.");
-            return;
-        }
-
-        JsonDocument document;
+        NeoTransportFrame frame;
         try
         {
-            document = JsonDocument.Parse(json, new JsonDocumentOptions
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            ArgumentNullException.ThrowIfNull(json);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Encoding.UTF8.GetByteCount(json) > _host.Options.MaximumFrameBytes)
             {
-                MaxDepth = _host.Options.MaximumJsonDepth,
-                AllowTrailingCommas = false,
-                CommentHandling = JsonCommentHandling.Disallow,
-            });
+                _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC frame exceeded the configured byte limit.");
+                return ValueTask.CompletedTask;
+            }
+            frame = NeoTransportFrame.FromString(json, reserve: 0);
         }
-        catch (JsonException)
-        {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "An RPC frame contained invalid JSON.");
-            return;
-        }
+        catch (OperationCanceledException exception) { return ValueTask.FromCanceled(exception.CancellationToken); }
+        catch (Exception exception) { return ValueTask.FromException(exception); }
+        return ReceiveAsync(frame, sourceOrigin, isMainFrame, arrival, cancellationToken);
+    }
 
-        using (document)
+    // A frame of the page as UTF-8, parsed once, off the UI thread, into a document over its own buffer. The session owns
+    // the frame and releases it once the frame is processed (for an invocation, once its call ended).
+    internal async ValueTask ReceiveAsync(NeoTransportFrame frame, Uri? sourceOrigin, bool isMainFrame, long arrival, CancellationToken cancellationToken)
+    {
+        try
         {
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !IsProtocolFrame(root) || !TryString(root, "kind", out var kind))
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (frame.Length > _host.Options.MaximumFrameBytes)
             {
-                _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "An RPC frame has an invalid discriminator or kind.");
+                _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC frame exceeded the configured byte limit.");
                 return;
             }
-            switch (kind)
+
+            JsonDocument document;
+            try
             {
-                case "invoke":
-                    await ReceiveInvokeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
-                    break;
-                case "cancel":
-                    ReceiveCancel(root);
-                    break;
-                case "subscribe":
-                    await ReceiveSubscribeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
-                    break;
-                case "unsubscribe":
-                    await ReceiveUnsubscribeAsync(root).ConfigureAwait(false);
-                    break;
-                case "channel_ack":
-                    ReceiveChannelAck(root);
-                    break;
-                case "channel_close":
-                    ReceiveChannelClose(root);
-                    break;
-                case "resource_close":
-                    await ReceiveResourceCloseAsync(root).ConfigureAwait(false);
-                    break;
-                case "result" or "subscribed" or "event" or "channel_item" or "channel_complete" or "channel_error":
-                    _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "A frontend sent a host-owned RPC frame kind.");
-                    break;
-                default:
-                    _host.Diagnose(NeoRpcDiagnosticLevel.Debug, NeoRpcErrorCodes.InvalidRequest, "An unknown RPC frame kind was ignored.");
-                    break;
+                document = JsonDocument.Parse(frame.Memory, new JsonDocumentOptions
+                {
+                    MaxDepth = _host.Options.MaximumJsonDepth,
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow,
+                });
             }
+            catch (JsonException)
+            {
+                _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "An RPC frame contained invalid JSON.");
+                return;
+            }
+
+            using (document)
+            {
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object || !IsProtocolFrame(root) || !TryString(root, "kind", out var kind))
+                {
+                    _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "An RPC frame has an invalid discriminator or kind.");
+                    return;
+                }
+                switch (kind)
+                {
+                    case "invoke":
+                        await ReceiveInvokeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case "cancel":
+                        ReceiveCancel(root);
+                        break;
+                    case "subscribe":
+                        await ReceiveSubscribeAsync(root, sourceOrigin, isMainFrame, arrival, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case "unsubscribe":
+                        await ReceiveUnsubscribeAsync(root).ConfigureAwait(false);
+                        break;
+                    case "channel_ack":
+                        ReceiveChannelAck(root);
+                        break;
+                    case "channel_close":
+                        ReceiveChannelClose(root);
+                        break;
+                    case "resource_close":
+                        await ReceiveResourceCloseAsync(root).ConfigureAwait(false);
+                        break;
+                    case "result" or "subscribed" or "event" or "channel_item" or "channel_complete" or "channel_error":
+                        _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.InvalidRequest, "A frontend sent a host-owned RPC frame kind.");
+                        break;
+                    default:
+                        _host.Diagnose(NeoRpcDiagnosticLevel.Debug, NeoRpcErrorCodes.InvalidRequest, "An unknown RPC frame kind was ignored.");
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            frame.Release();
         }
     }
 
@@ -530,7 +562,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
         while (_outbound.Reader.TryRead(out var frame))
         {
             Interlocked.Decrement(ref _queuedOutbound);
-            if (frame.TryTake()) frame.Cancel(CancellationToken.None);
+            if (frame.TryTake())
+            {
+                frame.Cancel(CancellationToken.None);
+                frame.Release();
+            }
         }
     }
 
@@ -572,42 +608,98 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // nested deeper than its transport accepts; one the view refuses when it is posted is reported to its owner.
     private ValueTask SendEventAsync(string subscriptionId, long sequence, byte[] json, bool awaitDelivery, IStreamFrameOwner owner, CancellationToken cancellationToken)
     {
-        var frame = BuildFrame(writer =>
+        var frame = BuildFrame((subscriptionId, sequence, json), static (writer, state) =>
         {
             writer.WriteStartObject();
             WriteHeader(writer, "event");
-            writer.WriteString("subscription", subscriptionId);
-            writer.WriteNumber("sequence", sequence);
-            writer.WritePropertyName("value"); writer.WriteRawValue(json, skipInputValidation: true);
+            writer.WriteString("subscription", state.subscriptionId);
+            writer.WriteNumber("sequence", state.sequence);
+            writer.WritePropertyName("value"); writer.WriteRawValue(state.json, skipInputValidation: true);
             writer.WriteEndObject();
         });
-        if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+        if (_limits.IsTooLarge(frame))
+        {
+            frame.Release();
+            throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+        }
         if (awaitDelivery) return SendRawAsync(frame, cancellationToken);
         QueueStreamFrame(frame, cancellationToken, owner);
         return ValueTask.CompletedTask;
     }
 
-    // Channel items are only queued: the unacknowledged-item credits of the channel bound how many are in flight.
-    private void QueueChannelItem(string channelId, long sequence, byte[] json, IStreamFrameOwner owner, CancellationToken cancellationToken)
+    // Channel items are only queued: the unacknowledged-item credits of the channel bound how many are in flight. The item
+    // is serialized into its frame, as JsonSerializer.SerializeToUtf8Bytes writes it, without a buffer of its own.
+    private void QueueChannelItem<T>(string channelId, long sequence, T item, JsonTypeInfo<T> typeInfo, IStreamFrameOwner owner, CancellationToken cancellationToken)
     {
-        if (_limits.IsTooDeep(json)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.SerializationFailed, "A channel item is nested deeper than the transport of the view accepts.");
-        var frame = BuildFrame(writer =>
+        var frame = BuildFrame((channelId, sequence), static (writer, state) =>
         {
-            writer.WriteStartObject(); WriteHeader(writer, "channel_item"); writer.WriteString("channel", channelId);
-            writer.WriteNumber("sequence", sequence); writer.WritePropertyName("value"); writer.WriteRawValue(json, true); writer.WriteEndObject();
+            writer.WriteStartObject(); WriteHeader(writer, "channel_item"); writer.WriteString("channel", state.channelId);
+            writer.WriteNumber("sequence", state.sequence); writer.WritePropertyName("value");
         });
-        if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+        try
+        {
+            var value = WriteValue(frame, item, typeInfo);
+            if (_limits.IsTooDeep(frame.Span.Slice(value.Start, value.Length))) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.SerializationFailed, "A channel item is nested deeper than the transport of the view accepts.");
+            if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+        }
+        catch
+        {
+            frame.Release();
+            throw;
+        }
         QueueStreamFrame(frame, cancellationToken, owner);
     }
+
+    // Serializes a value at the end of a frame whose header ends with the name of its property, then closes the frame. The
+    // value is written as JsonSerializer.SerializeToUtf8Bytes writes it with the options of its contract: the frame holds
+    // the bytes the frame writer would have copied from that buffer.
+    private static (int Start, int Length) WriteValue<T>(NeoTransportFrame frame, T value, JsonTypeInfo<T> typeInfo)
+    {
+        var start = frame.Length;
+        // The writer of the thread for these options is taken while it writes: a converter that comes back here gets one of
+        // its own. A writer left in the middle of a value by a failure is reset before it writes again.
+        var writer = t_valueWriter;
+        t_valueWriter = null;
+        if (writer is null || !ReferenceEquals(t_valueWriterOptions, typeInfo.Options))
+        {
+            writer = new Utf8JsonWriter(frame, WriterOptions(typeInfo.Options));
+        }
+        else writer.Reset(frame);
+        try
+        {
+            JsonSerializer.Serialize(writer, value, typeInfo);
+            writer.Flush();
+        }
+        finally
+        {
+            t_valueWriter = writer;
+            t_valueWriterOptions = typeInfo.Options;
+        }
+        var length = frame.Length - start;
+        frame.Write((byte)'}');
+        return (start, length);
+    }
+
+    // The writer options of JsonSerializer for these serializer options. Validation stays on: a converter that writes an
+    // invalid sequence fails its value instead of sending a frame the page cannot parse.
+    internal static JsonWriterOptions WriterOptions(JsonSerializerOptions options) => new()
+    {
+        Encoder = options.Encoder,
+        Indented = options.WriteIndented,
+        IndentCharacter = options.IndentCharacter,
+        IndentSize = options.IndentSize,
+        NewLine = options.NewLine,
+        MaxDepth = options.MaxDepth == 0 ? 64 : options.MaxDepth,
+    };
 
     private void DiagnoseRefusedStream(NeoRpcFrameRefusedException refusal, string what)
         => _host.Diagnose(NeoRpcDiagnosticLevel.Warning, refusal.Code, $"An RPC {what} could not be delivered to its view and was closed: {refusal.Message}");
 
     internal ValueTask SendChannelTerminalAsync(string channelId, string kind, NeoRpcError? error, CancellationToken cancellationToken)
-        => SendRawAsync(BuildFrame(writer =>
+        => SendRawAsync(BuildFrame((channelId, kind, error), static (writer, state) =>
         {
-            writer.WriteStartObject(); WriteHeader(writer, kind); writer.WriteString("channel", channelId);
-            if (error is { } value) { writer.WritePropertyName("error"); WriteError(writer, value); }
+            writer.WriteStartObject(); WriteHeader(writer, state.kind); writer.WriteString("channel", state.channelId);
+            if (state.error is { } value) { writer.WritePropertyName("error"); WriteError(writer, value); }
             writer.WriteEndObject();
         }), cancellationToken);
 
@@ -736,7 +828,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
             }
 
             CommandResult result;
-            try { result = descriptor.SerializeResult(applicationResult); }
+            try { result = descriptor.SerializeResult(id, applicationResult); }
             catch (Exception)
             {
                 _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.SerializationFailed, "RPC response serialization failed safely.", correlationId);
@@ -761,9 +853,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     preparedChannel = null; // The session tracks the running (or already closed) state through cleanup.
                 }
             }
-            else
+            // A result that is not sent, because the call ended meanwhile, gives its frame back.
+            else if (!await state.TryCommitAsync(() => SendSuccessResultAsync(id, result, correlationId)).ConfigureAwait(false))
             {
-                await state.TryCommitAsync(() => SendSuccessResultAsync(id, result, correlationId)).ConfigureAwait(false);
+                (result as ValueCommandResult)?.Frame.Release();
             }
         }
         catch (OperationCanceledException) when (state.Token.IsCancellationRequested)
@@ -875,7 +968,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 return;
             }
             if (!subscription.TryActivate()) return;
-            await SendRawAsync(BuildFrame(writer => { writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WriteEndObject(); }), _closedToken).ConfigureAwait(false);
+            await SendRawAsync(BuildFrame(id, static (writer, id) => { writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WriteEndObject(); }), _closedToken).ConfigureAwait(false);
             subscription.Start();
         }
         catch
@@ -1085,30 +1178,64 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     // A result the page could not receive fails its call alone, with an answer: its caller learns why, and the session
     // keeps serving the others. The page drops a frame deeper than its transport accepts without answering anything.
-    private async ValueTask SendSuccessResultAsync(string id, CommandResult result, string correlationId)
+    // The frame of a value result, its value serialized in place: SerializeResult of a value command. A value that cannot be
+    // serialized throws, and its frame is released.
+    internal static ValueCommandResult BuildValueResult<T>(string id, T value, JsonTypeInfo<T> typeInfo)
     {
-        if (result is ValueCommandResult deep && _limits.IsTooDeep(deep.Json))
-        {
-            _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.SerializationFailed, "An RPC result was nested deeper than the transport of its view accepts and was replaced by an error.", correlationId);
-            await SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.SerializationFailed, "The command result is nested deeper than the transport of the view accepts.", correlationId)).ConfigureAwait(false);
-            return;
-        }
-        var frame = BuildFrame(writer =>
+        var frame = BuildFrame(id, static (writer, id) =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", true); writer.WritePropertyName("value");
-            if (result is ValueCommandResult value) writer.WriteRawValue(value.Json, true); else writer.WriteNullValue();
-            writer.WriteEndObject();
         });
-        var maximum = _host.Options.MaximumResultBytes;
-        if (maximum != int.MaxValue && Encoding.UTF8.GetByteCount(frame) > maximum)
+        try
         {
+            var (start, length) = WriteValue(frame, value, typeInfo);
+            return new ValueCommandResult(frame, start, length);
+        }
+        catch
+        {
+            frame.Release();
+            throw;
+        }
+    }
+
+    // Owns the frame of a value result: it is sent, or released.
+    private async ValueTask SendSuccessResultAsync(string id, CommandResult result, string correlationId)
+    {
+        NeoTransportFrame frame;
+        if (result is ValueCommandResult value)
+        {
+            frame = value.Frame;
+            if (_limits.IsTooDeep(frame.Span.Slice(value.ValueStart, value.ValueLength)))
+            {
+                frame.Release();
+                _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.SerializationFailed, "An RPC result was nested deeper than the transport of its view accepts and was replaced by an error.", correlationId);
+                await SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.SerializationFailed, "The command result is nested deeper than the transport of the view accepts.", correlationId)).ConfigureAwait(false);
+                return;
+            }
+        }
+        else
+        {
+            frame = BuildFrame(id, static (writer, id) =>
+            {
+                writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", true); writer.WritePropertyName("value");
+                writer.WriteNullValue(); writer.WriteEndObject();
+            });
+        }
+        var maximum = _host.Options.MaximumResultBytes;
+        if (maximum != int.MaxValue && frame.Length > maximum)
+        {
+            frame.Release();
             _host.Diagnose(NeoRpcDiagnosticLevel.Warning, NeoRpcErrorCodes.PayloadTooLarge, "An RPC result exceeded the configured byte limit and was replaced by an error.", correlationId);
             await SendTerminalErrorResultAsync(id, FrameworkError(NeoRpcErrorCodes.PayloadTooLarge, "The command result exceeds the configured size limit.", correlationId)).ConfigureAwait(false);
             return;
         }
         try
         {
-            if (_limits.IsTooLarge(frame)) throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+            if (_limits.IsTooLarge(frame))
+            {
+                frame.Release();
+                throw new NeoRpcFrameRefusedException(NeoRpcErrorCodes.PayloadTooLarge, NeoRpcFrameRefusedException.TooLargeMessage);
+            }
             await SendRawAsync(frame, CancellationToken.None, allowClosing: true).ConfigureAwait(false);
         }
         catch (NeoRpcFrameRefusedException refusal)
@@ -1120,38 +1247,47 @@ public sealed class NeoRpcSession : IAsyncDisposable
     }
 
     private ValueTask SendChannelResultAsync(string id, string channelId)
-        => SendRawAsync(BuildFrame(writer =>
+        => SendRawAsync(BuildFrame((id, channelId), static (writer, state) =>
         {
-            writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", true);
-            writer.WritePropertyName("value"); writer.WriteStartObject(); writer.WriteString("channel", channelId); writer.WriteEndObject(); writer.WriteEndObject();
+            writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", state.id); writer.WriteBoolean("ok", true);
+            writer.WritePropertyName("value"); writer.WriteStartObject(); writer.WriteString("channel", state.channelId); writer.WriteEndObject(); writer.WriteEndObject();
         }), CancellationToken.None, allowClosing: true);
 
     private ValueTask SendErrorResultAsync(string id, NeoRpcError error)
-        => SendRawAsync(BuildFrame(writer =>
-        {
-            writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", false);
-            writer.WritePropertyName("error"); WriteError(writer, error); writer.WriteEndObject();
-        }), _closedToken);
+        => SendRawAsync(BuildErrorResult(id, error), _closedToken);
 
     private ValueTask SendTerminalErrorResultAsync(string id, NeoRpcError error)
-        => SendRawAsync(BuildFrame(writer =>
+        => SendRawAsync(BuildErrorResult(id, error), CancellationToken.None, allowClosing: true);
+
+    private static NeoTransportFrame BuildErrorResult(string id, NeoRpcError error)
+        => BuildFrame((id, error), static (writer, state) =>
         {
-            writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", false);
-            writer.WritePropertyName("error"); WriteError(writer, error); writer.WriteEndObject();
-        }), CancellationToken.None, allowClosing: true);
+            writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", state.id); writer.WriteBoolean("ok", false);
+            writer.WritePropertyName("error"); WriteError(writer, state.error); writer.WriteEndObject();
+        });
 
     private ValueTask SendSubscriptionErrorAsync(string id, NeoRpcError error)
-        => SendRawAsync(BuildFrame(writer =>
+        => SendRawAsync(BuildFrame((id, error), static (writer, state) =>
         {
-            writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WritePropertyName("error"); WriteError(writer, error); writer.WriteEndObject();
+            writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", state.id); writer.WritePropertyName("error"); WriteError(writer, state.error); writer.WriteEndObject();
         }), _closedToken);
 
-    private async ValueTask SendRawAsync(string json, CancellationToken cancellationToken, bool allowClosing = false)
+    // Owns the frame: it is queued for the writer, which then owns it, or released.
+    private async ValueTask SendRawAsync(NeoTransportFrame json, CancellationToken cancellationToken, bool allowClosing = false)
     {
-        if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closedToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var frame = new OutboundFrame(json, cancellationToken, awaited: true);
-        if (!TryQueue(frame)) throw new OperationCanceledException("The RPC session is closed.");
+        OutboundFrame frame;
+        try
+        {
+            if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closedToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            frame = new OutboundFrame(json, cancellationToken, awaited: true);
+            if (!TryQueue(frame)) throw new OperationCanceledException("The RPC session is closed.");
+        }
+        catch
+        {
+            json.Release();
+            throw;
+        }
         // The caller withdraws a frame still waiting in the queue with its own token (a closed channel or
         // subscription): it is not sent, and the transport did not fail.
         using (cancellationToken.CanBeCanceled ? cancellationToken.Register(static state => ((OutboundFrame)state!).TryWithdraw(), frame) : default)
@@ -1164,11 +1300,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // Queues a frame of a stream (an event or a channel item) without waiting for it to be sent: the frames of a stream
     // leave in batches instead of one round trip each. Nobody waits for it, so it is withdrawn when its token is canceled
     // before the writer takes it, a failure of the transport closes the session, which ends its stream, and a refusal of
-    // the frame alone is reported to its stream.
-    private void QueueStreamFrame(string json, CancellationToken cancellationToken, IStreamFrameOwner owner)
+    // the frame alone is reported to its stream. Owns the frame, as SendRawAsync does.
+    private void QueueStreamFrame(NeoTransportFrame json, CancellationToken cancellationToken, IStreamFrameOwner owner)
     {
-        if (Volatile.Read(ref _disposed) != 0 || cancellationToken.IsCancellationRequested) return;
-        if (TryQueue(new OutboundFrame(json, cancellationToken, awaited: false, owner))) StartWriter();
+        if (Volatile.Read(ref _disposed) == 0 && !cancellationToken.IsCancellationRequested && TryQueue(new OutboundFrame(json, cancellationToken, awaited: false, owner))) StartWriter();
+        else json.Release();
     }
 
     private bool TryQueue(OutboundFrame frame)
@@ -1188,9 +1324,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // transport takes a batch. A frame withdrawn before it was taken is skipped. A frame the view refuses alone (too
     // large for its messages) fails its own call, subscription, or channel; a failure of the transport fails the frames
     // it held and closes the session, as a failed send did.
+    // The writer owns the frames it took: each is released once the transport is done with it, whatever became of it.
     private async Task WriteAsync()
     {
         var batch = new List<OutboundFrame>();
+        List<NeoTransportFrame>? frames = null;
         while (true)
         {
             batch.Clear();
@@ -1211,22 +1349,32 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
             if (_sendBatch is { } sendBatch)
             {
-                var frames = new string[batch.Count];
-                for (var index = 0; index < frames.Length; index++) frames[index] = batch[index].Json;
+                frames ??= new List<NeoTransportFrame>(MaximumOutboundBatch);
+                frames.Clear();
+                foreach (var frame in batch) frames.Add(frame.Frame);
                 NeoRpcFrameRefusal[]? refusals;
                 try
                 {
                     refusals = await sendBatch(frames).ConfigureAwait(false);
-                    if (refusals is not null && refusals.Length != frames.Length) throw new InvalidOperationException("The view reported refusals for a different number of frames.");
+                    if (refusals is not null && refusals.Length != frames.Count) throw new InvalidOperationException("The view reported refusals for a different number of frames.");
                 }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
-                    foreach (var frame in batch) frame.Fail(exception);
+                    foreach (var frame in batch)
+                    {
+                        frame.Release();
+                        frame.Fail(exception);
+                    }
                     continue;
+                }
+                finally
+                {
+                    frames.Clear();
                 }
                 for (var index = 0; index < batch.Count; index++)
                 {
+                    batch[index].Release();
                     if (refusals is null || refusals[index] == NeoRpcFrameRefusal.None) batch[index].Complete();
                     else batch[index].Refuse(new NeoRpcFrameRefusedException(refusals[index]));
                 }
@@ -1238,7 +1386,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
             {
                 try
                 {
-                    await _send(frame.Json, frame.Token).ConfigureAwait(false);
+                    // The public send callback takes a string.
+                    string json;
+                    try { json = frame.Frame.ToString(); }
+                    finally { frame.Release(); }
+                    await _send(json, frame.Token).ConfigureAwait(false);
                     frame.Complete();
                 }
                 // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
@@ -1272,17 +1424,22 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     // A frame that a caller awaits has a completion; a frame of a stream has none, and nothing observes its outcome but
     // the stream it belongs to, when the view refuses it.
-    private sealed class OutboundFrame(string json, CancellationToken token, bool awaited, IStreamFrameOwner? owner = null)
+    // Its frame belongs to the queue until the writer takes it, and then to the writer: a frame withdrawn before it was taken
+    // is released by the withdrawal, a frame taken by whoever took it, once the transport is done with it.
+    private sealed class OutboundFrame(NeoTransportFrame frame, CancellationToken token, bool awaited, IStreamFrameOwner? owner = null)
     {
         private int _state; // 0 queued, 1 taken by the writer, 2 withdrawn by its caller
-        public string Json { get; } = json;
+        public NeoTransportFrame Frame { get; } = frame;
         public CancellationToken Token { get; } = token;
         public TaskCompletionSource? Done { get; } = awaited ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null;
         public bool TryTake() => Interlocked.CompareExchange(ref _state, 1, 0) == 0;
         public void TryWithdraw()
         {
-            if (Interlocked.CompareExchange(ref _state, 2, 0) == 0) Done?.TrySetCanceled(Token);
+            if (Interlocked.CompareExchange(ref _state, 2, 0) != 0) return;
+            Frame.Release();
+            Done?.TrySetCanceled(Token);
         }
+        public void Release() => Frame.Release();
         public void Complete() => Done?.TrySetResult();
         public void Cancel(CancellationToken cancellationToken) => Done?.TrySetCanceled(cancellationToken);
         public void Fail(Exception exception) => Done?.TrySetException(exception);
@@ -1335,12 +1492,35 @@ public sealed class NeoRpcSession : IAsyncDisposable
         writer.WriteBoolean("retryable", error.Retryable); writer.WriteEndObject();
     }
 
-    private static string BuildFrame(Action<Utf8JsonWriter> write)
+    // A frame of the host, written as UTF-8 into a pooled buffer that leaves room for its envelope. The writer is one of the
+    // thread: no application code runs while it writes (a value of an application type gets a writer of its own).
+    private static NeoTransportFrame BuildFrame<TState>(TState state, Action<Utf8JsonWriter, TState> write)
     {
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer)) write(writer);
-        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+        var frame = NeoTransportFrame.Create();
+        try
+        {
+            var writer = t_frameWriter;
+            if (writer is null) t_frameWriter = writer = new Utf8JsonWriter(frame);
+            else writer.Reset(frame);
+            write(writer, state);
+            writer.Flush();
+            return frame;
+        }
+        catch
+        {
+            frame.Release();
+            throw;
+        }
     }
+
+    [ThreadStatic]
+    private static Utf8JsonWriter? t_frameWriter;
+
+    [ThreadStatic]
+    private static Utf8JsonWriter? t_valueWriter;
+
+    [ThreadStatic]
+    private static JsonSerializerOptions? t_valueWriterOptions;
 
     private static NeoRpcError FrameworkError(string code, string message, string? correlationId, bool retryable = false)
         => new(code, message, correlationId) { Retryable = retryable };
@@ -1664,9 +1844,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 await foreach (var item in _channel.Items.WithCancellation(_closed.Token).ConfigureAwait(false))
                 {
                     await _credits.WaitAsync(_closed.Token).ConfigureAwait(false);
-                    var bytes = JsonSerializer.SerializeToUtf8Bytes(item, _channel.ItemTypeInfo);
                     var sequence = Interlocked.Increment(ref _sent);
-                    _session.QueueChannelItem(_id, sequence, bytes, this, _closed.Token);
+                    _session.QueueChannelItem(_id, sequence, item, _channel.ItemTypeInfo, this, _closed.Token);
                 }
             }
             catch (NeoRpcFrameRefusedException refusal) { Refuse(refusal); }
@@ -1716,12 +1895,7 @@ internal readonly record struct NeoRpcOutboundLimits(int MaximumFrameBytes, int 
     internal static NeoRpcOutboundLimits Of(uint maximumMessageSize, int maximumJsonDepth)
         => new((int)Math.Clamp((long)maximumMessageSize - MinimumEnvelopeBytes, 0, int.MaxValue), Math.Max(0, maximumJsonDepth - 1));
 
-    internal bool IsTooLarge(string frame)
-    {
-        // A UTF-16 character is at most three UTF-8 bytes (a surrogate pair is four for two): most frames need no count.
-        if (frame.Length <= MaximumFrameBytes / 3) return false;
-        return frame.Length > MaximumFrameBytes || Encoding.UTF8.GetByteCount(frame) > MaximumFrameBytes;
-    }
+    internal bool IsTooLarge(NeoTransportFrame frame) => frame.Length > MaximumFrameBytes;
 
     internal bool IsTooDeep(ReadOnlySpan<byte> value)
     {
