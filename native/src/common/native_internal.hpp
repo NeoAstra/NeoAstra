@@ -829,6 +829,8 @@ void neo_log(neoastra_app_t* app, neoastra_log_level_t level, std::string_view c
 void neo_emit_app(neoastra_app_t* app, neoastra_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neoastra_decision_t* decision = nullptr) noexcept;
 void neo_emit_view(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id = 0, const std::string* text = nullptr, const std::string* uri = nullptr, uint64_t value = 0, int64_t native_code = 0, neoastra_decision_t* decision = nullptr) noexcept;
 void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id, const std::string* text, const std::string* uri, uint64_t value, int64_t native_code, neoastra_decision_t* decision, const neo_event_details& details) noexcept;
+// NEOASTRA_EVENT_MESSAGE_RECEIVED with the message lent, not copied: the caller keeps it, unchanged, until this returns.
+void neo_emit_view_message(neoastra_view_t* view, const std::string& message, const std::string& uri, uint64_t value) noexcept;
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
 void neo_finish_decision_event(neoastra_app_t* app, neoastra_decision_t* decision) noexcept;
 inline void neo_finish_decision_event(neoastra_view_t* view, neoastra_decision_t* decision) noexcept { neo_finish_decision_event(view->environment->app, decision); }

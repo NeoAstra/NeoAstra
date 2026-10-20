@@ -143,7 +143,7 @@ bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, 
     const auto destroyed = view->ui_destroyed.load(std::memory_order_acquire) || view->destroying;
     if (neo_bridge_message_allowed_for(view->environment->custom_schemes, view->bridge_origins,
                                        view->bridge_policy, view->maximum_message_size, destroyed, message, uri)) {
-        neo_emit_view(view, NEOASTRA_EVENT_MESSAGE_RECEIVED, 0, &message, &uri, main_frame ? 1u : 0u);
+        neo_emit_view_message(view, message, uri, main_frame ? 1u : 0u);
         return true;
     }
     if (destroyed) return false;
@@ -522,6 +522,20 @@ void neo_emit_view(neoastra_view_t* view, neoastra_event_type_t type, uint64_t o
         neoastra_event_t event{};
         event_strings strings;
         initialize_event(view->environment->app, event, strings, type, object_id, text, uri, value, native_code, decision);
+        view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
+}
+
+// A message of the page can be as large as the view allows: it is lent to the handler instead of being copied. It is a local of
+// the backend callback that received it, which no handler can reach, so it stays as it is while the handler runs.
+void neo_emit_view_message(neoastra_view_t* view, const std::string& message, const std::string& uri, uint64_t value) noexcept {
+    neo_retain_guard owner(view);
+    if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return;
+    try {
+        neoastra_event_t event{};
+        event_strings strings;
+        initialize_event(view->environment->app, event, strings, NEOASTRA_EVENT_MESSAGE_RECEIVED, 0, nullptr, &uri, value, 0, nullptr);
+        event.text = neo_string_view(message);
         view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
     } catch (...) { /* Allocation failure must not cross a platform callback. */ }
 }
