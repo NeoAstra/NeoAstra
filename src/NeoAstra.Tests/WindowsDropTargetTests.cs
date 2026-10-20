@@ -183,7 +183,6 @@ public sealed class WindowsDropTargetTests
                 SetThreadDpiAwarenessContext(-4);
                 NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra real drag test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit, LogCallback = logged.Enqueue }, async application =>
                 {
-                    var pressed = false;
                     GetCursorPos(out var original);
                     try
                     {
@@ -219,24 +218,15 @@ public sealed class WindowsDropTargetTests
                         }
 
                         stage = "real mouse drag";
-                        MoveMouse(source);
-                        await Task.Delay(100, timeout.Token);
-                        SendButton(0x0002);
-                        pressed = true;
-                        for (var step = 1; step <= 35; step++)
+                        var drag = await DriveRealDragAsync(application, source, target, 30);
+                        if (drag.Interrupted is not null)
                         {
-                            var next = step <= 30 ? new Point { X = source.X + (target.X - source.X) * step / 30, Y = source.Y + (target.Y - source.Y) * step / 30 } : target;
-                            MoveMouse(next);
-                            await Task.Delay(step <= 30 ? 15 : 30, timeout.Token);
-                            // Someone else moves the mouse: the test lets go at once rather than fight them.
-                            if (GetCursorPos(out var now) && (Math.Abs(now.X - next.X) > 2 || Math.Abs(now.Y - next.Y) > 2))
-                            {
-                                inconclusive = "The mouse was moved by someone else during the drag; the test let go.";
-                                return;
-                            }
+                            inconclusive = drag.Interrupted;
+                            return;
                         }
-                        SendButton(0x0004);
-                        pressed = false;
+                        Assert.IsTrue(drag.Started, "The drag of the page did not start.");
+                        Assert.IsTrue(drag.DispatchedWhileHeld, "The UI thread ran no work posted to the application while the drag of the page was held still.");
+                        Assert.IsTrue(drag.UiTicksWhileHeld >= 4, $"The continuations of the UI thread ran {drag.UiTicksWhileHeld} times in the half second that the drag of the page was held still.");
                         for (var index = 0; index < 150 && await view.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token) != "true"; index++)
                             await Task.Delay(20, timeout.Token);
                         Assert.AreEqual("true", await view.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token),
@@ -254,7 +244,6 @@ public sealed class WindowsDropTargetTests
                     }
                     finally
                     {
-                        if (pressed) SendButton(0x0004);
                         SetCursorPos(original.X, original.Y);
                         application.ForceShutdown();
                     }
@@ -298,7 +287,6 @@ public sealed class WindowsDropTargetTests
                 SetThreadDpiAwarenessContext(-4);
                 NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra cross-window drag test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
                 {
-                    var pressed = false;
                     GetCursorPos(out var original);
                     try
                     {
@@ -338,23 +326,15 @@ public sealed class WindowsDropTargetTests
                         }
 
                         stage = "real mouse drag to another window";
-                        MoveMouse(source);
-                        await Task.Delay(100, timeout.Token);
-                        SendButton(0x0002);
-                        pressed = true;
-                        for (var step = 1; step <= 45; step++)
+                        var drag = await DriveRealDragAsync(application, source, target, 40);
+                        if (drag.Interrupted is not null)
                         {
-                            var next = step <= 40 ? new Point { X = source.X + (target.X - source.X) * step / 40, Y = source.Y + (target.Y - source.Y) * step / 40 } : target;
-                            MoveMouse(next);
-                            await Task.Delay(step <= 40 ? 15 : 30, timeout.Token);
-                            if (GetCursorPos(out var now) && (Math.Abs(now.X - next.X) > 2 || Math.Abs(now.Y - next.Y) > 2))
-                            {
-                                inconclusive = "The mouse was moved by someone else during the drag; the test let go.";
-                                return;
-                            }
+                            inconclusive = drag.Interrupted;
+                            return;
                         }
-                        SendButton(0x0004);
-                        pressed = false;
+                        Assert.IsTrue(drag.Started, "The drag of the page did not start.");
+                        Assert.IsTrue(drag.DispatchedWhileHeld, "The UI thread ran no work posted to the application while the drag of the page was held still.");
+                        Assert.IsTrue(drag.UiTicksWhileHeld >= 4, $"The continuations of the UI thread ran {drag.UiTicksWhileHeld} times in the half second that the drag of the page was held still.");
                         for (var index = 0; index < 150 && await targetView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token) != "true"; index++)
                             await Task.Delay(20, timeout.Token);
                         Assert.AreEqual("true", await targetView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token),
@@ -380,7 +360,6 @@ public sealed class WindowsDropTargetTests
                     }
                     finally
                     {
-                        if (pressed) SendButton(0x0004);
                         SetCursorPos(original.X, original.Y);
                         application.ForceShutdown();
                     }
@@ -406,6 +385,105 @@ public sealed class WindowsDropTargetTests
         var point = new Point { X = (int)Math.Round(center[0].GetDouble()), Y = (int)Math.Round(center[1].GetDouble()) };
         Assert.IsTrue(ClientToScreen(parent, ref point));
         return point;
+    }
+
+    private sealed class RealDrag
+    {
+        // Why the test let go of the mouse before the drag was done, or null.
+        public string? Interrupted { get; set; }
+        // Whether the drag loop of OLE took the capture of the UI thread, that is, the drag of the page started.
+        public bool Started { get; set; }
+        // Whether the UI thread ran work posted to the application while the drag was held still.
+        public bool DispatchedWhileHeld { get; set; }
+        // How many continuations of the UI thread ran while the drag was held still.
+        public int UiTicksWhileHeld { get; set; }
+    }
+
+    // Drives the real mouse from a thread of its own, never from the UI thread of the application: that thread runs the
+    // drag loop of the page while the button is held, and the test must not depend on it to let the button go. The
+    // button is released in every case, so that a drag that goes wrong never leaves the desktop with the button held.
+    // The drag goes just past the threshold of a drag, then is held still for half a second from the moment the drag
+    // loop runs: no move of the pointer reaches that loop, which then waits for one. Meanwhile the UI thread keeps
+    // awaiting short delays, as an application does, and the test counts them: its work must go on during the drag.
+    private static async Task<RealDrag> DriveRealDragAsync(NeoApplication application, Point source, Point target, int steps)
+    {
+        var uiThread = GetCurrentThreadId();
+        var ticks = 0;
+        var ticking = 1;
+        var ticker = TickAsync();
+        try
+        {
+            return await Drive();
+        }
+        finally
+        {
+            Volatile.Write(ref ticking, 0);
+            await ticker;
+        }
+
+        async Task TickAsync()
+        {
+            while (Volatile.Read(ref ticking) == 1)
+            {
+                await Task.Delay(10);
+                Interlocked.Increment(ref ticks);
+            }
+        }
+
+        Task<RealDrag> Drive() => Task.Factory.StartNew(() =>
+        {
+            // The points are in device pixels, as for the UI thread of the test.
+            SetThreadDpiAwarenessContext(-4);
+            var drag = new RealDrag();
+            var pressed = false;
+            try
+            {
+                MoveMouse(source);
+                Thread.Sleep(100);
+                SendButton(0x0002);
+                pressed = true;
+                var dispatched = 0;
+                for (var step = 1; step <= steps + 5; step++)
+                {
+                    var next = step <= steps ? new Point { X = source.X + (target.X - source.X) * step / steps, Y = source.Y + (target.Y - source.Y) * step / steps } : target;
+                    MoveMouse(next);
+                    Thread.Sleep(step <= steps ? 15 : 30);
+                    // Someone else moves the mouse: the test lets go at once rather than fight them.
+                    if (GetCursorPos(out var now) && (Math.Abs(now.X - next.X) > 2 || Math.Abs(now.Y - next.Y) > 2))
+                    {
+                        drag.Interrupted = "The mouse was moved by someone else during the drag; the test let go.";
+                        return drag;
+                    }
+                    // Each move waits for the drag to start, so that the move that started it is the last one before the hold.
+                    if (drag.Started) continue;
+                    for (var wait = 0; wait < 15 && !(drag.Started = HoldsDragCapture(uiThread)); wait++) Thread.Sleep(10);
+                    if (!drag.Started)
+                    {
+                        if (step >= 8) return drag;
+                        continue;
+                    }
+                    var before = Volatile.Read(ref ticks);
+                    application.Dispatcher.Post(() => Volatile.Write(ref dispatched, 1));
+                    Thread.Sleep(500);
+                    drag.UiTicksWhileHeld = Volatile.Read(ref ticks) - before;
+                    drag.DispatchedWhileHeld = Volatile.Read(ref dispatched) == 1;
+                }
+                return drag;
+            }
+            finally
+            {
+                if (pressed) SendButton(0x0004);
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+
+    // The drag loop of OLE holds the capture of the thread that runs it with a window of its own.
+    private static bool HoldsDragCapture(uint thread)
+    {
+        var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+        if (!GetGUIThreadInfo(thread, ref info) || info.Capture == 0) return false;
+        var name = new System.Text.StringBuilder(64);
+        return GetClassName(info.Capture, name, name.Capacity) > 0 && name.ToString() == "CLIPBRDWNDCLASS";
     }
 
     private static bool IsWithin(nint window, Point point)
@@ -628,6 +706,16 @@ public sealed class WindowsDropTargetTests
 
     [DllImport("user32.dll")]
     private static extern nint GetAncestor(nint window, uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GuiThreadInfo { public int Size; public uint Flags; public nint Active; public nint Focus; public nint Capture; public nint MenuOwner; public nint MoveSize; public nint Caret; public Rect CaretRect; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

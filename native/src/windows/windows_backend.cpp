@@ -2882,6 +2882,52 @@ void emit_page_drag_ended(neoastra_view_t* view, page_drag_outcome outcome, DWOR
                            (UINT64_C(1) << 63) | (UINT64_C(3) << 56) | static_cast<uint64_t>(outcome) | (effects << 4), 0, nullptr, details);
 }
 
+// The loop of DoDragDrop waits for mouse and keyboard messages of its own window, and runs the other messages of the
+// thread only once one arrives: while the pointer is held still, nothing of the application runs, neither its queued
+// work nor the callbacks of WebView2 (its messages from the pages among them), and timers and posted messages do not
+// wake it. While a drag of the page runs, a timer of the thread pool posts to that window, every 50 ms (the pace at
+// which HTML fires dragover), a move of the pointer where it is, which wakes the loop. It posts only to the window of
+// OLE that holds the capture of the UI thread, so it does nothing should OLE run its loop otherwise.
+class drag_loop_waker final {
+public:
+    explicit drag_loop_waker(DWORD thread) noexcept : thread_(thread) {
+        timer_ = CreateThreadpoolTimer(&drag_loop_waker::tick, this, nullptr);
+        if (!timer_) return;
+        ULARGE_INTEGER due{};
+        due.QuadPart = static_cast<ULONGLONG>(-static_cast<LONGLONG>(period_ms) * 10000);
+        FILETIME start{due.LowPart, due.HighPart};
+        SetThreadpoolTimer(timer_, &start, period_ms, 10);
+    }
+    drag_loop_waker(const drag_loop_waker&) = delete;
+    drag_loop_waker& operator=(const drag_loop_waker&) = delete;
+    ~drag_loop_waker() {
+        if (!timer_) return;
+        SetThreadpoolTimer(timer_, nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(timer_, TRUE);
+        CloseThreadpoolTimer(timer_);
+    }
+private:
+    static constexpr DWORD period_ms = 50;
+    static void CALLBACK tick(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
+        const auto* self = static_cast<const drag_loop_waker*>(context);
+        GUITHREADINFO info{};
+        info.cbSize = sizeof(info);
+        wchar_t name[32]{};
+        if (!GetGUIThreadInfo(self->thread_, &info) || !info.hwndCapture || !GetClassNameW(info.hwndCapture, name, 32) || wcscmp(name, L"CLIPBRDWNDCLASS") != 0) return;
+        POINT cursor{};
+        if (!GetCursorPos(&cursor) || !ScreenToClient(info.hwndCapture, &cursor)) return;
+        WPARAM keys{};
+        const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+        if (GetAsyncKeyState(swapped ? VK_RBUTTON : VK_LBUTTON) & 0x8000) keys |= MK_LBUTTON;
+        if (GetAsyncKeyState(swapped ? VK_LBUTTON : VK_RBUTTON) & 0x8000) keys |= MK_RBUTTON;
+        if (GetAsyncKeyState(VK_SHIFT) & 0x8000) keys |= MK_SHIFT;
+        if (GetAsyncKeyState(VK_CONTROL) & 0x8000) keys |= MK_CONTROL;
+        (void)PostMessageW(info.hwndCapture, WM_MOUSEMOVE, keys, MAKELPARAM(static_cast<short>(cursor.x), static_cast<short>(cursor.y)));
+    }
+    DWORD thread_{};
+    PTP_TIMER timer_{};
+};
+
 // Runs the drag the page started, outside of the DevTools event that reported it: an OLE drag loop of this process,
 // so that the drag can leave the window and NeoAstra's own target can give the page its drop before the drag ends.
 void run_page_drag(neoastra_view_t* view) noexcept {
@@ -2917,7 +2963,11 @@ void run_page_drag(neoastra_view_t* view) noexcept {
             state->page_drag_active = true;
             state->page_drag_dropped = false;
             DWORD effect{};
-            const auto result = DoDragDrop(object.Get(), source.Get(), allowed, &effect);
+            HRESULT result{};
+            {
+                drag_loop_waker waker(GetCurrentThreadId());
+                result = DoDragDrop(object.Get(), source.Get(), allowed, &effect);
+            }
             const neoastra_view_t* target{};
             if (marked) { std::lock_guard guard(running.lock); target = running.target; running.nonce.clear(); running.data.clear(); running.target = nullptr; }
             state = static_cast<windows_view*>(view->platform); // The view may have been closed during the loop.

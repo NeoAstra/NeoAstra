@@ -58,6 +58,12 @@ Add `--stress` for the bounded high-volume scenarios or `--timeout-seconds N` to
 
 The `automation:` scenarios call the [browser automation](browser-automation.md) tools by name against a fixture whose content security policy allows no inline script. Unlike the other scenarios, each of them reports its own `FAIL` line and the following ones still run, so that one run shows everything that differs on a platform; the run fails at the end when any of them did. They keep their windows hidden, except for the last one, which shows its window to capture it, to click at coordinates, and to resize it.
 
+Two tests of `WindowsDropTargetTests` drag a page element with the real mouse of a Windows desktop, within a window and to another one, and are skipped unless `NEOASTRA_TEST_REAL_INPUT` is `1`. They take the pointer for about two seconds each, drive it from a thread of their own, release the button in every case, and let go when someone else moves the mouse. Keep their windows uncovered while they run:
+
+```sh
+NEOASTRA_TEST_REAL_INPUT=1 dotnet test src/NeoAstra.Tests -c Release --filter "FullyQualifiedName~RealMouseDrag"
+```
+
 Run the dependency-free benchmark harness with:
 
 ```sh
