@@ -4,12 +4,14 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 
 namespace NeoAstra.Tests;
 
 [TestClass]
+[SupportedOSPlatform("windows")]
 public sealed class WindowsDropTargetTests
 {
     private const int DropEffectCopy = 1;
@@ -62,7 +64,7 @@ public sealed class WindowsDropTargetTests
                         // What OLE calls for a drag over the view: NeoAstra's target, which replaced WebView2's.
                         var dropTarget = (IOleDropTarget)Marshal.GetObjectForIUnknown(targetPointer);
                         var center = JsonDocument.Parse(await view.EvaluateScriptAsync(
-                            "(() => { const r = document.getElementById('target').getBoundingClientRect(); return [(r.left + r.width / 2) * devicePixelRatio, (r.top + r.height / 2) * devicePixelRatio]; })()", timeout.Token)).RootElement;
+                            "(() => { const r = document.getElementById('target').getBoundingClientRect(); return [(r.left + r.width / 2) * devicePixelRatio, (r.top + r.height / 2) * devicePixelRatio]; })()", timeout.Token) ?? throw new AssertFailedException("The page gave no position.")).RootElement;
                         var point = new Point { X = (int)Math.Round(center[0].GetDouble()), Y = (int)Math.Round(center[1].GetDouble()) };
                         Assert.IsTrue(ClientToScreen(parent, ref point));
                         // OLE hands the point of its drag loop in physical pixels, whatever the DPI awareness of the target.
@@ -381,7 +383,7 @@ public sealed class WindowsDropTargetTests
     private static async Task<Point> ScreenCenterAsync(global::NeoAstra.NeoAstra view, nint parent, string id, CancellationToken cancellationToken)
     {
         var center = JsonDocument.Parse(await view.EvaluateScriptAsync(
-            $"(() => {{ const r = document.getElementById('{id}').getBoundingClientRect(); return [(r.left + r.width / 2) * devicePixelRatio, (r.top + r.height / 2) * devicePixelRatio]; }})()", cancellationToken)).RootElement;
+            $"(() => {{ const r = document.getElementById('{id}').getBoundingClientRect(); return [(r.left + r.width / 2) * devicePixelRatio, (r.top + r.height / 2) * devicePixelRatio]; }})()", cancellationToken) ?? throw new AssertFailedException("The page gave no position.")).RootElement;
         var point = new Point { X = (int)Math.Round(center[0].GetDouble()), Y = (int)Math.Round(center[1].GetDouble()) };
         Assert.IsTrue(ClientToScreen(parent, ref point));
         return point;
