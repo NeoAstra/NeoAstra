@@ -12,6 +12,10 @@ public sealed class AppDelegate : UIApplicationDelegate
 
     public override void FailedToRegisterForRemoteNotifications(UIApplication application, NSError error) => NeoApplePush.DidFailToRegister(error.LocalizedDescription);
 
+    // A silent message (content-available) comes here, not to the notification center.
+    public override void DidReceiveRemoteNotification(UIApplication application, NSDictionary userInfo, Action<UIBackgroundFetchResult> completionHandler) =>
+        NeoApplePush.DidReceiveRemoteNotification(userInfo.Handle.Handle, () => completionHandler(UIBackgroundFetchResult.NewData));
+
     public override UISceneConfiguration GetConfiguration(UIApplication application, UISceneSession connectingSceneSession, UISceneConnectionOptions options) =>
         new("Default Configuration", connectingSceneSession.Role);
 }

@@ -160,6 +160,16 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public void ApplePush_CompletesARemoteNotificationItDoesNotReport()
+    {
+        // No message (or no push service yet): iOS gets its completion handler back at once, not after the grace of a silent push.
+        var completed = 0;
+        NeoApplePush.DidReceiveRemoteNotification(0, () => completed++);
+        Assert.AreEqual(1, completed);
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoApplePush.DidReceiveRemoteNotification(0, null!));
+    }
+
+    [TestMethod]
     public void Push_LetsTheApplicationDecideTheForegroundPresentation()
     {
         // iOS keeps the completion handler of willPresent until the decision; Java waits a few seconds for it in the foreground.

@@ -14,7 +14,8 @@ namespace NeoAstra.Push;
 /// <remarks>
 /// Forward <c>RegisteredForRemoteNotifications</c> to <see cref="DidRegister"/>, <c>FailedToRegisterForRemoteNotifications</c>
 /// to <see cref="DidFailToRegister"/>, and the <c>NotificationResponse</c> of the connection options of a scene that the user
-/// opened with a notification to <see cref="DidLaunch"/>. Call them on the main thread, as iOS does.
+/// opened with a notification to <see cref="DidLaunch"/>, and <c>DidReceiveRemoteNotification</c> with its completion handler to
+/// <see cref="DidReceiveRemoteNotification"/>. Call them on the main thread, as iOS does.
 /// </remarks>
 public static class NeoApplePush
 {
@@ -49,6 +50,24 @@ public static class NeoApplePush
         IosPush? current;
         lock (Sync) { current = s_current; if (current is null) s_launch = message; }
         current?.Opened(message, launch: true);
+    }
+
+    /// <summary>
+    /// Takes a message that iOS gives <c>application:didReceiveRemoteNotification:fetchCompletionHandler:</c>: a silent one
+    /// (<c>content-available</c> without an alert), which can wake the application in the background, is reported by
+    /// <see cref="INeoPush.MessageReceived"/>; one with an alert is reported as before, when it is shown.
+    /// </summary>
+    /// <param name="userInfo">The handle of the <c>userInfo</c> dictionary of the message.</param>
+    /// <param name="completion">
+    /// Calls the completion handler of iOS: at once for a message that is not reported, otherwise a few seconds later, so that
+    /// the application can fetch what changed.
+    /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="completion"/> is <see langword="null"/>.</exception>
+    public static void DidReceiveRemoteNotification(nint userInfo, Action completion)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        if (userInfo == 0 || Current() is not { } current || !current.Silent(userInfo)) { completion(); return; }
+        _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(_ => { try { completion(); } catch { } }, TaskScheduler.Default);
     }
 
     internal static void Attach(IosPush push)
@@ -172,6 +191,19 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         if (Volatile.Read(ref _disposed) != 0) return;
         if (launch) LaunchMessage = message;
         Raise(() => MessageOpened?.Invoke(this, message));
+    }
+
+    // A message of APNs without an alert: the notification center never sees it, so it is reported here.
+    internal bool Silent(nint userInfo)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return false;
+        var payload = Json(userInfo);
+        if (!NeoPush.IsPayload(payload)) return false;
+        using (var document = JsonDocument.Parse(payload))
+            if (!document.RootElement.TryGetProperty("aps", out var aps) || aps.ValueKind != JsonValueKind.Object || aps.TryGetProperty("alert", out _)) return false;
+        var message = new NeoPushMessage(null, null, payload);
+        Raise(() => MessageReceived?.Invoke(this, message));
+        return true;
     }
 
     private void OnReceived(object? sender, NeoExternalNotification notification) { if (Message(notification) is { } message) Raise(() => MessageReceived?.Invoke(this, message)); }
