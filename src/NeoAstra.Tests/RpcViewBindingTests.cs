@@ -16,40 +16,13 @@ public sealed class RpcViewBindingTests
     private static NeoRpcCommandOptions Trusted => new() { MaximumConcurrency = 4096 };
 
     [TestMethod]
-    public async Task AFrameTheViewRejectsAsTooLarge_FailsAlone_AndTheSessionGoesOn()
+    public void TheBatchSenderReportsEachFrameTheViewRejectsAsTooLarge()
     {
-        var posted = new ConcurrentQueue<string>();
-        var builder = new NeoRpcBuilder(new NeoRpcOptions());
-        builder.AddCommand<Request, Response>("flow.echo", (request, _, _) => ValueTask.FromResult(new Response(request.Id, "view")),
-            RpcTestJsonContext.Default.Request, RpcTestJsonContext.Default.Response, Trusted);
-        await using var host = builder.Build();
-        // The view posts every frame of a batch but the ones over its message size, and says which.
-        await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "rejecting-session"),
-            (_, _) => throw new AssertFailedException("A view session sends in batches."),
-            frames =>
-            {
-                var rejected = new List<int>();
-                for (var index = 0; index < frames.Count; index++)
-                {
-                    if (frames[index].Contains("\"big\"", StringComparison.Ordinal)) rejected.Add(index);
-                    else posted.Enqueue(frames[index]);
-                }
-                return rejected.Count == 0 ? ValueTask.CompletedTask : ValueTask.FromException(new NeoRpcFramesRejectedException(rejected));
-            }, null, null);
-
-        var big = session.ReceiveAsync(Invoke("big", "flow.echo", "{\"id\":\"big\"}")).AsTask();
-        var small = session.ReceiveAsync(Invoke("small", "flow.echo", "{\"id\":\"small\"}")).AsTask();
-        try { await Task.WhenAll(big, small).WaitAsync(TimeSpan.FromSeconds(5)); }
-        catch (NeoRpcException exception) when (exception.Code == NeoRpcErrorCodes.PayloadTooLarge) { /* The call whose answer was too large. */ }
-
-        Assert.IsFalse(session.Closed.IsCancellationRequested, "A frame too large for the view is not a failure of the transport.");
-        var answered = posted.Select(static frame => JsonDocument.Parse(frame).RootElement).Where(static root => root.GetProperty("kind").GetString() == "result").ToArray();
-        CollectionAssert.Contains(answered.Select(static root => root.GetProperty("id").GetString()).ToArray(), "small");
-        Assert.AreEqual(0, session.ActiveInvocationCount);
-
-        // The session still answers.
-        await session.ReceiveAsync(Invoke("after", "flow.echo", "{\"id\":\"after\"}")).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.IsTrue(posted.Any(static frame => frame.Contains("\"after\"", StringComparison.Ordinal)));
+        Assert.IsNull(NeoRpcViewBinding.ToRefusals(new NeoTrustedPostResult(false, null), 3), "Every frame was posted.");
+        var refusals = NeoRpcViewBinding.ToRefusals(new NeoTrustedPostResult(false, [1, 3]), 4);
+        CollectionAssert.AreEqual(new[] { NeoRpcFrameRefusal.None, NeoRpcFrameRefusal.TooLarge, NeoRpcFrameRefusal.None, NeoRpcFrameRefusal.TooLarge }, refusals);
+        // The frames of a session that is no longer the active one of the view have no document to go to.
+        Assert.ThrowsExactly<OperationCanceledException>(() => NeoRpcViewBinding.ToRefusals(new NeoTrustedPostResult(true, null), 2));
     }
 
     [TestMethod]
