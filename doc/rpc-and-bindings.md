@@ -152,7 +152,10 @@ const unsubscribe = await documents.onChanged(value => render(value));
 
 For `invokeChannel`, the signal remains effective after opening: aborting discards buffered items,
 rejects pending/future reads with `operation_canceled`, and sends one `channel_close`. The timeout
-bounds only the opening invocation, not the channel's duration. Lower-level callers can pass the
+bounds only the opening invocation, not the channel's duration. When the opening invocation is
+aborted or times out after the host already committed the channel, the late channel result is
+answered with one `channel_close`, so the host channel does not keep its slot until navigation; the
+client remembers the last 256 abandoned invocations for this. Lower-level callers can pass the
 same signal to `client.channel(id, signal)`. Iterator `return()` (including a `for await` break)
 discards unread items and closes observation; terminal frames, overflow, return, and connection loss
 remove abort listeners. A completed channel wins a later abort. Canceling observation does not

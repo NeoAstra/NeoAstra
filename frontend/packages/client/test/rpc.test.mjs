@@ -318,6 +318,28 @@ test("the mock transport fails a call whose result is deeper than its negotiated
   client.close();
 });
 
+test("a channel result that arrives after its invocation was aborted or timed out closes the host channel", async () => {
+  const transport = createMockClient();
+  let next = 0;
+  const client = new NeoRpcClient(await transport.connect(), { idFactory: () => `late-${++next}` });
+  const controller = new AbortController();
+  const opening = client.invokeChannel("documents.stream", {}, { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(opening, error => error.code === "operation_canceled");
+  // The host committed the channel before it read the cancel: nothing observes it, so it is closed at once.
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-1", ok: true, value: { channel: "ch-1" } });
+  transport.injectInbound({ neoastra: 1, kind: "channel_item", channel: "ch-1", sequence: 1, value: "unread" });
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1"]);
+  assert.equal(transport.outboundFrames.some(frame => frame.kind === "channel_ack"), false);
+
+  await assert.rejects(client.invokeChannel("documents.stream", {}, { timeoutMilliseconds: 5 }), error => error.code === "timeout");
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-2", ok: true, value: { channel: "ch-2" } });
+  transport.injectInbound({ neoastra: 1, kind: "result", id: "late-2", ok: true, value: { channel: "ch-2" } });
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1", "ch-2"]);
+  client.close();
+  assert.deepEqual(transport.outboundFrames.filter(frame => frame.kind === "channel_close").map(frame => frame.channel), ["ch-1", "ch-2"]);
+});
+
 test("an invocation timeout sends cancel and rejects with the retryable timeout code", async () => {
   const transport = createMockClient();
   let next = 0;

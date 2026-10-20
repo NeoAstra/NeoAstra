@@ -71,6 +71,9 @@ export class NeoRpcClient {
   private readonly pendingSubscriptions = new Map<string, PendingSubscription>();
   private readonly subscriptions = new Map<string, ActiveSubscription>();
   private readonly channels = new Map<string, ChannelState<unknown>>();
+  // Invocations that stopped waiting (abort or timeout) before their result. The host may have committed a
+  // channel first: its late result is then closed at once, since nothing will observe it. Oldest first out.
+  private readonly abandoned = new Set<string>();
   private readonly removeReceive: () => void;
   private readonly connectionClosed: () => void;
   private detached = false;
@@ -103,6 +106,7 @@ export class NeoRpcClient {
       const stop = (error: NeoRpcError): void => {
         if (!this.pending.delete(id)) return;
         try { this.connection.send(Object.freeze({ neoastra: 1, kind: "cancel", id })); } catch { }
+        this.abandon(id);
         cleanup();
         reject(error);
       };
@@ -244,7 +248,12 @@ export class NeoRpcClient {
   private receiveResult(frame: Readonly<Record<string, unknown>>): void {
     if (typeof frame.id !== "string") return;
     const pending = this.pending.get(frame.id);
-    if (pending === undefined) return;
+    if (pending === undefined) {
+      if (this.abandoned.delete(frame.id) && frame.ok === true && isChannelResult(frame.value)) {
+        try { this.connection.send(Object.freeze({ neoastra: 1, kind: "channel_close", channel: frame.value.channel })); } catch { }
+      }
+      return;
+    }
     this.pending.delete(frame.id); pending.cleanup();
     if (frame.ok === true) {
       if (isRecord(frame.value) && typeof frame.value.channel === "string" && Object.keys(frame.value).length === 1) {
@@ -359,7 +368,7 @@ export class NeoRpcClient {
     for (const pending of this.pending.values()) { pending.cleanup(); pending.reject(error); }
     for (const pending of this.pendingSubscriptions.values()) pending.reject(error);
     for (const state of this.channels.values()) { state.error = error; state.closed = true; state.values.length = 0; this.cleanupChannel(state); for (const waiter of state.waiters.splice(0)) waiter.reject(error); }
-    this.pending.clear(); this.pendingSubscriptions.clear(); this.subscriptions.clear(); this.channels.clear();
+    this.pending.clear(); this.pendingSubscriptions.clear(); this.subscriptions.clear(); this.channels.clear(); this.abandoned.clear();
   }
 
   private detach(): void {
@@ -367,6 +376,11 @@ export class NeoRpcClient {
     this.detached = true;
     this.connection.closed.removeEventListener("abort", this.connectionClosed);
     this.removeReceive();
+  }
+
+  private abandon(id: string): void {
+    if (this.abandoned.size === maximumAbandonedInvocations) this.abandoned.delete(this.abandoned.values().next().value!);
+    this.abandoned.add(id);
   }
 
   private cleanupChannel<T>(state: ChannelState<T>): void {
@@ -390,6 +404,8 @@ export class NeoRpcClient {
     return state;
   }
 }
+
+const maximumAbandonedInvocations = 256;
 
 let defaultClient: Promise<NeoRpcClient> | undefined;
 
@@ -423,6 +439,10 @@ function parseError(value: unknown): NeoRpcError {
   });
 }
 
+function isChannelResult(value: unknown): value is { readonly channel: string } {
+  return isRecord(value) && Object.keys(value).length === 1 && isOpaqueId(value.channel);
+}
+
 function abortError(): NeoRpcError {
   return new NeoRpcError({ code: "operation_canceled", message: "The RPC operation was canceled.", retryable: false });
 }
@@ -442,6 +462,9 @@ function assertContractHash(value: string | undefined): void {
 }
 
 function assertOpaqueId(value: string, name: string): void {
-  if (typeof value !== "string" || value.length === 0 || value.length > 128 || !/^[\x21-\x7e]+$/.test(value))
-    throw new TypeError(`The ${name} is invalid.`);
+  if (!isOpaqueId(value)) throw new TypeError(`The ${name} is invalid.`);
+}
+
+function isOpaqueId(value: unknown): value is string {
+  return typeof value === "string" && value.length !== 0 && value.length <= 128 && /^[\x21-\x7e]+$/.test(value);
 }
