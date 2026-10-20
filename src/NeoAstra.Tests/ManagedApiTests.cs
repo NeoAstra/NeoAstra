@@ -1038,7 +1038,9 @@ public sealed class ManagedApiTests
                     application.Shutdown(17);
                 }));
 
-            Assert.AreEqual(17, await run.WaitAsync(TimeSpan.FromSeconds(10)));
+            // The whole run starts a browser cold, which a busy CI runner can take most of ten seconds for; each step above
+            // keeps its own ten seconds, so that a step that hangs still fails.
+            Assert.AreEqual(17, await run.WaitAsync(TimeSpan.FromSeconds(60)));
         }
         catch (NeoAstraNativeLibraryException)
         {
