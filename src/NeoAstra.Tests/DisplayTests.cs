@@ -2,6 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Runtime.InteropServices;
+using NeoAstra.Desktop.WindowState;
 
 namespace NeoAstra.Tests;
 
@@ -274,6 +275,99 @@ public sealed class DisplayTests
                 Assert.AreSame(window, session.Application.GetWindowAt(center), message);
                 Assert.AreEqual(window.Display, session.Application.GetDisplayAt(center), message);
             }, perMonitorDpiAware: aware);
+        }
+    }
+
+    [TestMethod]
+    public async Task Placement_ComesBackOnTheDisplayItNames()
+    {
+        var left = new NeoDisplay("left", "Left", new NeoRect(0, 0, 1920, 1080), new NeoRect(0, 0, 1920, 1040), 1, true);
+        var right = new NeoDisplay("right", "Right", new NeoRect(1920, 0, 2560, 1440), new NeoRect(1920, 0, 2560, 1400), 1, false);
+        var saved = new NeoWindowPlacement(new NeoRect(2100, 200, 800, 600), NeoWindowState.Normal, "right", 1, true) { DisplayWorkArea = right.WorkArea };
+
+        // The displays are as they were: the window is where it was.
+        var same = NeoWindowStateRestore.Clamp(saved, [left, right], restoreMinimized: false, countsInDisplayPixels: false);
+        Assert.AreEqual(saved.NormalBounds, same.NormalBounds);
+        Assert.AreEqual("right", same.DisplayId);
+        Assert.AreEqual(right.WorkArea, same.DisplayWorkArea);
+
+        // The right display is now on the left of the other one: the window keeps its place on it.
+        var rearranged = new NeoDisplay("right", "Right", new NeoRect(-2560, 0, 2560, 1440), new NeoRect(-2560, 0, 2560, 1400), 1, false);
+        var followed = NeoWindowStateRestore.Clamp(saved, [left, rearranged], restoreMinimized: false, countsInDisplayPixels: false);
+        Assert.AreEqual(new NeoRect(-2560 + 180, 200, 800, 600), followed.NormalBounds);
+        Assert.AreEqual("right", followed.DisplayId);
+        Assert.AreEqual(rearranged.WorkArea, followed.DisplayWorkArea);
+
+        // Its scale doubled, in a window counted in pixels: the place and the size follow the scale.
+        var scaled = new NeoDisplay("right", "Right", new NeoRect(1920, 0, 5120, 2880), new NeoRect(1920, 0, 5120, 2800), 2, false);
+        var doubled = NeoWindowStateRestore.Clamp(saved, [left, scaled], restoreMinimized: false, countsInDisplayPixels: true);
+        Assert.AreEqual(new NeoRect(1920 + 360, 400, 1600, 1200), doubled.NormalBounds);
+        Assert.AreEqual(2d, doubled.DisplayScaleFactor);
+
+        // The display is gone: the window comes back whole on the one it covers most, else the primary one.
+        var gone = NeoWindowStateRestore.Clamp(saved, [left], restoreMinimized: false, countsInDisplayPixels: false);
+        Assert.AreEqual("left", gone.DisplayId);
+        Assert.AreEqual(new NeoRect(1920 - 800, 200, 800, 600), gone.NormalBounds);
+        Assert.AreEqual(left.WorkArea, gone.DisplayWorkArea);
+
+        // A placement saved before work areas were saved keeps its place on the desktop.
+        var older = NeoWindowStateRestore.Clamp(saved with { DisplayWorkArea = null }, [left, rearranged], restoreMinimized: false, countsInDisplayPixels: false);
+        Assert.AreEqual("right", older.DisplayId);
+        Assert.AreEqual(rearranged.WorkArea.X + rearranged.WorkArea.Width - 800, older.NormalBounds.X);
+        Assert.ThrowsExactly<ArgumentException>(() => NeoWindowStateRestore.Clamp(saved, [left, null!]));
+
+        // A store keeps the work area, and refuses one without area.
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-tests", "placement-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new NeoJsonWindowStateStore(root);
+            await store.SaveAsync("main", saved);
+            Assert.AreEqual(saved, await store.LoadAsync("main"));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(async () => await store.SaveAsync("main", saved with { DisplayWorkArea = new NeoRect(0, 0, 0, 10) }));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowState_SavesTheDisplayOfTheWindowAndComesBackOnIt()
+    {
+        foreach (var aware in new[] { true, false })
+        {
+            var root = Path.Combine(Path.GetTempPath(), "neoastra-tests", "placement-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                await RunAsync(aware, async application =>
+                {
+                    var message = aware ? "aware" : "unaware";
+                    var store = new NeoJsonWindowStateStore(root);
+                    var display = application.GetDisplays()[^1];
+                    var area = display.WorkArea;
+                    var bounds = new NeoRect(area.X + 60, area.Y + 50, Math.Min(700, area.Width - 200), Math.Min(450, area.Height - 200));
+                    await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, StartupLocation = NeoWindowStartupLocation.Manual, X = bounds.X, Y = bounds.Y, Width = bounds.Width, Height = bounds.Height }))
+                    {
+                        await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                    }
+
+                    var saved = await store.LoadAsync("main");
+                    Assert.IsNotNull(saved, message);
+                    Assert.AreEqual(display.Id, saved.DisplayId, message);
+                    Assert.AreEqual(display.WorkArea, saved.DisplayWorkArea, message);
+                    Assert.AreEqual(bounds, saved.NormalBounds, message);
+
+                    // What the next launch does: the window comes back on that display, where it was.
+                    await using (var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 }))
+                    {
+                        await using var controller = new NeoWindowStateController(window, store, "main", TimeSpan.FromMilliseconds(50));
+                        var restored = await controller.RestoreAsync();
+                        Assert.IsNotNull(restored, message);
+                        Assert.AreEqual(bounds, window.Bounds, message);
+                        Assert.AreEqual(display.Id, window.Display?.Id, message);
+                        Assert.AreEqual(display.Id, restored.DisplayId, message);
+                    }
+                });
+            }
+            finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
         }
     }
 

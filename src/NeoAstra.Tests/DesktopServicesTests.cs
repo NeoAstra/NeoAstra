@@ -1308,8 +1308,10 @@ public sealed class DesktopServicesTests
                 var normal = new NeoRect(120, 90, 640, 420);
                 // What the window shows at its normal bounds, which a placement keeps with them and around them.
                 var shown = normal;
+                NeoDisplay? on = null;
+                // A placement names the display the window is on, and its work area.
                 NeoWindowPlacement Placement(NeoRect bounds, NeoWindowState state, double scale)
-                    => new(bounds, state, null, scale, true) { NormalFrame = new NeoRect(bounds.X + shown.X - normal.X, bounds.Y + shown.Y - normal.Y, bounds.Width + shown.Width - normal.Width, bounds.Height + shown.Height - normal.Height) };
+                    => new(bounds, state, on?.Id, scale, true) { NormalFrame = new NeoRect(bounds.X + shown.X - normal.X, bounds.Y + shown.Y - normal.Y, bounds.Width + shown.Width - normal.Width, bounds.Height + shown.Height - normal.Height), DisplayWorkArea = on?.WorkArea };
 
                 // What the store holds once a change had the time to be written.
                 async Task<NeoWindowPlacement> SavedAsync()
@@ -1330,6 +1332,8 @@ public sealed class DesktopServicesTests
                 {
                     window.Show();
                     shown = window.FrameBounds;
+                    on = window.Display;
+                    Assert.IsNotNull(on);
                     await using var controller = new NeoWindowStateController(window, store, "main", delay);
                     Command(window, maximize);
                     Assert.AreEqual(NeoWindowState.Maximized, window.State);

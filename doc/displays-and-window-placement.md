@@ -76,6 +76,14 @@ GTK 4 cannot place a window and does not tell where it is: a position is kept bu
 places windows. `MoveToDisplay` throws `NotSupportedException` there, and
 `NeoApplication.GetWindowCapability(NeoWindowCapability.Placement)` reports `NeoSupportLevel.None`.
 
+## Saving and restoring a layout
+
+`NeoWindowStateController` of the `NeoAstra` package saves, with the bounds of a window, the identifier and the work area of its
+display, and `controller.RestoreAsync()` brings the window back on that display while it is there, at its place in its work area,
+also when the displays were arranged another way. A window whose display is gone comes back whole on the display it covers most,
+or else the primary one. An application that saves its own layout can do the same with `NeoWindow.Display.Id`,
+`NeoApplication.GetDisplays()`, and `NeoWindowStateRestore.Clamp`; see [persistence](desktop-services.md#persistence-and-secrets).
+
 ## Tabs dragged out of a window
 
 An application that tracks a tab drag with `setPointerCapture` in its page, rather than with HTML drag and drop, can follow the

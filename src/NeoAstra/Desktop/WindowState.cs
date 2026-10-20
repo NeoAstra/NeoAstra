@@ -9,7 +9,10 @@ namespace NeoAstra.Desktop.WindowState;
 /// <summary>Contains the persisted placement of a window, in the units its window counts in.</summary>
 /// <param name="NormalBounds">Last normal bounds: the position and the client size that <see cref="NeoWindow.Position"/> and <see cref="NeoWindow.ClientSize"/> report and accept.</param>
 /// <param name="State">Last effective state.</param>
-/// <param name="DisplayId">Stable-in-session display affinity hint.</param>
+/// <param name="DisplayId">
+/// The <see cref="NeoDisplay.Id"/> of the display the window was on, or <see langword="null"/> when it is not known. It names the
+/// display after a restart where <see cref="NeoDisplay.IsIdPersistent"/>, and the window comes back on that display while it is there.
+/// </param>
 /// <param name="DisplayScaleFactor">The <see cref="NeoWindow.ScaleFactor"/> of the window when it was saved.</param>
 /// <param name="WasVisible">Optional saved visibility.</param>
 public sealed record NeoWindowPlacement(NeoRect NormalBounds, NeoWindowState State, string? DisplayId, double DisplayScaleFactor, bool? WasVisible)
@@ -25,6 +28,18 @@ public sealed record NeoWindowPlacement(NeoRect NormalBounds, NeoWindowState Sta
     /// </remarks>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public NeoRect? NormalFrame { get; init; }
+
+    /// <summary>
+    /// Gets the <see cref="NeoDisplay.WorkArea"/> of the display named by <see cref="DisplayId"/> when the placement was saved, in
+    /// the units of the window, or <see langword="null"/> when it is not known.
+    /// </summary>
+    /// <remarks>
+    /// A window that comes back on that display while its work area is elsewhere, as when the displays were arranged another
+    /// way, keeps its place in the work area rather than its place on the desktop. A placement that was saved before this member
+    /// has none.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public NeoRect? DisplayWorkArea { get; init; }
 }
 
 /// <summary>Provides application-chosen persistence without granting renderer access.</summary>
@@ -85,7 +100,7 @@ public sealed class NeoJsonWindowStateStore : INeoWindowStateStore
     internal static void ValidatePlacement(NeoWindowPlacement placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
-        if (placement.NormalBounds.Width <= 0 || placement.NormalBounds.Height <= 0 || !double.IsFinite(placement.DisplayScaleFactor) || placement.DisplayScaleFactor is < 0.25 or > 16 || !Enum.IsDefined(placement.State) || placement.DisplayId is { } id && (id.Length > 128 || id.Any(char.IsControl)) || placement.NormalFrame is { } frame && !IsFrameOf(frame, placement.NormalBounds)) throw new ArgumentException("A window placement is malformed.", nameof(placement));
+        if (placement.NormalBounds.Width <= 0 || placement.NormalBounds.Height <= 0 || !double.IsFinite(placement.DisplayScaleFactor) || placement.DisplayScaleFactor is < 0.25 or > 16 || !Enum.IsDefined(placement.State) || placement.DisplayId is { } id && (id.Length > 128 || id.Any(char.IsControl)) || placement.NormalFrame is { } frame && !IsFrameOf(frame, placement.NormalBounds) || placement.DisplayWorkArea is { } area && (area.Width <= 0 || area.Height <= 0)) throw new ArgumentException("A window placement is malformed.", nameof(placement));
     }
 
     // Whether a rectangle can be what a window with these bounds shows: a frame and a title bar are no more than this around them.
@@ -119,8 +134,10 @@ public static class NeoWindowStateRestore
     /// </para>
     /// <para>
     /// The display that the window comes back on is the one named by the saved placement, or else the one whose work
-    /// area the saved bounds cover most, the primary one if they cover none. Its identifier and its scale are those of
-    /// the returned placement. A window that is on that display alone is shrunk to its work area and moved into it.
+    /// area the saved bounds cover most, the primary one if they cover none, as when the display it was on is gone. Its
+    /// identifier, its scale, and its work area are those of the returned placement. A window that comes back on the display
+    /// it was saved on, whose work area is now elsewhere (<see cref="NeoWindowPlacement.DisplayWorkArea"/>), keeps its place
+    /// in that work area. A window that is on that display alone is shrunk to its work area and moved into it.
     /// </para>
     /// <para>
     /// A window that is over several displays stays over them: it is shrunk to the rectangle around the work areas of
@@ -144,28 +161,65 @@ public static class NeoWindowStateRestore
     public static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreMinimized = false)
         => Clamp(saved, displays, restoreMinimized, OperatingSystem.IsWindows());
 
+    /// <summary>Restores a safe placement on the displays of <see cref="NeoApplication.GetDisplays"/>. Minimized state is normalized by default.</summary>
+    /// <param name="saved">The placement that was saved.</param>
+    /// <param name="displays">The displays there are now, which are in the units of the window.</param>
+    /// <param name="restoreMinimized">Whether a window that was saved minimized comes back minimized.</param>
+    /// <returns>The placement to give the window, in the units of <paramref name="saved"/>, as <see cref="Clamp(NeoWindowPlacement, IReadOnlyList{SystemInfo.NeoDisplaySnapshot}, bool)"/> returns it.</returns>
+    /// <remarks>
+    /// This is <see cref="Clamp(NeoWindowPlacement, IReadOnlyList{SystemInfo.NeoDisplaySnapshot}, bool)"/> for displays that are
+    /// described in the units of the window already, as <see cref="NeoDisplay"/> is, whose identifiers name the displays after a
+    /// restart where the platform tells their monitors.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="saved"/> or <paramref name="displays"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="saved"/> or one of <paramref name="displays"/> is malformed.</exception>
+    public static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<NeoDisplay> displays, bool restoreMinimized = false)
+        => Clamp(saved, displays, restoreMinimized, OperatingSystem.IsWindows());
+
+    internal static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<NeoDisplay> displays, bool restoreMinimized, bool countsInDisplayPixels)
+    {
+        ArgumentNullException.ThrowIfNull(displays);
+        if (displays.Any(static value => value is null)) throw new ArgumentException("A display is null.", nameof(displays));
+        return Clamp(saved, displays.Select(static value => new Target(value.Id, value.WorkArea, value.ScaleFactor, value.IsPrimary)).ToArray(), restoreMinimized, countsInDisplayPixels, nameof(displays));
+    }
+
     internal static NeoWindowPlacement Clamp(NeoWindowPlacement saved, IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreMinimized, bool countsInDisplayPixels)
     {
-        NeoJsonWindowStateStore.ValidatePlacement(saved); ArgumentNullException.ThrowIfNull(displays);
-        if (displays.Count == 0) return saved with { State = saved.State == NeoWindowState.Minimized && !restoreMinimized ? NeoWindowState.Normal : saved.State };
+        ArgumentNullException.ThrowIfNull(displays);
+        if (displays.Any(static value => value is null)) throw new ArgumentException("A display snapshot is null.", nameof(displays));
         if (displays.Any(static value => value.WorkArea.Width <= 0 || value.WorkArea.Height <= 0 || !double.IsFinite(value.ScaleFactor) || value.ScaleFactor is < 0.25 or > 16)) throw new ArgumentException("A display snapshot is malformed.", nameof(displays));
+        return Clamp(saved, displays.Select(value => new Target(value.Id, WorkArea(value, countsInDisplayPixels), value.ScaleFactor, value.IsPrimary)).ToArray(), restoreMinimized, countsInDisplayPixels, nameof(displays));
+    }
+
+    // A display with its work area in the units of the window.
+    private sealed record Target(string Id, NeoRect WorkArea, double ScaleFactor, bool IsPrimary);
+
+    private static NeoWindowPlacement Clamp(NeoWindowPlacement saved, Target[] displays, bool restoreMinimized, bool countsInDisplayPixels, string parameter)
+    {
+        NeoJsonWindowStateStore.ValidatePlacement(saved);
+        if (displays.Length == 0) return saved with { State = saved.State == NeoWindowState.Minimized && !restoreMinimized ? NeoWindowState.Normal : saved.State };
+        if (displays.Any(static value => value.WorkArea.Width <= 0 || value.WorkArea.Height <= 0 || !double.IsFinite(value.ScaleFactor) || value.ScaleFactor is < 0.25 or > 16)) throw new ArgumentException("A display is malformed.", parameter);
         // What the window shows is what is on a display, and the saved bounds stand for it where it is not known.
         var normal = saved.NormalBounds;
         var frame = saved.NormalFrame ?? normal;
-        var display = displays.FirstOrDefault(value => value.Id == saved.DisplayId) ?? displays.OrderByDescending(value => IntersectionArea(frame, WorkArea(value, countsInDisplayPixels))).ThenByDescending(static value => value.IsPrimary).First();
-        var work = WorkArea(display, countsInDisplayPixels);
+        var named = displays.FirstOrDefault(value => value.Id == saved.DisplayId);
+        var display = named ?? displays.OrderByDescending(value => IntersectionArea(frame, value.WorkArea)).ThenByDescending(static value => value.IsPrimary).First();
+        var work = display.WorkArea;
         // A logical unit is the same on every display; a pixel is worth what the scale of its display says.
         var ratio = countsInDisplayPixels ? display.ScaleFactor / saved.DisplayScaleFactor : 1d;
         // Where the frame is around the bounds, which follows the scale as the size of the window does.
         long left = Scaled((long)frame.X - normal.X), top = Scaled((long)frame.Y - normal.Y), wider = Scaled((long)frame.Width - normal.Width), higher = Scaled((long)frame.Height - normal.Height);
-        var wanted = new Area(normal.X + left, normal.Y + top, Scaled(normal.Width) + wider, Scaled(normal.Height) + higher);
+        long frameX = normal.X + left, frameY = normal.Y + top;
+        // The display the window was on is elsewhere on the desktop: the window keeps its place on that display.
+        if (named is not null && saved.DisplayWorkArea is { } was && was != work) { frameX = work.X + Scaled((long)frame.X - was.X); frameY = work.Y + Scaled((long)frame.Y - was.Y); }
+        var wanted = new Area(frameX, frameY, Scaled(normal.Width) + wider, Scaled(normal.Height) + higher);
         var home = new Area(work.X, work.Y, work.Width, work.Height);
         var shown = Fit(wanted, home);
         // The rectangle around the displays that the window is on has parts that no display shows where they are not aligned.
         var around = home;
         foreach (var other in displays)
         {
-            var area = WorkArea(other, countsInDisplayPixels);
+            var area = other.WorkArea;
             if (IntersectionArea(wanted, area) > 0) around = around.Around(new(area.X, area.Y, area.Width, area.Height));
         }
         if (around != home && Fit(wanted, around) is var over && displays.Any(value => HasTitleBarOn(over, value, countsInDisplayPixels))) shown = over;
@@ -174,7 +228,7 @@ public static class NeoWindowStateRestore
         NeoRect? restored = saved.NormalFrame is null ? null : new(Whole(bounds.X + left), Whole(bounds.Y + top), (int)Math.Max(1, bounds.Width + wider), (int)Math.Max(1, bounds.Height + higher));
         // A frame that a change of scale took further from the bounds than a store accepts is left out.
         if (restored is { } frameOfBounds && !NeoJsonWindowStateStore.IsFrameOf(frameOfBounds, bounds)) restored = null;
-        return new(bounds, state, display.Id, display.ScaleFactor, saved.WasVisible) { NormalFrame = restored };
+        return new(bounds, state, display.Id, display.ScaleFactor, saved.WasVisible) { NormalFrame = restored, DisplayWorkArea = work };
 
         long Scaled(long value) => (long)Math.Round(value * ratio);
         static int Whole(long value) => (int)Math.Clamp(value, int.MinValue, int.MaxValue);
@@ -203,9 +257,9 @@ public static class NeoWindowStateRestore
     }
 
     // Whether enough of the top of a window is on the work area of a display for a user to take the window by it.
-    private static bool HasTitleBarOn(Area window, SystemInfo.NeoDisplaySnapshot display, bool countsInDisplayPixels)
+    private static bool HasTitleBarOn(Area window, Target display, bool countsInDisplayPixels)
     {
-        var work = WorkArea(display, countsInDisplayPixels);
+        var work = display.WorkArea;
         var unit = countsInDisplayPixels ? display.ScaleFactor : 1d;
         if (window.Y < work.Y || window.Y + (long)Math.Ceiling(TitleBarHeight * unit) > (long)work.Y + work.Height) return false;
         var stretch = Math.Min(window.X + window.Width, (long)work.X + work.Width) - Math.Max(window.X, work.X);
@@ -259,6 +313,7 @@ public sealed class NeoWindowStateController : IAsyncDisposable
     private readonly Timer _timer;
     private NeoRect? _normalBounds;
     private NeoRect? _normalFrame;
+    private NeoDisplay? _display;
     private NeoWindowState _state;
     private bool _disposed;
     private Task _lastWrite = Task.CompletedTask;
@@ -279,19 +334,57 @@ public sealed class NeoWindowStateController : IAsyncDisposable
         window.StateChanged += OnChanged;
     }
 
-    /// <summary>Loads and clamps state before a window is shown.</summary>
-    public async ValueTask<NeoWindowPlacement?> RestoreAsync(IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreVisibility = false, CancellationToken cancellationToken = default)
+    /// <summary>Loads and clamps state before a window is shown, on the displays of <see cref="NeoApplication.GetDisplays"/>.</summary>
+    /// <param name="restoreVisibility">Whether a window that was saved visible is shown.</param>
+    /// <param name="cancellationToken">Cancels the load and the wait for the UI thread.</param>
+    /// <returns>The placement that the window was given, or <see langword="null"/> when none was saved.</returns>
+    /// <remarks>
+    /// The window comes back on the display that it was saved on, which <see cref="NeoWindowPlacement.DisplayId"/> names, while
+    /// that display is there, and at its place in the work area of that display; on another display otherwise, as
+    /// <see cref="NeoWindowStateRestore.Clamp(NeoWindowPlacement, IReadOnlyList{NeoDisplay}, bool)"/> tells. The displays are
+    /// read on the UI thread, in the units of the window. With a native library that tells no displays, the saved bounds are
+    /// given back as they are.
+    /// </remarks>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
+    /// <exception cref="ObjectDisposedException">The window or its application is disposed.</exception>
+    public async ValueTask<NeoWindowPlacement?> RestoreAsync(bool restoreVisibility = false, CancellationToken cancellationToken = default)
     {
         var saved = await _store.LoadAsync(_key, cancellationToken).ConfigureAwait(false); if (saved is null) return null;
-        var restored = NeoWindowStateRestore.Clamp(saved, displays);
+        NeoWindowPlacement? restored = null;
         await _window.Application.Dispatcher.InvokeAsync(() =>
         {
-            _window.Position = restored.NormalBounds.Position; _window.ClientSize = restored.NormalBounds.Size; _window.State = restored.State;
-            // A window that comes back in another state than the normal one never shows these bounds, and still goes back to them.
-            lock (_sync) { _normalBounds = restored.NormalBounds; _normalFrame = restored.NormalFrame; _state = restored.State == NeoWindowState.Minimized ? NeoWindowState.Normal : restored.State; }
-            if (restoreVisibility && restored.WasVisible == true) _window.Show();
+            restored = NeoWindowStateRestore.Clamp(saved, _window.Application.GetDisplays());
+            Apply(restored, restoreVisibility);
         }, cancellationToken).ConfigureAwait(false);
         return restored;
+    }
+
+    /// <summary>Loads and clamps state before a window is shown.</summary>
+    /// <param name="displays">The display snapshots there are now, in logical units, as <see cref="SystemInfo.NeoSystemInfoService.Displays"/> has them.</param>
+    /// <param name="restoreVisibility">Whether a window that was saved visible is shown.</param>
+    /// <param name="cancellationToken">Cancels the load and the wait for the UI thread.</param>
+    /// <returns>The placement that the window was given, or <see langword="null"/> when none was saved.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="displays"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">One of <paramref name="displays"/> is malformed.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
+    /// <exception cref="ObjectDisposedException">The window or its application is disposed.</exception>
+    public async ValueTask<NeoWindowPlacement?> RestoreAsync(IReadOnlyList<SystemInfo.NeoDisplaySnapshot> displays, bool restoreVisibility = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(displays);
+        var saved = await _store.LoadAsync(_key, cancellationToken).ConfigureAwait(false); if (saved is null) return null;
+        var restored = NeoWindowStateRestore.Clamp(saved, displays);
+        await _window.Application.Dispatcher.InvokeAsync(() => Apply(restored, restoreVisibility), cancellationToken).ConfigureAwait(false);
+        return restored;
+    }
+
+    // Runs on the UI thread.
+    private void Apply(NeoWindowPlacement restored, bool restoreVisibility)
+    {
+        // The position and the size in one request: a window that this takes to a display of another scale keeps them.
+        _window.Bounds = restored.NormalBounds; _window.State = restored.State;
+        // A window that comes back in another state than the normal one never shows these bounds, and still goes back to them.
+        lock (_sync) { _normalBounds = restored.NormalBounds; _normalFrame = restored.NormalFrame; _state = restored.State == NeoWindowState.Minimized ? NeoWindowState.Normal : restored.State; }
+        if (restoreVisibility && restored.WasVisible == true) _window.Show();
     }
 
     /// <inheritdoc />
@@ -335,11 +428,14 @@ public sealed class NeoWindowStateController : IAsyncDisposable
         var state = _window.State;
         var bounds = Usable(new(_window.Position.X, _window.Position.Y, _window.ClientSize.Width, _window.ClientSize.Height));
         var frame = state == NeoWindowState.Normal && bounds is { } shown ? Frame(shown) : null;
+        var display = Display();
         lock (_sync)
         {
             if (state == NeoWindowState.Normal && bounds is { } read) { _normalFrame = frame ?? Moved(_normalFrame, _normalBounds, read); _normalBounds = read; }
             if (state != NeoWindowState.Minimized) _state = state;
-            return _normalBounds is { } normal ? new(normal, _state, null, _window.ScaleFactor, _window.IsVisible) { NormalFrame = _normalFrame } : null;
+            // A window that was closed tells no display: the one it was last on stays.
+            if (display is not null) _display = display;
+            return _normalBounds is { } normal ? new(normal, _state, StoredId(_display), _window.ScaleFactor, _window.IsVisible) { NormalFrame = _normalFrame, DisplayWorkArea = StoredId(_display) is null ? null : _display!.WorkArea } : null;
         }
     }
 
@@ -350,6 +446,16 @@ public sealed class NeoWindowStateController : IAsyncDisposable
         try { return _window.FrameBounds is var frame && NeoJsonWindowStateStore.IsFrameOf(frame, bounds) ? frame : null; }
         catch (Exception exception) when (exception is InvalidOperationException or NeoAstraException) { return null; }
     }
+
+    // The display of the window, which a window tells on its own thread and until it is closed.
+    private NeoDisplay? Display()
+    {
+        try { return _window.Display; }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException or NeoAstraException) { return null; }
+    }
+
+    // An identifier that a store keeps: one that is too long or has control characters is not saved.
+    private static string? StoredId(NeoDisplay? display) => display?.Id is { Length: > 0 and <= 128 } id && !id.Any(char.IsControl) ? id : null;
 
     // The last write can come after the window was closed: the frame that was known keeps its place around the bounds.
     private static NeoRect? Moved(NeoRect? frame, NeoRect? from, NeoRect to)
