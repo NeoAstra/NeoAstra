@@ -1553,17 +1553,27 @@ public sealed class DesktopServicesTests
     private static async Task<string> NavigateAndGetSessionAsync(global::NeoAstra.NeoAstra view, Uri target, string? previousSessionId = null)
     {
         var connected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // The session can open as the document commits, before its load completes; the test goes on once both happened.
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void SessionChanged(NeoTransportSessionSnapshot? snapshot)
         {
             if (snapshot is { } value && !string.Equals(value.DocumentSessionId, previousSessionId, StringComparison.Ordinal)) connected.TrySetResult(value.DocumentSessionId);
         }
+        void NavigationCompleted(object? sender, NeoNavigationCompletedEventArgs args) => completed.TrySetResult();
         view.TransportSessionChanged += SessionChanged;
+        view.NavigationCompleted += NavigationCompleted;
         try
         {
             await view.NavigateAsync(target);
-            return await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var session = await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            return session;
         }
-        finally { view.TransportSessionChanged -= SessionChanged; }
+        finally
+        {
+            view.TransportSessionChanged -= SessionChanged;
+            view.NavigationCompleted -= NavigationCompleted;
+        }
     }
 
     private static IReadOnlyList<nint> GetDescendantWindows(nint parent)

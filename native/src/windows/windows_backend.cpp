@@ -950,6 +950,10 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
         Callback<ICoreWebView2ContentLoadingEventHandler>([view](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs*) -> HRESULT {
             neo_retain_guard owner(view);
             if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            // The new document can take input before its load completes: the renderer windows it brought get NeoAstra's
+            // drop targets now, and again when the navigation completes.
+            register_view_drop_targets(view, static_cast<windows_view*>(view->platform));
+            if (view->platform == nullptr || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
             neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &view->source);
             return S_OK;
         }).Get(), &state->content_loading);
