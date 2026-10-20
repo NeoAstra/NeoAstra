@@ -360,25 +360,45 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     /// <summary>
-    /// Posts frames that NeoAstra wrote itself to web content, in order, in one turn of the UI thread: an RPC session
-    /// sends what it has queued this way instead of one dispatcher round trip per frame. The frames are valid JSON
-    /// objects already, so they are not parsed again here. Runs on the UI thread.
+    /// Posts frames that a transport document session of this view wrote itself to its document, in order, in one turn
+    /// of the UI thread: an RPC session sends what it has queued this way instead of one dispatcher round trip per frame.
+    /// The frames are valid JSON objects already, so they are not parsed again here. Runs on the UI thread.
     /// </summary>
+    /// <param name="documentSessionId">The document session that wrote the frames.</param>
     /// <param name="frames">Complete JSON objects, in the order they are posted.</param>
+    /// <returns>
+    /// Whether the session is closed, in which case nothing was posted; otherwise, the frames that were not posted
+    /// because their envelope exceeds <see cref="NeoAstraOptions.MaximumMessageSize"/>. Every other frame was posted.
+    /// </returns>
     /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
     /// <exception cref="NeoAstraException">The backend refused a message; the frames before it were posted.</exception>
-    internal unsafe void PostTrustedMessages(IReadOnlyList<string> frames)
+    internal NeoTrustedPostResult PostTrustedMessages(string documentSessionId, IReadOnlyList<string> frames)
     {
         ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(documentSessionId);
         ArgumentNullException.ThrowIfNull(frames);
-        foreach (var json in frames)
+        return PostTrustedFrames(_transport, documentSessionId, frames, json => PostNativeMessage(json, "post web message"));
+    }
+
+    internal static NeoTrustedPostResult PostTrustedFrames(NeoTransportCoordinator? transport, string documentSessionId, IReadOnlyList<string> frames, Action<string> post)
+    {
+        if (transport is null) return new(SessionClosed: true, null);
+        List<int>? rejected = null;
+        for (var index = 0; index < frames.Count; index++)
         {
-            var outbound = _transport?.WrapOutboundTrusted(json) ?? json;
-            using var nativeJson = new Utf8String(outbound);
-            NativeMethods.neoastra_error_t error = default;
-            var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
-            NativeError.ThrowIfFailed(result, error, "post web message", CancellationToken.None);
+            switch (transport.WrapOutboundTrusted(documentSessionId, frames[index], out var envelope))
+            {
+                case NeoTransportOutboundStatus.Wrapped:
+                    post(envelope!);
+                    break;
+                case NeoTransportOutboundStatus.TooLarge:
+                    (rejected ??= []).Add(index);
+                    break;
+                default:
+                    return new(SessionClosed: true, rejected);
+            }
         }
+        return new(SessionClosed: false, rejected);
     }
 
     /// <summary>Reloads the current document.</summary>
@@ -921,12 +941,14 @@ public sealed class NeoAstra : IAsyncDisposable
         try { TransportSessionChanged?.Invoke(session); } catch { }
     }
 
-    private unsafe void SendRawMessage(string json)
+    private void SendRawMessage(string json) => PostNativeMessage(json, "post transport message");
+
+    private unsafe void PostNativeMessage(string json, string operation)
     {
         using var nativeJson = new Utf8String(json);
         NativeMethods.neoastra_error_t error = default;
         var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
-        NativeError.ThrowIfFailed(result, error, "post transport message");
+        NativeError.ThrowIfFailed(result, error, operation, CancellationToken.None);
     }
 
     private void RaiseTransportDiagnostic(NeoTransportDiagnosticEventArgs value)

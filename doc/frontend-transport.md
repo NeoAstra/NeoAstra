@@ -85,7 +85,12 @@ that a 2 GiB message can be allocated or delivered.
 
 `NeoRpcOptions.MaximumFrameBytes` and `MaximumQueuedEventBytesPerSubscription` also default to
 `int.MaxValue`. Applications can set smaller positive limits on the view and RPC host to bound memory
-use; the strictest applicable limit wins, and view limits include envelope overhead. Event queue count
+use; the strictest applicable limit wins, and view limits include envelope overhead. An RPC answer,
+event, or channel item whose envelope exceeds the view limit is not posted: its own send fails with
+`payload_too_large`, and the other frames sent with it are posted and the session goes on. The frames
+of a document session go only to its own document, while it is the active session of the view: those
+that a session wrote before a navigation replaced its document are dropped, never posted to the next
+document. Event queue count
 and overflow policy, concurrency, request rates, timeouts, and JSON nesting-depth limits are unchanged.
 For deeply nested DTOs, configure `NeoTransportOptions.MaximumJsonDepth`,
 `NeoRpcOptions.MaximumJsonDepth`, and the application's `JsonSerializerContext` options together.

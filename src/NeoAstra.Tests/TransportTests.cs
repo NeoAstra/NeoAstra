@@ -219,6 +219,56 @@ public sealed class TransportTests
     }
 
     [TestMethod]
+    public void FramesOfASessionAreNeverPostedToAnotherDocument()
+    {
+        var sent = new List<string>();
+        var nextId = 0;
+        var coordinator = CreateCoordinator(sent, idFactory: () => $"session-{++nextId}", runtimeInfo: CommitRuntimeInfo);
+        ConnectCommitted(coordinator, "document-a");
+        ConnectCommitted(coordinator, "document-b");
+        const string frame = "{\"neoastra\":1,\"kind\":\"result\",\"id\":\"1\",\"ok\":true}";
+        var posted = new List<string>();
+
+        // Session A wrote these frames before the navigation replaced its document.
+        var stale = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-1", [frame, frame], posted.Add);
+        Assert.IsTrue(stale.SessionClosed);
+        Assert.IsEmpty(posted);
+
+        // Nor are they posted raw while no document has a session: the page of the view would see them.
+        coordinator.NavigationStarted();
+        coordinator.NavigationCommitted();
+        Assert.IsTrue(global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-2", [frame], posted.Add).SessionClosed);
+        Assert.IsEmpty(posted);
+
+        coordinator.Receive(Envelope(coordinator, "document-c", Hello()));
+        var current = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-3", [frame], posted.Add);
+        Assert.IsFalse(current.SessionClosed);
+        Assert.HasCount(1, posted);
+        using var envelope = JsonDocument.Parse(posted[0]);
+        Assert.AreEqual("document-c", envelope.RootElement.GetProperty("rendererDocumentId").GetString());
+        Assert.AreEqual("1", envelope.RootElement.GetProperty("frame").GetProperty("id").GetString());
+    }
+
+    [TestMethod]
+    public void AFrameOverTheViewLimitFailsAloneAndTheRestOfItsBatchIsPosted()
+    {
+        var options = Options();
+        options.MaximumMessageSize = 512;
+        var sent = new List<string>();
+        var coordinator = CreateCoordinator(sent, options: options);
+        Connect(coordinator, "document");
+        var posted = new List<string>();
+        string Frame(string id, int padding) => $"{{\"neoastra\":1,\"kind\":\"result\",\"id\":\"{id}\",\"ok\":true,\"value\":\"{new string('x', padding)}\"}}";
+
+        var result = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "fixed-session", [Frame("a", 1), Frame("big", 600), Frame("c", 1)], posted.Add);
+
+        Assert.IsFalse(result.SessionClosed);
+        CollectionAssert.AreEqual(new[] { 1 }, result.RejectedFrames!.ToArray());
+        CollectionAssert.AreEqual(new[] { "a", "c" }, posted.Select(value => JsonDocument.Parse(value).RootElement.GetProperty("frame").GetProperty("id").GetString()).ToArray());
+        Assert.IsTrue(coordinator.IsConnected);
+    }
+
+    [TestMethod]
     public void HelloOfADocumentThatLoadsLongerThanTheHandshakeTimeoutIsStillAnswered()
     {
         // A native library that does not report the commit holds the hello until the navigation ends.

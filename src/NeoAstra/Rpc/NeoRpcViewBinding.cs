@@ -135,24 +135,30 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             ContractHash = host.Options.ContractHash,
             Dispatcher = new ViewDispatcher(view.Environment.Application.Dispatcher),
         };
+        var documentSessionId = snapshot.DocumentSessionId;
         return host.OpenSessionCore(identity,
-            (json, cancellationToken) => SendAsync(view, json, cancellationToken),
-            frames => SendBatchAsync(view, frames),
+            (json, cancellationToken) => SendAsync(view, documentSessionId, json, cancellationToken),
+            frames => SendBatchAsync(view, documentSessionId, frames),
             view,
             view.OwnedWindow);
     }
 
     // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
-    // trip each, and the UI thread only writes their envelope and posts them.
-    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, IReadOnlyList<string> frames)
-        => await view.Environment.Application.Dispatcher.InvokeAsync(() => view.PostTrustedMessages(frames)).ConfigureAwait(false);
+    // trip each, and the UI thread only writes their envelope and posts them. They go only to the document of the
+    // session that wrote them, while that session is the active one of the view.
+    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, string documentSessionId, IReadOnlyList<string> frames)
+        => ThrowIfNotPosted(await view.Environment.Application.Dispatcher
+            .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, frames)).ConfigureAwait(false));
 
-    private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string json, CancellationToken cancellationToken)
+    private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string documentSessionId, string json, CancellationToken cancellationToken)
+        => ThrowIfNotPosted(await view.Environment.Application.Dispatcher
+            .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, [json]), cancellationToken).ConfigureAwait(false));
+
+    private static void ThrowIfNotPosted(NeoTrustedPostResult result)
     {
-        var send = await view.Environment.Application.Dispatcher
-            .InvokeAsync(() => view.PostMessageAsync(json, cancellationToken).AsTask(), cancellationToken)
-            .ConfigureAwait(false);
-        await send.ConfigureAwait(false);
+        // The transport closed the session, for a navigation or the disposal of the view: its frames have no document.
+        if (result.SessionClosed) throw new OperationCanceledException("The document session of these frames is closed.");
+        if (result.RejectedFrames is { Count: > 0 } rejected) throw new NeoRpcFramesRejectedException(rejected);
     }
 
     private static NeoCapabilityPlatform CurrentPlatform()
@@ -279,4 +285,16 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             return await task.ConfigureAwait(false);
         }
     }
+}
+
+// The batch sender of a view posted every frame of a batch but these: the envelope of each exceeds the message size of
+// the view. Their own sends fail, with a payload_too_large NeoRpcException, and the session goes on.
+internal sealed class NeoRpcFramesRejectedException(IReadOnlyList<int> frameIndexes)
+    : Exception("Frames of the batch exceed the maximum message size of the view.")
+{
+    // The indexes of the rejected frames in the batch, in increasing order.
+    internal IReadOnlyList<int> FrameIndexes { get; } = frameIndexes;
+
+    internal static NeoRpcException CreateFrameException() =>
+        new(NeoRpcErrorCodes.PayloadTooLarge, "The frame exceeds the maximum message size of the view.");
 }

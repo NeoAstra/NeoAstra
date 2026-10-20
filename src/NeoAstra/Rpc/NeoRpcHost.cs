@@ -1145,6 +1145,15 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     await sendBatch(frames).ConfigureAwait(false);
                     foreach (var frame in batch) frame.Done.TrySetResult();
                 }
+                catch (NeoRpcFramesRejectedException rejected)
+                {
+                    // The view posted every frame but these, too large for it: only their own sends fail.
+                    for (var index = 0; index < batch.Count; index++)
+                    {
+                        if (rejected.FrameIndexes.Contains(index)) batch[index].Done.TrySetException(NeoRpcFramesRejectedException.CreateFrameException());
+                        else batch[index].Done.TrySetResult();
+                    }
+                }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
@@ -1164,6 +1173,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
                 // transport did not fail. Session teardown cancels every caller token too.
                 catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Done.TrySetCanceled(exception.CancellationToken); }
+                catch (NeoRpcFramesRejectedException) { frame.Done.TrySetException(NeoRpcFramesRejectedException.CreateFrameException()); }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();

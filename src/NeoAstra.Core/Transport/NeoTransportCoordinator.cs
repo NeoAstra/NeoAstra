@@ -230,16 +230,20 @@ internal sealed class NeoTransportCoordinator
     }
 
     // A frame NeoAstra wrote itself (an RPC answer, event or channel item) is a valid JSON object already: only its
-    // envelope is written, on the thread that owns the transport state, without parsing it again.
-    internal string WrapOutboundTrusted(string json)
+    // envelope is written, on the thread that owns the transport state, without parsing it again. It is wrapped only
+    // for the document session that wrote it, while that session is the active one: the frame of a session that a
+    // navigation closed would otherwise reach the next document, whose channel IDs restart, or its page listeners.
+    internal NeoTransportOutboundStatus WrapOutboundTrusted(string documentSessionId, string json, out string? envelope)
     {
-        if (_active is null || _closed) return json;
-        var envelope = BuildEnvelope(_active.RendererDocumentId, writer => writer.WriteRawValue(json, skipInputValidation: true));
-        if (Encoding.UTF8.GetByteCount(envelope) > _viewOptions.MaximumMessageSize)
+        envelope = null;
+        if (_closed || _active is not { } active || !string.Equals(active.DocumentSessionId, documentSessionId, StringComparison.Ordinal))
         {
-            throw new ArgumentException("The transport envelope exceeds the configured message size.", nameof(json));
+            return NeoTransportOutboundStatus.SessionClosed;
         }
-        return envelope;
+        var value = BuildEnvelope(active.RendererDocumentId, writer => writer.WriteRawValue(json, skipInputValidation: true));
+        if (Encoding.UTF8.GetByteCount(value) > _viewOptions.MaximumMessageSize) return NeoTransportOutboundStatus.TooLarge;
+        envelope = value;
+        return NeoTransportOutboundStatus.Wrapped;
     }
 
     internal string WrapOutbound(string json)
@@ -542,5 +546,18 @@ internal sealed class NeoTransportCoordinator
     private readonly record struct PendingHello(string RendererDocumentId, long NavigationGeneration, int ProtocolMinor, string[] Features);
     private sealed record ActiveSession(string RendererDocumentId, string DocumentSessionId, int ProtocolMinor, string[] Features);
 }
+
+internal enum NeoTransportOutboundStatus
+{
+    Wrapped,
+    // The document session that wrote the frame is not the active one any more.
+    SessionClosed,
+    // The envelope of the frame exceeds NeoAstraOptions.MaximumMessageSize.
+    TooLarge,
+}
+
+// What became of the frames of one batch of a document session: none was posted when its session is closed; otherwise
+// every frame was posted but the rejected ones, given by their index in the batch, whose envelope exceeds the view limit.
+internal readonly record struct NeoTrustedPostResult(bool SessionClosed, IReadOnlyList<int>? RejectedFrames);
 
 internal readonly record struct NeoTransportSessionSnapshot(string DocumentSessionId, int ProtocolMinor, IReadOnlyList<string> Features, bool WholeViewTrust);
