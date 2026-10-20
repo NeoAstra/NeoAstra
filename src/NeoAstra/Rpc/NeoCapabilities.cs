@@ -278,7 +278,12 @@ public sealed class NeoCapabilityResolutionOptions
     public bool Release { get; init; } = true;
     /// <summary>Gets the named resolved security profile.</summary>
     public NeoSecurityProfile Profile { get; init; } = NeoSecurityProfile.ProductionLocalApp;
-    /// <summary>Gets whether an explicit reviewed view pattern is accepted. Release defaults to exact labels only.</summary>
+    /// <summary>Gets whether reviewed trailing-prefix view patterns, such as <c>window-*</c>, are accepted. Off by default: selectors are then exact labels only.</summary>
+    /// <remarks>
+    /// A view label is assigned by the host, never by a page, so a pattern grants its permissions only to views the application itself
+    /// labeled with that prefix, such as one view per window of a multi-window application. Opt in, also for a release, once it is reviewed
+    /// that no view of less trusted content gets a label with that prefix.
+    /// </remarks>
     public bool AllowReviewedViewPatterns { get; init; }
 }
 
@@ -354,7 +359,6 @@ public sealed class NeoCapabilityManifest
         ArgumentNullException.ThrowIfNull(options.Profile);
         if (!Enum.IsDefined(options.Platform)) throw new ArgumentOutOfRangeException(nameof(options), "The target platform is unsupported.");
         options.Profile.Validate(options.Release, null, false);
-        if (options.Release && options.AllowReviewedViewPatterns) throw new NeoCapabilityValidationException("view_pattern", "Reviewed view patterns cannot be enabled for release resolution.");
         if (utf8Json.Length is 0 or > 1024 * 1024) throw new NeoCapabilityValidationException("document_size", "A capability document must be between 1 byte and 1 MiB.");
         CapabilityDocumentDto document;
         try

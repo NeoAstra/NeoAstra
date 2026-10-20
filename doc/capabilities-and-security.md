@@ -32,7 +32,7 @@ Capability files use [`neoastra-capabilities-v1.schema.json`](../schemas/neoastr
 }
 ```
 
-Selectors are exact by default. Reviewed `prefix:*` view patterns are development-only and never accepted in release resolution. Origin selectors are canonical exact `(scheme, IDN host, explicit/default port)` tuples; paths, fragments, wildcards, opaque origins, user information, and renderer claims are rejected. Overlapping capabilities that could union the same permission fail resolution unless the permission explicitly declares a union-safe scope family.
+Selectors are exact by default. A reviewed trailing-prefix view pattern, such as `window-*` for an application that opens one view per window with labels it generates, is accepted only when resolution opts in with `NeoCapabilityResolutionOptions.AllowReviewedViewPatterns = true` (and `--allow-view-patterns` for a Release build with the tool below), in a release as in development. A view label is assigned by the host, never by a page, so a pattern grants its permissions only to views the application itself labeled with that prefix: opt in once it is reviewed that no view of less trusted content gets a label with that prefix. The prefix must have at least three characters before the trailing `*`. Origin selectors are canonical exact `(scheme, IDN host, explicit/default port)` tuples; paths, fragments, wildcards, opaque origins, user information, and renderer claims are rejected. Overlapping capabilities that could union the same permission fail resolution unless the permission explicitly declares a union-safe scope family.
 
 When a manifest is used to restrict only selected views, construct `NeoCapabilityAuthorizationService` with `trustUnconfiguredViews: true`. A view label that has any matching capability record is then governed entirely by that record, while controlled local views absent from the manifest retain the normal trusted-application behavior. The strict constructor remains default-deny for every unlisted view.
 
@@ -43,6 +43,8 @@ dotnet neoastra capabilities resolve \
   --capabilities app.capabilities.json --catalog app.permissions.json \
   --platform windows --configuration Release obj/capabilities.windows.resolved.json
 ```
+
+Add `--allow-view-patterns` when the capability document uses a reviewed view pattern such as `window-*`; a Debug resolution always accepts them.
 
 Resolution strictly rejects unknown fields, versions, schemas, IDs, permission versions, platform combinations, release development grants, unsafe duplicate/union semantics, and malformed scope data. Output is canonical UTF-8 JSON ordered independently of input order, with no timestamps, plus a SHA-256 hash. It intentionally contains canonical exact scope policy (including configured paths) for security review; do not publish it as a diagnostic or place user-specific secrets in capability files. Generate twice and byte-compare in CI. The resolved file is review/audit evidence; runtime authorization uses the corresponding immutable `NeoCapabilityManifest` object, not reparsed renderer data.
 
@@ -90,7 +92,7 @@ Path canonicalization is platform-sensitive. Windows comparisons are ordinal-ign
 
 ## Profiles and release validation
 
-`ProductionLocalApp` is the default: no development server, no wildcard patterns, no detailed renderer errors, and release-safe capability resolution. The conventional `NeoApp` host also allows only the exact `app://neoastra` origin, including its local routes, and denies unexpected new windows. `DevelopmentLocalApp` requires `Release = false` and an explicit loopback HTTP(S) origin; `NeoApp` accepts only the exact configured `127.0.0.1` or `::1` origin and port. Development mode must never be selected by renderer input. Release validation rejects development-only grants, reviewed patterns, development origins, and detailed error output.
+`ProductionLocalApp` is the default: no development server, no view patterns unless explicitly allowed, no detailed renderer errors, and release-safe capability resolution. The conventional `NeoApp` host also allows only the exact `app://neoastra` origin, including its local routes, and denies unexpected new windows. `DevelopmentLocalApp` requires `Release = false` and an explicit loopback HTTP(S) origin; `NeoApp` accepts only the exact configured `127.0.0.1` or `::1` origin and port. Development mode must never be selected by renderer input. Release validation rejects development-only grants, view patterns that were not explicitly allowed, development origins, and detailed error output.
 
 Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error posture. `NeoApp` applies the conventional local-app navigation and popup policy, but applications using the low-level API must install equivalent handlers themselves. Applications must also apply CSP when serving assets. Trusted RPC assumes that this controlled-content boundary is intact; capability policy is not a browser sandbox and cannot protect a privileged command from script already executing in the same trusted document.
 

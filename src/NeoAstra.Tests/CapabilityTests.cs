@@ -271,7 +271,14 @@ public sealed class CapabilityTests
         _ = new NeoRpcBuilder(new NeoRpcOptions { SecurityProfile = NeoSecurityProfile.DevelopmentLocalApp, Release = false, DevelopmentOrigin = new Uri("http://127.0.0.1:5173") });
         const string basic = """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"permissions":["documents:open"]}]}""";
         var productionManifest = Resolve(basic, Catalog(), NeoCapabilityPlatform.Windows);
-        Assert.Throws<NeoCapabilityValidationException>(() => NeoCapabilityManifest.Resolve(Encoding.UTF8.GetBytes(basic.Replace("\"main\"],", "\"main-*\"],")), Catalog(), new() { Platform = NeoCapabilityPlatform.Windows, Release = true, AllowReviewedViewPatterns = true }));
+        // A view pattern needs an explicit opt-in, in a release as in development.
+        var pattern = Encoding.UTF8.GetBytes(basic.Replace("\"main\"],", "\"window-*\"],"));
+        Assert.AreEqual("view_pattern", Assert.Throws<NeoCapabilityValidationException>(() => NeoCapabilityManifest.Resolve(pattern, Catalog(), new() { Platform = NeoCapabilityPlatform.Windows, Release = true })).Code);
+        var windows = NeoCapabilityManifest.Resolve(pattern, Catalog(), new() { Platform = NeoCapabilityPlatform.Windows, Release = true, AllowReviewedViewPatterns = true });
+        Assert.IsTrue(windows.HasCapabilityForView("window-1"));
+        Assert.IsTrue(windows.HasCapabilityForView("window-27"));
+        Assert.IsFalse(windows.HasCapabilityForView("main"));
+        Assert.IsFalse(windows.HasCapabilityForView("window"));
         Assert.Throws<NeoCapabilityValidationException>(() => NeoCapabilityManifest.Resolve(Encoding.UTF8.GetBytes(basic), Catalog(), new() { Platform = NeoCapabilityPlatform.Windows, Release = true, Profile = NeoSecurityProfile.RemoteContent }));
         Assert.Throws<InvalidOperationException>(() => new NeoRpcBuilder(new NeoRpcOptions { SecurityProfile = NeoSecurityProfile.RemoteContent, CapabilityManifest = productionManifest, AuthorizationService = new NeoCapabilityAuthorizationService(productionManifest) }));
         var mismatchedRegistration = new NeoRpcBuilder(new NeoRpcOptions { CapabilityManifest = productionManifest, AuthorizationService = new NeoCapabilityAuthorizationService(productionManifest) });
@@ -372,6 +379,29 @@ public sealed class CapabilityTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
+    [TestMethod]
+    public async Task ToolAcceptsViewPatternsInReleaseOnlyWhenAllowed()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), $"neoastra-patterns-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var catalog = FindRepositoryFile("src", "NeoAstra.Tests", "Fixtures", "Capabilities", "catalog.json");
+            var capabilities = Path.Combine(temp, "windows.json");
+            await File.WriteAllTextAsync(capabilities, (await File.ReadAllTextAsync(FindRepositoryFile("src", "NeoAstra.Tests", "Fixtures", "Capabilities", "capabilities.json"))).Replace("\"views\": [\"main\"]", "\"views\": [\"window-*\"]", StringComparison.Ordinal));
+            var refused = Path.Combine(temp, "refused.json");
+            var (refusedCode, refusedError) = await RunToolAsync(capabilities, catalog, "Release", refused);
+            Assert.AreEqual(1, refusedCode);
+            StringAssert.Contains(refusedError, "view_pattern");
+            Assert.IsFalse(File.Exists(refused));
+            var resolved = Path.Combine(temp, "resolved.json");
+            var (code, error) = await RunToolAsync(capabilities, catalog, "Release", resolved, "--allow-view-patterns");
+            Assert.AreEqual(0, code, error);
+            StringAssert.Contains(await File.ReadAllTextAsync(resolved), "window-*");
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
     private static NeoPermissionCatalog Catalog(bool includeUrl = false, bool includeScopes = false)
     {
         var builder = new NeoPermissionCatalogBuilder().Add(new NeoPermissionDeclaration("documents:open", 1, ["documents.open"], NeoPermissionRisk.Sensitive, NeoScopeFamily.None));
@@ -400,6 +430,19 @@ public sealed class CapabilityTests
         }
         throw new FileNotFoundException("The repository fixture could not be located.");
     }
+    private static async Task<(int ExitCode, string Error)> RunToolAsync(string capabilities, string catalog, string configurationName, string output, params string[] options)
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var tool = FindRepositoryFile("src", "NeoAstra.Tool", "bin", configuration, "net10.0", "NeoAstra.Tool.dll");
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+        foreach (var argument in new[] { tool, "capabilities", "resolve", "--capabilities", capabilities, "--catalog", catalog, "--platform", "windows", "--configuration", configurationName }.Concat(options).Append(output)) start.ArgumentList.Add(argument);
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var error = await process.StandardError.ReadToEndAsync();
+        _ = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return (process.ExitCode, error.Trim());
+    }
+
     private static async Task AssertToolRejectsAsync(string catalog, string temp, string configurationName = "Release")
     {
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;

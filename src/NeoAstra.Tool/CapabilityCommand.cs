@@ -8,7 +8,7 @@ namespace NeoAstra.Tool;
 
 internal static class CapabilityCommand
 {
-    internal static int Resolve(string capabilitiesPath, string catalogPath, string platformName, string configuration, string outputPath)
+    internal static int Resolve(string capabilitiesPath, string catalogPath, string platformName, string configuration, string outputPath, bool allowViewPatterns = false)
     {
         try
         {
@@ -27,7 +27,7 @@ internal static class CapabilityCommand
                 _ => throw new ArgumentException("Unknown target platform.")
             };
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
-            var manifest = NeoCapabilityManifest.Resolve(ReadBoundedFile(capabilitiesPath, "capability document"), catalog, new() { Platform = platform, Release = release, Profile = profile, AllowReviewedViewPatterns = !release });
+            var manifest = NeoCapabilityManifest.Resolve(ReadBoundedFile(capabilitiesPath, "capability document"), catalog, new() { Platform = platform, Release = release, Profile = profile, AllowReviewedViewPatterns = !release || allowViewPatterns });
             var output = Path.GetFullPath(outputPath);
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
             File.WriteAllText(output, manifest.Json + "\n", new System.Text.UTF8Encoding(false));

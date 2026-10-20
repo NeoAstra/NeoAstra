@@ -351,6 +351,7 @@ internal static class NeoToolApplication
         string? platform = null;
         string? configuration = null;
         string? output = null;
+        var allowViewPatterns = false;
         return new Command("capabilities", "Resolve a platform capability manifest.")
         {
             new CommandUsage(),
@@ -378,6 +379,11 @@ internal static class NeoToolApplication
                     "Build {CONFIGURATION}: Release or Debug.",
                     value => configuration = value
                 },
+                {
+                    "allow-view-patterns",
+                    "Accept reviewed trailing-prefix view patterns such as window-* in a Release build (Debug always accepts them).",
+                    value => allowViewPatterns = value is not null
+                },
                 Section,
                 "Arguments:",
                 {
@@ -391,7 +397,8 @@ internal static class NeoToolApplication
                     NeoToolCommands.Required(catalog, "--catalog"),
                     NeoToolCommands.Required(platform, "--platform"),
                     NeoToolCommands.Required(configuration, "--configuration"),
-                    NeoToolCommands.Required(output, "<output>"))),
+                    NeoToolCommands.Required(output, "<output>"),
+                    allowViewPatterns)),
             },
         };
     }
