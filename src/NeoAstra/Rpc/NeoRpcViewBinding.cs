@@ -78,7 +78,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         }
         var currentTeardown = session is null ? Task.CompletedTask : DisposeContainedAsync(session);
         await Task.WhenAll(teardowns.Append(currentTeardown)).ConfigureAwait(false);
-        await _host.CloseViewServicesAsync(_view.ViewLabel!).ConfigureAwait(false);
+        await _host.CloseViewServicesAsync(_view.RpcServiceScope).ConfigureAwait(false);
     }
 
     private void OnSessionChanged(NeoTransportSessionSnapshot? snapshot)
@@ -121,7 +121,12 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         if (previous is not null) _ = CompleteTeardownAsync(previous, teardownCompletion!);
         if (next is not null) WatchSession(next);
         if (openFailure is not null)
+        {
             _host.Diagnose(NeoRpcDiagnosticLevel.Error, NeoRpcErrorCodes.ConnectionClosed, $"The platform RPC binding could not open its document session ({FailureName(openFailure)}).");
+            // The transport answers the hello of that document: without a revocation, its calls would wait for answers
+            // nobody sends. The transport is announcing the session now, so the revocation runs after that.
+            PostRevocation(snapshot!.Value.DocumentSessionId);
+        }
     }
 
     private static NeoRpcSession Open(NeoRpcHost host, global::NeoAstra.NeoAstra view, NeoTransportSessionSnapshot snapshot)
@@ -135,24 +140,30 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             ContractHash = host.Options.ContractHash,
             Dispatcher = new ViewDispatcher(view.Environment.Application.Dispatcher),
         };
+        var documentSessionId = snapshot.DocumentSessionId;
         return host.OpenSessionCore(identity,
-            (json, cancellationToken) => SendAsync(view, json, cancellationToken),
-            frames => SendBatchAsync(view, frames),
+            (json, cancellationToken) => SendAsync(view, documentSessionId, json, cancellationToken),
+            frames => SendBatchAsync(view, documentSessionId, frames),
             view,
             view.OwnedWindow);
     }
 
     // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
-    // trip each, and the UI thread only writes their envelope and posts them.
-    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, IReadOnlyList<string> frames)
-        => await view.Environment.Application.Dispatcher.InvokeAsync(() => view.PostTrustedMessages(frames)).ConfigureAwait(false);
+    // trip each, and the UI thread only writes their envelope and posts them. They go only to the document of the
+    // session that wrote them, while that session is the active one of the view.
+    private static async ValueTask SendBatchAsync(global::NeoAstra.NeoAstra view, string documentSessionId, IReadOnlyList<string> frames)
+        => ThrowIfNotPosted(await view.Environment.Application.Dispatcher
+            .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, frames)).ConfigureAwait(false));
 
-    private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string json, CancellationToken cancellationToken)
+    private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string documentSessionId, string json, CancellationToken cancellationToken)
+        => ThrowIfNotPosted(await view.Environment.Application.Dispatcher
+            .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, [json]), cancellationToken).ConfigureAwait(false));
+
+    private static void ThrowIfNotPosted(NeoTrustedPostResult result)
     {
-        var send = await view.Environment.Application.Dispatcher
-            .InvokeAsync(() => view.PostMessageAsync(json, cancellationToken).AsTask(), cancellationToken)
-            .ConfigureAwait(false);
-        await send.ConfigureAwait(false);
+        // The transport closed the session, for a navigation or the disposal of the view: its frames have no document.
+        if (result.SessionClosed) throw new OperationCanceledException("The document session of these frames is closed.");
+        if (result.RejectedFrames is { Count: > 0 } rejected) throw new NeoRpcFramesRejectedException(rejected);
     }
 
     private static NeoCapabilityPlatform CurrentPlatform()
@@ -220,15 +231,20 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         // A session replaced by a navigation or detached by disposal was closed by the transport itself.
         lock (_gate) if (!ReferenceEquals(_session, session)) return;
+        PostRevocation(session.DocumentSessionId);
+    }
+
+    private void PostRevocation(string documentSessionId)
+    {
         if (_application is null)
         {
-            _ = Task.Run(() => RevokeTransportSession(session));
+            _ = Task.Run(() => RevokeTransportSession(documentSessionId));
             return;
         }
         try
         {
             // The transport is owned by the UI thread, and this runs on whichever thread closed the session.
-            _application.Dispatcher.Post(() => RevokeTransportSession(session));
+            _application.Dispatcher.Post(() => RevokeTransportSession(documentSessionId));
         }
         catch
         {
@@ -237,10 +253,10 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
         }
     }
 
-    private void RevokeTransportSession(NeoRpcSession session)
+    private void RevokeTransportSession(string documentSessionId)
     {
         bool revoked;
-        try { revoked = _closeTransportSession(session.DocumentSessionId); }
+        try { revoked = _closeTransportSession(documentSessionId); }
         catch { revoked = false; }
         // The transport no longer has that session when a navigation or view disposal already replaced it.
         if (revoked)
@@ -279,4 +295,16 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
             return await task.ConfigureAwait(false);
         }
     }
+}
+
+// The batch sender of a view posted every frame of a batch but these: the envelope of each exceeds the message size of
+// the view. Their own sends fail, with a payload_too_large NeoRpcException, and the session goes on.
+internal sealed class NeoRpcFramesRejectedException(IReadOnlyList<int> frameIndexes)
+    : Exception("Frames of the batch exceed the maximum message size of the view.")
+{
+    // The indexes of the rejected frames in the batch, in increasing order.
+    internal IReadOnlyList<int> FrameIndexes { get; } = frameIndexes;
+
+    internal static NeoRpcException CreateFrameException() =>
+        new(NeoRpcErrorCodes.PayloadTooLarge, "The frame exceeds the maximum message size of the view.");
 }

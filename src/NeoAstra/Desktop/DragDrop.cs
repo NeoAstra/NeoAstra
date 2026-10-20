@@ -299,7 +299,8 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
     {
         if (view.ViewLabel is null) return;
         Action<int, IReadOnlyList<string>, NeoPoint> drop = (kind, values, position) => ReceiveNativeDrop(view, kind, values, position);
-        Action navigation = () => { ReleaseOwner(NeoPluginOwner.View(view.ViewLabel)); UpdateViewSession(view, null); };
+        // A started navigation may leave the document in place: its session ends only when the transport says so.
+        Action navigation = () => ReleaseOwner(NeoPluginOwner.View(view.ViewLabel));
         Action<NeoTransportSessionSnapshot?> sessionChanged = session => UpdateViewSession(view, session?.DocumentSessionId);
         Action disposing = () => DetachView(view);
         EventHandler? windowClosed = view.OwnedWindow is null ? null : (_, _) => DetachView(view);

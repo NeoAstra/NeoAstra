@@ -42,25 +42,38 @@ copies of `@neoastra/client` in their source trees.
 ## Lifecycle and limits
 
 `connect()` is idempotent in one module realm and shares concurrent handshakes. The host assigns an
-opaque document-session ID only after a compatible hello and committed navigation. Navigation,
-renderer loss, view disposal, and application shutdown invalidate the old session. Late old-document
-frames are ignored rather than retargeted. A connection exposes an `AbortSignal` through `closed`, a
-single receive-handler registration, negotiated feature lookup, bounded `send`, and deterministic
-`close()`.
+opaque document-session ID only after a compatible hello. A navigation, renderer loss, view disposal,
+and application shutdown invalidate the old session; late old-document frames are ignored rather than
+retargeted. A navigation ends the session when it commits a new document. One that never replaces the
+document (a download, an answer without content such as 204, `Stop()`, or a navigation that a newer
+one supersedes) leaves the document and its session alone, and the document is not told anything. The
+hello of the new document is answered as soon as it arrives, while the document still loads; with a
+native library that does not report the commit, the host learns of the new document from its hello or
+from the end of the navigation, and answers the hello when the navigation ends. Renderer loss is a
+`NeoAstra.ProcessFailed` that ends the main document: the view stays usable, and the document that a
+reload or a navigation loads next handshakes and gets a new session. A failure that leaves the
+document running does not touch its session: with WebView2, the exit of the GPU process or another
+helper process, or of a renderer of subframes only (all reported with `RecoveryAction.None`), and a
+renderer that stops answering. A connection exposes an `AbortSignal` through `closed`, a single
+receive-handler registration, negotiated feature lookup, bounded `send`, and deterministic `close()`.
 
 A connection closed by the host reports why through `closeReason`, set before `closed` aborts, and
 through one `connection_closed` information diagnostic. `client_close` follows the document's own
-`close()`. `navigation`, `view_disposed`, `application_shutdown`, and `renderer_lost` end a document
-that is going away. `rpc_session_closed` is different: the host closed the RPC session of a document
-that keeps running (see [RPC and bindings](rpc-and-bindings.md)). A close without a valid reason
-token reports `unspecified`. A document handshakes once, so `connect()` then rejects with
-`connection_closed` and every RPC call fails immediately; a reload is the only way to reconnect, and
-whether to reload, and what state to keep, is the application's decision:
+`close()`. `view_disposed` and `application_shutdown` end a document that is going away; a document
+that a navigation replaced or whose renderer is lost is gone before anything can reach it, and is told
+nothing (the host no longer sends `navigation` or `renderer_lost`). A replaced document that the
+engine keeps in its back-forward cache can be shown again, though: its bootstrap reports `navigation`
+to it when the document is hidden, so its calls fail at once instead of waiting. `rpc_session_closed` is
+different: the host closed the RPC session of a document that keeps running (see
+[RPC and bindings](rpc-and-bindings.md)). A close without a valid reason token reports `unspecified`.
+A document handshakes once, so `connect()` then rejects with `connection_closed` and every RPC call
+fails immediately; a reload is the only way to reconnect, and whether to reload, and what state to
+keep, is the application's decision:
 
 ```ts
 const connection = await connect();
 connection.closed.addEventListener("abort", () => {
-  // Do not reload on "navigation": that would cancel the navigation already under way.
+  // Only a document whose RPC session the host closed keeps running without one.
   if (connection.closeReason === "rpc_session_closed") location.reload();
 }, { once: true });
 ```
@@ -74,7 +87,12 @@ that a 2 GiB message can be allocated or delivered.
 
 `NeoRpcOptions.MaximumFrameBytes` and `MaximumQueuedEventBytesPerSubscription` also default to
 `int.MaxValue`. Applications can set smaller positive limits on the view and RPC host to bound memory
-use; the strictest applicable limit wins, and view limits include envelope overhead. Event queue count
+use; the strictest applicable limit wins, and view limits include envelope overhead. An RPC answer,
+event, or channel item whose envelope exceeds the view limit is not posted: its own send fails with
+`payload_too_large`, and the other frames sent with it are posted and the session goes on. The frames
+of a document session go only to its own document, while it is the active session of the view: those
+that a session wrote before a navigation replaced its document are dropped, never posted to the next
+document. Event queue count
 and overflow policy, concurrency, request rates, timeouts, and JSON nesting-depth limits are unchanged.
 For deeply nested DTOs, configure `NeoTransportOptions.MaximumJsonDepth`,
 `NeoRpcOptions.MaximumJsonDepth`, and the application's `JsonSerializerContext` options together.
@@ -129,9 +147,10 @@ admits envelopes to the configured view, but is **not** a secret from script alr
 document and is not a sandbox. Each renderer realm generates a `rendererDocumentId`; that value is
 untrusted correlation data, not the document's trusted identity. After a compatible hello for the
 current navigation, the host creates the separate opaque `documentSessionId` and associates the
-renderer value with that host-owned session. Navigation closes the association, and the coordinator
-retains closed renderer IDs for the view lifetime so replayed hello and application frames cannot bind
-to a replacement document. Security comes from controlled content, native transport admission,
+renderer value with that host-owned session. A navigation that commits a new document closes the
+association, and the coordinator retains closed renderer IDs for the view lifetime so replayed hello
+and application frames cannot bind to a replacement document. The frames of the old document are
+accepted only until then, while it is still the document of the view. Security comes from controlled content, native transport admission,
 host-owned view/navigation/session state, bounded framing, and command
 capabilities. On Linux, never infer sender origin from the current top-level URI or message timing;
 remote content belongs in a separate bridge-disabled view.

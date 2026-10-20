@@ -334,9 +334,12 @@ public enum NeoPermissionKind
 /// <summary>Identifies the portable category of a browser process failure.</summary>
 public enum NeoProcessFailureKind
 {
-    /// <summary>The backend could not classify the failure.</summary>
+    /// <summary>
+    /// The backend could not classify the failure, or the process that failed is of no portable kind, such as the GPU
+    /// process or another helper process of WebView2.
+    /// </summary>
     Unknown,
-    /// <summary>A web-content or renderer process exited.</summary>
+    /// <summary>A web-content or renderer process exited: the one of the main document or, with WebView2, one that rendered subframes only.</summary>
     WebProcessExited,
     /// <summary>The browser process exited.</summary>
     BrowserProcessExited,
@@ -481,6 +484,12 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
     /// a view keeps its history navigation whatever its features say.
     /// </remarks>
     public bool ControlsHistoryNavigation => (BuildFeatures & HistoryNavigation) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT of native/include/neoastra.h.
+    private const ulong NavigationCommit = 1UL << 2;
+
+    // Whether the native library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a navigation replaces the document.
+    internal bool ReportsNavigationCommit => (BuildFeatures & NavigationCommit) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

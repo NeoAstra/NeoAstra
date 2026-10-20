@@ -561,7 +561,13 @@ public sealed class NeoTransportOptions
     /// <summary>Gets or sets the maximum number of retained transport diagnostics.</summary>
     public int MaximumDiagnosticQueue { get; set; } = 100;
 
-    /// <summary>Gets or sets the host handshake timeout.</summary>
+    /// <summary>Gets or sets the handshake timeout of the frontend client.</summary>
+    /// <remarks>
+    /// The client waits that long for the host's answer to its hello. The host answers a hello as soon as its document
+    /// has replaced the previous one; with a native library that does not report that moment, it answers when the
+    /// navigation ends, and only reports a <c>handshake_timeout</c> diagnostic when the navigation takes longer than
+    /// this timeout: the hello is still answered then.
+    /// </remarks>
     public TimeSpan HandshakeTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Gets the number of application frames accepted before a handshake.</summary>

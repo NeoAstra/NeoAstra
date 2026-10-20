@@ -86,6 +86,7 @@ public sealed class TransportTests
     [TestMethod]
     public void NavigationClosesOldSessionAndLateFramesCannotReachReplacement()
     {
+        // A native library that does not report the commit: the hello of another document tells that the old one is gone.
         var sent = new List<string>();
         var diagnostics = new List<NeoTransportDiagnosticEventArgs>();
         var nextId = 0;
@@ -94,11 +95,12 @@ public sealed class TransportTests
         Assert.IsTrue(coordinator.IsConnected);
 
         coordinator.NavigationStarted();
-        Assert.IsFalse(coordinator.IsConnected);
-        coordinator.Receive(Envelope(coordinator, "old-document", "{\"neoastra\":1,\"kind\":\"invoke\"}"));
-        coordinator.Receive(Envelope(coordinator, "old-document", Hello()));
-        Assert.HasCount(2, sent);
+        Assert.IsTrue(coordinator.IsConnected, "The old document runs until the navigation replaces it.");
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "old-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
         coordinator.Receive(Envelope(coordinator, "new-document", Hello()));
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.HasCount(1, sent, "Nothing is posted for the replaced document, whose frames would reach the new one.");
+        coordinator.Receive(Envelope(coordinator, "old-document", Hello()));
         coordinator.NavigationCompleted(succeeded: true);
         Assert.IsTrue(coordinator.IsConnected);
 
@@ -107,10 +109,65 @@ public sealed class TransportTests
         var application = coordinator.Receive(Envelope(coordinator, "new-document", "{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"new\"}"));
         Assert.AreEqual(NeoTransportReceiveKind.Consumed, replayedApplication.Kind);
         Assert.AreEqual(NeoTransportReceiveKind.Application, application.Kind);
-        Assert.HasCount(3, sent);
+        Assert.HasCount(2, sent);
         Assert.IsTrue(diagnostics.Any(value => value.Code == "late_frame"));
         using var last = JsonDocument.Parse(sent[^1]);
         Assert.AreEqual("session-2", last.RootElement.GetProperty("frame").GetProperty("runtime").GetProperty("documentSessionId").GetString());
+    }
+
+    [TestMethod]
+    public void CommittedNavigationRotatesTheSessionAndTheNewDocumentNeedNotWaitForItsLoad()
+    {
+        var sent = new List<string>();
+        var nextId = 0;
+        var coordinator = CreateCoordinator(sent, idFactory: () => $"session-{++nextId}", runtimeInfo: CommitRuntimeInfo);
+        ConnectCommitted(coordinator, "old-document");
+        Assert.AreEqual("session-1", coordinator.CurrentSession!.Value.DocumentSessionId);
+
+        coordinator.NavigationStarted();
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "old-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+        coordinator.NavigationCommitted();
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.HasCount(1, sent, "Nothing is posted for the replaced document, whose frames would reach the new one.");
+        Assert.AreEqual(NeoTransportReceiveKind.Consumed, coordinator.Receive(Envelope(coordinator, "old-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+
+        // The new document is answered at once, while it still loads.
+        coordinator.Receive(Envelope(coordinator, "new-document", Hello()));
+        Assert.HasCount(2, sent);
+        Assert.AreEqual("session-2", coordinator.CurrentSession!.Value.DocumentSessionId);
+        coordinator.NavigationCompleted(succeeded: true);
+        coordinator.Receive(Envelope(coordinator, "old-document", Hello()));
+        Assert.HasCount(2, sent);
+        Assert.AreEqual("session-2", coordinator.CurrentSession!.Value.DocumentSessionId);
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "new-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+    }
+
+    [TestMethod]
+    public void NavigationThatDoesNotReplaceTheDocumentKeepsItsSession()
+    {
+        // A download, a 204 answer, Stop(), or a newer navigation: the started navigation never commits.
+        foreach (var runtimeInfo in new[] { RuntimeInfo, CommitRuntimeInfo })
+        {
+            var sent = new List<string>();
+            var sessions = new List<NeoTransportSessionSnapshot?>();
+            var nextId = 0;
+            var coordinator = new NeoTransportCoordinator(Options(), runtimeInfo, sent.Add, _ => { }, idFactory: () => $"session-{++nextId}", sessionChanged: sessions.Add);
+            Connect(coordinator, "page");
+
+            coordinator.NavigationStarted();
+            coordinator.NavigationStarted();
+            coordinator.NavigationCompleted(succeeded: false);
+
+            Assert.IsTrue(coordinator.IsConnected);
+            Assert.AreEqual("session-1", coordinator.CurrentSession!.Value.DocumentSessionId);
+            Assert.HasCount(1, sessions, "The RPC session of the page was never closed.");
+            Assert.HasCount(1, sent, "The page is not told to close.");
+            Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "page", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+            coordinator.Receive(Envelope(coordinator, "page", Hello()));
+            Assert.HasCount(2, sent);
+            using var ack = JsonDocument.Parse(sent[^1]);
+            Assert.AreEqual("session-1", ack.RootElement.GetProperty("frame").GetProperty("runtime").GetProperty("documentSessionId").GetString());
+        }
     }
 
     [TestMethod]
@@ -159,6 +216,77 @@ public sealed class TransportTests
         coordinator.Close("view_disposed");
         Assert.IsFalse(coordinator.IsConnected);
         Assert.AreEqual(NeoTransportReceiveKind.Consumed, coordinator.Receive("{}").Kind);
+    }
+
+    [TestMethod]
+    public void FramesOfASessionAreNeverPostedToAnotherDocument()
+    {
+        var sent = new List<string>();
+        var nextId = 0;
+        var coordinator = CreateCoordinator(sent, idFactory: () => $"session-{++nextId}", runtimeInfo: CommitRuntimeInfo);
+        ConnectCommitted(coordinator, "document-a");
+        ConnectCommitted(coordinator, "document-b");
+        const string frame = "{\"neoastra\":1,\"kind\":\"result\",\"id\":\"1\",\"ok\":true}";
+        var posted = new List<string>();
+
+        // Session A wrote these frames before the navigation replaced its document.
+        var stale = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-1", [frame, frame], posted.Add);
+        Assert.IsTrue(stale.SessionClosed);
+        Assert.IsEmpty(posted);
+
+        // Nor are they posted raw while no document has a session: the page of the view would see them.
+        coordinator.NavigationStarted();
+        coordinator.NavigationCommitted();
+        Assert.IsTrue(global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-2", [frame], posted.Add).SessionClosed);
+        Assert.IsEmpty(posted);
+
+        coordinator.Receive(Envelope(coordinator, "document-c", Hello()));
+        var current = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "session-3", [frame], posted.Add);
+        Assert.IsFalse(current.SessionClosed);
+        Assert.HasCount(1, posted);
+        using var envelope = JsonDocument.Parse(posted[0]);
+        Assert.AreEqual("document-c", envelope.RootElement.GetProperty("rendererDocumentId").GetString());
+        Assert.AreEqual("1", envelope.RootElement.GetProperty("frame").GetProperty("id").GetString());
+    }
+
+    [TestMethod]
+    public void AFrameOverTheViewLimitFailsAloneAndTheRestOfItsBatchIsPosted()
+    {
+        var options = Options();
+        options.MaximumMessageSize = 512;
+        var sent = new List<string>();
+        var coordinator = CreateCoordinator(sent, options: options);
+        Connect(coordinator, "document");
+        var posted = new List<string>();
+        string Frame(string id, int padding) => $"{{\"neoastra\":1,\"kind\":\"result\",\"id\":\"{id}\",\"ok\":true,\"value\":\"{new string('x', padding)}\"}}";
+
+        var result = global::NeoAstra.NeoAstra.PostTrustedFrames(coordinator, "fixed-session", [Frame("a", 1), Frame("big", 600), Frame("c", 1)], posted.Add);
+
+        Assert.IsFalse(result.SessionClosed);
+        CollectionAssert.AreEqual(new[] { 1 }, result.RejectedFrames!.ToArray());
+        CollectionAssert.AreEqual(new[] { "a", "c" }, posted.Select(value => JsonDocument.Parse(value).RootElement.GetProperty("frame").GetProperty("id").GetString()).ToArray());
+        Assert.IsTrue(coordinator.IsConnected);
+    }
+
+    [TestMethod]
+    public void HelloOfADocumentThatLoadsLongerThanTheHandshakeTimeoutIsStillAnswered()
+    {
+        // A native library that does not report the commit holds the hello until the navigation ends.
+        var sent = new List<string>();
+        var diagnostics = new List<NeoTransportDiagnosticEventArgs>();
+        var coordinator = CreateCoordinator(sent, diagnostics);
+        coordinator.NavigationStarted();
+        coordinator.Receive(Envelope(coordinator, "slow-document", Hello()));
+
+        coordinator.ExpireHandshake(1);
+        Assert.IsTrue(diagnostics.Any(value => value.Code == "handshake_timeout"));
+        coordinator.NavigationCompleted(succeeded: true);
+
+        Assert.IsTrue(coordinator.IsConnected, "The host's timeout does not end the handshake of a document that still loads.");
+        Assert.HasCount(1, sent);
+        using var ack = JsonDocument.Parse(sent[0]);
+        Assert.AreEqual("hello_ack", ack.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+        Assert.AreEqual("slow-document", ack.RootElement.GetProperty("rendererDocumentId").GetString());
     }
 
     [TestMethod]
@@ -224,14 +352,84 @@ public sealed class TransportTests
         Assert.AreEqual("invalid_frame", rejection.RootElement.GetProperty("frame").GetProperty("code").GetString());
     }
 
+    // The bits of a process failure, as native/include/neoastra.h defines them.
+    private const ulong Crashed = 1UL << 32;
+    private const ulong RecreateView = 1UL << 33;
+    private const ulong DocumentIntact = 1UL << 35;
+
+    [TestMethod]
+    public void RendererLossLeavesTheTransportReadyForTheReloadedDocument()
+    {
+        var sent = new List<string>();
+        var sessions = new List<NeoTransportSessionSnapshot?>();
+        var nextId = 0;
+        var coordinator = new NeoTransportCoordinator(Options(), RuntimeInfo, sent.Add, _ => { }, idFactory: () => $"session-{++nextId}", sessionChanged: sessions.Add);
+        Connect(coordinator, "crashed-document");
+
+        global::NeoAstra.NeoAstra.NotifyTransportOfProcessFailure(coordinator, (ulong)NeoProcessFailureKind.WebProcessExited | Crashed | RecreateView);
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.IsNull(sessions[^1], "The RPC session of the lost document is closed.");
+        Assert.HasCount(1, sent, "Nothing is posted to a renderer that is gone.");
+
+        // The application reloads the view: the new document handshakes as after any navigation.
+        Connect(coordinator, "reloaded-document");
+        Assert.IsTrue(coordinator.IsConnected);
+        Assert.AreEqual("session-2", sessions[^1]!.Value.DocumentSessionId);
+        Assert.HasCount(2, sent);
+        using (var ack = JsonDocument.Parse(sent[^1]))
+        {
+            Assert.AreEqual("reloaded-document", ack.RootElement.GetProperty("rendererDocumentId").GetString());
+            Assert.AreEqual("hello_ack", ack.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+        }
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "reloaded-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+        Assert.AreEqual(NeoTransportReceiveKind.Consumed, coordinator.Receive(Envelope(coordinator, "crashed-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind,
+            "A late frame of the lost document is not rebound.");
+    }
+
+    [TestMethod]
+    public void ProcessFailuresThatLeaveTheMainDocumentKeepItsSession()
+    {
+        // A GPU, utility, sandbox, or plugin process; a renderer of subframes only; a renderer that stopped answering.
+        ulong[] failures =
+        [
+            (ulong)NeoProcessFailureKind.Unknown | Crashed | DocumentIntact,
+            (ulong)NeoProcessFailureKind.WebProcessExited | Crashed | DocumentIntact,
+            (ulong)NeoProcessFailureKind.ProcessUnresponsive | RecreateView | DocumentIntact,
+        ];
+        foreach (var failure in failures)
+        {
+            var sent = new List<string>();
+            var coordinator = CreateCoordinator(sent);
+            Connect(coordinator, "running-document");
+
+            global::NeoAstra.NeoAstra.NotifyTransportOfProcessFailure(coordinator, failure);
+
+            Assert.IsTrue(coordinator.IsConnected, $"Failure 0x{failure:x} leaves the session of the running document.");
+            Assert.HasCount(1, sent);
+            Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "running-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+        }
+    }
+
     private static NeoTransportCoordinator CreateCoordinator(
         List<string> sent,
         List<NeoTransportDiagnosticEventArgs>? diagnostics = null,
         Func<string>? idFactory = null,
-        NeoAstraOptions? options = null)
+        NeoAstraOptions? options = null,
+        NeoRuntimeInfo? runtimeInfo = null)
     {
         diagnostics ??= [];
-        return new NeoTransportCoordinator(options ?? Options(), RuntimeInfo, sent.Add, diagnostics.Add, idFactory: idFactory ?? (() => "fixed-session"));
+        return new NeoTransportCoordinator(options ?? Options(), runtimeInfo ?? RuntimeInfo, sent.Add, diagnostics.Add, idFactory: idFactory ?? (() => "fixed-session"));
+    }
+
+    // A native library that reports NEOASTRA_EVENT_NAVIGATION_COMMITTED (NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT).
+    private static readonly NeoRuntimeInfo CommitRuntimeInfo = new("webview2", "1", "1", "windows", "x64", 1UL << 2, false);
+
+    private static void ConnectCommitted(NeoTransportCoordinator coordinator, string rendererDocumentId)
+    {
+        coordinator.NavigationStarted();
+        coordinator.NavigationCommitted();
+        coordinator.Receive(Envelope(coordinator, rendererDocumentId, Hello()));
+        coordinator.NavigationCompleted(succeeded: true);
     }
 
     private static NeoAstraOptions Options() => new()

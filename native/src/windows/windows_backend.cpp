@@ -83,6 +83,7 @@ struct windows_view {
     std::string refused_navigation;
     ULONGLONG refused_navigation_time{};
     EventRegistrationToken navigation_completed{};
+    EventRegistrationToken content_loading{};
     EventRegistrationToken source_changed{};
     EventRegistrationToken title_changed{};
     EventRegistrationToken history_changed{};
@@ -566,6 +567,7 @@ void remove_view_events(windows_view* state) noexcept {
     state->core->remove_NavigationStarting(state->navigation_starting);
     state->core->remove_FrameNavigationStarting(state->frame_navigation_starting);
     state->core->remove_NavigationCompleted(state->navigation_completed);
+    state->core->remove_ContentLoading(state->content_loading);
     state->core->remove_SourceChanged(state->source_changed);
     state->core->remove_DocumentTitleChanged(state->title_changed);
     state->core->remove_HistoryChanged(state->history_changed);
@@ -785,11 +787,27 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
 }
 
 uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
-    uint64_t value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
-    if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+    uint64_t value{};
+    switch (kind) {
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED:
         value = NEOASTRA_PROCESS_FAILURE_BROWSER_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RESTART_APPLICATION;
-    } else if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE) {
-        value = NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
+        break;
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED:
+        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
+        break;
+    // The document still runs in its renderer and may answer again.
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE:
+        value = NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
+    // Only the subframes that renderer drew are gone; the main document runs on.
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED:
+        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
+    // A GPU, utility, sandbox helper, or plugin process, or one WebView2 does not name: WebView2 starts another one
+    // when it needs it, and the document runs on.
+    default:
+        value = NEOASTRA_PROCESS_FAILURE_UNKNOWN | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
     }
     if (reason == COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED ||
         reason == COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED ||
@@ -924,6 +942,17 @@ HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
                           static_cast<int64_t>(status));
             return S_OK;
         }).Get(), &state->navigation_completed);
+    if (FAILED(result)) return result;
+
+    // ContentLoading is the commit of a new main-frame document, error pages included; WebView2 raises it for no same-document
+    // navigation, and for no navigation that ends without a document, such as a download or an answer without content.
+    result = state->core->add_ContentLoading(
+        Callback<ICoreWebView2ContentLoadingEventHandler>([view](ICoreWebView2*, ICoreWebView2ContentLoadingEventArgs*) -> HRESULT {
+            neo_retain_guard owner(view);
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &view->source);
+            return S_OK;
+        }).Get(), &state->content_loading);
     if (FAILED(result)) return result;
 
     result = state->core->add_SourceChanged(

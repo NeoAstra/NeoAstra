@@ -379,12 +379,28 @@ public sealed class NeoAppBuilder
         return uri;
     }
 
+    // The view and its transport belong to the UI thread, while the teardown before it may end on the thread pool. Once
+    // the application loop has ended, no thread runs them any more, and the view is disposed where this runs.
+    internal static async ValueTask DisposeOnDispatcherAsync(NeoDispatcher dispatcher, IAsyncDisposable value)
+    {
+        if (dispatcher.CheckAccess())
+        {
+            await value.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        Task disposal;
+        try { disposal = await dispatcher.InvokeAsync(() => value.DisposeAsync().AsTask()).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is ObjectDisposedException or OperationCanceledException) { disposal = value.DisposeAsync().AsTask(); }
+        await disposal.ConfigureAwait(false);
+    }
+
     private sealed class Session(NeoRpcHost rpc, NeoEnvironment environment, global::NeoAstra.NeoAstra view, NeoRpcViewBinding binding) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             await binding.DisposeAsync().ConfigureAwait(false);
-            await view.DisposeAsync().ConfigureAwait(false);
+            await DisposeOnDispatcherAsync(environment.Application.Dispatcher, view).ConfigureAwait(false);
             await environment.DisposeAsync().ConfigureAwait(false);
             await rpc.DisposeAsync().ConfigureAwait(false);
         }

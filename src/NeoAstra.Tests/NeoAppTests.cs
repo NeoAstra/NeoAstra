@@ -256,6 +256,53 @@ public sealed class NeoAppTests
         }
     }
 
+    [TestMethod]
+    public async Task TheViewOfTheSessionIsDisposedOnTheUiThreadEvenFromTheThreadPool()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("The application dispatcher is qualified by this test on Windows only.");
+            return;
+        }
+        try
+        {
+            await RunStaAsync(() =>
+            {
+                NeoDispatcher? dispatcher = null;
+                var whileRunning = new DisposalProbe();
+                NeoApplication.Run(new NeoApplicationOptions { ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                {
+                    dispatcher = application.Dispatcher;
+                    try { await Task.Run(async () => await NeoAppBuilder.DisposeOnDispatcherAsync(application.Dispatcher, whileRunning)); }
+                    finally { application.ForceShutdown(); }
+                });
+                Assert.IsTrue(whileRunning.OnDispatcherThread, "A view is disposed on the UI thread while the application runs.");
+
+                // Once the loop has ended, nothing runs the dispatcher: the view is disposed where the teardown runs.
+                var afterShutdown = new DisposalProbe();
+                Task.Run(async () => await NeoAppBuilder.DisposeOnDispatcherAsync(dispatcher!, afterShutdown)).Wait(TimeSpan.FromSeconds(5));
+                Assert.IsTrue(afterShutdown.Disposed);
+            });
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            Assert.Inconclusive("The native runtime is not staged for dispatcher tests.");
+        }
+    }
+
+    private sealed class DisposalProbe : IAsyncDisposable
+    {
+        private readonly int _creatorThread = Environment.CurrentManagedThreadId;
+        public bool Disposed { get; private set; }
+        public bool OnDispatcherThread { get; private set; }
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            OnDispatcherThread = Environment.CurrentManagedThreadId == _creatorThread;
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static Task RunStaAsync(Action action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -29,6 +29,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private bool _canGoForward;
     private bool _historyNavigationOff;
     private int _disposed;
+    private object? _rpcServiceScope;
 
     internal NeoAstra(NeoEnvironment environment, SafeViewHandle handle, NeoAstraHost host, NeoAstraOptions options)
     {
@@ -168,6 +169,13 @@ public sealed class NeoAstra : IAsyncDisposable
     public event EventHandler<NeoTransportDiagnosticEventArgs>? TransportDiagnostic;
 
     /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
+    /// <remarks>
+    /// A failure that ended the main document closes the frontend transport session of the view; the document that
+    /// <see cref="Reload()"/> or a navigation loads next connects again. With WebView2, the exit of a GPU, utility,
+    /// sandbox, or plugin process, or of a renderer of subframes only, leaves the document running: it is reported with
+    /// <see cref="NeoProcessRecoveryAction.None"/>, and the session stays open. So does a renderer that stops answering,
+    /// for which <see cref="NeoProcessRecoveryAction.RecreateView"/> is recommended in case it does not recover.
+    /// </remarks>
     public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
 
     /// <summary>Occurs when a drag that started in the page of this view ends, and tells how it ended and where.</summary>
@@ -353,25 +361,45 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     /// <summary>
-    /// Posts frames that NeoAstra wrote itself to web content, in order, in one turn of the UI thread: an RPC session
-    /// sends what it has queued this way instead of one dispatcher round trip per frame. The frames are valid JSON
-    /// objects already, so they are not parsed again here. Runs on the UI thread.
+    /// Posts frames that a transport document session of this view wrote itself to its document, in order, in one turn
+    /// of the UI thread: an RPC session sends what it has queued this way instead of one dispatcher round trip per frame.
+    /// The frames are valid JSON objects already, so they are not parsed again here. Runs on the UI thread.
     /// </summary>
+    /// <param name="documentSessionId">The document session that wrote the frames.</param>
     /// <param name="frames">Complete JSON objects, in the order they are posted.</param>
+    /// <returns>
+    /// Whether the session is closed, in which case nothing was posted; otherwise, the frames that were not posted
+    /// because their envelope exceeds <see cref="NeoAstraOptions.MaximumMessageSize"/>. Every other frame was posted.
+    /// </returns>
     /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
     /// <exception cref="NeoAstraException">The backend refused a message; the frames before it were posted.</exception>
-    internal unsafe void PostTrustedMessages(IReadOnlyList<string> frames)
+    internal NeoTrustedPostResult PostTrustedMessages(string documentSessionId, IReadOnlyList<string> frames)
     {
         ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(documentSessionId);
         ArgumentNullException.ThrowIfNull(frames);
-        foreach (var json in frames)
+        return PostTrustedFrames(_transport, documentSessionId, frames, json => PostNativeMessage(json, "post web message"));
+    }
+
+    internal static NeoTrustedPostResult PostTrustedFrames(NeoTransportCoordinator? transport, string documentSessionId, IReadOnlyList<string> frames, Action<string> post)
+    {
+        if (transport is null) return new(SessionClosed: true, null);
+        List<int>? rejected = null;
+        for (var index = 0; index < frames.Count; index++)
         {
-            var outbound = _transport?.WrapOutboundTrusted(json) ?? json;
-            using var nativeJson = new Utf8String(outbound);
-            NativeMethods.neoastra_error_t error = default;
-            var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
-            NativeError.ThrowIfFailed(result, error, "post web message", CancellationToken.None);
+            switch (transport.WrapOutboundTrusted(documentSessionId, frames[index], out var envelope))
+            {
+                case NeoTransportOutboundStatus.Wrapped:
+                    post(envelope!);
+                    break;
+                case NeoTransportOutboundStatus.TooLarge:
+                    (rejected ??= []).Add(index);
+                    break;
+                default:
+                    return new(SessionClosed: true, rejected);
+            }
         }
+        return new(SessionClosed: false, rejected);
     }
 
     /// <summary>Reloads the current document.</summary>
@@ -589,6 +617,10 @@ public sealed class NeoAstra : IAsyncDisposable
 
     internal TimeSpan DecisionTimeout => _decisionTimeout;
 
+    // Identifies the per-view RPC services of this view instance, without keeping the view alive: a view created later
+    // with the same label gets services of its own.
+    internal object RpcServiceScope => Volatile.Read(ref _rpcServiceScope) ?? Interlocked.CompareExchange(ref _rpcServiceScope, new object(), null) ?? _rpcServiceScope!;
+
     // Browser automation answers the dialogs of the views it drives; the handler of the application stays in place
     // and gets the dialogs back when automation lets go of the view.
     internal Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? AutomationScriptDialogRequested { get; set; }
@@ -757,6 +789,9 @@ public sealed class NeoAstra : IAsyncDisposable
                 _source = uri ?? _source;
                 _isLoading = true;
                 break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_COMMITTED:
+                _transport?.NavigationCommitted();
+                break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_NAVIGATION_COMPLETED:
                 _source = uri ?? _source;
                 _isLoading = false;
@@ -798,7 +833,7 @@ public sealed class NeoAstra : IAsyncDisposable
                 try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
-                _transport?.Close("renderer_lost");
+                NotifyTransportOfProcessFailure(_transport, value.value);
                 try { ProcessFailed?.Invoke(this, DecodeProcessFailure(value.value, value.native_code, Utf8String.Decode(value.text))); } catch { }
                 break;
         }
@@ -911,12 +946,22 @@ public sealed class NeoAstra : IAsyncDisposable
         try { TransportSessionChanged?.Invoke(session); } catch { }
     }
 
-    private unsafe void SendRawMessage(string json)
+    // The transport also posts the close of its session while the view is being disposed, before the native view is
+    // released, so it checks the native handle rather than the disposal of the view.
+    private void SendRawMessage(string json)
+    {
+        ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
+        PostNativeMessage(new(_handle.DangerousGetHandle()), json, "post transport message");
+    }
+
+    private void PostNativeMessage(string json, string operation) => PostNativeMessage(NativeHandle, json, operation);
+
+    private static unsafe void PostNativeMessage(NativeMethods.neoastra_view_t view, string json, string operation)
     {
         using var nativeJson = new Utf8String(json);
         NativeMethods.neoastra_error_t error = default;
-        var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
-        NativeError.ThrowIfFailed(result, error, "post transport message");
+        var result = NativeMethods.neoastra_view_post_message(view, nativeJson.View, 1, &error);
+        NativeError.ThrowIfFailed(result, error, operation, CancellationToken.None);
     }
 
     private void RaiseTransportDiagnostic(NeoTransportDiagnosticEventArgs value)
@@ -927,6 +972,18 @@ public sealed class NeoAstra : IAsyncDisposable
     // A status this version does not know is one that did not open the address.
     internal static NeoExternalOpenCompletedEventArgs DecodeExternalOpen(Uri? uri, ulong value, long nativeCode) =>
         new(uri, value <= (ulong)NeoExternalOpenStatus.Failed ? (NeoExternalOpenStatus)(int)value : NeoExternalOpenStatus.Failed, nativeCode);
+
+    // NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT of native/include/neoastra.h: the failed process was not the one of the
+    // main document (a GPU or other helper process, or the renderer of subframes only), or that renderer only stopped
+    // answering. A native library from before the bit reports every failure as one that ended the document.
+    private const ulong ProcessFailureDocumentIntact = 1UL << 35;
+
+    // A failure that ended the main document ends its transport session, and the view stays ready for the document of a
+    // reload; any other failure leaves the running document and its session alone.
+    internal static void NotifyTransportOfProcessFailure(NeoTransportCoordinator? transport, ulong value)
+    {
+        if ((value & ProcessFailureDocumentIntact) == 0) transport?.RendererLost();
+    }
 
     internal static NeoProcessFailedEventArgs DecodeProcessFailure(ulong value, long nativeCode, string? description)
     {

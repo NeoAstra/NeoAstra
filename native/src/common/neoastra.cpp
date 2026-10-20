@@ -822,7 +822,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
