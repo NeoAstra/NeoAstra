@@ -183,7 +183,6 @@ public sealed class NativeLibraryLoadTests
             var bytes = File.ReadAllBytes(FindRepositoryFile("src", "NeoAstra.Core", "runtimes", rid, "native", "neoastra_native.dll"));
             var imports = NativeLibraryDiagnostics.ReadPeImports(bytes);
             CollectionAssert.Contains(imports.ToArray(), "KERNEL32.dll", rid);
-            CollectionAssert.Contains(imports.ToArray(), "VCRUNTIME140.dll", rid);
             Assert.AreEqual(rid == "win-x64" ? Architecture.X64 : Architecture.Arm64, NativeLibraryDiagnostics.ReadImage(bytes).Architectures.Single(), rid);
         }
 

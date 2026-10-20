@@ -33,10 +33,9 @@ Every platform needs:
   includes it. A host can instead name a fixed-version runtime through the environment options.
 - NeoAstra links the WebView2 loader statically. It does not ship the WebView2 runtime or another
   Chromium distribution.
-- The Microsoft Visual C++ runtime (`MSVCP140.dll`, `VCRUNTIME140.dll`) for the architecture of the
-  process, which `neoastra_native.dll` imports. Most machines have it; a clean one needs the
-  [latest Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist),
-  or the DLLs copied beside the application.
+- Nothing else: `neoastra_native.dll` carries its C and C++ runtime, so the Microsoft Visual C++
+  Redistributable is not needed. The library of NeoAstra 1.7 and earlier imported it
+  (`MSVCP140.dll`, `VCRUNTIME140.dll`).
 
 ### macOS
 
@@ -82,7 +81,7 @@ each path, with its `Result`, `Error`, `NativeErrorCode`, `ImageArchitectures`, 
 | What the message says for a path | Cause | Fix |
 | --- | --- | --- |
 | `not found` for every path, and `No usable neoastra_native.dll was found` | The library is not beside the application, for example in a framework-dependent build that has no RID, or a deployment that left out `runtimes/` | Reference `NeoAstra.Core` (the `NeoAstra` package references it), publish for a supported RID (`dotnet publish -r win-x64`), or set `NEOASTRA_NATIVE_LIBRARY` to the full path of the library |
-| `missing dependency MSVCP140.dll, VCRUNTIME140.dll (Win32 error 126)` | Windows: the Visual C++ runtime is not installed | Install the [latest Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for the architecture of the process, or copy the DLLs beside the application |
+| `missing dependency MSVCP140.dll, VCRUNTIME140.dll (Win32 error 126)` | Windows: the Visual C++ runtime is not installed, for a library of NeoAstra 1.7 or earlier or one built with a shared runtime | Install the [latest Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for the architecture of the process, or copy the DLLs beside the application |
 | `missing dependency libwebkitgtk-6.0.so.4` (or `libgtk-4.so.1`, `libjavascriptcoregtk-6.0.so.1`, `libsoup-3.0.so.0`), with `cannot open shared object file` | Linux: GTK 4 or WebKitGTK 6.0 is not installed | `sudo apt-get install libgtk-4-1 libwebkitgtk-6.0-4` on Debian and Ubuntu; `sudo dnf install gtk4 webkitgtk6.0` on Fedora, which NeoAstra does not check. `ldd libneoastra_native.so \| grep "not found"` lists every missing library |
 | `version 'GLIBC_2.xx' not found` | Linux: the glibc of the system is older than the one the library was built with | Use Ubuntu 24.04 or later, or another glibc distribution of the same age |
 | `Library not loaded: ...`, or `built for macOS 26.0 which is newer than running OS` | macOS: the release is older than the one the library needs | Run the `osx-x64` library on macOS 15 or later and the `osx-arm64` library on macOS 26 or later |
