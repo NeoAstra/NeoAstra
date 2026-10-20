@@ -21,7 +21,9 @@ running; reload the document to reconnect.
 
 ## RPC
 
-Generated bindings use the public `invoke` and `subscribe` functions. For direct infrastructure use,
+Generated bindings use the public `invoke` and `subscribe` functions. They share one client made by
+`rpcClient()`; when its handshake fails with a retryable error (`handshake_timeout`), the next call tries
+the handshake again, up to three attempts, after which the failure is returned at once. For direct infrastructure use,
 `NeoRpcClient` multiplexes calls, stable `NeoRpcError` values, `AbortSignal` cancellation, ordered event
 subscriptions, acknowledged async channels, and session-owned resource close over one connected
 transport. An already-aborted call sends no invoke frame. `timeoutMilliseconds` bounds both invocation

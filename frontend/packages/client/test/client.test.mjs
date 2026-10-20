@@ -309,3 +309,17 @@ test("a frame the client rejects fails the call, channel or subscription it answ
   assert.equal(diagnostics.filter(value => value.code === "invalid_frame" && /depth/.test(value.message)).length, 3);
   connection.close();
 });
+
+test("rpcClient retries the handshake after a retryable failure", async () => {
+  let hellos = 0;
+  const bootstrap = createBootstrap((handler, frame) => {
+    if (frame.kind === "hello" && ++hellos === 2) queueMicrotask(() => handler(runtime()));
+    if (frame.kind === "invoke") queueMicrotask(() => handler({ neoastra: 1, kind: "result", id: frame.id, ok: true, value: "read" }));
+  });
+  bootstrap.metadata.handshakeTimeoutMilliseconds = 5;
+  const client = await loadClient(bootstrap);
+  await assert.rejects(client.invoke("documents.read", {}), error => error.code === "handshake_timeout" && error.retryable);
+  assert.equal((await outcome(client.invoke("documents.read", {}))).value, "read");
+  assert.equal(hellos, 2);
+  // The bound on attempts is tested in rpc.test.mjs: rpcClient keeps one module-level client per test process.
+});

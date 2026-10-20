@@ -407,10 +407,24 @@ export class NeoRpcClient {
 
 const maximumAbandonedInvocations = 256;
 
+// A handshake that failed with a retryable error (a handshake timeout) is tried again by the next call, up
+// to the host's default number of hello attempts. Each attempt waits for a whole handshake timeout, so
+// retries never spin; past the last one, the failure stays cached like a terminal one.
+const maximumHandshakeAttempts = 3;
+
 let defaultClient: Promise<NeoRpcClient> | undefined;
+let handshakeAttempts = 0;
 
 export async function rpcClient(): Promise<NeoRpcClient> {
-  defaultClient ??= connect().then(connection => new NeoRpcClient(connection));
+  if (defaultClient === undefined) {
+    handshakeAttempts++;
+    const attempt = connect().then(connection => new NeoRpcClient(connection));
+    defaultClient = attempt;
+    attempt.catch((error: unknown) => {
+      if (defaultClient === attempt && handshakeAttempts < maximumHandshakeAttempts &&
+          error instanceof NeoAstraClientError && error.retryable) defaultClient = undefined;
+    });
+  }
   return defaultClient;
 }
 

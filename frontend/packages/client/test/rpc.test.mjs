@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import test from "node:test";
-import { NeoRpcClient, NeoRpcError } from "../dist/index.js";
+import { NeoRpcClient, NeoRpcError, invoke } from "../dist/index.js";
 import { createMockClient, createMockRpcHarness } from "../dist/testing.js";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -358,4 +358,28 @@ test("an invocation timeout sends cancel and rejects with the retryable timeout 
   await assert.rejects(aborted, error => error.code === "operation_canceled" && error.retryable === false);
   assert.equal(transport.outboundFrames.filter(frame => frame.kind === "cancel").length, 2);
   client.close();
+});
+
+test("rpcClient stops retrying a handshake that never completes after three attempts", async () => {
+  // This process has not connected yet: the default client is created by the first call below.
+  const transportKey = Symbol.for("@neoastra/client/transport/v1");
+  let hellos = 0;
+  Object.defineProperty(globalThis, transportKey, {
+    configurable: true,
+    value: {
+      metadata: { platform: "windows", backend: "webview2", viewLabel: "main", wholeViewTrust: false, maximumFrameBytes: 1024, maximumDiagnosticQueue: 100, handshakeTimeoutMilliseconds: 5 },
+      send(frame) { if (frame.kind === "hello") hellos++; },
+      setReceiveHandler() { return () => {}; },
+    },
+  });
+  try {
+    // Each attempt costs one hello and one handshake timeout; past the third, the failure stays cached.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await assert.rejects(invoke("documents.read", {}), error => error.code === "handshake_timeout" && error.retryable);
+      assert.equal(hellos, attempt);
+    }
+    await assert.rejects(invoke("documents.read", {}), error => error.code === "handshake_timeout");
+    await tick();
+    assert.equal(hellos, 3);
+  } finally { delete globalThis[transportKey]; }
 });
