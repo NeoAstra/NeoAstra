@@ -253,6 +253,9 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private readonly WeakReference<global::NeoAstra.NeoAstra>? _view;
     private readonly WeakReference<NeoWindow>? _window;
     private readonly CancellationTokenSource _closed;
+    // Read once: the token stays usable after the source is disposed at the end of teardown, while the Token property of
+    // a disposed source throws, and a publisher or a late frame may still look at the session then.
+    private readonly CancellationToken _closedToken;
     private readonly ConcurrentDictionary<string, InvocationState> _requests = new(StringComparer.Ordinal);
     // Actual IDs and request-state objects are owned only while processing is active.
     private readonly Dictionary<string, RequestIdState> _usedRequestIds = new(StringComparer.Ordinal);
@@ -291,6 +294,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         _view = view is null ? null : new(view);
         _window = window is null ? null : new(window);
         _closed = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+        _closedToken = _closed.Token;
         _resources = new NeoRpcResourceCollection(this, host.Options.MaximumResourcesPerSession);
         _rateTokens = host.Options.RequestRateBurst;
         _openedTimestamp = _lastRateTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -301,7 +305,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
     /// <summary>Gets the immutable trusted view label.</summary>
     public string ViewLabel => _identity.ViewLabel;
     /// <summary>Gets the cancellation token triggered by session or host teardown.</summary>
-    public CancellationToken Closed => _closed.Token;
+    /// <remarks>It remains readable after the session is disposed.</remarks>
+    public CancellationToken Closed => _closedToken;
     /// <summary>Gets the current active invocation count.</summary>
     public int ActiveInvocationCount => Volatile.Read(ref _activeInvocations);
     // The frames queued for the writer and not yet taken into a batch (the queue of one reader does not count them).
@@ -517,7 +522,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         foreach (var subscription in _subscriptions.Values)
         {
             if (!ReferenceEquals(subscription.Descriptor, descriptor)) continue;
-            if (!recipient(CreateContext(NewCorrelationId(), _closed.Token, subscription.SourceOrigin, subscription.IsMainFrame))) continue;
+            if (!recipient(CreateContext(NewCorrelationId(), _closedToken, subscription.SourceOrigin, subscription.IsMainFrame))) continue;
             accepted |= subscription.Enqueue(json);
         }
         return accepted;
@@ -620,7 +625,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         var correlationId = NewCorrelationId();
         var timeout = descriptor.Options.Timeout ?? _host.Options.InvocationTimeout;
         var state = new InvocationState(
-            _closed.Token,
+            _closedToken,
             receiveCancellation,
             timeout,
             timedOut => SendTerminalErrorResultAsync(id, timedOut
@@ -826,7 +831,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 return;
             }
             if (!subscription.TryActivate()) return;
-            await SendRawAsync(BuildFrame(writer => { writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WriteEndObject(); }), _closed.Token).ConfigureAwait(false);
+            await SendRawAsync(BuildFrame(writer => { writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WriteEndObject(); }), _closedToken).ConfigureAwait(false);
             subscription.Start();
         }
         catch
@@ -1082,7 +1087,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             writer.WriteStartObject(); WriteHeader(writer, "result"); writer.WriteString("id", id); writer.WriteBoolean("ok", false);
             writer.WritePropertyName("error"); WriteError(writer, error); writer.WriteEndObject();
-        }), _closed.Token);
+        }), _closedToken);
 
     private ValueTask SendTerminalErrorResultAsync(string id, NeoRpcError error)
         => SendRawAsync(BuildFrame(writer =>
@@ -1095,11 +1100,11 @@ public sealed class NeoRpcSession : IAsyncDisposable
         => SendRawAsync(BuildFrame(writer =>
         {
             writer.WriteStartObject(); WriteHeader(writer, "subscribed"); writer.WriteString("id", id); writer.WritePropertyName("error"); WriteError(writer, error); writer.WriteEndObject();
-        }), _closed.Token);
+        }), _closedToken);
 
     private async ValueTask SendRawAsync(string json, CancellationToken cancellationToken, bool allowClosing = false)
     {
-        if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closed.Token);
+        if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closedToken);
         cancellationToken.ThrowIfCancellationRequested();
         var frame = new OutboundFrame(json, cancellationToken);
         Interlocked.Increment(ref _queuedOutbound);
@@ -1356,10 +1361,14 @@ public sealed class NeoRpcSession : IAsyncDisposable
         private readonly NeoRpcSession _session;
         private readonly RequestIdState _requestId;
         private readonly string _id;
+        // Guards the queue, the pump waiting for it, and disposal: a publisher may enqueue at the moment the subscription
+        // or its session closes. Nothing that waits (a semaphore) is disposed under a publisher.
         private readonly object _lock = new();
         private readonly Queue<byte[]> _queue = [];
-        private readonly SemaphoreSlim _ready;
         private readonly CancellationTokenSource _closed;
+        private readonly CancellationToken _token;
+        private TaskCompletionSource? _waiting;
+        private bool _disposed;
         private long _bytes;
         private int _started;
         private long _sequence;
@@ -1369,28 +1378,36 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             _session = session; _requestId = requestId; _id = requestId.Id; Descriptor = descriptor;
             SourceOrigin = sourceOrigin; IsMainFrame = isMainFrame;
-            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closed.Token);
-            _ready = new SemaphoreSlim(0, session._host.Options.MaximumQueuedEventsPerSubscription);
+            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closedToken);
+            _token = _closed.Token;
         }
         internal EventDescriptor Descriptor { get; }
         internal Uri? SourceOrigin { get; }
         internal bool IsMainFrame { get; }
-        internal CancellationToken Token => _closed.Token;
+        internal CancellationToken Token => _token;
         internal bool IsActive => Volatile.Read(ref _state) == Active;
         internal Task Completion { get; private set; } = Task.CompletedTask;
-        internal bool TryActivate() => !_closed.IsCancellationRequested && Interlocked.CompareExchange(ref _state, Active, Pending) == Pending;
+        internal bool TryActivate() => !_token.IsCancellationRequested && Interlocked.CompareExchange(ref _state, Active, Pending) == Pending;
         internal bool TryClosePending()
         {
             if (Interlocked.CompareExchange(ref _state, Closed, Pending) != Pending) return false;
-            if (!_closed.IsCancellationRequested) _closed.Cancel();
+            Cancel();
             return true;
         }
         internal void Start() { if (Volatile.Read(ref _state) == Active && Interlocked.Exchange(ref _started, 1) == 0) Completion = PumpAsync(); }
         internal bool Enqueue(byte[] value)
         {
+            if (TryEnqueue(value, out var failed)) return true;
+            if (failed) Cancel();
+            return false;
+        }
+
+        private bool TryEnqueue(byte[] value, out bool failed)
+        {
+            failed = false;
             lock (_lock)
             {
-                if (_closed.IsCancellationRequested || value.Length > _session._host.Options.MaximumQueuedEventBytesPerSubscription) return false;
+                if (_token.IsCancellationRequested || value.Length > _session._host.Options.MaximumQueuedEventBytesPerSubscription) return false;
                 var countFull = _queue.Count >= _session._host.Options.MaximumQueuedEventsPerSubscription;
                 var bytesFull = _bytes + value.Length > _session._host.Options.MaximumQueuedEventBytesPerSubscription;
                 if (countFull || bytesFull)
@@ -1398,46 +1415,76 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     switch (Descriptor.Options.OverflowBehavior)
                     {
                         case NeoRpcOverflowBehavior.DropNewest: return false;
-                        case NeoRpcOverflowBehavior.Fail: _closed.Cancel(); return false;
+                        case NeoRpcOverflowBehavior.Fail: failed = true; return false;
                         case NeoRpcOverflowBehavior.Coalesce:
-                            var removed = _queue.Count;
                             _queue.Clear(); _bytes = 0;
-                            while (removed-- > 0) _ready.Wait(0);
                             break;
                         case NeoRpcOverflowBehavior.DropOldest:
                             while (_queue.Count != 0 && (_queue.Count >= _session._host.Options.MaximumQueuedEventsPerSubscription || _bytes + value.Length > _session._host.Options.MaximumQueuedEventBytesPerSubscription))
-                            {
                                 _bytes -= _queue.Dequeue().Length;
-                                _ready.Wait(0);
-                            }
                             break;
                     }
                 }
                 _queue.Enqueue(value); _bytes += value.Length;
-                try { _ready.Release(); } catch (SemaphoreFullException) { }
+                WakeLocked();
                 return true;
             }
         }
-        internal void Close() { Interlocked.Exchange(ref _state, Closed); if (!_closed.IsCancellationRequested) _closed.Cancel(); }
+        internal void Close() { Interlocked.Exchange(ref _state, Closed); Cancel(); }
         internal void DisposePending()
         {
-            if (Volatile.Read(ref _started) == 0) { _ready.Dispose(); _closed.Dispose(); _session.CompleteRequestId(_requestId); }
+            if (Volatile.Read(ref _started) == 0) { Dispose(); _session.CompleteRequestId(_requestId); }
         }
+
+        // Never under the lock: application callbacks registered on the token (an authorization service) run here. The
+        // source is disposed only once it was canceled, so a disposed source is canceled already.
+        private void Cancel()
+        {
+            try { _closed.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        private void WakeLocked()
+        {
+            _waiting?.TrySetResult();
+            _waiting = null;
+        }
+
+        private void Dispose()
+        {
+            lock (_lock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                _queue.Clear();
+                _bytes = 0;
+            }
+            _closed.Dispose();
+        }
+
         private async Task PumpAsync()
         {
+            // Closing the subscription or its session wakes a pump that waits for an event.
+            var wake = _token.UnsafeRegister(static state => { var subscription = (SubscriptionState)state!; lock (subscription._lock) subscription.WakeLocked(); }, this);
             try
             {
                 while (true)
                 {
-                    await _ready.WaitAsync(_closed.Token).ConfigureAwait(false);
                     byte[]? item = null;
-                    lock (_lock) { if (_queue.Count != 0) { item = _queue.Dequeue(); _bytes -= item.Length; } }
-                    if (item is not null) await _session.SendEventAsync(_id, Interlocked.Increment(ref _sequence), item, _closed.Token).ConfigureAwait(false);
+                    Task? waiting = null;
+                    lock (_lock)
+                    {
+                        if (_token.IsCancellationRequested) return;
+                        if (_queue.TryDequeue(out item)) _bytes -= item.Length;
+                        else waiting = (_waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+                    }
+                    if (waiting is not null) await waiting.ConfigureAwait(false);
+                    else await _session.SendEventAsync(_id, Interlocked.Increment(ref _sequence), item!, _token).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (_closed.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
             catch (Exception) { Close(); }
-            finally { _session.RemoveSubscription(_id, this); _ready.Dispose(); _closed.Dispose(); _session.CompleteRequestId(_requestId); }
+            finally { wake.Dispose(); _session.RemoveSubscription(_id, this); Dispose(); _session.CompleteRequestId(_requestId); }
         }
     }
 
@@ -1463,7 +1510,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
         internal ChannelState(NeoRpcSession session, string id, NeoRpcChannel<T> channel)
         {
             _session = session; _id = id; _channel = channel;
-            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closed.Token);
+            _closed = CancellationTokenSource.CreateLinkedTokenSource(session._closedToken);
             _credits = new SemaphoreSlim(session._host.Options.MaximumUnacknowledgedChannelItems, session._host.Options.MaximumUnacknowledgedChannelItems);
             _completion = PumpAsync();
         }
@@ -1525,7 +1572,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
                         _session._host.Diagnose(NeoRpcDiagnosticLevel.Error, "channel_cleanup_failed", "A channel service lease failed to dispose safely.", error.Value.CorrelationId);
                     }
                     // Abandoning an unstarted result must not send: a reentrant close may be inside the result send itself.
-                    try { if (started && !_session._closed.IsCancellationRequested) await _session.SendChannelTerminalAsync(_id, error is null ? "channel_complete" : "channel_error", error, _session._closed.Token).ConfigureAwait(false); } catch { }
+                    try { if (started && !_session._closed.IsCancellationRequested) await _session.SendChannelTerminalAsync(_id, error is null ? "channel_complete" : "channel_error", error, _session._closedToken).ConfigureAwait(false); } catch { }
                 }
                 finally
                 {

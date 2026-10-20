@@ -193,6 +193,53 @@ public sealed class RpcSessionFlowTests
         Assert.IsTrue(frames.All(static frame => ErrorCode(frame) is null));
     }
 
+    [TestMethod]
+    public async Task PublishingWhileSubscriptionsAndSessionsClose_NeverThrows()
+    {
+        // Small queues: publications overflow and drop while subscriptions and sessions close under them.
+        var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumQueuedEventsPerSubscription = 2 });
+        var dropping = builder.AddEvent("flow.dropping", RpcTestJsonContext.Default.Response);
+        var failing = builder.AddEvent("flow.failing", RpcTestJsonContext.Default.Response, new() { OverflowBehavior = NeoRpcOverflowBehavior.Fail });
+        await using var host = builder.Build();
+        var failures = new ConcurrentQueue<Exception>();
+        using var stop = new CancellationTokenSource();
+        var publishers = Enumerable.Range(0, Math.Max(2, Environment.ProcessorCount / 2)).Select(_ => Task.Run(async () =>
+        {
+            var value = new Response("x", "view");
+            while (!stop.IsCancellationRequested)
+            {
+                try
+                {
+                    await dropping.PublishAsync(value);
+                    await dropping.PublishAsync(value, static context => context.IsMainFrame);
+                    await failing.PublishAsync(value);
+                }
+                catch (Exception exception) { failures.Enqueue(exception); }
+            }
+        })).ToArray();
+
+        var deadline = Stopwatch.GetTimestamp() + 3 * Stopwatch.Frequency;
+        for (var round = 0; Stopwatch.GetTimestamp() < deadline || round < 50; round++)
+        {
+            var session = host.OpenSession(new NeoRpcSessionIdentity("fixture", $"race-{round}"), async (_, cancellationToken) => await Task.Yield());
+            try
+            {
+                for (var index = 0; index < 8; index++)
+                    await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"subscribe\",\"id\":\"sub-{index}\",\"event\":\"{(index % 2 == 0 ? "flow.dropping" : "flow.failing")}\"}}");
+                var unsubscribing = Enumerable.Range(0, 4).Select(index => Task.Run(() => session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"unsubscribe\",\"id\":\"sub-{index}\"}}").AsTask())).ToArray();
+                await session.DisposeAsync();
+                try { await Task.WhenAll(unsubscribing); }
+                catch (ObjectDisposedException) { /* An unsubscribe that arrives after the session closed is refused as such. */ }
+                _ = session.Closed.IsCancellationRequested;
+            }
+            catch (Exception exception) { failures.Enqueue(exception); }
+        }
+        stop.Cancel();
+        await Task.WhenAll(publishers);
+        Assert.IsEmpty(failures, string.Join(Environment.NewLine, failures.Take(5)));
+        Assert.AreEqual(0, host.ActiveSessionCount);
+    }
+
     // A rate an application configures as a safety rail: 100 frames a second, a burst of 200, closure after 20 seconds.
     private static NeoRpcOptions RateLimited(INeoRpcDiagnosticSink? diagnostics = null)
         => new() { RequestRatePerSecond = 100, RequestRateBurst = 200, AbuseClosureThreshold = 20, DiagnosticSink = diagnostics };
