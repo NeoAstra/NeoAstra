@@ -131,6 +131,53 @@ void test_dpi_callback_release() {
     neoastra_app_release(app);
 }
 
+// The width of the big or small icon that a window shows; 0 when it has none.
+int icon_size(HWND hwnd, WPARAM kind) {
+    const auto icon = reinterpret_cast<HICON>(SendMessageW(hwnd, WM_GETICON, kind, 0));
+    ICONINFO info{};
+    if (!icon || !GetIconInfo(icon, &info)) return 0;
+    BITMAP bitmap{};
+    const auto size = GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof(bitmap), &bitmap) ? bitmap.bmWidth : 0;
+    if (info.hbmColor) DeleteObject(info.hbmColor);
+    if (info.hbmMask) DeleteObject(info.hbmMask);
+    return size;
+}
+
+void assert_icon_sizes(HWND hwnd, UINT dpi) {
+    assert(icon_size(hwnd, ICON_BIG) == GetSystemMetricsForDpi(SM_CXICON, dpi));
+    assert(icon_size(hwnd, ICON_SMALL) == GetSystemMetricsForDpi(SM_CXSMICON, dpi));
+}
+
+void test_executable_icon() {
+    // The executable of this test has an icon group whose first picture is 16 pixels, and pictures up to 64 pixels.
+    auto* app = create_app();
+    auto* window = create_window(app);
+    const auto hwnd = window_handle(window);
+    const auto dpi = GetDpiForWindow(hwnd);
+    // A window shows the icon of its executable at the sizes of the scale of its display, not the first picture.
+    assert_icon_sizes(hwnd, dpi);
+    // It moves to a display of another scale.
+    const UINT other = dpi == 192 ? 144 : 192;
+    RECT suggested{};
+    assert(GetWindowRect(hwnd, &suggested));
+    SendMessageW(hwnd, WM_DPICHANGED, MAKELONG(other, other), reinterpret_cast<LPARAM>(&suggested));
+    assert_icon_sizes(hwnd, other);
+    // An icon that the application gives the window stays through a change of scale.
+    const auto own = LoadIconW(nullptr, MAKEINTRESOURCEW(32515)); // IDI_WARNING, shared
+    assert(own);
+    SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(own));
+    assert(GetWindowRect(hwnd, &suggested));
+    SendMessageW(hwnd, WM_DPICHANGED, MAKELONG(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+    assert(reinterpret_cast<HICON>(SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0)) == own);
+    assert(icon_size(hwnd, ICON_SMALL) == GetSystemMetricsForDpi(SM_CXSMICON, dpi));
+    // Taking it away gives the window the icon of its executable back, at the sizes of the current scale.
+    SendMessageW(hwnd, WM_SETICON, ICON_BIG, 0);
+    assert_icon_sizes(hwnd, dpi);
+    neoastra_window_release(window);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+}
+
 void NEOASTRA_CALL release_window_on_close(void* pointer, const neoastra_event_t* event) {
     auto* context = static_cast<window_callback_context*>(pointer);
     if (event->header.type != NEOASTRA_EVENT_WINDOW_CLOSED || event->object_id != context->id) return;
@@ -447,6 +494,7 @@ int main() {
     test_window_callback_release(false);
     test_window_callback_release(true);
     test_dpi_callback_release();
+    test_executable_icon();
     test_window_destroy_callback_release();
     test_zero_reference_window_native_cleanup();
     test_session_callback_release();

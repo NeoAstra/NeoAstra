@@ -20,6 +20,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 using Microsoft::WRL::Callback;
@@ -56,7 +57,17 @@ struct windows_window {
     bool active{true};
     int caption_hot{-1};
     int caption_pressed{-1};
+    // The icon of the executable at the sizes of the scale of the window's display (see apply_executable_icons).
+    HICON executable_big_icon{};
+    HICON executable_small_icon{};
     windows_window() { restored_placement.length = sizeof(restored_placement); }
+    windows_window(const windows_window&) = delete;
+    windows_window& operator=(const windows_window&) = delete;
+    // The native window is destroyed before its state, so it no longer shows these icons.
+    ~windows_window() {
+        if (executable_big_icon) DestroyIcon(executable_big_icon);
+        if (executable_small_icon) DestroyIcon(executable_small_icon);
+    }
 };
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; bool private_mode{}; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
@@ -1319,6 +1330,55 @@ UINT window_dpi(HWND hwnd) noexcept { const auto dpi = GetDpiForWindow(hwnd); re
 // What the system reports depends on the awareness of the process: a process that declares none is told 96 on every display.
 double window_scale_factor(HWND hwnd) noexcept { return window_dpi(hwnd) / static_cast<double>(USER_DEFAULT_SCREEN_DPI); }
 int scale_for_dpi(int value, UINT dpi) noexcept { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); }
+
+// The first icon group of the executable, the one Explorer shows for it: in a .NET application, its <ApplicationIcon>.
+struct executable_icon_group { std::wstring name; WORD id{}; bool found{}; };
+BOOL CALLBACK find_executable_icon_group(HMODULE, LPCWSTR, LPWSTR name, LONG_PTR parameter) {
+    auto* group = reinterpret_cast<executable_icon_group*>(parameter);
+    try {
+        if (IS_INTRESOURCE(name)) group->id = static_cast<WORD>(reinterpret_cast<ULONG_PTR>(name));
+        else group->name = name;
+        group->found = true;
+    } catch (...) {}
+    return FALSE;
+}
+const wchar_t* executable_icon_name() noexcept {
+    static const executable_icon_group group = [] {
+        executable_icon_group value;
+        EnumResourceNamesW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */, find_executable_icon_group, reinterpret_cast<LONG_PTR>(&value));
+        return value;
+    }();
+    if (!group.found) return nullptr;
+    return group.id ? MAKEINTRESOURCEW(group.id) : group.name.c_str();
+}
+
+// A window shows the icon of its executable, when it has one, at the sizes the system draws for the scale of the window's
+// display: a big one for the taskbar and Alt+Tab, a small one for the title bar. Loading the icon without a size would give
+// the first picture of its group, often 16 pixels, which the taskbar enlarges. Called again when that scale changes; an icon
+// that the application gave the window with WM_SETICON stays, and these come back when the application takes it away.
+void apply_executable_icons(windows_window* state, HWND hwnd, UINT dpi) noexcept {
+    const auto* name = executable_icon_name();
+    if (!name) return;
+    const auto instance = GetModuleHandleW(nullptr);
+    const auto big_size = GetSystemMetricsForDpi(SM_CXICON, dpi);
+    const auto small_size = GetSystemMetricsForDpi(SM_CXSMICON, dpi);
+    // `small` is a macro of the Windows headers.
+    const auto big_icon = static_cast<HICON>(LoadImageW(instance, name, IMAGE_ICON, big_size, big_size, LR_DEFAULTCOLOR));
+    const auto small_icon = static_cast<HICON>(LoadImageW(instance, name, IMAGE_ICON, small_size, small_size, LR_DEFAULTCOLOR));
+    if (!big_icon || !small_icon) {
+        if (big_icon) DestroyIcon(big_icon);
+        if (small_icon) DestroyIcon(small_icon);
+        return;
+    }
+    const auto shown_big = reinterpret_cast<HICON>(SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0));
+    const auto shown_small = reinterpret_cast<HICON>(SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0));
+    const auto previous_big = std::exchange(state->executable_big_icon, big_icon);
+    const auto previous_small = std::exchange(state->executable_small_icon, small_icon);
+    if (!shown_big || shown_big == previous_big) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big_icon));
+    if (!shown_small || shown_small == previous_small) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
+    if (previous_big) DestroyIcon(previous_big);
+    if (previous_small) DestroyIcon(previous_small);
+}
 int title_bar_height(const neoastra_window_t* window) noexcept { return window->title_bar.height > 0 ? window->title_bar.height : caption_default_height; }
 POINT client_point(HWND hwnd, LPARAM screen) noexcept {
     POINT point{static_cast<short>(LOWORD(screen)), static_cast<short>(HIWORD(screen))};
@@ -1753,7 +1813,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             if (state_changed) neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_STATE_CHANGED, window->id, nullptr, nullptr, state);
             break;
         }
+        case WM_SETICON:
+            // Taking an icon away gives the window the icon of its executable back.
+            if (auto* native = static_cast<windows_window*>(window->platform); native && !lparam) {
+                if (const auto icon = wparam == ICON_BIG ? native->executable_big_icon : native->executable_small_icon) lparam = reinterpret_cast<LPARAM>(icon);
+            }
+            break;
         case WM_DPICHANGED: {
+            // Before the move below, which can reenter user code that releases the window.
+            if (auto* native = static_cast<windows_window*>(window->platform)) apply_executable_icons(native, hwnd, HIWORD(wparam));
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
             SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
                          suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
@@ -1984,6 +2052,7 @@ bool neo_platform_window_create(neoastra_window_t* window, const neoastra_window
         sync_bounds(window,state->hwnd);
         // A window is told of a scale only when it changes, so the one it starts with is read here.
         neo_window_set_scale_factor(window,window_scale_factor(state->hwnd),false);
+        apply_executable_icons(state,state->hwnd,window_dpi(state->hwnd));
         state->modal=(options->flags&128u)!=0;if(state->modal&&(options->flags&4u)&&window->owner){auto* owner_state=static_cast<windows_window*>(window->owner->platform);if(owner_state&&owner_state->hwnd){state->modal_active=true;if(owner_state->modal_children++==0)EnableWindow(owner_state->hwnd,FALSE);}}
         if (window->platform != state || !state->hwnd) { neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Win32 window was destroyed during creation", 0, "win32"); return false; }
         if(options->flags&4u){const auto show=options->state==NEOASTRA_WINDOW_MINIMIZED?SW_SHOWMINIMIZED:options->state==NEOASTRA_WINDOW_MAXIMIZED?SW_SHOWMAXIMIZED:SW_SHOW;ShowWindow(state->hwnd,show);if(options->state==NEOASTRA_WINDOW_FULLSCREEN){{std::lock_guard lock(window->state_mutex);window->state=NEOASTRA_WINDOW_FULLSCREEN;}neo_platform_window_set_state(window);}}

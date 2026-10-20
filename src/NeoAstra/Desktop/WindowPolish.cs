@@ -78,7 +78,8 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     /// On Windows only .ico files are accepted. The window gets a big icon, for the taskbar and Alt+Tab, at the <c>SM_CXICON</c> size of the
     /// scale of its display, and a small one, for its title bar, at the <c>SM_CXSMICON</c> size: each is the picture of the file that suits
     /// that size best. Both are loaded again from the file when the window moves to a display of another scale, and destroyed when the window
-    /// closes or the service is disposed.
+    /// closes or the service is disposed. Without a call, a Windows window shows the icon of its executable (for a .NET application,
+    /// its <c>ApplicationIcon</c>) at the same sizes, and shows it again when the service takes its icons away.
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="window"/> or <paramref name="path"/> is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="path"/> is empty or white space.</exception>
