@@ -248,6 +248,7 @@ public sealed class NeoRpcSession : IAsyncDisposable
     // Every outbound frame (answers, events, channel items) waits in one ordered queue, and one writer sends what has
     // queued: a view posts it in one turn of its UI thread instead of one dispatcher round trip per frame.
     private readonly Channel<OutboundFrame> _outbound = Channel.CreateUnbounded<OutboundFrame>(new UnboundedChannelOptions { SingleReader = true });
+    private int _queuedOutbound;
     private int _writing;
     private readonly WeakReference<global::NeoAstra.NeoAstra>? _view;
     private readonly WeakReference<NeoWindow>? _window;
@@ -302,6 +303,8 @@ public sealed class NeoRpcSession : IAsyncDisposable
     public CancellationToken Closed => _closed.Token;
     /// <summary>Gets the current active invocation count.</summary>
     public int ActiveInvocationCount => Volatile.Read(ref _activeInvocations);
+    // The frames queued for the writer and not yet taken into a batch (the queue of one reader does not count them).
+    internal int QueuedOutboundFrameCount => Volatile.Read(ref _queuedOutbound);
     /// <summary>Gets the current number of tracked invocation/subscription identities, including active IDs and bounded completed fingerprints.</summary>
     /// <remarks>Completed ID strings and request-state objects are released; only fixed-size SHA-256 fingerprints remain for replay checks.</remarks>
     public int RetainedRequestIdCount { get { lock (_requestIdsLock) return _usedRequestIds.Count + _completedRequestIds.Count; } }
@@ -501,7 +504,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
     {
         _outbound.Writer.TryComplete();
         while (_outbound.Reader.TryRead(out var frame))
+        {
+            Interlocked.Decrement(ref _queuedOutbound);
             if (frame.TryTake()) frame.Done.TrySetCanceled();
+        }
     }
 
     internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool> recipient)
@@ -1088,7 +1094,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
         if (!allowClosing && Volatile.Read(ref _disposed) != 0) throw new OperationCanceledException("The RPC session is closed.", _closed.Token);
         cancellationToken.ThrowIfCancellationRequested();
         var frame = new OutboundFrame(json, cancellationToken);
-        if (!_outbound.Writer.TryWrite(frame)) throw new OperationCanceledException("The RPC session is closed.");
+        Interlocked.Increment(ref _queuedOutbound);
+        if (!_outbound.Writer.TryWrite(frame))
+        {
+            Interlocked.Decrement(ref _queuedOutbound);
+            throw new OperationCanceledException("The RPC session is closed.");
+        }
         // The caller withdraws a frame still waiting in the queue with its own token (a closed channel or
         // subscription): it is not sent, and the transport did not fail.
         using (cancellationToken.CanBeCanceled ? cancellationToken.Register(static state => ((OutboundFrame)state!).TryWithdraw(), frame) : default)
@@ -1113,7 +1124,10 @@ public sealed class NeoRpcSession : IAsyncDisposable
         {
             batch.Clear();
             while (batch.Count < MaximumOutboundBatch && _outbound.Reader.TryRead(out var next))
+            {
+                Interlocked.Decrement(ref _queuedOutbound);
                 if (next.TryTake()) batch.Add(next);
+            }
             if (batch.Count == 0)
             {
                 Volatile.Write(ref _writing, 0);

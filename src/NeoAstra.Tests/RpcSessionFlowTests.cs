@@ -38,8 +38,9 @@ public sealed class RpcSessionFlowTests
         var first = session.ReceiveAsync(Invoke("first", "flow.echo", "{\"id\":\"first\"}")).AsTask();
         await firstSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var others = Enumerable.Range(0, 20).Select(index => session.ReceiveAsync(Invoke($"call-{index}", "flow.echo", $"{{\"id\":\"{index}\"}}")).AsTask()).ToArray();
-        // The answers of the 20 calls wait behind the batch being sent.
-        await WaitUntilAsync(() => session.ActiveInvocationCount >= 20);
+        // The answers of the 20 calls wait behind the batch being sent: queued, not merely being computed, so that a slow
+        // runner does not release the batch before they are there.
+        await WaitUntilAsync(() => session.QueuedOutboundFrameCount >= 20);
         releaseFirst.TrySetResult();
         await Task.WhenAll(others.Append(first)).WaitAsync(TimeSpan.FromSeconds(5));
 
