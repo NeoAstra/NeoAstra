@@ -17,7 +17,8 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     private bool _droppedFrameDiagnosed;
     private int _disposed;
     // The frames of the page, in the order the transport delivered them, read by one reader on the thread pool: the
-    // UI thread only queues them, and no JSON of a request is parsed or deserialized there.
+    // UI thread only authenticates their envelope and queues them, and no JSON of a request is parsed into a document or
+    // deserialized there.
     private readonly System.Threading.Channels.Channel<InboundFrame> _inbound =
         System.Threading.Channels.Channel.CreateUnbounded<InboundFrame>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
     private int _reading;
@@ -151,15 +152,24 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     // The frames a session queued, posted in order in one turn of the UI thread: answers do not wait one UI round
     // trip each, and the UI thread only writes their envelope and posts them. They go only to the document of the
     // session that wrote them, while that session is the active one of the view.
-    private static async ValueTask<NeoRpcFrameRefusal[]?> SendBatchAsync(global::NeoAstra.NeoAstra view, string documentSessionId, IReadOnlyList<string> frames)
+    // The UI thread reads the frames until the dispatched call completes; a canceled call never runs afterwards.
+    private static async ValueTask<NeoRpcFrameRefusal[]?> SendBatchAsync(global::NeoAstra.NeoAstra view, string documentSessionId, IReadOnlyList<NeoTransportFrame> frames)
         => ToRefusals(await view.Environment.Application.Dispatcher
             .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, frames)).ConfigureAwait(false), frames.Count);
 
     private static async ValueTask SendAsync(global::NeoAstra.NeoAstra view, string documentSessionId, string json, CancellationToken cancellationToken)
     {
-        var refusals = ToRefusals(await view.Environment.Application.Dispatcher
-            .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, [json]), cancellationToken).ConfigureAwait(false), 1);
-        if (refusals is not null) throw new NeoRpcException(NeoRpcErrorCodes.PayloadTooLarge, "The frame exceeds the maximum message size of the view.");
+        var frame = NeoTransportFrame.FromString(json);
+        try
+        {
+            var refusals = ToRefusals(await view.Environment.Application.Dispatcher
+                .InvokeAsync(() => view.PostTrustedMessages(documentSessionId, [frame]), cancellationToken).ConfigureAwait(false), 1);
+            if (refusals is not null) throw new NeoRpcException(NeoRpcErrorCodes.PayloadTooLarge, "The frame exceeds the maximum message size of the view.");
+        }
+        finally
+        {
+            frame.Release();
+        }
     }
 
     // What the view did with a batch, as NeoRpcSendFrames reports it: null when every frame was posted, otherwise one entry
@@ -185,10 +195,19 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
     {
         NeoRpcSession? session;
         lock (_gate) session = _session;
-        if (session is null || !string.Equals(session.DocumentSessionId, message.Session.DocumentSessionId, StringComparison.Ordinal)) return;
+        // The binding owns the frame of the message: the session it goes to releases it, or the binding does.
+        if (session is null || !string.Equals(session.DocumentSessionId, message.Session.DocumentSessionId, StringComparison.Ordinal))
+        {
+            message.Frame.Release();
+            return;
+        }
         // Transport order is kept by one reader, and the native WebView callback is left at once: no application
         // handler can enter its own native modal loop from it. The frame is stamped now, for the rate of the session.
-        if (!_inbound.Writer.TryWrite(new(session, message, System.Diagnostics.Stopwatch.GetTimestamp()))) return;
+        if (!_inbound.Writer.TryWrite(new(session, message, System.Diagnostics.Stopwatch.GetTimestamp())))
+        {
+            message.Frame.Release();
+            return;
+        }
         if (Interlocked.CompareExchange(ref _reading, 1, 0) == 0) _ = Task.Run(ReadInbound);
     }
 
@@ -208,7 +227,7 @@ public sealed class NeoRpcViewBinding : IAsyncDisposable
 
     private async Task ReceiveContainedAsync(NeoRpcSession session, NeoTransportApplicationMessage message, long arrival)
     {
-        try { await session.ReceiveAsync(message.Json, message.SourceOrigin, message.IsMainFrame, arrival, session.Closed).ConfigureAwait(false); }
+        try { await session.ReceiveAsync(message.Frame, message.SourceOrigin, message.IsMainFrame, arrival, session.Closed).ConfigureAwait(false); }
         catch (OperationCanceledException) when (session.Closed.IsCancellationRequested) { DiagnoseDroppedFrame(session); }
         catch (ObjectDisposedException) { DiagnoseDroppedFrame(session); }
         catch (Exception exception)

@@ -31,7 +31,7 @@ public sealed class RpcSessionFlowTests
             (_, _) => throw new AssertFailedException("A view session sends in batches."),
             async frames =>
             {
-                batches.Enqueue([.. frames]);
+                batches.Enqueue([.. frames.Select(static frame => frame.ToString())]);
                 if (batches.Count == 1) { firstSent.TrySetResult(); await releaseFirst.Task; }
                 return null;
             }, null, null);
@@ -482,8 +482,10 @@ public sealed class RpcSessionFlowTests
         internal void Release() => _release.TrySetResult();
         public void Dispose() => Release();
 
-        internal async ValueTask<NeoRpcFrameRefusal[]?> SendAsync(IReadOnlyList<string> frames)
+        internal async ValueTask<NeoRpcFrameRefusal[]?> SendAsync(IReadOnlyList<NeoTransportFrame> batch)
         {
+            // The frames are the session's: they are read while the batch is sent.
+            var frames = batch.Select(static frame => frame.ToString()).ToArray();
             Interlocked.Increment(ref _batches);
             foreach (var frame in frames) _frames.Enqueue(frame);
             if (hold(frames) && Interlocked.Exchange(ref _holding, 1) == 0)

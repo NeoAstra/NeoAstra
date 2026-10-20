@@ -1,10 +1,12 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Unicode;
 using NeoAstra.Interop;
 using NeoAstra.Interop.Generated;
 
@@ -22,6 +24,8 @@ public sealed class NeoAstra : IAsyncDisposable
     private GCHandle _eventRoot;
     private Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? _scriptDialogRequested;
     private NeoUserScript? _transportScript;
+    private NeoMessagePost? _postMessages;
+    private DecodedUri? _lastUri;
     private Uri? _source;
     private string _title = string.Empty;
     private bool _isLoading;
@@ -350,61 +354,92 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <param name="json">A complete JSON value.</param>
     /// <param name="cancellationToken">Cancels the call before it is submitted.</param>
     /// <returns>A completed task after the backend accepts the message.</returns>
-    /// <exception cref="JsonException"><paramref name="json"/> is not valid JSON.</exception>
-    public unsafe ValueTask PostMessageAsync(string json, CancellationToken cancellationToken = default)
+    /// <exception cref="JsonException"><paramref name="json"/> is not valid JSON, or, while the page has a transport session, not a JSON object no deeper than <see cref="NeoTransportOptions.MaximumJsonDepth"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="json"/> is not valid UTF-16, or its transport envelope exceeds <see cref="NeoAstraOptions.MaximumMessageSize"/>.</exception>
+    /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend refused the message.</exception>
+    public ValueTask PostMessageAsync(string json, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(json);
         cancellationToken.ThrowIfCancellationRequested();
-        using (JsonDocument.Parse(json)) { }
-        var outbound = _transport?.WrapOutbound(json) ?? json;
-        using var nativeJson = new Utf8String(outbound);
-        NativeMethods.neoastra_error_t error = default;
-        var result = NativeMethods.neoastra_view_post_message(NativeHandle, nativeJson.View, 1, &error);
-        NativeError.ThrowIfFailed(result, error, "post web message", cancellationToken);
+        // The JSON is validated once, as UTF-8, and its envelope is written around it in the same pooled buffer.
+        var frame = NeoTransportFrame.FromString(json);
+        try
+        {
+            var message = _transport is { } transport ? transport.WrapOutbound(frame) : Validated(frame);
+            PostNativeMessages(NativeHandle, new ReadOnlySpan<ReadOnlyMemory<byte>>(in message), "post web message", cancellationToken);
+        }
+        finally
+        {
+            frame.Release();
+        }
         return ValueTask.CompletedTask;
+
+        static ReadOnlyMemory<byte> Validated(NeoTransportFrame frame)
+        {
+            NeoTransportCoordinator.ValidateJson(frame.Span);
+            return frame.Memory;
+        }
     }
 
     /// <summary>
     /// Posts frames that a transport document session of this view wrote itself to its document, in order, in one turn
     /// of the UI thread: an RPC session sends what it has queued this way instead of one dispatcher round trip per frame.
-    /// The frames are valid JSON objects already, so they are not parsed again here. Runs on the UI thread.
+    /// The frames are valid JSON objects already, so they are not parsed again here: their envelope is written around
+    /// them in their own buffers, and the native library reads them there. Runs on the UI thread.
     /// </summary>
     /// <param name="documentSessionId">The document session that wrote the frames.</param>
-    /// <param name="frames">Complete JSON objects, in the order they are posted.</param>
+    /// <param name="frames">Complete JSON objects, in the order they are posted. They stay the caller's, who releases them.</param>
     /// <returns>
     /// Whether the session is closed, in which case nothing was posted; otherwise, the frames that were not posted
     /// because their envelope exceeds <see cref="NeoAstraOptions.MaximumMessageSize"/>. Every other frame was posted.
     /// </returns>
     /// <exception cref="ObjectDisposedException">The view was disposed.</exception>
     /// <exception cref="NeoAstraException">The backend refused a message; the frames before it were posted.</exception>
-    internal NeoTrustedPostResult PostTrustedMessages(string documentSessionId, IReadOnlyList<string> frames)
+    internal NeoTrustedPostResult PostTrustedMessages(string documentSessionId, IReadOnlyList<NeoTransportFrame> frames)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(documentSessionId);
         ArgumentNullException.ThrowIfNull(frames);
-        return PostTrustedFrames(_transport, documentSessionId, frames, json => PostNativeMessage(json, "post web message"));
+        return PostTrustedFrames(_transport, documentSessionId, frames, _postMessages ??= messages => PostNativeMessages(NativeHandle, messages, "post web message", CancellationToken.None));
     }
 
-    internal static NeoTrustedPostResult PostTrustedFrames(NeoTransportCoordinator? transport, string documentSessionId, IReadOnlyList<string> frames, Action<string> post)
+    // Posts complete messages in order; a failure throws, and the messages before it were posted.
+    internal delegate void NeoMessagePost(ReadOnlySpan<ReadOnlyMemory<byte>> messages);
+
+    internal static NeoTrustedPostResult PostTrustedFrames(NeoTransportCoordinator? transport, string documentSessionId, IReadOnlyList<NeoTransportFrame> frames, NeoMessagePost post)
     {
         if (transport is null) return new(SessionClosed: true, null);
         List<int>? rejected = null;
-        for (var index = 0; index < frames.Count; index++)
+        var envelopes = ArrayPool<ReadOnlyMemory<byte>>.Shared.Rent(Math.Max(frames.Count, 1));
+        var count = 0;
+        try
         {
-            switch (transport.WrapOutboundTrusted(documentSessionId, frames[index], out var envelope))
+            for (var index = 0; index < frames.Count; index++)
             {
-                case NeoTransportOutboundStatus.Wrapped:
-                    post(envelope!);
-                    break;
-                case NeoTransportOutboundStatus.TooLarge:
-                    (rejected ??= []).Add(index);
-                    break;
-                default:
-                    return new(SessionClosed: true, rejected);
+                switch (transport.WrapOutboundTrusted(documentSessionId, frames[index], out var envelope))
+                {
+                    case NeoTransportOutboundStatus.Wrapped:
+                        envelopes[count++] = envelope;
+                        break;
+                    case NeoTransportOutboundStatus.TooLarge:
+                        (rejected ??= []).Add(index);
+                        break;
+                    default:
+                        post(envelopes.AsSpan(0, count));
+                        return new(SessionClosed: true, rejected);
+                }
             }
+            post(envelopes.AsSpan(0, count));
+            return new(SessionClosed: false, rejected);
         }
-        return new(SessionClosed: false, rejected);
+        finally
+        {
+            // The pooled array keeps no reference to the frames.
+            envelopes.AsSpan(0, count).Clear();
+            ArrayPool<ReadOnlyMemory<byte>>.Shared.Return(envelopes);
+        }
     }
 
     /// <summary>Reloads the current document.</summary>
@@ -837,7 +872,7 @@ public sealed class NeoAstra : IAsyncDisposable
                     if ((ulong)nativePaths.Length != count || nativePaths.Any(static path => Encoding.UTF8.GetByteCount(path) > 32768)) break;
                     DispatchNativeDrop((int)((value.value >> 56) & 0x7f), nativePaths, new NeoPoint(value.bounds.Value.x, value.bounds.Value.y));
                 }
-                else DispatchWebMessage(Utf8String.Decode(value.text), uri, (value.value & 1) != 0);
+                else DispatchWebMessage(Utf8String.Bytes(value.text), uri, (value.value & 1) != 0);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED:
                 try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
@@ -931,24 +966,36 @@ public sealed class NeoAstra : IAsyncDisposable
         }
     }
 
-    private void DispatchWebMessage(string json, Uri? sourceOrigin, bool isMainFrame)
+    // A message of the page, as the UTF-8 of the native event, which lives until this returns. The transport authenticates
+    // it in place; an application frame is copied once, into a pooled buffer that its consumer owns and parses off the UI
+    // thread. A string is made only for the handlers of MessageReceived, when there are any.
+    internal void DispatchWebMessage(ReadOnlySpan<byte> message, Uri? sourceOrigin, bool isMainFrame)
     {
-        var result = _transport?.Receive(json) ?? new NeoTransportReceiveResult(NeoTransportReceiveKind.Legacy);
+        // The native library gives the UTF-8 it checked or encoded itself. Anything else is read as a string of it read,
+        // with replacement characters, so that no consumer meets bytes that are not UTF-8.
+        if (!Utf8.IsValid(message)) message = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(message));
+        var result = _transport?.Receive(message) ?? new NeoTransportReceiveResult(NeoTransportReceiveKind.Legacy);
         if (result.Kind == NeoTransportReceiveKind.Consumed) return;
-        var deliveredJson = result.Kind == NeoTransportReceiveKind.Application ? result.ApplicationJson! : json;
-        if (result.Kind == NeoTransportReceiveKind.Application && _transport?.CurrentSession is { } session)
+        var delivered = result.Kind == NeoTransportReceiveKind.Application ? message.Slice(result.FrameStart, result.FrameLength) : message;
+        if (result.Kind == NeoTransportReceiveKind.Application && _transport?.CurrentSession is { } session && TransportApplicationMessageReceived is { } received)
         {
-            try
-            {
-                TransportApplicationMessageReceived?.Invoke(new NeoTransportApplicationMessage(
-                    deliveredJson, session, sourceOrigin, isMainFrame));
-            }
+            if (received.HasSingleTarget) Deliver(received, delivered, session, sourceOrigin, isMainFrame);
+            else foreach (var consumer in received.GetInvocationList()) Deliver((Action<NeoTransportApplicationMessage>)consumer, delivered, session, sourceOrigin, isMainFrame);
+        }
+        if (MessageReceived is { } handler)
+        {
+            try { handler(this, new NeoWebMessageReceivedEventArgs(Encoding.UTF8.GetString(delivered), sourceOrigin, isMainFrame)); } catch { }
+        }
+
+        // Each consumer gets a frame of its own, which it releases.
+        static void Deliver(Action<NeoTransportApplicationMessage> consumer, ReadOnlySpan<byte> frame, NeoTransportSessionSnapshot session, Uri? sourceOrigin, bool isMainFrame)
+        {
+            try { consumer(new NeoTransportApplicationMessage(NeoTransportFrame.CopyOf(frame), session, sourceOrigin, isMainFrame)); }
             catch
             {
                 // Internal protocol consumers are isolated from the native callback boundary.
             }
         }
-        try { MessageReceived?.Invoke(this, new NeoWebMessageReceivedEventArgs(deliveredJson, sourceOrigin, isMainFrame)); } catch { }
     }
 
     private void OnTransportSessionChanged(NeoTransportSessionSnapshot? session)
@@ -964,14 +1011,26 @@ public sealed class NeoAstra : IAsyncDisposable
         PostNativeMessage(new(_handle.DangerousGetHandle()), json, "post transport message");
     }
 
-    private void PostNativeMessage(string json, string operation) => PostNativeMessage(NativeHandle, json, operation);
-
     private static unsafe void PostNativeMessage(NativeMethods.neoastra_view_t view, string json, string operation)
     {
         using var nativeJson = new Utf8String(json);
         NativeMethods.neoastra_error_t error = default;
         var result = NativeMethods.neoastra_view_post_message(view, nativeJson.View, 1, &error);
         NativeError.ThrowIfFailed(result, error, operation, CancellationToken.None);
+    }
+
+    // The native library reads each message where it lies, during the call, and keeps no pointer to it.
+    private static unsafe void PostNativeMessages(NativeMethods.neoastra_view_t view, ReadOnlySpan<ReadOnlyMemory<byte>> messages, string operation, CancellationToken cancellationToken)
+    {
+        foreach (var message in messages)
+        {
+            fixed (byte* data = message.Span)
+            {
+                NativeMethods.neoastra_error_t error = default;
+                var result = NativeMethods.neoastra_view_post_message(view, Utf8String.ViewOf(data, message.Length), 1, &error);
+                NativeError.ThrowIfFailed(result, error, operation, cancellationToken);
+            }
+        }
     }
 
     private void RaiseTransportDiagnostic(NeoTransportDiagnosticEventArgs value)
@@ -1343,10 +1402,23 @@ public sealed class NeoAstra : IAsyncDisposable
         try { NavigationCompleted?.Invoke(this, args); } catch { }
     }
 
-    private static Uri? DecodeUri(NativeMethods.neoastra_string_view_t value)
+    // The address of the last event is kept: the messages of a page, and most events of a view, come from the address of
+    // the event before them, which is then neither decoded nor parsed again. A Uri does not change.
+    private Uri? DecodeUri(NativeMethods.neoastra_string_view_t value)
     {
-        var text = Utf8String.Decode(value);
-        return Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri : null;
+        var text = Utf8String.Bytes(value);
+        if (text.IsEmpty) return null;
+        var last = Volatile.Read(ref _lastUri);
+        if (last is not null && text.SequenceEqual(last.Text)) return last.Uri;
+        var uri = Uri.TryCreate(Encoding.UTF8.GetString(text), UriKind.Absolute, out var parsed) ? parsed : null;
+        Volatile.Write(ref _lastUri, new DecodedUri(text.ToArray(), uri));
+        return uri;
+    }
+
+    private sealed class DecodedUri(byte[] text, Uri? uri)
+    {
+        internal byte[] Text { get; } = text;
+        internal Uri? Uri { get; } = uri;
     }
 
     private static string? NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
@@ -1468,8 +1540,15 @@ public sealed class NeoAstra : IAsyncDisposable
         int SelectedIndex = -1);
 }
 
+// The consumer of the message owns its frame, and releases it once it parsed it.
 internal readonly record struct NeoTransportApplicationMessage(
-    string Json,
+    NeoTransportFrame Frame,
     NeoTransportSessionSnapshot Session,
     Uri? SourceOrigin,
-    bool IsMainFrame);
+    bool IsMainFrame)
+{
+    internal NeoTransportApplicationMessage(string json, NeoTransportSessionSnapshot session, Uri? sourceOrigin, bool isMainFrame)
+        : this(NeoTransportFrame.FromString(json, reserve: 0), session, sourceOrigin, isMainFrame)
+    {
+    }
+}

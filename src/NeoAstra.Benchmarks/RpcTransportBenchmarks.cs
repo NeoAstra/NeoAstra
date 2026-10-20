@@ -15,6 +15,7 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
     private const string UploadCommand = "benchmark.upload";
     private const string EchoCommand = "benchmark.echo";
     private const int LargeBytes = 1024 * 1024;
+    private static readonly string LargeBlob = new('x', LargeBytes);
 
     internal async ValueTask RunAsync()
     {
@@ -53,10 +54,11 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
         var view = new ViewTransport();
         var envelope = Encoding.UTF8.GetBytes(view.Envelope(frame));
         var count = Math.Clamp(iterations * (envelope.Length > 4096 ? 2 : 1000), 20, 100_000);
-        for (var index = 0; index < 10; index++) view.ReceiveOnUiThread(envelope);
+        for (var index = 0; index < 10; index++) view.ReceiveOnUiThread(envelope)?.Release();
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         var stopwatch = Stopwatch.StartNew();
-        for (var index = 0; index < count; index++) view.ReceiveOnUiThread(envelope);
+        // The binding releases the frame once its session parsed it: here at once, so that only the UI thread is measured.
+        for (var index = 0; index < count; index++) view.ReceiveOnUiThread(envelope)?.Release();
         stopwatch.Stop();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
         report($"rpc {name} inbound frame UI thread", stopwatch.Elapsed.TotalMicroseconds / count, "us/frame", count, $"decode and authentication of a {envelope.Length}-byte envelope until it is handed to the binding");
@@ -97,7 +99,8 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
             BenchmarkTransportJsonContext.Default.RpcEchoResponse);
         builder.AddCommand<RpcEchoRequest, RpcBlob>(
             BlobCommand,
-            static (request, _, _) => ValueTask.FromResult(new RpcBlob(new string('x', request.Value))),
+            // The value the application answers is kept: the measurement counts what RPC allocates for it.
+            static (request, _, _) => ValueTask.FromResult(new RpcBlob(request.Value == LargeBytes ? LargeBlob : new string('x', request.Value))),
             BenchmarkTransportJsonContext.Default.RpcEchoRequest,
             BenchmarkTransportJsonContext.Default.RpcBlob);
         builder.AddCommand<RpcBlob, RpcEchoResponse>(
@@ -116,6 +119,7 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
     private sealed class ViewTransport
     {
         private readonly NeoTransportCoordinator _coordinator;
+        private readonly global::NeoAstra.NeoAstra.NeoMessagePost _post;
         private int _posted;
 
         internal ViewTransport()
@@ -128,6 +132,7 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
             _coordinator.NavigationCompleted(succeeded: true);
             if (!_coordinator.IsConnected) throw new InvalidOperationException("The benchmark transport did not connect.");
             Limits = (options.MaximumMessageSize, options.Transport.MaximumJsonDepth);
+            _post = Post;
         }
 
         internal int Posted => Volatile.Read(ref _posted);
@@ -141,28 +146,26 @@ internal sealed class RpcTransportBenchmarks(int iterations, TimeSpan timeout, R
             => host.OpenSessionCore(
                 new NeoRpcSessionIdentity("benchmark", "benchmark-session"),
                 static (_, _) => throw new InvalidOperationException("A view session sends in batches."),
-                async frames => NeoRpcViewBinding.ToRefusals(await ui.InvokeAsync(() => global::NeoAstra.NeoAstra.PostTrustedFrames(_coordinator, "benchmark-session", frames, Post)), frames.Count),
+                async frames => NeoRpcViewBinding.ToRefusals(await ui.InvokeAsync(() => global::NeoAstra.NeoAstra.PostTrustedFrames(_coordinator, "benchmark-session", frames, _post)), frames.Count),
                 null,
                 null,
                 NeoRpcOutboundLimits.Of(Limits.MaximumMessageSize, Limits.MaximumJsonDepth));
 
-        // NeoAstra.PostNativeMessage without the native call.
-        private void Post(string envelope)
-        {
-            using var native = new global::NeoAstra.Interop.Utf8String(envelope);
-            Interlocked.Increment(ref _posted);
-        }
+        // NeoAstra.PostNativeMessages without the native call, which reads the messages where they lie.
+        private void Post(ReadOnlySpan<ReadOnlyMemory<byte>> messages) => Interlocked.Add(ref _posted, messages.Length);
 
-        // NeoAstra.DispatchWebMessage, from the UTF-8 the native library gives: the frame it hands to the binding.
-        internal string? ReceiveOnUiThread(byte[] nativeText)
+        // NeoAstra.DispatchWebMessage, from the UTF-8 the native library gives: the frame it hands to the binding, which the
+        // binding gives to its session. No handler of MessageReceived is attached.
+        internal NeoTransportFrame? ReceiveOnUiThread(byte[] nativeText)
         {
-            var json = Encoding.UTF8.GetString(nativeText);
-            var result = _coordinator.Receive(json);
-            return result.Kind == NeoTransportReceiveKind.Application ? result.ApplicationJson : null;
+            ReadOnlySpan<byte> message = nativeText;
+            if (!System.Text.Unicode.Utf8.IsValid(message)) throw new InvalidOperationException("The benchmark frame is not UTF-8.");
+            var result = _coordinator.Receive(message);
+            return result.Kind == NeoTransportReceiveKind.Application ? NeoTransportFrame.CopyOf(message.Slice(result.FrameStart, result.FrameLength)) : null;
         }
 
         internal ValueTask ReceiveAsync(byte[] nativeText, NeoRpcSession session)
-            => session.ReceiveAsync(ReceiveOnUiThread(nativeText) ?? throw new InvalidOperationException("The benchmark frame was not delivered."));
+            => session.ReceiveAsync(ReceiveOnUiThread(nativeText) ?? throw new InvalidOperationException("The benchmark frame was not delivered."), null, true, Stopwatch.GetTimestamp(), session.Closed);
     }
 
     // One thread that runs what is posted to it in order and measures how long it is busy, as the UI thread of a view.
