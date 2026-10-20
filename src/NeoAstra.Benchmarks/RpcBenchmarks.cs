@@ -21,6 +21,7 @@ internal sealed class RpcBenchmarks(int iterations, TimeSpan timeout, RpcBenchma
         await MeasureConcurrentInvokesAsync();
         await MeasureEventThroughputAsync();
         await MeasureChannelThroughputAsync();
+        await new RpcTransportBenchmarks(iterations, timeout, report).RunAsync();
     }
 
     private async ValueTask MeasureSmallInvokeAsync()
