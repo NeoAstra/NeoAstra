@@ -235,7 +235,7 @@ public sealed class NeoRpcEvent<T> : IEventHandle
     /// <exception cref="InvalidOperationException">The builder has not been built.</exception>
     /// <exception cref="JsonException">The value does not satisfy its generated JSON contract.</exception>
     public ValueTask<int> PublishAsync(T value, CancellationToken cancellationToken = default)
-        => PublishAsync(value, static _ => true, cancellationToken);
+        => PublishCoreAsync(value, null, cancellationToken);
 
     /// <summary>Publishes an event to sessions selected from trusted immutable context.</summary>
     /// <param name="value">The event DTO.</param>
@@ -248,6 +248,12 @@ public sealed class NeoRpcEvent<T> : IEventHandle
     public ValueTask<int> PublishAsync(T value, Func<NeoRpcContext, bool> recipient, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(recipient);
+        return PublishCoreAsync(value, recipient, cancellationToken);
+    }
+
+    // Without a recipient, no context is built for each subscription.
+    private ValueTask<int> PublishCoreAsync(T value, Func<NeoRpcContext, bool>? recipient, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         var host = Volatile.Read(ref _host) ?? throw new InvalidOperationException("The event publisher is unavailable until its builder is built.");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, _typeInfo);

@@ -195,7 +195,8 @@ public sealed class NeoRpcHost : IAsyncDisposable
         foreach (var lifetime in _serviceLifetimes) await lifetime.CloseViewAsync(viewLabel).ConfigureAwait(false);
     }
 
-    internal async ValueTask<int> PublishAsync(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool> recipient, CancellationToken cancellationToken)
+    // A null recipient sends to every subscription: no context is built for it.
+    internal async ValueTask<int> PublishAsync(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool>? recipient, CancellationToken cancellationToken)
     {
         var accepted = 0;
         foreach (var session in _sessions.Values)
@@ -517,13 +518,13 @@ public sealed class NeoRpcSession : IAsyncDisposable
         }
     }
 
-    internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool> recipient)
+    internal bool TryPublish(EventDescriptor descriptor, byte[] json, Func<NeoRpcContext, bool>? recipient)
     {
         var accepted = false;
         foreach (var subscription in _subscriptions.Values)
         {
             if (!ReferenceEquals(subscription.Descriptor, descriptor)) continue;
-            if (!recipient(CreateContext(NewCorrelationId(), _closedToken, subscription.SourceOrigin, subscription.IsMainFrame))) continue;
+            if (recipient is not null && !recipient(CreateContext(NewCorrelationId(), _closedToken, subscription.SourceOrigin, subscription.IsMainFrame))) continue;
             accepted |= subscription.Enqueue(json);
         }
         return accepted;
