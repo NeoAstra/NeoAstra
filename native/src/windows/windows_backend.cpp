@@ -2784,13 +2784,17 @@ public:
     // The button was pressed while the browser had the mouse, so the key state of this thread, which OLE passes, never
     // saw it go down: the drag goes on while the physical button is held.
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD) override {
-        if (escape) return DRAGDROP_S_CANCEL;
+        if (escape) { escaped_ = true; return DRAGDROP_S_CANCEL; }
         return GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000 ? S_OK : DRAGDROP_S_DROP;
     }
     HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+    // The user ended the drag with the Escape key, rather than by releasing it where nothing took it: OLE reports both
+    // as a cancel.
+    bool escaped() const noexcept { return escaped_; }
 private:
     ~page_drop_source() = default;
     volatile LONG references_{1};
+    bool escaped_{};
 };
 
 std::vector<std::pair<UINT_PTR, neoastra_view_t*>> page_drags; // Views whose page drag starts on a timer (UI thread only).
@@ -2803,9 +2807,10 @@ const std::string* own_page_drag(const neoastra_view_t* view) noexcept {
 // The page drag that NeoAstra runs in this process, while its loop runs (see run_page_drag). Its data object carries
 // a nonce of the drag in a format of its own, by which a view of another window of the application, on any thread,
 // recognizes the drag and gives its page the original data. The data stays here: what another process could put in
-// that format cannot pass for a page drag, as it does not know the nonce of the drag that runs.
+// that format cannot pass for a page drag, as it does not know the nonce of the drag that runs. `target` is the view
+// that took the drop, never dereferenced: the host is told its address, by which it finds the view.
 constexpr wchar_t app_page_drag_format[] = L"NeoAstra Page Drag";
-struct app_page_drag_record { std::mutex lock; std::string nonce; std::string data; };
+struct app_page_drag_record { std::mutex lock; std::string nonce; std::string data; const neoastra_view_t* target{}; };
 app_page_drag_record& running_app_page_drag() noexcept {
     static app_page_drag_record value;
     return value;
@@ -2850,8 +2855,31 @@ bool drop_page_drag(neoastra_view_t* view, POINTL point, DWORD keys) noexcept {
 bool drop_app_page_drag(neoastra_view_t* view, POINTL point, DWORD keys, const std::string& data) noexcept {
     auto done = std::make_shared<bool>(false);
     if (!forward_page_drag(view, L"drop", point, keys, data, done)) return false;
+    try {
+        auto& running = running_app_page_drag();
+        std::lock_guard guard(running.lock);
+        if (!running.nonce.empty()) running.target = view;
+    } catch (...) { }
     wait_for_page_drop(done);
     return true;
+}
+
+// How a drag of the page that NeoAstra ran ended, in bits 0-3 of the value of its event (see NeoAstra.PageDragEnded).
+enum class page_drag_outcome : uint64_t { canceled = 0, not_dropped = 1, dropped_on_view = 2, dropped_on_other_application = 3 };
+
+// Tells the host of the source view how the drag of its page ended: a drop event of kind 3 whose value holds the outcome
+// and, in bits 4-7, the effect the drop target answered; its text is the data of the drag, its position the pointer on
+// the screen, and its second value the view of the application that took the drop. Raised last: the host may close the
+// view in its handler.
+void emit_page_drag_ended(neoastra_view_t* view, page_drag_outcome outcome, DWORD effect, const neoastra_view_t* target, const std::string& data) noexcept {
+    POINT cursor{};
+    (void)GetCursorPos(&cursor);
+    neo_event_details details{};
+    details.bounds = {static_cast<int32_t>(cursor.x), static_cast<int32_t>(cursor.y), 0, 0};
+    details.value2 = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(target));
+    const auto effects = static_cast<uint64_t>(effect & (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK));
+    neo_emit_view_detailed(view, NEOASTRA_EVENT_MESSAGE_RECEIVED, 0, &data, nullptr,
+                           (UINT64_C(1) << 63) | (UINT64_C(3) << 56) | static_cast<uint64_t>(outcome) | (effects << 4), 0, nullptr, details);
 }
 
 // Runs the drag the page started, outside of the DevTools event that reported it: an OLE drag loop of this process,
@@ -2873,8 +2901,9 @@ void run_page_drag(neoastra_view_t* view) noexcept {
         }
         const auto button = GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON;
         auto object = page_drag_object(wide);
+        auto* drop_source = new (std::nothrow) page_drop_source();
         ComPtr<IDropSource> source;
-        source.Attach(new (std::nothrow) page_drop_source());
+        source.Attach(drop_source);
         POINT cursor{};
         if (allowed && object && source && (GetAsyncKeyState(button) & 0x8000)) {
             // The nonce by which the other views of the application recognize this drag (see app_page_drag).
@@ -2883,21 +2912,29 @@ void run_page_drag(neoastra_view_t* view) noexcept {
             const bool marked = SUCCEEDED(CoCreateGuid(&guid)) && StringFromGUID2(guid, nonce, 40) > 0 &&
                                 set_global_data(object.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(app_page_drag_format)), nonce, (wcslen(nonce) + 1) * sizeof(wchar_t));
             auto& running = running_app_page_drag();
-            if (marked) { std::lock_guard guard(running.lock); running.nonce = narrow(nonce); running.data = data; }
+            if (marked) { std::lock_guard guard(running.lock); running.nonce = narrow(nonce); running.data = data; running.target = nullptr; }
             state->page_drag_data = data;
             state->page_drag_active = true;
             state->page_drag_dropped = false;
             DWORD effect{};
-            (void)DoDragDrop(object.Get(), source.Get(), allowed, &effect);
-            if (marked) { std::lock_guard guard(running.lock); running.nonce.clear(); running.data.clear(); }
+            const auto result = DoDragDrop(object.Get(), source.Get(), allowed, &effect);
+            const neoastra_view_t* target{};
+            if (marked) { std::lock_guard guard(running.lock); target = running.target; running.nonce.clear(); running.data.clear(); running.target = nullptr; }
             state = static_cast<windows_view*>(view->platform); // The view may have been closed during the loop.
             const bool dropped = state && state->page_drag_dropped;
+            if (dropped) target = view;
             if (state) { state->page_drag_active = false; state->page_drag_data.clear(); }
             if (state && !dropped && GetPhysicalCursorPos(&cursor)) (void)forward_page_drag(view, L"dragCancel", {cursor.x, cursor.y}, 0, data);
+            const auto outcome = target ? page_drag_outcome::dropped_on_view
+                               : drop_source->escaped() ? page_drag_outcome::canceled
+                               : result == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE ? page_drag_outcome::dropped_on_other_application
+                                                                                       : page_drag_outcome::not_dropped;
+            emit_page_drag_ended(view, outcome, outcome == page_drag_outcome::dropped_on_view || outcome == page_drag_outcome::dropped_on_other_application ? effect : DROPEFFECT_NONE, target, data);
             return;
         }
         // No drag to run (the button is already up, or nothing to carry): the page still waits for its end.
         if (GetPhysicalCursorPos(&cursor)) (void)forward_page_drag(view, L"dragCancel", {cursor.x, cursor.y}, 0, data);
+        emit_page_drag_ended(view, page_drag_outcome::not_dropped, DROPEFFECT_NONE, nullptr, data);
     } catch (...) {
         neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "drag-drop", "A drag of the page could not be run");
     }

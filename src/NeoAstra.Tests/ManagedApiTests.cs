@@ -513,6 +513,32 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void PageDragEnded_DecodesTheOutcomeTheEffectAndTheDataOfTheDrag()
+    {
+        // The event is a native drop of kind 3: the outcome in bits 0-3 of its value, the OLE effect in bits 4-7.
+        const ulong Event = (1UL << 63) | (3UL << 56);
+        Assert.AreEqual(NeoPageDragOutcome.Canceled, NeoAstra.DecodePageDragOutcome(Event));
+        Assert.AreEqual(NeoPageDragOutcome.NotDropped, NeoAstra.DecodePageDragOutcome(Event | 1));
+        Assert.AreEqual(NeoPageDragOutcome.DroppedOnView, NeoAstra.DecodePageDragOutcome(Event | 2 | (2 << 4)));
+        Assert.AreEqual(NeoPageDragOutcome.DroppedOnOtherApplication, NeoAstra.DecodePageDragOutcome(Event | 3 | (1 << 4)));
+        // An outcome of a later native library is one this version cannot name: nothing it knows took the drop.
+        for (ulong later = 4; later <= 15; later++) Assert.AreEqual(NeoPageDragOutcome.NotDropped, NeoAstra.DecodePageDragOutcome(Event | later));
+
+        Assert.AreEqual(NeoDropEffect.None, NeoAstra.DecodeDropEffect(Event | 2));
+        Assert.AreEqual(NeoDropEffect.Copy, NeoAstra.DecodeDropEffect(Event | (1 << 4)));
+        Assert.AreEqual(NeoDropEffect.Move, NeoAstra.DecodeDropEffect(Event | (2 << 4)));
+        Assert.AreEqual(NeoDropEffect.Link, NeoAstra.DecodeDropEffect(Event | (4 << 4)));
+        Assert.AreEqual(NeoDropEffect.Copy, NeoAstra.DecodeDropEffect(Event | (3 << 4)));
+
+        // The data is the one of the DevTools event that reported the drag.
+        var items = NeoAstra.DecodePageDragItems("""{"items":[{"mimeType":"text/plain","data":"payload"},{"mimeType":"text/html","data":"<b>Tab</b>"},{"mimeType":"application/x-tab","data":"tab-7","title":""},{"mimeType":3}],"dragOperationsMask":16}""");
+        CollectionAssert.AreEqual(new[] { new NeoPageDragItem("text/plain", "payload"), new NeoPageDragItem("text/html", "<b>Tab</b>"), new NeoPageDragItem("application/x-tab", "tab-7") }, items.ToArray());
+        Assert.AreEqual(0, NeoAstra.DecodePageDragItems("{\"dragOperationsMask\":1}").Count);
+        Assert.AreEqual(0, NeoAstra.DecodePageDragItems("not json").Count);
+        Assert.AreEqual(0, NeoAstra.DecodePageDragItems("[]").Count);
+    }
+
+    [TestMethod]
     public void ExternalOpen_DecodesWhatBecameOfTheAddress()
     {
         var address = new Uri("https://example.com/page");

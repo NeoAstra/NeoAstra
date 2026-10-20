@@ -670,6 +670,58 @@ public sealed class NeoProcessFailedEventArgs : EventArgs
     public string? ProcessDescription { get; }
 }
 
+/// <summary>Says how a drag that started in the page of a view ended.</summary>
+public enum NeoPageDragOutcome
+{
+    /// <summary>The user canceled the drag with the Escape key.</summary>
+    Canceled,
+    /// <summary>The user released the drag where nothing took it: over the desktop, outside every window, or over a target that refused it.</summary>
+    NotDropped,
+    /// <summary>The user released the drag over a view of the application, which <see cref="NeoPageDragEndedEventArgs.TargetView"/> names; its page received the drop when it accepted it.</summary>
+    DroppedOnView,
+    /// <summary>Another application took the drop, with the effect that <see cref="NeoPageDragEndedEventArgs.Effect"/> tells.</summary>
+    DroppedOnOtherApplication,
+}
+
+/// <summary>Identifies what a drop did with the data of a drag, as its target answered it.</summary>
+public enum NeoDropEffect
+{
+    /// <summary>Nothing took the drop.</summary>
+    None,
+    /// <summary>The target copied the data.</summary>
+    Copy,
+    /// <summary>The target moved the data: the source removes what it dragged.</summary>
+    Move,
+    /// <summary>The target linked to the data.</summary>
+    Link,
+}
+
+/// <summary>Contains one item of the data of a page drag, as the page set it with <c>dataTransfer.setData</c>.</summary>
+/// <param name="MimeType">The type of the item, such as <c>text/plain</c>, <c>text/html</c>, or a custom MIME type.</param>
+/// <param name="Data">The data of the item.</param>
+public sealed record NeoPageDragItem(string MimeType, string Data);
+
+/// <summary>Provides how a drag that started in the page of a view ended.</summary>
+/// <param name="outcome">How the drag ended.</param>
+/// <param name="effect">What the drop target answered it did with the data.</param>
+/// <param name="targetView">The view of the application that the drag was released over, or <see langword="null"/>.</param>
+/// <param name="screenPosition">The position of the pointer on the screen when the drag ended.</param>
+/// <param name="items">The data of the drag.</param>
+public sealed class NeoPageDragEndedEventArgs(NeoPageDragOutcome outcome, NeoDropEffect effect, NeoAstra? targetView, NeoPoint screenPosition, IReadOnlyList<NeoPageDragItem> items) : EventArgs
+{
+    /// <summary>Gets how the drag ended.</summary>
+    public NeoPageDragOutcome Outcome { get; } = outcome;
+    /// <summary>Gets what the drop target answered it did with the data; <see cref="NeoDropEffect.None"/> unless the drag was dropped.</summary>
+    /// <remarks>For a drop on a view of the application this is the first effect that the page allowed (copy, then move, then link): the engine does not tell which effect the receiving page chose.</remarks>
+    public NeoDropEffect Effect { get; } = effect;
+    /// <summary>Gets the view of the application that the drag was released over when <see cref="Outcome"/> is <see cref="NeoPageDragOutcome.DroppedOnView"/>, which can be the source view itself; otherwise, or when that view was disposed since, <see langword="null"/>.</summary>
+    public NeoAstra? TargetView { get; } = targetView;
+    /// <summary>Gets the position of the pointer on the screen when the drag ended, in the units of <see cref="NeoWindow.Position"/>.</summary>
+    public NeoPoint ScreenPosition { get; } = screenPosition;
+    /// <summary>Gets the data of the drag, in the order the page set it.</summary>
+    public IReadOnlyList<NeoPageDragItem> Items { get; } = items ?? throw new ArgumentNullException(nameof(items));
+}
+
 /// <summary>Provides a message sent by web content.</summary>
 public sealed class NeoWebMessageReceivedEventArgs : EventArgs
 {

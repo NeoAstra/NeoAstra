@@ -119,6 +119,27 @@ public sealed class WindowsDropTargetTests
                         CollectionAssert.AreEqual(new[] { "forged" }, drop.Values);
                         await Task.Delay(200, timeout.Token);
                         Assert.AreEqual("1", await view.EvaluateScriptAsync("globalThis.events.filter(value => value.startsWith('drop:')).length", timeout.Token), "An external text drop stays with the host.");
+
+                        // What the native library tells the host when a drag of the page ends: the view that took the drop is
+                        // named by the address of its native view, which a view that is gone no longer has.
+                        stage = "end of a page drag";
+                        var endings = new List<NeoPageDragEndedEventArgs>();
+                        view.PageDragEnded += (_, args) => endings.Add(args);
+                        const ulong PageDragEnded = (1UL << 63) | (3UL << 56);
+                        view.RaisePageDragEnded(PageDragEnded | 2 | (2 << 4), view.NativeViewIdentity, new NeoPoint(10, 20), """{"items":[{"mimeType":"application/x-neoastra-test","data":"tab-7"}],"dragOperationsMask":16}""");
+                        view.RaisePageDragEnded(PageDragEnded | 2 | (1 << 4), 8, new NeoPoint(0, 0), "{}");
+                        view.RaisePageDragEnded(PageDragEnded, 0, new NeoPoint(-5, 7), "{}");
+                        Assert.AreEqual(3, endings.Count);
+                        Assert.AreEqual(NeoPageDragOutcome.DroppedOnView, endings[0].Outcome);
+                        Assert.AreSame(view, endings[0].TargetView);
+                        Assert.AreEqual(NeoDropEffect.Move, endings[0].Effect);
+                        Assert.AreEqual(new NeoPoint(10, 20), endings[0].ScreenPosition);
+                        CollectionAssert.AreEqual(new[] { new NeoPageDragItem(CustomType, "tab-7") }, endings[0].Items.ToArray());
+                        Assert.IsNull(endings[1].TargetView);
+                        Assert.AreEqual(NeoDropEffect.Copy, endings[1].Effect);
+                        Assert.AreEqual(NeoPageDragOutcome.Canceled, endings[2].Outcome);
+                        Assert.AreEqual(NeoDropEffect.None, endings[2].Effect);
+                        Assert.AreEqual(new NeoPoint(-5, 7), endings[2].ScreenPosition);
                         Marshal.ReleaseComObject(dropTarget);
                     }
                     finally { application.ForceShutdown(); }
@@ -181,6 +202,8 @@ public sealed class WindowsDropTargetTests
                         await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "drag-view" });
                         var hostDrops = new ConcurrentQueue<int>();
                         view.NativeDropReceived += (kind, _, _) => hostDrops.Enqueue(kind);
+                        var ended = new ConcurrentQueue<NeoPageDragEndedEventArgs>();
+                        view.PageDragEnded += (_, args) => ended.Enqueue(args);
                         await view.NavigateAsync(new Uri("app://neoastra/index.html"));
                         await WaitAsync(view, "globalThis.ready === true", timeout.Token);
                         var source = await ScreenCenterAsync(view, parent, "source", timeout.Token);
@@ -222,6 +245,12 @@ public sealed class WindowsDropTargetTests
                             "The drop lacks data of the drag: " + await view.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token));
                         StringAssert.Contains(await view.EvaluateScriptAsync("globalThis.events.join(',')", timeout.Token), "enter:");
                         Assert.IsTrue(hostDrops.IsEmpty, "An in-page drag that carries text must not reach the host as an inbound drop.");
+                        await WaitUntilAsync(() => !ended.IsEmpty, timeout.Token);
+                        Assert.IsTrue(ended.TryDequeue(out var end));
+                        Assert.AreEqual(NeoPageDragOutcome.DroppedOnView, end.Outcome);
+                        Assert.AreSame(view, end.TargetView);
+                        Assert.AreEqual(NeoDropEffect.Move, end.Effect);
+                        CollectionAssert.Contains(end.Items.ToArray(), new NeoPageDragItem("application/x-neoastra-test", "tab-7"));
                     }
                     finally
                     {
@@ -291,6 +320,10 @@ public sealed class WindowsDropTargetTests
                         var hostDrops = new ConcurrentQueue<int>();
                         sourceView.NativeDropReceived += (kind, _, _) => hostDrops.Enqueue(kind);
                         targetView.NativeDropReceived += (kind, _, _) => hostDrops.Enqueue(kind);
+                        var ended = new ConcurrentQueue<NeoPageDragEndedEventArgs>();
+                        sourceView.PageDragEnded += (_, args) => ended.Enqueue(args);
+                        var targetEnded = 0;
+                        targetView.PageDragEnded += (_, _) => Interlocked.Increment(ref targetEnded);
                         foreach (var view in new[] { sourceView, targetView })
                         {
                             await view.NavigateAsync(new Uri("app://neoastra/index.html"));
@@ -336,6 +369,14 @@ public sealed class WindowsDropTargetTests
                         Assert.AreEqual("true", await sourceView.EvaluateScriptAsync("globalThis.trace.some(value => value.startsWith('dragend'))", timeout.Token), "The source page saw no dragend.");
                         Assert.AreEqual("false", await sourceView.EvaluateScriptAsync("globalThis.events.some(value => value.startsWith('drop:'))", timeout.Token));
                         Assert.IsTrue(hostDrops.IsEmpty, "A drag of a page of the application must not reach the host as an inbound drop.");
+                        // The host of the source learns where the drag went, which its dragend cannot tell.
+                        await WaitUntilAsync(() => !ended.IsEmpty, timeout.Token);
+                        Assert.IsTrue(ended.TryDequeue(out var end));
+                        Assert.AreEqual(NeoPageDragOutcome.DroppedOnView, end.Outcome);
+                        Assert.AreSame(targetView, end.TargetView);
+                        Assert.AreEqual(NeoDropEffect.Move, end.Effect);
+                        Assert.AreEqual(0, Volatile.Read(ref targetEnded), "The view that took the drop did not start a drag.");
+                        Assert.IsTrue(Math.Abs(end.ScreenPosition.X - target.X) <= 4 && Math.Abs(end.ScreenPosition.Y - target.Y) <= 4, $"The drag ended at {end.ScreenPosition.X},{end.ScreenPosition.Y}, not at {target.X},{target.Y}.");
                     }
                     finally
                     {

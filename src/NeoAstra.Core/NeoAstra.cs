@@ -170,6 +170,16 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
     public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
 
+    /// <summary>Occurs when a drag that started in the page of this view ends, and tells how it ended and where.</summary>
+    /// <remarks>
+    /// The event is raised on the UI thread, once for each drag of the page, after the page that received the drop got
+    /// it (NeoAstra waits for that for at most two seconds). It tells apart what the <c>dragend</c> of the page cannot: a drop
+    /// on a view of another window of the application, a release outside every window, and a cancel with the Escape key.
+    /// The Windows backend raises it; with WebKit on macOS and Linux the engine runs the drag itself and the event is not
+    /// raised.
+    /// </remarks>
+    public event EventHandler<NeoPageDragEndedEventArgs>? PageDragEnded;
+
     /// <summary>Occurs when an accepted download starts.</summary>
     public event EventHandler<NeoDownloadEventArgs>? DownloadStarted;
 
@@ -771,6 +781,11 @@ public sealed class NeoAstra : IAsyncDisposable
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_MESSAGE_RECEIVED:
                 if ((value.value & (1UL << 63)) != 0)
                 {
+                    if (((value.value >> 56) & 0x7f) == PageDragEndedKind)
+                    {
+                        RaisePageDragEnded(value);
+                        break;
+                    }
                     var count = value.value & 0x00ff_ffff_ffff_ffffUL;
                     if (count is < 1 or > 256 || value.text.Value.length is 0 or > 1024 * 1024) break;
                     var nativePaths = Utf8String.Decode(value.text).Split('\0', StringSplitOptions.RemoveEmptyEntries);
@@ -798,6 +813,78 @@ public sealed class NeoAstra : IAsyncDisposable
     }
 
     internal void NotifyNativeNavigationStarted() { try { NativeNavigationStarted?.Invoke(); } catch { } }
+
+    // The end of a page drag is a native drop of its own kind: the outcome in bits 0-3 of the value, the effect in bits
+    // 4-7, the data of the drag as text, the pointer as position, and the native view that took the drop as second value.
+    private const ulong PageDragEndedKind = 3;
+
+    private void RaisePageDragEnded(NativeMethods.neoastra_event value) =>
+        RaisePageDragEnded(value.value, value.value2, new NeoPoint(value.bounds.Value.x, value.bounds.Value.y), Utf8String.Decode(value.text));
+
+    internal void RaisePageDragEnded(ulong value, ulong nativeTargetView, NeoPoint screenPosition, string data)
+    {
+        if (PageDragEnded is not { } handler) return;
+        var args = new NeoPageDragEndedEventArgs(
+            DecodePageDragOutcome(value),
+            DecodeDropEffect(value),
+            nativeTargetView == 0 ? null : FindRegisteredView(nativeTargetView),
+            screenPosition,
+            DecodePageDragItems(data));
+        try { handler(this, args); } catch { }
+    }
+
+    // The address of the native view, by which the native library names the view that took the drop of a page drag.
+    internal ulong NativeViewIdentity => (ulong)_handle.DangerousGetHandle();
+
+    private NeoAstra? FindRegisteredView(ulong nativeView)
+    {
+        foreach (var view in Environment.Application.GetRegisteredViews())
+        {
+            if (view.NativeViewIdentity == nativeView) return view;
+        }
+        return null;
+    }
+
+    internal static NeoPageDragOutcome DecodePageDragOutcome(ulong value) =>
+        (value & 15) switch
+        {
+            0 => NeoPageDragOutcome.Canceled,
+            2 => NeoPageDragOutcome.DroppedOnView,
+            3 => NeoPageDragOutcome.DroppedOnOtherApplication,
+            _ => NeoPageDragOutcome.NotDropped,
+        };
+
+    // The effect is the one of OLE, DROPEFFECT_COPY, _MOVE, or _LINK; a target that answered several is taken by the first.
+    internal static NeoDropEffect DecodeDropEffect(ulong value)
+    {
+        var effect = (value >> 4) & 15;
+        return (effect & 1) != 0 ? NeoDropEffect.Copy : (effect & 2) != 0 ? NeoDropEffect.Move : (effect & 4) != 0 ? NeoDropEffect.Link : NeoDropEffect.None;
+    }
+
+    // The "data" of the DevTools drag event that reported the drag: its items, each a MIME type and its data.
+    internal static IReadOnlyList<NeoPageDragItem> DecodePageDragItems(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object || !document.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return [];
+            var result = new List<NeoPageDragItem>(items.GetArrayLength());
+            foreach (var item in items.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object &&
+                    item.TryGetProperty("mimeType", out var type) && type.ValueKind == JsonValueKind.String &&
+                    item.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.String)
+                {
+                    result.Add(new NeoPageDragItem(type.GetString()!, data.GetString()!));
+                }
+            }
+            return result.AsReadOnly();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
 
     private void DispatchWebMessage(string json, Uri? sourceOrigin, bool isMainFrame)
     {
