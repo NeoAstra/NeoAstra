@@ -110,6 +110,69 @@ public sealed class NeoAstra : IAsyncDisposable
         }
     }
 
+    /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>
+    /// <param name="point">The point in the CSS pixels of the main viewport of the view; it may be outside the view, as during a drag.</param>
+    /// <returns>The screen point, rounded to the nearest unit, or <see langword="null"/> where the backend does not know where its windows are on screen.</returns>
+    /// <remarks>
+    /// <para>
+    /// The bounds of the view in its window, the place of the client area of the window on screen, the scale of its display, and
+    /// <see cref="ZoomFactor"/> are counted in, so a page that tracks a pointer with <c>setPointerCapture</c> can tell where the
+    /// pointer is among the windows and displays: give the result to <see cref="NeoApplication.GetWindowAt(NeoPoint, NeoWindow?)"/>
+    /// or <see cref="NeoApplication.GetDisplayAt(NeoPoint)"/>. On Windows the scale is the rasterization scale of the browser and
+    /// the units those of the window; on macOS a pinch magnification is counted in as well.
+    /// </para>
+    /// <para>
+    /// The result is <see langword="null"/> with GTK, which does not tell where a window is, for a view that is not in a window on
+    /// macOS, and with a native library from before this member.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">A coordinate of <paramref name="point"/> is not finite.</exception>
+    /// <exception cref="ObjectDisposedException">The view is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread, or the view is not ready.</exception>
+    public unsafe NeoPoint? ClientToScreen(NeoViewPoint point)
+    {
+        if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)) throw new ArgumentOutOfRangeException(nameof(point), "The coordinates of a point must be finite.");
+        if (!TryConvertPoint(toScreen: true, point.X, point.Y, out var x, out var y)) return null;
+        return new NeoPoint(Whole(x), Whole(y));
+
+        static int Whole(double value) => (int)Math.Clamp(Math.Round(value, MidpointRounding.AwayFromZero), int.MinValue, int.MaxValue);
+    }
+
+    /// <summary>Converts a point in the coordinates and units of <see cref="NeoWindow.Position"/> to a point of the view in CSS pixels, as a page reports <c>clientX</c> and <c>clientY</c>.</summary>
+    /// <param name="point">The screen point.</param>
+    /// <returns>The point of the view, outside its viewport when the screen point is, or <see langword="null"/> where the backend does not know where its windows are on screen.</returns>
+    /// <remarks>This is the reverse of <see cref="ClientToScreen(NeoViewPoint)"/>, and is exact: converting its result back gives <paramref name="point"/>.</remarks>
+    /// <exception cref="ObjectDisposedException">The view is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread, or the view is not ready.</exception>
+    public NeoViewPoint? ScreenToClient(NeoPoint point)
+        => TryConvertPoint(toScreen: false, point.X, point.Y, out var x, out var y) ? new NeoViewPoint(x, y) : null;
+
+    private unsafe bool TryConvertPoint(bool toScreen, double x, double y, out double convertedX, out double convertedY)
+    {
+        ThrowIfDisposed();
+        double outX, outY;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = toScreen
+                ? NativeMethods.neoastra_view_point_to_screen(NativeHandle, x, y, &outX, &outY)
+                : NativeMethods.neoastra_view_point_from_screen(NativeHandle, x, y, &outX, &outY);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // An older native library does not convert points.
+            convertedX = convertedY = 0;
+            return false;
+        }
+
+        convertedX = outX;
+        convertedY = outY;
+        // A backend that does not know where windows are, or a view without a window, has no screen point.
+        if (NativeError.Code(result) is NeoErrorCode.NotSupported or NeoErrorCode.InvalidState) return false;
+        NativeError.ThrowIfFailed(result, default, toScreen ? "convert view point to screen" : "convert screen point to view");
+        return true;
+    }
+
     /// <summary>Gets or sets the single asynchronous navigation policy handler.</summary>
     public Func<NeoNavigationRequest, ValueTask<NeoNavigationDecision>>? NavigationRequested { get; set; }
 

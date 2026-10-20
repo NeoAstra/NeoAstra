@@ -9,6 +9,7 @@ static_assert(NEOASTRA_HARD_MAXIMUM_MESSAGE_SIZE == 2147483647u);
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <type_traits>
 
 namespace {
@@ -89,13 +90,19 @@ static_assert(NEOASTRA_WINDOW_CLOSE_PROGRAMMATIC == 5);
 static_assert(NEOASTRA_PERMISSION_PERSISTENT_STORAGE == 12);
 static_assert(NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE == 3);
 static_assert(NEOASTRA_EVENT_CLIENT_CERTIFICATE_REQUESTED == 33 && NEOASTRA_EVENT_APPLICATION_SESSION_END == 37 && NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED == 38);
+static_assert(NEOASTRA_EVENT_DISPLAYS_CHANGED == 39 && NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED == 40);
+static_assert(std::is_same_v<std::underlying_type_t<neoastra_window_capability_t>, uint32_t>);
+static_assert(NEOASTRA_WINDOW_CAPABILITY_DISPLAYS == 0 && NEOASTRA_WINDOW_CAPABILITY_PLACEMENT == 1 && NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS == 2 && NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE == 3 && NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS == 4);
+static_assert(NEOASTRA_WINDOW_SHOW_IN_TASKBAR == 3 && NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS == 4);
+static_assert(NEOASTRA_DISPLAY_PRIMARY == 1 && NEOASTRA_DISPLAY_WORK_AREA_REPORTED == 2 && NEOASTRA_DISPLAY_ID_PERSISTENT == 4 && NEOASTRA_DISPLAY_ROTATION_REPORTED == 8);
+static_assert(NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN == 1 && NEOASTRA_VIRTUAL_DESKTOP_ON_CURRENT == 2);
 static_assert(std::is_same_v<std::underlying_type_t<neoastra_external_open_status_t>, uint32_t>);
 static_assert(NEOASTRA_EXTERNAL_OPEN_OPENED == 0 && NEOASTRA_EXTERNAL_OPEN_REFUSED == 1 && NEOASTRA_EXTERNAL_OPEN_FAILED == 2);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME == 1 && NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED == 2 && NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED == 1);
 static_assert(NEOASTRA_REQUEST_LINK_ACTIVATED == 4 && NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED == 8);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_MASK == 0xf0 && NEOASTRA_NAVIGATION_REQUEST_KIND_UNKNOWN == 0);
 static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT == 0x10 && NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD == 0x20 && NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD == 0x30);
-static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4 && NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH == 8);
+static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4 && NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH == 8 && NEOASTRA_BUILD_FEATURE_DISPLAYS == 16);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
@@ -132,6 +139,10 @@ static_assert(sizeof(neoastra_cookie_t) == 88 && offsetof(neoastra_cookie_t, exp
 static_assert(sizeof(neoastra_resource_request_t) == 96 && offsetof(neoastra_resource_request_t, body_length) == 88);
 static_assert(sizeof(neoastra_resource_response_t) == 120 && offsetof(neoastra_resource_response_t, release) == 112);
 static_assert(sizeof(neoastra_custom_scheme_t) == 64 && offsetof(neoastra_custom_scheme_t, resource_provider) == 40);
+static_assert(sizeof(neoastra_display_info_t) == 96 && offsetof(neoastra_display_info_t, id) == 8 && offsetof(neoastra_display_info_t, name) == 24);
+static_assert(offsetof(neoastra_display_info_t, bounds) == 40 && offsetof(neoastra_display_info_t, work_area) == 56 && offsetof(neoastra_display_info_t, scale_factor) == 72);
+static_assert(offsetof(neoastra_display_info_t, refresh_rate) == 80 && offsetof(neoastra_display_info_t, rotation_degrees) == 88 && offsetof(neoastra_display_info_t, flags) == 92);
+static_assert(sizeof(neoastra_virtual_desktop_info_t) == 32 && offsetof(neoastra_virtual_desktop_info_t, flags) == 8 && offsetof(neoastra_virtual_desktop_info_t, id) == 16);
 
 #define NEO_ASSERT_STANDARD_LAYOUT(type) static_assert(std::is_standard_layout_v<type>)
 NEO_ASSERT_STANDARD_LAYOUT(neoastra_string_view_t);
@@ -155,6 +166,8 @@ NEO_ASSERT_STANDARD_LAYOUT(neoastra_cookie_t);
 NEO_ASSERT_STANDARD_LAYOUT(neoastra_resource_request_t);
 NEO_ASSERT_STANDARD_LAYOUT(neoastra_resource_response_t);
 NEO_ASSERT_STANDARD_LAYOUT(neoastra_custom_scheme_t);
+NEO_ASSERT_STANDARD_LAYOUT(neoastra_display_info_t);
+NEO_ASSERT_STANDARD_LAYOUT(neoastra_virtual_desktop_info_t);
 #undef NEO_ASSERT_STANDARD_LAYOUT
 
 int main() {
@@ -173,6 +186,7 @@ int main() {
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH) != 0);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_DISPLAYS) != 0);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);
@@ -222,6 +236,69 @@ int main() {
     assert(neoastra_window_get_frame(window, &frame) == NEOASTRA_OK);
     assert(frame.y == bounds.y && frame.x >= bounds.x && frame.x - bounds.x < 64);
     assert(frame.width >= bounds.width && frame.width - bounds.width < 64 && frame.height >= bounds.height && frame.height - bounds.height < 256);
+    // The displays: the primary one first and only it primary, each with an identifier, a name, and a work area within its bounds.
+    uint32_t display_count{};
+    assert(neoastra_app_get_display_count(nullptr, &display_count) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_app_get_display_count(app, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_app_get_display_count(app, &display_count) == NEOASTRA_OK && display_count >= 1);
+    neoastra_display_info_t display{};
+    assert(neoastra_app_get_display(app, 0, &display) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    display.size = sizeof(display);
+    display.version = 1;
+    assert(neoastra_app_get_display(app, display_count, &display) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    for (uint32_t index = 0; index < display_count; ++index) {
+        assert(neoastra_app_get_display(app, index, &display) == NEOASTRA_OK);
+        assert(((display.flags & NEOASTRA_DISPLAY_PRIMARY) != 0) == (index == 0));
+        assert(display.id.data != nullptr && display.id.length != 0 && display.name.data != nullptr && display.name.length != 0);
+        assert(display.bounds.width > 0 && display.bounds.height > 0 && display.work_area.width > 0 && display.work_area.height > 0);
+        assert(display.work_area.x >= display.bounds.x && display.work_area.y >= display.bounds.y);
+        assert(int64_t{display.work_area.x} + display.work_area.width <= int64_t{display.bounds.x} + display.bounds.width);
+        assert(int64_t{display.work_area.y} + display.work_area.height <= int64_t{display.bounds.y} + display.bounds.height);
+        assert(display.scale_factor >= 1.0 && display.scale_factor <= 16.0 && display.refresh_rate >= 0.0);
+        assert((display.flags & NEOASTRA_DISPLAY_ROTATION_REPORTED) == 0 || display.rotation_degrees % 90 == 0);
+    }
+    // The display of a window is the one that holds its center, also for a window that is not shown.
+    assert(neoastra_window_get_display(nullptr, &display) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_display(window, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_window_get_bounds(window, &bounds) == NEOASTRA_OK);
+    assert(neoastra_app_get_display_at(app, {bounds.x + bounds.width / 2, bounds.y + bounds.height / 2}, &display) == NEOASTRA_OK);
+    const std::string center_display(reinterpret_cast<const char*>(display.id.data), static_cast<size_t>(display.id.length));
+    assert(neoastra_window_get_display(window, &display) == NEOASTRA_OK);
+    assert(std::string(reinterpret_cast<const char*>(display.id.data), static_cast<size_t>(display.id.length)) == center_display);
+    // A point far from every display is on the nearest one.
+    assert(neoastra_app_get_display_at(app, {-1000000, -1000000}, &display) == NEOASTRA_OK && display.bounds.width > 0);
+    neoastra_capability_info_t window_capability{};
+    window_capability.size = sizeof(window_capability);
+    window_capability.version = 1;
+    assert(neoastra_app_get_window_capability(app, static_cast<neoastra_window_capability_t>(5), &window_capability) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    for (uint32_t capability = NEOASTRA_WINDOW_CAPABILITY_DISPLAYS; capability <= NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS; ++capability) {
+        assert(neoastra_app_get_window_capability(app, static_cast<neoastra_window_capability_t>(capability), &window_capability) == NEOASTRA_OK);
+        assert(window_capability.support <= NEOASTRA_SUPPORT_LIMITED && window_capability.details.length != 0);
+    }
+    assert(neoastra_app_get_window_capability(app, NEOASTRA_WINDOW_CAPABILITY_DISPLAYS, &window_capability) == NEOASTRA_OK && window_capability.support != NEOASTRA_SUPPORT_NONE);
+    // A window that is not shown is at no point; a backend that does not know where windows are says so.
+    neoastra_window_t* found_window = window;
+    const auto found = neoastra_app_get_window_at(app, {bounds.x + bounds.width / 2, bounds.y + bounds.height / 2}, nullptr, &found_window);
+    assert((found == NEOASTRA_OK || found == NEOASTRA_ERROR_NOT_SUPPORTED) && found_window == nullptr);
+    assert(neoastra_app_get_window_at(app, {0, 0}, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    neoastra_virtual_desktop_info_t desktop{};
+    assert(neoastra_window_get_virtual_desktop(window, &desktop) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    desktop.size = sizeof(desktop);
+    desktop.version = 1;
+    const auto desktop_result = neoastra_window_get_virtual_desktop(window, &desktop);
+    assert(desktop_result == NEOASTRA_OK || desktop_result == NEOASTRA_ERROR_NOT_SUPPORTED || desktop_result == NEOASTRA_ERROR_INVALID_STATE);
+    assert(desktop_result == NEOASTRA_OK || (desktop.flags == 0 && desktop.id.length == 0));
+    assert(neoastra_window_move_to_virtual_desktop(window, neoastra_string_view_t{}) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    uint32_t all_desktops = 1;
+    assert(neoastra_window_get_attribute(window, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, &all_desktops) == NEOASTRA_OK && all_desktops == 0);
+    const auto joined = neoastra_window_set_attribute(window, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, 1);
+    assert(joined == NEOASTRA_OK || joined == NEOASTRA_ERROR_NOT_SUPPORTED);
+    assert(neoastra_window_get_attribute(window, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, &all_desktops) == NEOASTRA_OK && all_desktops == (joined == NEOASTRA_OK ? 1u : 0u));
+    if (joined == NEOASTRA_OK) assert(neoastra_window_set_attribute(window, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, 0) == NEOASTRA_OK);
+    assert(neoastra_window_set_attribute(window, static_cast<neoastra_window_attribute_t>(5), 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    double converted_x{}, converted_y{};
+    assert(neoastra_view_point_to_screen(nullptr, 1, 2, &converted_x, &converted_y) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_point_from_screen(nullptr, 1, 2, &converted_x, &converted_y) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_window_set_maximum_size(window, {1200, 900}) == NEOASTRA_OK);
     assert(neoastra_window_set_minimum_size(window, {320, 200}) == NEOASTRA_OK);
     neoastra_size_t size{};

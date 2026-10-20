@@ -7,6 +7,7 @@
 #include <dwmapi.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shellscalingapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <wrl.h>
@@ -32,14 +33,20 @@ namespace {
 constexpr UINT dispatch_message = WM_APP + 0x4e;
 constexpr UINT quit_message = WM_APP + 0x4f;
 constexpr UINT destroy_app_message = WM_APP + 0x50;
-// Decision timers use the address of their decision as identifier, which is never 1.
+// Decision timers use the address of their decision as identifier, which is never 1 or 2.
 constexpr UINT_PTR dispatch_timer = 1;
+constexpr UINT_PTR display_timer = 2;
 constexpr wchar_t dispatch_class[] = L"NeoAstra.Dispatcher";
 constexpr wchar_t window_class[] = L"NeoAstra.Window";
 
 // `dispatch_armed` is true while a dispatch message or the dispatch timer waits: that one wake-up stands for all queued
 // work. `dispatch_deferred`, on the UI thread only, turns a dispatch message that waits into the timer when it arrives.
-struct windows_app { HWND dispatcher{}; bool owns_com{}; std::atomic<bool> dispatch_armed{false}; bool dispatch_deferred{}; std::vector<neoastra_decision_t*> decision_timers; };
+struct windows_app {
+    HWND dispatcher{}; bool owns_com{}; std::atomic<bool> dispatch_armed{false}; bool dispatch_deferred{}; std::vector<neoastra_decision_t*> decision_timers;
+    // The virtual desktops of the shell, created on first use; absent where the shell has none (Windows Server, no Explorer).
+    ComPtr<IVirtualDesktopManager> desktops;
+    bool desktops_created{};
+};
 struct windows_window {
     HWND hwnd{};
     bool fullscreen{};
@@ -50,6 +57,9 @@ struct windows_window {
     uint32_t modal_children{};
     bool modal_active{};
     bool modal{};
+    // While a request places the window, the bounds it asked for: a display of another scale that the window lands on takes them at that scale.
+    bool placing{};
+    neoastra_rect_t placement{};
     HWND caption{}; // Caption-button overlay for NEOASTRA_TITLE_BAR_OVERLAY.
     HWND top_grip{}; // Input-only strip restoring top-edge resizing above the browser.
     bool caption_layered{};
@@ -1320,6 +1330,12 @@ LRESULT handle_session_message(neoastra_app_t* app, UINT message, WPARAM wparam)
     return 0;
 }
 
+// The system tells of a change of the displays in several messages, and the displays are read once it is done telling.
+void schedule_display_check(neoastra_app_t* app) noexcept {
+    auto* state = app ? static_cast<windows_app*>(app->platform) : nullptr;
+    if (state && state->dispatcher) SetTimer(state->dispatcher, display_timer, 100, nullptr);
+}
+
 // One wake-up at a time stands for the whole queue; a failed post leaves the next producer to post again.
 void post_dispatch(windows_app* state) noexcept {
     if (state && state->dispatcher && !state->dispatch_armed.exchange(true) && !PostMessageW(state->dispatcher, dispatch_message, 0, 0)) state->dispatch_armed.store(false);
@@ -1366,6 +1382,9 @@ LRESULT CALLBACK dispatcher_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
     if (message == dispatch_message && app) { run_dispatch_slice(app, true); return 0; }
     if (message == quit_message && app) { neo_drain_dispatch(app); PostQuitMessage(app->exit_code.load()); return 0; }
     if (message == WM_TIMER && wparam == dispatch_timer && app) { KillTimer(hwnd, dispatch_timer); run_dispatch_slice(app, false); return 0; }
+    if (message == WM_TIMER && wparam == display_timer && app) { KillTimer(hwnd, display_timer); neo_app_displays_changed(app); return 0; }
+    // The hidden top-level dispatcher hears of the displays: their topology, the work areas that the taskbar leaves, and their scale.
+    if (app && (message == WM_DISPLAYCHANGE || message == WM_DPICHANGED || (message == WM_SETTINGCHANGE && wparam == SPI_SETWORKAREA))) schedule_display_check(app);
     if (message == WM_TIMER && app) {
         auto* decision = reinterpret_cast<neoastra_decision_t*>(wparam);
         auto* state = static_cast<windows_app*>(app->platform);
@@ -1852,6 +1871,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             // The message carries the client origin, which is not where a position request places the window.
             sync_bounds(window, hwnd);
             neo_emit_app(window->app, NEOASTRA_EVENT_WINDOW_MOVED, window->id);
+            neo_window_display_changed(window);
             break;
         case WM_SIZE: {
             auto* native = static_cast<windows_window*>(window->platform);
@@ -1889,10 +1909,21 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             // Before the move below, which can reenter user code that releases the window.
             if (auto* native = static_cast<windows_window*>(window->platform)) apply_executable_icons(native, hwnd, HIWORD(wparam));
             const auto* suggested = reinterpret_cast<const RECT*>(lparam);
-            SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
-                         suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+            if (auto* native = static_cast<windows_window*>(window->platform); native && native->placing) {
+                // A position and a size that were asked for are in the pixels of the display that the window goes to: the window
+                // takes them there, with the frame of that scale, instead of the size it had scaled to the new display.
+                const auto placement = native->placement;
+                const auto outer = outer_size(window, hwnd, placement.width, placement.height);
+                SetWindowPos(hwnd, nullptr, placement.x, placement.y, outer.cx, outer.cy, SWP_NOACTIVATE | SWP_NOZORDER);
+            } else {
+                SetWindowPos(hwnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
+                             suggested->bottom - suggested->top, SWP_NOACTIVATE | SWP_NOZORDER);
+            }
             layout_title_bar(window);
             neo_window_set_scale_factor(window, HIWORD(wparam) / static_cast<double>(USER_DEFAULT_SCREEN_DPI));
+            neo_window_display_changed(window);
+            // The scale of a display that a user changes reaches its windows, and the list of displays tells it too.
+            schedule_display_check(window->app);
             return 0;
         }
         case WM_GETMINMAXINFO: {
@@ -2071,6 +2102,7 @@ void neo_platform_shutdown(neoastra_app_t* app) noexcept {
     auto* state = static_cast<windows_app*>(app->platform); if (!state) return;
     for (auto* decision : state->decision_timers) { KillTimer(state->dispatcher, reinterpret_cast<UINT_PTR>(decision)); decision->abandon(); decision->release(); }
     state->decision_timers.clear();
+    state->desktops.Reset();
     if (state->dispatcher && IsWindow(state->dispatcher)) DestroyWindow(state->dispatcher);
     if (state->owns_com && app->ui_thread == std::this_thread::get_id()) OleUninitialize();
     delete state; app->platform = nullptr;
@@ -2189,9 +2221,22 @@ neoastra_result_t neo_platform_window_force_close(neoastra_window_t* w) noexcept
 neoastra_result_t neo_platform_window_set_title(neoastra_window_t* w) noexcept {try{auto* s=static_cast<windows_window*>(w->platform);auto title=widen(w->title);return s&&s->hwnd&&SetWindowTextW(s->hwnd,title.c_str())?NEOASTRA_OK:NEOASTRA_ERROR_DISPOSED;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_window_set_bounds(neoastra_window_t* w) noexcept {
     auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;
-    const auto outer=outer_size(w,s->hwnd,w->bounds.width,w->bounds.height);
-    if(!SetWindowPos(s->hwnd,nullptr,w->bounds.x,w->bounds.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE))return NEOASTRA_ERROR_DISPOSED;
+    neoastra_rect_t requested{};{std::lock_guard lock(w->state_mutex);requested=w->bounds;}
+    const auto dpi=window_dpi(s->hwnd);
+    const auto outer=outer_size(w,s->hwnd,requested.width,requested.height);
+    // A window that the move takes to a display of another scale is told of it during the move (WM_DPICHANGED), and keeps the
+    // requested bounds rather than the size that the system scales for that display.
+    s->placing=true;s->placement=requested;
+    const auto moved=SetWindowPos(s->hwnd,nullptr,requested.x,requested.y,outer.cx,outer.cy,SWP_NOZORDER|SWP_NOACTIVATE);
     if (w->platform != s || !s->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    s->placing=false;
+    if(!moved)return NEOASTRA_ERROR_DISPOSED;
+    // The frame of the new scale has another size, which a window that changed its scale without being told takes here.
+    if(window_dpi(s->hwnd)!=dpi&&!IsIconic(s->hwnd)&&!IsZoomed(s->hwnd)){
+        const auto scaled=outer_size(w,s->hwnd,requested.width,requested.height);
+        SetWindowPos(s->hwnd,nullptr,requested.x,requested.y,scaled.cx,scaled.cy,SWP_NOZORDER|SWP_NOACTIVATE);
+        if (w->platform != s || !s->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    }
     // A request the system adjusted to a placement the window already had sends no move or size message.
     if(!IsIconic(s->hwnd))sync_bounds(w,s->hwnd);
     return NEOASTRA_OK;
@@ -2267,6 +2312,8 @@ neoastra_result_t neo_platform_window_set_state(neoastra_window_t* w) noexcept {
 neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* w,neoastra_window_attribute_t attribute,bool enabled) noexcept {
     auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;
     auto attributes=w->attributes;if(enabled)attributes|=1u<<attribute;else attributes&=~(1u<<attribute);
+    // Windows shows a window on every virtual desktop only through interfaces of the shell that are not documented.
+    if(attribute==NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS)return NEOASTRA_ERROR_NOT_SUPPORTED;
     if(attribute==NEOASTRA_WINDOW_ALWAYS_ON_TOP)return SetWindowPos(state->hwnd,enabled?HWND_TOPMOST:HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;
     if(attribute==NEOASTRA_WINDOW_SHOW_IN_TASKBAR){auto extended=static_cast<DWORD>(GetWindowLongW(state->hwnd,GWL_EXSTYLE));if(enabled){extended&=~WS_EX_TOOLWINDOW;extended|=WS_EX_APPWINDOW;}else{extended&=~WS_EX_APPWINDOW;extended|=WS_EX_TOOLWINDOW;}SetWindowLongW(state->hwnd,GWL_EXSTYLE,static_cast<LONG>(extended));return SetWindowPos(state->hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
     auto style=(attributes&(1u<<NEOASTRA_WINDOW_DECORATED))?static_cast<DWORD>(WS_OVERLAPPEDWINDOW):static_cast<DWORD>(WS_POPUP);
@@ -2319,6 +2366,261 @@ neoastra_result_t neo_platform_window_get_title_bar(neoastra_window_t* w,neoastr
 neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* w) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,HTCAPTION,0);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t* w,neoastra_window_resize_edge_t edge) noexcept {auto* state=static_cast<windows_window*>(w->platform);if(!state||!state->hwnd)return NEOASTRA_ERROR_DISPOSED;static constexpr WPARAM hit_tests[]={HTLEFT,HTTOP,HTRIGHT,HTBOTTOM,HTTOPLEFT,HTTOPRIGHT,HTBOTTOMLEFT,HTBOTTOMRIGHT};ReleaseCapture();SendMessageW(state->hwnd,WM_NCLBUTTONDOWN,hit_tests[edge],0);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* w,neoastra_native_handle_kind_t kind,neoastra_native_handle_t* h) noexcept {if(kind!=NEOASTRA_NATIVE_HANDLE_WIN32_HWND)return NEOASTRA_ERROR_NOT_SUPPORTED;auto* s=static_cast<windows_window*>(w->platform);if(!s||!s->hwnd)return NEOASTRA_ERROR_DISPOSED;h->kind=kind;h->value=s->hwnd;return NEOASTRA_OK;}
+
+namespace {
+// What the display configuration tells of the monitor that shows a source of the desktop, named by the device of that source
+// (\\.\DISPLAY1, as GetMonitorInfo names it): the device path of the monitor, which names the monitor and its connection and
+// stays the same after a restart, its name, its refresh rate, and its rotation. A source that several monitors show (a mirror)
+// is told of by the first of them.
+struct display_path { std::wstring device; std::string id; std::string name; double refresh_rate{}; uint32_t rotation{}; bool rotation_known{}; };
+
+std::vector<display_path> display_paths() {
+    std::vector<display_path> values;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+    LONG result = ERROR_INSUFFICIENT_BUFFER;
+    // The configuration can change between the size and the query.
+    for (int attempt = 0; attempt < 4 && result == ERROR_INSUFFICIENT_BUFFER; ++attempt) {
+        UINT32 path_count{}, mode_count{};
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &path_count, &mode_count) != ERROR_SUCCESS) return values;
+        paths.resize(path_count);
+        modes.resize(mode_count);
+        result = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
+        paths.resize(path_count);
+    }
+    if (result != ERROR_SUCCESS) return values;
+    for (const auto& path : paths) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) continue;
+        if (std::any_of(values.begin(), values.end(), [&](const display_path& value) { return value.device == source.viewGdiDeviceName; })) continue;
+        display_path value;
+        value.device = source.viewGdiDeviceName;
+        DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+        target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+        target.header.size = sizeof(target);
+        target.header.adapterId = path.targetInfo.adapterId;
+        target.header.id = path.targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS) {
+            value.id = narrow(target.monitorDevicePath);
+            value.name = narrow(target.monitorFriendlyDeviceName);
+        }
+        if (path.targetInfo.refreshRate.Denominator) value.refresh_rate = static_cast<double>(path.targetInfo.refreshRate.Numerator) / path.targetInfo.refreshRate.Denominator;
+        switch (path.targetInfo.rotation) {
+            case DISPLAYCONFIG_ROTATION_IDENTITY: value.rotation = 0; value.rotation_known = true; break;
+            case DISPLAYCONFIG_ROTATION_ROTATE90: value.rotation = 90; value.rotation_known = true; break;
+            case DISPLAYCONFIG_ROTATION_ROTATE180: value.rotation = 180; value.rotation_known = true; break;
+            case DISPLAYCONFIG_ROTATION_ROTATE270: value.rotation = 270; value.rotation_known = true; break;
+            default: break;
+        }
+        values.push_back(std::move(value));
+    }
+    return values;
+}
+
+BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
+    try { reinterpret_cast<std::vector<HMONITOR>*>(data)->push_back(monitor); } catch (...) { return FALSE; }
+    return TRUE;
+}
+
+// The scale that a window on the monitor reports. It depends on the awareness of the thread, as the units of the bounds do: a
+// thread that is not aware of display scaling counts in logical units on every display.
+double monitor_scale_factor(HMONITOR monitor) noexcept {
+    const auto awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
+    if (awareness == DPI_AWARENESS_UNAWARE) return 1.0;
+    if (awareness == DPI_AWARENESS_SYSTEM_AWARE) return GetDpiForSystem() / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
+    UINT x{}, y{};
+    return SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &x, &y)) && x ? x / static_cast<double>(USER_DEFAULT_SCREEN_DPI) : 1.0;
+}
+
+bool rect_contains(const neoastra_rect_t& rect, neoastra_point_t point) noexcept {
+    return point.x >= rect.x && point.y >= rect.y && int64_t{point.x} < int64_t{rect.x} + rect.width && int64_t{point.y} < int64_t{rect.y} + rect.height;
+}
+
+IVirtualDesktopManager* desktop_manager(neoastra_app_t* app) noexcept {
+    auto* state = static_cast<windows_app*>(app->platform);
+    if (!state) return nullptr;
+    if (!state->desktops_created) {
+        state->desktops_created = true;
+        if (FAILED(CoCreateInstance(__uuidof(VirtualDesktopManager), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&state->desktops)))) state->desktops.Reset();
+    }
+    return state->desktops.Get();
+}
+}
+
+// GetMonitorInfo and the bounds of a window count in the units of the awareness of the thread, so the two agree.
+void neo_platform_get_displays(neoastra_app_t*, std::vector<neo_display>& displays) noexcept {
+    try {
+        displays.clear();
+        std::vector<HMONITOR> monitors;
+        EnumDisplayMonitors(nullptr, nullptr, collect_monitor, reinterpret_cast<LPARAM>(&monitors));
+        const auto paths = display_paths();
+        for (const auto monitor : monitors) {
+            MONITORINFOEXW info{};
+            info.cbSize = sizeof(info);
+            if (!GetMonitorInfoW(monitor, &info)) continue;
+            neo_display display;
+            display.handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(monitor));
+            display.bounds = {info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right - info.rcMonitor.left, info.rcMonitor.bottom - info.rcMonitor.top};
+            display.work_area = {info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left, info.rcWork.bottom - info.rcWork.top};
+            display.flags = NEOASTRA_DISPLAY_WORK_AREA_REPORTED | ((info.dwFlags & MONITORINFOF_PRIMARY) ? NEOASTRA_DISPLAY_PRIMARY : 0u);
+            display.scale_factor = monitor_scale_factor(monitor);
+            const auto path = std::find_if(paths.begin(), paths.end(), [&](const display_path& value) { return value.device == info.szDevice; });
+            if (path != paths.end()) {
+                if (!path->id.empty()) { display.id = path->id; display.flags |= NEOASTRA_DISPLAY_ID_PERSISTENT; }
+                display.name = path->name;
+                display.refresh_rate = path->refresh_rate;
+                if (path->rotation_known) { display.rotation_degrees = path->rotation; display.flags |= NEOASTRA_DISPLAY_ROTATION_REPORTED; }
+            }
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode)) {
+                // 0 and 1 stand for the default rate of the hardware.
+                if (display.refresh_rate <= 0 && mode.dmDisplayFrequency > 1) display.refresh_rate = mode.dmDisplayFrequency;
+                if ((display.flags & NEOASTRA_DISPLAY_ROTATION_REPORTED) == 0 && (mode.dmFields & DM_DISPLAYORIENTATION) && mode.dmDisplayOrientation <= DMDO_270) {
+                    display.rotation_degrees = mode.dmDisplayOrientation * 90u;
+                    display.flags |= NEOASTRA_DISPLAY_ROTATION_REPORTED;
+                }
+            }
+            // Without the display configuration (a remote session), the device lasts for the session.
+            if (display.id.empty()) display.id = narrow(info.szDevice);
+            if (display.name.empty()) {
+                DISPLAY_DEVICEW device{};
+                device.cb = sizeof(device);
+                if (EnumDisplayDevicesW(info.szDevice, 0, &device, 0)) display.name = narrow(device.DeviceString);
+            }
+            displays.push_back(std::move(display));
+        }
+    } catch (...) { displays.clear(); }
+}
+
+// A minimized window is on the display of the bounds it goes back to.
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<windows_window*>(window->platform);
+    if (!state || !state->hwnd) return 0;
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(MonitorFromWindow(state->hwnd, MONITOR_DEFAULTTONEAREST)));
+}
+
+void neo_platform_window_capability(neoastra_app_t* app, neoastra_window_capability_t capability, neoastra_capability_info_t* info) noexcept {
+    static const std::string displays = "Win32 monitors and their work areas, in the units that the awareness of the thread to display scaling gives; the device path of the monitor from the display configuration is its identifier, with its friendly name, scale, rotation, and refresh rate";
+    static const std::string placement = "Positions are those of the frame in virtual-screen coordinates; a window placed on a display of another scale keeps the bounds it was given";
+    static const std::string desktops = "IVirtualDesktopManager tells whether a window is on the current virtual desktop and the identifier of its desktop";
+    static const std::string move = "IVirtualDesktopManager moves a window of the application to another virtual desktop";
+    static const std::string no_desktops = "The shell provides no virtual desktops: IVirtualDesktopManager is unavailable";
+    static const std::string all_desktops = "Windows shows a window on every virtual desktop only through undocumented shell interfaces";
+    switch (capability) {
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS: info->support = NEOASTRA_SUPPORT_NATIVE; info->details = neo_string_view(displays); break;
+        case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT: info->support = NEOASTRA_SUPPORT_NATIVE; info->details = neo_string_view(placement); break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE: {
+            // The shell object is created on the UI thread; another thread is told what that thread found, or that it is expected.
+            const auto* state = static_cast<windows_app*>(app->platform);
+            const auto available = app->ui_thread == std::this_thread::get_id() ? desktop_manager(app) != nullptr : !state || !state->desktops_created || state->desktops;
+            info->support = available ? NEOASTRA_SUPPORT_NATIVE : NEOASTRA_SUPPORT_NONE;
+            info->details = neo_string_view(!available ? no_desktops : capability == NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS ? desktops : move);
+            break;
+        }
+        case NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS: info->details = neo_string_view(all_desktops); break;
+        default: break;
+    }
+}
+
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* w, uint32_t* flags, std::string* id) noexcept {
+    auto* state = static_cast<windows_window*>(w->platform);
+    if (!state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    auto* manager = desktop_manager(w->app);
+    if (!manager) return NEOASTRA_ERROR_NOT_SUPPORTED;
+    BOOL current{};
+    GUID desktop{};
+    const auto told = manager->IsWindowOnCurrentVirtualDesktop(state->hwnd, &current);
+    const auto named = manager->GetWindowDesktopId(state->hwnd, &desktop);
+    if (SUCCEEDED(told)) *flags |= NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN | (current ? NEOASTRA_VIRTUAL_DESKTOP_ON_CURRENT : 0u);
+    // A window that was never shown is on no desktop yet.
+    if (SUCCEEDED(named) && desktop != GUID{}) {
+        wchar_t text[40]{};
+        if (StringFromGUID2(desktop, text, 40) > 0) *id = narrow(text);
+    }
+    return SUCCEEDED(told) || !id->empty() ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
+}
+
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* w, const std::string& id) noexcept {
+    auto* state = static_cast<windows_window*>(w->platform);
+    if (!state || !state->hwnd) return NEOASTRA_ERROR_DISPOSED;
+    auto* manager = desktop_manager(w->app);
+    if (!manager) return NEOASTRA_ERROR_NOT_SUPPORTED;
+    GUID desktop{};
+    try {
+        const auto text = widen(id);
+        if (FAILED(IIDFromString(text.c_str(), &desktop)) || desktop == GUID{}) return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    } catch (...) { return NEOASTRA_ERROR_INVALID_ARGUMENT; }
+    GUID current{};
+    if (FAILED(manager->GetWindowDesktopId(state->hwnd, &current)) || current == GUID{}) return NEOASTRA_ERROR_INVALID_STATE;
+    if (current == desktop) return NEOASTRA_OK;
+    const auto result = manager->MoveWindowToDesktop(state->hwnd, desktop);
+    if (SUCCEEDED(result)) return NEOASTRA_OK;
+    // The shell names a desktop that does not exist an element it did not find.
+    return result == TYPE_E_ELEMENTNOTFOUND || result == E_INVALIDARG ? NEOASTRA_ERROR_INVALID_ARGUMENT : NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+
+// The top-level windows in their order on screen, front first. A window on another virtual desktop is cloaked by the desktop
+// window manager while it says it is visible.
+neoastra_result_t neo_platform_window_at(neoastra_app_t* app, neoastra_point_t point, const neoastra_window_t* excluded, uint64_t* id) noexcept {
+    std::vector<std::pair<HWND, neoastra_window_t*>> windows;
+    try {
+        {
+            std::lock_guard lock(app->windows_mutex);
+            windows.reserve(app->windows.size());
+            for (const auto& entry : app->windows) {
+                auto* window = entry.second;
+                auto* state = static_cast<windows_window*>(window->platform);
+                if (window == excluded || !state || !state->hwnd || !window->retain()) continue;
+                windows.emplace_back(state->hwnd, window);
+            }
+        }
+        for (HWND hwnd = GetTopWindow(nullptr); hwnd && *id == 0; hwnd = GetWindow(hwnd, GW_HWNDNEXT)) {
+            const auto found = std::find_if(windows.begin(), windows.end(), [hwnd](const auto& value) { return value.first == hwnd; });
+            if (found == windows.end() || !IsWindowVisible(hwnd) || IsIconic(hwnd)) continue;
+            DWORD cloaked{};
+            if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) continue;
+            auto* window = found->second;
+            neoastra_rect_t frame{};
+            { std::lock_guard lock(window->state_mutex); frame = window->bounds; }
+            if (neo_platform_window_get_frame(window, &frame) == NEOASTRA_OK && rect_contains(frame, point)) *id = window->id;
+        }
+    } catch (...) { *id = 0; }
+    for (const auto& entry : windows) entry.second->release();
+    return NEOASTRA_OK;
+}
+
+// A point of the page is in CSS pixels, which the zoom and the rasterization scale of the controller make pixels of its bounds in
+// the client area of its parent, and the client area is placed on screen in the units of the awareness of that parent: those of
+// the bounds of the window, which its messages give it.
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool to_screen, double x, double y, double* out_x, double* out_y) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    HWND parent{};
+    RECT bounds{};
+    if (FAILED(state->controller->get_ParentWindow(&parent)) || !parent || FAILED(state->controller->get_Bounds(&bounds))) return NEOASTRA_ERROR_NATIVE_FAILURE;
+    POINT origin{};
+    bool converted{};
+    if (const auto previous = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(parent))) {
+        converted = ClientToScreen(parent, &origin) != FALSE;
+        SetThreadDpiAwarenessContext(previous);
+    } else converted = ClientToScreen(parent, &origin) != FALSE;
+    if (!converted) return NEOASTRA_ERROR_NATIVE_FAILURE;
+    double scale = 1.0, zoom = 1.0;
+    ComPtr<ICoreWebView2Controller3> controller3;
+    if (SUCCEEDED(state->controller.As(&controller3)) && (FAILED(controller3->get_RasterizationScale(&scale)) || !(scale > 0.0))) scale = 1.0;
+    if (FAILED(state->controller->get_ZoomFactor(&zoom)) || !(zoom > 0.0)) zoom = 1.0;
+    const auto unit = scale * zoom;
+    const auto left = static_cast<double>(origin.x) + bounds.left, top = static_cast<double>(origin.y) + bounds.top;
+    if (to_screen) { *out_x = left + x * unit; *out_y = top + y * unit; }
+    else { *out_x = (x - left) / unit; *out_y = (y - top) / unit; }
+    return NEOASTRA_OK;
+}
 
 bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {
     try {

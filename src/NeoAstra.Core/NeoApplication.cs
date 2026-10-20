@@ -352,6 +352,158 @@ public sealed class NeoApplication : IAsyncDisposable
         return window;
     }
 
+    /// <summary>Occurs on the UI thread when the displays changed: a display came or went, or its bounds, work area, scale, name, or primary role changed.</summary>
+    /// <remarks>
+    /// The platform tells of the change: <c>WM_DISPLAYCHANGE</c>, a change of the work area, and a change of scale on Windows,
+    /// <c>NSApplicationDidChangeScreenParametersNotification</c> on macOS, and the list and the properties of the monitors with
+    /// GTK. A window that the change leaves on another display then raises <see cref="NeoWindow.DisplayChanged"/>. A native
+    /// library from before displays raises nothing.
+    /// </remarks>
+    public event EventHandler<NeoDisplaysChangedEventArgs>? DisplaysChanged;
+
+    /// <summary>Reads the displays there are, the primary one first.</summary>
+    /// <returns>The displays, in the coordinates and units of <see cref="NeoWindow.Position"/>; empty when the loaded native library cannot tell them.</returns>
+    /// <remarks>Each call reads the displays again; <see cref="DisplaysChanged"/> tells when they change.</remarks>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread.</exception>
+    public unsafe IReadOnlyList<NeoDisplay> GetDisplays()
+    {
+        ThrowIfDisposed();
+        uint count;
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_app_get_display_count(NativeHandle, &count), default, "get displays");
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // An older native library does not tell the displays.
+            return Array.Empty<NeoDisplay>();
+        }
+
+        var displays = new NeoDisplay[count];
+        for (uint index = 0; index < count; index++)
+        {
+            var native = NeoDisplay.CreateNative();
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_app_get_display(NativeHandle, index, &native), default, "get display");
+            displays[index] = NeoDisplay.FromNative(native);
+        }
+
+        return Array.AsReadOnly(displays);
+    }
+
+    /// <summary>Finds the display that holds a point, or else the one nearest to it.</summary>
+    /// <param name="point">A point in the coordinates and units of <see cref="NeoWindow.Position"/>, such as where a drag ended.</param>
+    /// <returns>The display, or <see langword="null"/> when the platform or the loaded native library tells no display.</returns>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread.</exception>
+    public unsafe NeoDisplay? GetDisplayAt(NeoPoint point)
+    {
+        ThrowIfDisposed();
+        var native = NeoDisplay.CreateNative();
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_app_get_display_at(NativeHandle, new NativeMethods.neoastra_point { x = point.X, y = point.Y }, &native);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+
+        if (NativeError.Code(result) == NeoErrorCode.NotSupported) return null;
+        NativeError.ThrowIfFailed(result, default, "get display at point");
+        return NeoDisplay.FromNative(native);
+    }
+
+    /// <summary>Finds the front-most window of the application whose frame holds a point.</summary>
+    /// <param name="point">A point in the coordinates and units of <see cref="NeoWindow.Position"/>.</param>
+    /// <returns>The window, or <see langword="null"/> when none holds the point or the backend does not know where its windows are.</returns>
+    /// <remarks>See <see cref="GetWindowAt(NeoPoint, NeoWindow?)"/>.</remarks>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread.</exception>
+    public NeoWindow? GetWindowAt(NeoPoint point) => GetWindowAt(point, null);
+
+    /// <summary>Finds the front-most window of the application whose frame holds a point, passing over one window.</summary>
+    /// <param name="point">A point in the coordinates and units of <see cref="NeoWindow.Position"/>.</param>
+    /// <param name="excluded">A window to pass over, such as one that follows the pointer during a drag, or <see langword="null"/>.</param>
+    /// <returns>The window, or <see langword="null"/> when none holds the point or the backend does not know where its windows are.</returns>
+    /// <remarks>
+    /// <para>
+    /// The frame is <see cref="NeoWindow.FrameBounds"/>. The windows looked at are those of this application that are visible,
+    /// not minimized, and on the current virtual desktop, in their order on screen: the windows of other applications are not
+    /// looked at, so a window of this application that another one covers at the point is still found.
+    /// </para>
+    /// <para>
+    /// GTK does not tell where a window is nor the order of windows on screen, so the result is <see langword="null"/> there, as
+    /// it is with a native library from before this member; <see cref="GetWindowCapability"/> with
+    /// <see cref="NeoWindowCapability.Placement"/> tells whether the result is meaningful.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="excluded"/> belongs to another application.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="InvalidOperationException">The method was called on another thread than the UI thread.</exception>
+    public unsafe NeoWindow? GetWindowAt(NeoPoint point, NeoWindow? excluded)
+    {
+        ThrowIfDisposed();
+        if (excluded is not null && !ReferenceEquals(excluded.Application, this)) throw new ArgumentException("The excluded window must belong to this application.", nameof(excluded));
+        var excludedHandle = excluded is null || excluded.IsClosed ? default : excluded.NativeHandle;
+        NativeMethods.neoastra_window_t found = default;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_app_get_window_at(NativeHandle, new NativeMethods.neoastra_point { x = point.X, y = point.Y }, excludedHandle, &found);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+
+        if (NativeError.Code(result) == NeoErrorCode.NotSupported) return null;
+        NativeError.ThrowIfFailed(result, default, "get window at point");
+        if (found.Handle == 0) return null;
+        try
+        {
+            var id = NativeMethods.neoastra_window_get_id(found);
+            lock (_sync) return _windows.TryGetValue(id, out var window) ? window : null;
+        }
+        finally
+        {
+            NativeMethods.neoastra_window_release(found);
+        }
+    }
+
+    /// <summary>Tells what the backend can do with displays, the placement of windows, and virtual desktops.</summary>
+    /// <param name="capability">The capability to query.</param>
+    /// <returns>Support information from the active backend; <see cref="NeoSupportLevel.None"/> with a native library from before these capabilities.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="capability"/> is not defined.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    public NeoCapabilityInfo GetWindowCapability(NeoWindowCapability capability)
+        => ReadWindowCapability(capability) ?? new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library does not report window capabilities.");
+
+    // Null with a native library from before window capabilities.
+    internal unsafe NeoCapabilityInfo? ReadWindowCapability(NeoWindowCapability capability)
+    {
+        if (!Enum.IsDefined(capability)) throw new ArgumentOutOfRangeException(nameof(capability));
+        ThrowIfDisposed();
+        var native = new NativeMethods.neoastra_capability_info_t(new NativeMethods.neoastra_capability_info
+        {
+            size = (uint)sizeof(NativeMethods.neoastra_capability_info),
+            version = 1,
+        });
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_app_get_window_capability(NativeHandle, (NativeMethods.neoastra_window_capability)capability, &native), default, "query window capability");
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+
+        var raw = native.Value;
+        var details = Utf8String.Decode(raw.details);
+        return new NeoCapabilityInfo((NeoSupportLevel)raw.support.Value, raw.capability_version, raw.flags, string.IsNullOrEmpty(details) ? null : details);
+    }
+
     /// <summary>Urgently bypasses cancelable quit and requests application shutdown. This method may be called from any thread.</summary>
     /// <param name="exitCode">The process-style exit code returned by <see cref="Run"/>.</param>
     /// <remarks>Safe to call concurrently with <see cref="DisposeAsync"/>; it is a no-op after disposal starts.</remarks>
@@ -1224,6 +1376,9 @@ public sealed class NeoApplication : IAsyncDisposable
                 case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_APPLICATION_SESSION_END:
                     HandleSessionEnd(value);
                     return;
+                case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_DISPLAYS_CHANGED:
+                    OnDisplaysChanged();
+                    return;
             }
         }
         catch (Exception exception)
@@ -1267,7 +1422,21 @@ public sealed class NeoApplication : IAsyncDisposable
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_STATE_CHANGED:
                 window.OnStateChanged((NeoWindowState)value.value);
                 break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED:
+                window.OnDisplayChanged();
+                break;
         }
+    }
+
+    private void OnDisplaysChanged()
+    {
+        var handler = DisplaysChanged;
+        if (handler is null) return;
+        IReadOnlyList<NeoDisplay> displays;
+        try { displays = GetDisplays(); }
+        catch (Exception exception) { ReportLifecycleFailure("application.displays", exception, 0); return; }
+        try { handler(this, new NeoDisplaysChangedEventArgs(displays)); }
+        catch (Exception exception) { ReportLifecycleFailure("application.displays", exception, 0); }
     }
 
     private void OnWindowClosed(NeoWindow window)

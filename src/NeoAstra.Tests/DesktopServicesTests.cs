@@ -95,9 +95,11 @@ public sealed class DesktopServicesTests
             Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.ParseColor(malformed));
         var snapshotJson = JsonSerializer.Serialize(
             new DesktopWindowStateResult(new("Title", default, new(800, 600), default, default, true, true, false, 1, NeoWindowState.Maximized, true, true, false, true, false,
-                new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138))),
+                new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138), "display-1")),
             DesktopRendererJsonContext.Default.DesktopWindowStateResult);
         StringAssert.Contains(snapshotJson, "\"titleBar\":{\"style\":\"Overlay\",\"height\":32,\"leftInset\":0,\"rightInset\":138}");
+        // A page finds the display of its window among the displays by its identifier.
+        StringAssert.Contains(snapshotJson, "\"displayId\":\"display-1\"");
         var titleBarRequest = JsonSerializer.Deserialize("{\"style\":\"Hidden\",\"height\":40,\"symbolColor\":\"#ffffff\"}", DesktopRendererJsonContext.Default.DesktopWindowTitleBarRequest);
         Assert.AreEqual(new DesktopWindowTitleBarRequest(NeoWindowTitleBarStyle.Hidden, 40, "#ffffff", null), titleBarRequest);
 
@@ -1308,8 +1310,10 @@ public sealed class DesktopServicesTests
                 var normal = new NeoRect(120, 90, 640, 420);
                 // What the window shows at its normal bounds, which a placement keeps with them and around them.
                 var shown = normal;
+                NeoDisplay? on = null;
+                // A placement names the display the window is on, and its work area.
                 NeoWindowPlacement Placement(NeoRect bounds, NeoWindowState state, double scale)
-                    => new(bounds, state, null, scale, true) { NormalFrame = new NeoRect(bounds.X + shown.X - normal.X, bounds.Y + shown.Y - normal.Y, bounds.Width + shown.Width - normal.Width, bounds.Height + shown.Height - normal.Height) };
+                    => new(bounds, state, on?.Id, scale, true) { NormalFrame = new NeoRect(bounds.X + shown.X - normal.X, bounds.Y + shown.Y - normal.Y, bounds.Width + shown.Width - normal.Width, bounds.Height + shown.Height - normal.Height), DisplayWorkArea = on?.WorkArea };
 
                 // What the store holds once a change had the time to be written.
                 async Task<NeoWindowPlacement> SavedAsync()
@@ -1330,6 +1334,8 @@ public sealed class DesktopServicesTests
                 {
                     window.Show();
                     shown = window.FrameBounds;
+                    // Null with a native library from before displays, which saves no display.
+                    on = window.Display;
                     await using var controller = new NeoWindowStateController(window, store, "main", delay);
                     Command(window, maximize);
                     Assert.AreEqual(NeoWindowState.Maximized, window.State);

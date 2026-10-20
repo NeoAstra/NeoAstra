@@ -18,6 +18,8 @@ public sealed unsafe class NeoDispatcher
     private readonly Dictionary<nint, DispatchRegistration> _outstanding = [];
     private bool _shutdown;
 
+    internal NeoApplication Application => _application;
+
     internal NeoDispatcher(NeoApplication application, int threadId)
     {
         _application = application;

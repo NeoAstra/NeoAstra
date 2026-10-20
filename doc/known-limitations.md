@@ -218,7 +218,18 @@ and Linux implementations have not yet been run on their target hosts. On Window
 buttons and top-edge resizing over the browser view require an application manifest that declares
 Windows 8 or later support. Linux window positioning is compositor-controlled on Wayland, so `Position`,
 `PositionChanged`, startup coordinates, and position restoration are best-effort there; size, focus,
-and native window-state transitions remain available.
+and native window-state transitions remain available. The GTK backend does not apply a position on X11 either: GTK 4 has no
+call that places a window or tells where it is, so `NeoWindow.MoveToDisplay` throws `NotSupportedException`, and
+`NeoApplication.GetWindowAt` and `NeoAstra.ClientToScreen` return `null` with GTK.
+
+[Displays](displays-and-window-placement.md) differ in what each platform tells. GTK names no primary display, so the one at the
+origin of the desktop is taken for it, and tells no rotation; on Wayland it tells no work area, which is then the bounds of the
+display. Windows names a display after a restart by the device path of its monitor, macOS by its vendor, model, and serial
+numbers, and GTK by its connector, manufacturer, and model; two identical monitors that the platform does not tell apart are told
+apart by their order. Virtual desktops are told and moved on Windows only: macOS tells whether a window is on the active Space and
+can show it on every Space, but has no public identifier of a Space nor a way to move a window to one, and GTK 4 tells nothing of
+workspaces. The macOS and GTK display code has been written against the platform documentation and has not yet been run on those
+platforms.
 
 `Position` is the top-left corner of the window, including its frame, measured from the top-left
 corner of the primary display, and `ClientSize` excludes the frame and a standard title bar. Windows
@@ -239,8 +250,9 @@ scaling gets the pixels of the display, and `NeoWindow.ScaleFactor` of them make
 size that is meant in logical units is multiplied by `ScaleFactor`. An application that declares no
 awareness gets logical units and a `ScaleFactor` of 1, and the system scales what it draws.
 `ScaleFactor` is known from the moment a window exists, and `ScaleFactorChanged` reports a change;
-with GTK it is a whole number. Display snapshots are in logical units, and
-`NeoWindowStateRestore.Clamp` compares a window with them in the units of the window.
+with GTK it is a whole number. `NeoApplication.GetDisplays()` describes the displays in the units of the windows, while the
+display snapshots of `NeoSystemInfoService` are in logical units, and `NeoWindowStateRestore.Clamp` compares a window with them
+in the units of the window.
 On Windows the frame that `Position` is the corner of has a border that is not drawn on its left,
 right, and bottom sides, 9 pixels wide at 150 percent, so a window whose visible edge is at the left
 edge of a display has a position that many pixels to the left of it. `NeoWindow.FrameBounds` is the

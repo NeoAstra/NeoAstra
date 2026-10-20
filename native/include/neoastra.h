@@ -74,7 +74,8 @@ typedef enum neoastra_app_shutdown_mode : uint32_t { NEOASTRA_APP_SHUTDOWN_EXPLI
 typedef enum neoastra_native_parent_kind : uint32_t { NEOASTRA_NATIVE_PARENT_NONE = 0, NEOASTRA_NATIVE_PARENT_WIN32_HWND = 1, NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW = 2, NEOASTRA_NATIVE_PARENT_GTK_WIDGET = 3 } neoastra_native_parent_kind_t;
 typedef enum neoastra_native_handle_kind : uint32_t { NEOASTRA_NATIVE_HANDLE_NONE = 0, NEOASTRA_NATIVE_HANDLE_WIN32_HWND = 1, NEOASTRA_NATIVE_HANDLE_COCOA_NSWINDOW = 2, NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW = 3, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW = 4, NEOASTRA_NATIVE_HANDLE_GTK_WIDGET = 5, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER = 6, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE = 7, NEOASTRA_NATIVE_HANDLE_WKWEBVIEW = 8, NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = 9 } neoastra_native_handle_kind_t;
 typedef enum neoastra_window_state : uint32_t { NEOASTRA_WINDOW_NORMAL = 0, NEOASTRA_WINDOW_MINIMIZED = 1, NEOASTRA_WINDOW_MAXIMIZED = 2, NEOASTRA_WINDOW_FULLSCREEN = 3 } neoastra_window_state_t;
-typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 0, NEOASTRA_WINDOW_DECORATED = 1, NEOASTRA_WINDOW_ALWAYS_ON_TOP = 2, NEOASTRA_WINDOW_SHOW_IN_TASKBAR = 3 } neoastra_window_attribute_t;
+/** ALL_VIRTUAL_DESKTOPS shows the window on every virtual desktop (a Space of macOS); NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS tells where a backend has it. A library from before it refuses it as an invalid argument. */
+typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 0, NEOASTRA_WINDOW_DECORATED = 1, NEOASTRA_WINDOW_ALWAYS_ON_TOP = 2, NEOASTRA_WINDOW_SHOW_IN_TASKBAR = 3, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS = 4 } neoastra_window_attribute_t;
 typedef enum neoastra_window_resize_edge : uint32_t { NEOASTRA_WINDOW_RESIZE_LEFT = 0, NEOASTRA_WINDOW_RESIZE_TOP = 1, NEOASTRA_WINDOW_RESIZE_RIGHT = 2, NEOASTRA_WINDOW_RESIZE_BOTTOM = 3, NEOASTRA_WINDOW_RESIZE_TOP_LEFT = 4, NEOASTRA_WINDOW_RESIZE_TOP_RIGHT = 5, NEOASTRA_WINDOW_RESIZE_BOTTOM_LEFT = 6, NEOASTRA_WINDOW_RESIZE_BOTTOM_RIGHT = 7 } neoastra_window_resize_edge_t;
 /** Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls. */
 typedef enum neoastra_title_bar_style : uint32_t { NEOASTRA_TITLE_BAR_DEFAULT = 0, NEOASTRA_TITLE_BAR_OVERLAY = 1, NEOASTRA_TITLE_BAR_HIDDEN = 2 } neoastra_title_bar_style_t;
@@ -102,9 +103,15 @@ typedef enum neoastra_event_type : uint32_t {
     NEOASTRA_EVENT_DOWNLOAD_STARTED, NEOASTRA_EVENT_DOWNLOAD_PROGRESS_CHANGED, NEOASTRA_EVENT_DOWNLOAD_COMPLETED, NEOASTRA_EVENT_CLIENT_CERTIFICATE_REQUESTED,
     NEOASTRA_EVENT_APPLICATION_ACTIVATED, NEOASTRA_EVENT_APPLICATION_OPEN_FILE, NEOASTRA_EVENT_APPLICATION_OPEN_URL, NEOASTRA_EVENT_APPLICATION_SESSION_END,
     /* A view event that follows an OPEN_EXTERNAL decision: the address is the uri, the value a neoastra_external_open_status_t, and the native code what the system reported when it could not open the address. */
-    NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED
+    NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED,
+    /* An application event, without an object, when the displays, their bounds, work areas, scales, names, or the primary one changed. */
+    NEOASTRA_EVENT_DISPLAYS_CHANGED,
+    /* A window event when the display that holds most of the window became another one, as neoastra_window_get_display tells. */
+    NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED
 } neoastra_event_type_t;
 typedef enum neoastra_capability : uint32_t { NEOASTRA_CAPABILITY_CUSTOM_SCHEME = 0, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_END, NEOASTRA_CAPABILITY_SCRIPT_ISOLATED_WORLD, NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES, NEOASTRA_CAPABILITY_MESSAGE_ORIGIN, NEOASTRA_CAPABILITY_MESSAGE_SUBFRAMES, NEOASTRA_CAPABILITY_PROFILE_NAMED, NEOASTRA_CAPABILITY_PROFILE_EPHEMERAL, NEOASTRA_CAPABILITY_COOKIES, NEOASTRA_CAPABILITY_CLEAR_DATA_BY_TIME, NEOASTRA_CAPABILITY_DOWNLOADS, NEOASTRA_CAPABILITY_DOWNLOAD_PAUSE, NEOASTRA_CAPABILITY_PERMISSIONS, NEOASTRA_CAPABILITY_PERMISSION_PERSISTENCE, NEOASTRA_CAPABILITY_NETWORK_OBSERVATION, NEOASTRA_CAPABILITY_NETWORK_INTERCEPTION, NEOASTRA_CAPABILITY_PRINT_DIALOG, NEOASTRA_CAPABILITY_PRINT_PDF, NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT, NEOASTRA_CAPABILITY_CAPTURE_FULL_PAGE, NEOASTRA_CAPABILITY_DEVTOOLS, NEOASTRA_CAPABILITY_FIND, NEOASTRA_CAPABILITY_TRANSPARENT_BACKGROUND, NEOASTRA_CAPABILITY_COMPOSITION, NEOASTRA_CAPABILITY_ZOOM, NEOASTRA_CAPABILITY_TRACKED_POPUPS, NEOASTRA_CAPABILITY_SCRIPT_DIALOGS, NEOASTRA_CAPABILITY_FILE_CHOOSER, NEOASTRA_CAPABILITY_HTTP_AUTHENTICATION, NEOASTRA_CAPABILITY_CLIENT_CERTIFICATES, NEOASTRA_CAPABILITY_TLS_ERROR_DECISIONS, NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS } neoastra_capability_t;
+/** What a backend can do with displays and the placement of windows, which neoastra_app_get_window_capability tells. DISPLAYS: the displays and the display of a window; PLACEMENT: a position given to a window is where it goes; VIRTUAL_DESKTOPS: whether a window is on the current virtual desktop, and its identifier; VIRTUAL_DESKTOP_MOVE: neoastra_window_move_to_virtual_desktop; ALL_VIRTUAL_DESKTOPS: NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS. */
+typedef enum neoastra_window_capability : uint32_t { NEOASTRA_WINDOW_CAPABILITY_DISPLAYS = 0, NEOASTRA_WINDOW_CAPABILITY_PLACEMENT = 1, NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS = 2, NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE = 3, NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS = 4 } neoastra_window_capability_t;
 typedef enum neoastra_log_level : uint32_t { NEOASTRA_LOG_TRACE = 0, NEOASTRA_LOG_DEBUG, NEOASTRA_LOG_INFORMATION, NEOASTRA_LOG_WARNING, NEOASTRA_LOG_ERROR, NEOASTRA_LOG_CRITICAL } neoastra_log_level_t;
 typedef enum neoastra_resource_kind : uint32_t { NEOASTRA_RESOURCE_OTHER = 0, NEOASTRA_RESOURCE_DOCUMENT, NEOASTRA_RESOURCE_STYLESHEET, NEOASTRA_RESOURCE_IMAGE, NEOASTRA_RESOURCE_MEDIA, NEOASTRA_RESOURCE_FONT, NEOASTRA_RESOURCE_SCRIPT, NEOASTRA_RESOURCE_XML_HTTP_REQUEST, NEOASTRA_RESOURCE_FETCH, NEOASTRA_RESOURCE_TEXT_TRACK, NEOASTRA_RESOURCE_EVENT_SOURCE, NEOASTRA_RESOURCE_WEBSOCKET, NEOASTRA_RESOURCE_MANIFEST } neoastra_resource_kind_t;
 typedef enum neoastra_resource_body_kind : uint32_t { NEOASTRA_RESOURCE_BODY_EMPTY = 0, NEOASTRA_RESOURCE_BODY_BYTES = 1, NEOASTRA_RESOURCE_BODY_FILE = 2 } neoastra_resource_body_kind_t;
@@ -164,11 +171,26 @@ typedef uint64_t neoastra_data_kind_t;
    NAVIGATION_COMMIT says that this library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a main-frame navigation replaces the
    document, between NEOASTRA_EVENT_NAVIGATION_STARTED and the end of the navigation, and not for a navigation that leaves the document
    in place (a download, an answer without content, a stopped or superseded navigation, or a same-document navigation).
-   MESSAGE_BATCH says that this library has neoastra_view_post_messages. */
+   MESSAGE_BATCH says that this library has neoastra_view_post_messages.
+   DISPLAYS says that this library has the display and virtual-desktop functions, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, and raises
+   NEOASTRA_EVENT_DISPLAYS_CHANGED and NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
 #define NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH (UINT64_C(1) << 3)
+#define NEOASTRA_BUILD_FEATURE_DISPLAYS (UINT64_C(1) << 4)
+/* Bits of neoastra_display_info_t.flags. PRIMARY marks the one primary display. WORK_AREA_REPORTED says that the platform told
+   the part of the display that the menu bar, the taskbar, the Dock, or the panels leave to windows; without it the work area is
+   the bounds (GTK on Wayland). ID_PERSISTENT says that the identifier comes from the monitor and its connection and is the same
+   after a restart; without it the identifier lasts for the session only. ROTATION_REPORTED says that rotation_degrees is known. */
+#define NEOASTRA_DISPLAY_PRIMARY (1u << 0)
+#define NEOASTRA_DISPLAY_WORK_AREA_REPORTED (1u << 1)
+#define NEOASTRA_DISPLAY_ID_PERSISTENT (1u << 2)
+#define NEOASTRA_DISPLAY_ROTATION_REPORTED (1u << 3)
+/* Bits of neoastra_virtual_desktop_info_t.flags. CURRENT_KNOWN says that the platform told whether the window is on the current
+   virtual desktop, and ON_CURRENT that it is. */
+#define NEOASTRA_VIRTUAL_DESKTOP_CURRENT_KNOWN (1u << 0)
+#define NEOASTRA_VIRTUAL_DESKTOP_ON_CURRENT (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY (1u << 0)
 #define NEOASTRA_CUSTOM_SCHEME_SECURE (1u << 1)
 #define NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED (1u << 2)
@@ -199,6 +221,18 @@ typedef struct neoastra_decision_response { uint32_t size; uint32_t version; neo
 typedef struct neoastra_download_info { uint32_t size; uint32_t version; uint64_t id; neoastra_download_state_t state; uint32_t can_pause; neoastra_string_view_t source_uri; neoastra_string_view_t destination_path; uint64_t bytes_received; uint64_t total_bytes; neoastra_string_view_t failure_reason; } neoastra_download_info_t;
 typedef struct neoastra_runtime_info { uint32_t size; uint32_t version; neoastra_string_view_t backend_name; neoastra_string_view_t backend_version; neoastra_string_view_t browser_version; neoastra_string_view_t operating_system; neoastra_string_view_t architecture; uint64_t build_features; uint32_t debug_build; uint32_t reserved; } neoastra_runtime_info_t;
 typedef struct neoastra_cookie { uint32_t size; uint32_t version; neoastra_string_view_t name; neoastra_string_view_t value; neoastra_string_view_t domain; neoastra_string_view_t path; int64_t expires_unix_ms; uint32_t flags; uint32_t same_site; } neoastra_cookie_t;
+/** A display, in the coordinates and units of the bounds of a window: measured from the top-left corner of the primary display with
+    the vertical axis pointing down, in logical units on macOS and with GTK and in the units that the system gives the process on
+    Windows (the pixels of the display for a process aware of display scaling). The work area is the part of the bounds that the
+    menu bar, the taskbar, the Dock, or the panels leave to windows. The scale factor is the number of pixels of the display for one
+    logical unit, as neoastra_window_get_scale_factor tells it for a window on the display. The refresh rate is in hertz, 0 when
+    unknown. The identifier and the name are UTF-8. Those of neoastra_app_get_display stay valid until the next call of
+    neoastra_app_get_display_count, and those of neoastra_app_get_display_at and neoastra_window_get_display until the next call of
+    either, on the UI thread of the application. */
+typedef struct neoastra_display_info { uint32_t size; uint32_t version; neoastra_string_view_t id; neoastra_string_view_t name; neoastra_rect_t bounds; neoastra_rect_t work_area; double scale_factor; double refresh_rate; uint32_t rotation_degrees; uint32_t flags; } neoastra_display_info_t;
+/** Where a window is among the virtual desktops. The identifier is opaque UTF-8, empty when unknown, and stays valid until the next
+    virtual-desktop call of the window on the UI thread. */
+typedef struct neoastra_virtual_desktop_info { uint32_t size; uint32_t version; uint32_t flags; uint32_t reserved; neoastra_string_view_t id; } neoastra_virtual_desktop_info_t;
 struct neoastra_resource_request { uint32_t size; uint32_t version; neoastra_string_view_t uri; neoastra_string_view_t method; neoastra_string_view_t headers; neoastra_string_view_t initiating_origin; neoastra_resource_kind_t resource_kind; uint32_t main_frame; const uint8_t* body; uint64_t body_length; };
 typedef void (NEOASTRA_CALL *neoastra_context_release_callback_t)(void* context);
 struct neoastra_resource_response { uint32_t size; uint32_t version; uint32_t status_code; neoastra_resource_body_kind_t body_kind; neoastra_string_view_t reason_phrase; neoastra_string_view_t headers; neoastra_string_view_t mime_type; uint64_t content_length; const uint8_t* bytes; uint64_t byte_length; neoastra_string_view_t file_path; void* release_context; neoastra_context_release_callback_t release; };
@@ -260,6 +294,23 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_set_event_callback(neo
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t*, const neoastra_window_options_t*, neoastra_window_t**, neoastra_error_t**);
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_app_get_window_count(const neoastra_app_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_window(neoastra_app_t*, uint64_t, neoastra_window_t**);
+/* Reads the displays again and tells how many there are, at least one when the platform reports any. Must be called on the UI
+   thread; neoastra_app_get_display then reads them, the primary one first. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_display_count(neoastra_app_t*, uint32_t*);
+/* One of the displays that neoastra_app_get_display_count read last, by index. The info must have its size and version set.
+   NEOASTRA_ERROR_INVALID_ARGUMENT for an index beyond the count. Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_display(neoastra_app_t*, uint32_t, neoastra_display_info_t*);
+/* Reads the displays again and returns the one that holds the point, in the coordinates of the bounds of a window, or else the
+   one nearest to it. NEOASTRA_ERROR_NOT_SUPPORTED when the platform reports no display. Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_display_at(neoastra_app_t*, neoastra_point_t, neoastra_display_info_t*);
+/* What the backend can do with displays, the placement of windows, and virtual desktops. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_window_capability(neoastra_app_t*, neoastra_window_capability_t, neoastra_capability_info_t*);
+/* The front-most window of the application whose frame (what neoastra_window_get_frame returns) holds the point, in the
+   coordinates of the bounds of a window, among its visible windows that are not minimized and are on the current virtual desktop.
+   The windows of other applications are not looked at. The excluded window, when not null, is passed over. The window is
+   retained, or null when none holds the point. NEOASTRA_ERROR_NOT_SUPPORTED where the backend knows neither where its windows
+   are nor their order (GTK). Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_get_window_at(neoastra_app_t*, neoastra_point_t, neoastra_window_t*, neoastra_window_t**);
 
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_window_get_id(const neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_bounds(const neoastra_window_t*, neoastra_rect_t*);
@@ -296,6 +347,19 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_close(neoastra_wind
 /* Internal/backend teardown entry point. It bypasses close negotiation and is not exposed to renderers. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_force_close(neoastra_window_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_native_handle(neoastra_window_t*, neoastra_native_handle_kind_t, neoastra_native_handle_t*);
+/* Reads the displays again and returns the one that holds most of the window, also for a hidden window: the one the platform
+   says the window is on, or else the one its bounds cover most, or else the primary one. NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED
+   tells when it becomes another one. NEOASTRA_ERROR_NOT_SUPPORTED when the platform reports no display. Must be called on the
+   UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_display(neoastra_window_t*, neoastra_display_info_t*);
+/* Whether the window is on the current virtual desktop and the identifier of its desktop, as far as the platform tells.
+   NEOASTRA_ERROR_NOT_SUPPORTED where the platform tells neither, NEOASTRA_ERROR_INVALID_STATE while the platform tracks no
+   desktop for the window (a window that was never shown). Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_virtual_desktop(neoastra_window_t*, neoastra_virtual_desktop_info_t*);
+/* Moves the window to the virtual desktop of an identifier that neoastra_window_get_virtual_desktop returned.
+   NEOASTRA_ERROR_NOT_SUPPORTED where the platform cannot move a window, NEOASTRA_ERROR_INVALID_ARGUMENT for an identifier of no
+   desktop, NEOASTRA_ERROR_INVALID_STATE while the platform tracks no desktop for the window. Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_move_to_virtual_desktop(neoastra_window_t*, neoastra_string_view_t);
 
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t*, const neoastra_environment_options_t*, neoastra_environment_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_profile_async(neoastra_environment_t*, const neoastra_profile_options_t*, neoastra_profile_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
@@ -338,6 +402,12 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_
    takes no such input. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_move_pointer(neoastra_view_t*, double, double);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_open_devtools(neoastra_view_t*);
+/* Converts a point of the view, in CSS pixels of its main viewport as a page reports clientX and clientY, to the coordinates and
+   units of the bounds of a window, and back: the bounds of the view in its window, the place of the client area of the window on
+   screen, the scale of its display, and the zoom of the view are counted in. NEOASTRA_ERROR_NOT_SUPPORTED where the backend does
+   not know where a window is on screen (GTK). Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_point_to_screen(neoastra_view_t*, double, double, double*, double*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_point_from_screen(neoastra_view_t*, double, double, double*, double*);
 /* Completes with the encoded image of what the view currently shows. Its pixel size is the captured size in CSS pixels times the zoom and device scale of the view.
    A view that is not being drawn, such as one in a hidden window, can fail or never complete: cancel the operation to stop waiting. */
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_capture_async(neoastra_view_t*, const neoastra_capture_options_t*, neoastra_buffer_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);

@@ -45,14 +45,28 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   Windows 11 with two displays of 3840 by 2160 pixels side by side, both at 150 percent
   (`WindowStateRestoresAWindowOverTwoDisplays`, which runs nothing on a machine without two such
   displays). The rest is the unit test `WindowStateKeepsAWindowOverSeveralDisplaysWhereItWas`, with
-  made-up displays. Not run: displays with different scales on Windows, where a restore sets the
-  position and then the size of a window, and the window may change its scale between the two
-  (`WM_DPICHANGED` resizes it to what the system suggests); `Clamp` also chooses the display from the
+  made-up displays. Not run: displays with different scales on Windows, where a restore now gives a
+  window its position and its size in one request that keeps them when the window changes its scale
+  (`WM_DPICHANGED` while `placing`, `Window_PlacedOnADisplayOfAnotherScaleKeepsTheBoundsItWasGiven`,
+  inconclusive without two such displays); `Clamp` also chooses the display from the
   saved placement and scales the size afterwards, so a window that was saved with another scale than
   the one of that display can end up mostly on another display than the one whose scale it was
   given. Not run either: macOS, where a window over two displays is shown on one of them when
   displays have separate Spaces, and which one that is for a window that is placed by its
   application is not known; and GTK.
+- **Displays, virtual desktops, hit-testing, and point conversion were run on Windows with one display.**
+  The native functions of 2026-10-20 (`neoastra_app_get_display_count` and the others of
+  `native/include/neoastra.h`) and the managed members over them were run on Windows 11 ARM64 with
+  one display, in a thread aware of display scaling and in one that is not
+  (`DisplayTests`). Not run: two displays (`Window_MovedToAnotherDisplayReportsIt` and the test of
+  displays of different scales are inconclusive with one); a change of the displays
+  (`WM_DISPLAYCHANGE` and the others on the dispatcher window), which no test makes; the macOS
+  backend (`NSScreen`, `windowDidChangeScreen`, `isOnActiveSpace`, `CanJoinAllSpaces`,
+  `orderedWindows`, `convertPointToScreen`) and the GTK backend (`GdkMonitor`, the work area of the
+  X11 backend through a weak symbol, `enter-monitor` and `leave-monitor`), which were not compiled
+  here and are checked by the native ABI test on the runners only; and the pointer capture of a page
+  outside its window on every engine (`RealMousePointerCaptureReportsPointsOutsideTheWindow` runs only
+  with `NEOASTRA_TEST_REAL_INPUT=1`, for WebView2).
 - **Visible-frame placement restoration was run on Windows only.**
   `neoastra_window_get_frame`, `NeoWindow.FrameBounds`, and the `NormalFrame` of a placement were
   written for the three backends on 2026-10-09. On Windows 11 at 150 percent, in a thread that is
