@@ -112,7 +112,9 @@ Both conversions and `GetWindowAt` return `null` with GTK, which does not know w
 
 Whether a page keeps receiving `pointermove` with coordinates outside its window while a button is held after `setPointerCapture`
 is up to the engine: WebView2 is expected to through the Win32 mouse capture, WKWebView through `mouseDragged`, and WebKitGTK
-through the implicit grab of the press. None of the three has been verified by a test yet.
+through the implicit grab of the press. None of the three has been verified yet. For WebView2,
+`RealMousePointerCaptureReportsPointsOutsideTheWindow` of the unit tests checks it, and that `ClientToScreen` of the last point the
+page heard of is where the pointer was; it takes the mouse of the desktop, so it runs only with `NEOASTRA_TEST_REAL_INPUT=1`.
 
 ## Virtual desktops
 

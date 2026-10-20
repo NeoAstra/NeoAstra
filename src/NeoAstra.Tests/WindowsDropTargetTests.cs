@@ -264,6 +264,154 @@ public sealed class WindowsDropTargetTests
         if (inconclusive is not null) Assert.Inconclusive(inconclusive);
     }
 
+    // A page that captures the pointer, as one that drags a tab out of its window does, keeps hearing of it outside the window
+    // while the button is held, and NeoAstra.ClientToScreen gives back where the pointer is. Takes the real mouse, as the test
+    // above, from a thread of its own, and always releases the button.
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task RealMousePointerCaptureReportsPointsOutsideTheWindow()
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("NEOASTRA_TEST_REAL_INPUT") != "1")
+        {
+            Assert.Inconclusive("Set NEOASTRA_TEST_REAL_INPUT=1 to let this test drive the mouse of a Windows desktop.");
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stage = "startup";
+        string? inconclusive = null;
+        var userData = Path.Combine(Path.GetTempPath(), "neoastra-real-capture-" + Guid.NewGuid().ToString("N"));
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                // Screen, client, and page coordinates all in device pixels.
+                SetThreadDpiAwarenessContext(-4);
+                NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra real capture test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+                {
+                    GetCursorPos(out var original);
+                    try
+                    {
+                        var window = application.CreateWindow(new NeoWindowOptions { Label = "capture-window", Title = "Capture", Width = 640, Height = 400 });
+                        window.Show();
+                        var parent = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                        SetWindowPos(parent, -1, 0, 0, 0, 0, 0x0001 | 0x0002); // Topmost, so that the pointer lands on it.
+                        SetForegroundWindow(parent);
+                        stage = "browser creation";
+                        await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
+                        {
+                            UserDataRoot = userData,
+                            CustomSchemes = [NeoCustomScheme.Application("app", new CapturePageProvider())],
+                        });
+                        await using var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { ViewLabel = "capture-view" });
+                        await view.NavigateAsync(new Uri("app://neoastra/index.html"));
+                        await WaitAsync(view, "globalThis.ready === true", timeout.Token);
+                        var source = await ScreenCenterAsync(view, parent, "source", timeout.Token);
+                        if (!IsWithin(parent, source))
+                        {
+                            inconclusive = "Another window covers the test window; the mouse was left alone.";
+                            return;
+                        }
+
+                        // A point beside the window, on the display it is on.
+                        var frame = window.FrameBounds;
+                        var display = application.GetDisplayAt(new NeoPoint(source.X, source.Y))!.Bounds;
+                        var x = frame.X + frame.Width + 150 < display.X + display.Width ? frame.X + frame.Width + 150 : frame.X - 150;
+                        if (x < display.X)
+                        {
+                            inconclusive = "The display has no room beside the test window.";
+                            return;
+                        }
+
+                        var target = new Point { X = x, Y = source.Y };
+                        stage = "real pointer capture";
+                        var interrupted = await DrivePointerAsync(source, target, 20);
+                        if (interrupted is not null)
+                        {
+                            inconclusive = interrupted;
+                            return;
+                        }
+
+                        await WaitAsync(view, "globalThis.released === true", timeout.Token);
+                        var last = JsonDocument.Parse(await view.EvaluateScriptAsync("JSON.stringify(globalThis.moves.at(-1) ?? null)", timeout.Token) ?? "null").RootElement;
+                        Assert.AreEqual(JsonValueKind.Array, last.ValueKind, "The page heard of no move of the captured pointer.");
+                        var css = new NeoViewPoint(last[0].GetDouble(), last[1].GetDouble());
+                        Assert.IsTrue(css.X < 0 || css.X > window.ClientSize.Width / window.ScaleFactor, $"The last move the page heard of, {css}, is in its window.");
+                        // The point of the page is where the pointer was on screen.
+                        var screen = view.ClientToScreen(css);
+                        Assert.IsNotNull(screen);
+                        Assert.AreEqual(target.X, screen.Value.X, 2d, $"{css} is {screen} on screen, the pointer was at {target.X},{target.Y}.");
+                        Assert.AreEqual(target.Y, screen.Value.Y, 2d, $"{css} is {screen} on screen, the pointer was at {target.X},{target.Y}.");
+                        Assert.IsNull(application.GetWindowAt(screen.Value));
+                    }
+                    finally
+                    {
+                        SetCursorPos(original.X, original.Y);
+                        application.ForceShutdown();
+                    }
+                });
+                completion.TrySetResult();
+            }
+            catch (Exception exception) { completion.TrySetException(exception); }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(50)); }
+        catch (TimeoutException) { Assert.Fail($"The real capture test hung during {stage}."); }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested) { Assert.Fail($"The real capture test timed out during {stage}."); }
+        catch (NeoAstraNativeLibraryException) { Assert.Inconclusive("The Windows native runtime is not staged."); }
+        finally { try { Directory.Delete(userData, recursive: true); } catch { } }
+        if (inconclusive is not null) Assert.Inconclusive(inconclusive);
+    }
+
+    // Presses the button at a point, moves to another one, and releases it, from a thread of its own; null, or why it let go.
+    private static Task<string?> DrivePointerAsync(Point source, Point target, int steps) => Task.Factory.StartNew<string?>(() =>
+    {
+        SetThreadDpiAwarenessContext(-4);
+        var pressed = false;
+        try
+        {
+            MoveMouse(source);
+            Thread.Sleep(100);
+            SendButton(0x0002);
+            pressed = true;
+            Thread.Sleep(100);
+            for (var step = 1; step <= steps; step++)
+            {
+                var next = new Point { X = source.X + (target.X - source.X) * step / steps, Y = source.Y + (target.Y - source.Y) * step / steps };
+                MoveMouse(next);
+                Thread.Sleep(20);
+                // Someone else moves the mouse: the test lets go at once rather than fight them.
+                if (GetCursorPos(out var now) && (Math.Abs(now.X - next.X) > 2 || Math.Abs(now.Y - next.Y) > 2)) return "The mouse was moved by someone else during the capture; the test let go.";
+            }
+
+            Thread.Sleep(200);
+            return null;
+        }
+        finally
+        {
+            if (pressed) SendButton(0x0004);
+        }
+    }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private sealed class CapturePageProvider : INeoResourceProvider
+    {
+        public NeoResourceResponse GetResponse(NeoResourceRequest request) => NeoResourceResponse.FromBytes("""
+            <!doctype html><title>real capture</title>
+            <style>body { margin: 0; user-select: none; } #source { position: absolute; left: 40px; top: 60px; width: 120px; height: 60px; background: #ddd; touch-action: none; }</style>
+            <div id="source">Tab</div>
+            <script>
+            globalThis.moves = [];
+            const source = document.getElementById('source');
+            source.addEventListener('pointerdown', event => { source.setPointerCapture(event.pointerId); globalThis.captured = true; });
+            source.addEventListener('pointermove', event => { if (globalThis.captured) globalThis.moves.push([event.clientX, event.clientY]); });
+            source.addEventListener('pointerup', () => { globalThis.released = true; });
+            globalThis.ready = true;
+            </script>
+            """u8.ToArray(), "text/html; charset=utf-8");
+    }
+
     // A drag of a page dropped on the view of another window: that page gets the drop with the data of the drag, its text
     // and HTML included, rather than its host an external text drop. Takes the real mouse, as the test above.
     [TestMethod]
