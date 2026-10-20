@@ -836,7 +836,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -1166,6 +1166,18 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_vie
 neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t* v,neoastra_string_view_t script,const neoastra_script_options_t* options,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script)||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->world_name))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script injection must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_add_script(v,neo_string(script),options,cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t* v,neoastra_string_view_t identifier){if(!v||!neo_valid_utf8(identifier))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;try{return neo_platform_view_remove_script(v,neo_string(identifier));}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t* v,neoastra_string_view_t msg,uint32_t json,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(msg))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"message posting must run on the UI thread");if(!neo_bridge_access_allowed(v,v->source))return neo_fail(e,NEOASTRA_ERROR_SECURITY,"Web messaging is blocked by the configured bridge policy",0,"bridge");try{return neo_platform_view_post_message(v,neo_string(msg),json!=0,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");}}
+// Every message is checked before the first is posted: an invalid batch posts nothing.
+neoastra_result_t NEOASTRA_CALL neoastra_view_post_messages(neoastra_view_t* v,const neoastra_string_view_t* messages,uint32_t count,uint32_t json,uint32_t* posted,neoastra_error_t** e){
+    if(posted)*posted=0;
+    neo_retain_guard owner(v);
+    if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");
+    if(!v||(count!=0&&!messages))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid messages");
+    for(uint32_t index=0;index<count;index++)if(!neo_valid_utf8(messages[index]))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");
+    if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"message posting must run on the UI thread");
+    if(!neo_bridge_access_allowed(v,v->source))return neo_fail(e,NEOASTRA_ERROR_SECURITY,"Web messaging is blocked by the configured bridge policy",0,"bridge");
+    if(count==0)return NEOASTRA_OK;
+    return neo_platform_view_post_messages(v,messages,count,json!=0,posted,e);
+}
 neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_view_t* v,double* factor){if(!v||!factor)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;return neo_platform_view_get_zoom_factor(v,factor);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neoastra_view_setting_t setting,uint32_t enabled){
     neo_retain_guard owner(v);

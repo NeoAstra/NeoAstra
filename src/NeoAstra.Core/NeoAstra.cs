@@ -26,6 +26,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private NeoUserScript? _transportScript;
     private NeoMessagePost? _postMessages;
     private DecodedUri? _lastUri;
+    private bool _postsBatches;
     private Uri? _source;
     private string _title = string.Empty;
     private bool _isLoading;
@@ -44,6 +45,7 @@ public sealed class NeoAstra : IAsyncDisposable
         _viewLabel = options.ViewLabel;
         Profile = options.Profile;
         TransportLimits = (options.MaximumMessageSize, options.Transport.MaximumJsonDepth);
+        _postsBatches = environment.RuntimeInfo.PostsMessageBatches;
         RegisterEventCallback();
         if (options.BridgePolicy != NeoBridgePolicy.Disabled)
         {
@@ -1019,8 +1021,66 @@ public sealed class NeoAstra : IAsyncDisposable
         NativeError.ThrowIfFailed(result, error, operation, CancellationToken.None);
     }
 
-    // The native library reads each message where it lies, during the call, and keeps no pointer to it.
-    private static unsafe void PostNativeMessages(NativeMethods.neoastra_view_t view, ReadOnlySpan<ReadOnlyMemory<byte>> messages, string operation, CancellationToken cancellationToken)
+    // The native library reads each message where it lies, during the call, and keeps no pointer to it. One that has
+    // neoastra_view_post_messages takes them in batches, which WebKit dispatches with one script each: a batch holds at most
+    // MaximumPostedBatch messages and MaximumPostedBatchBytes of them, or one larger message, so that the script WebKit
+    // builds stays bounded. Any other native library takes them one by one.
+    private void PostNativeMessages(NativeMethods.neoastra_view_t view, ReadOnlySpan<ReadOnlyMemory<byte>> messages, string operation, CancellationToken cancellationToken)
+    {
+        if (!_postsBatches)
+        {
+            PostNativeMessagesOneByOne(view, messages, operation, cancellationToken);
+            return;
+        }
+        while (!messages.IsEmpty)
+        {
+            var count = 1;
+            var bytes = (long)messages[0].Length;
+            while (count < messages.Length && count < MaximumPostedBatch && bytes + messages[count].Length <= MaximumPostedBatchBytes) bytes += messages[count++].Length;
+            try
+            {
+                PostNativeBatch(view, messages[..count], operation, cancellationToken);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                // The library said it has the batch export and has not: nothing of this batch was posted.
+                _postsBatches = false;
+                PostNativeMessagesOneByOne(view, messages, operation, cancellationToken);
+                return;
+            }
+            messages = messages[count..];
+        }
+    }
+
+    private const int MaximumPostedBatch = 256;
+    private const long MaximumPostedBatchBytes = 4 * 1024 * 1024;
+
+    private static unsafe void PostNativeBatch(NativeMethods.neoastra_view_t view, ReadOnlySpan<ReadOnlyMemory<byte>> messages, string operation, CancellationToken cancellationToken)
+    {
+        var views = stackalloc NativeMethods.neoastra_string_view_t[messages.Length];
+        var handles = ArrayPool<System.Buffers.MemoryHandle>.Shared.Rent(messages.Length);
+        var pinned = 0;
+        try
+        {
+            for (; pinned < messages.Length; pinned++)
+            {
+                handles[pinned] = messages[pinned].Pin();
+                views[pinned] = Utf8String.ViewOf((byte*)handles[pinned].Pointer, messages[pinned].Length);
+            }
+            NativeMethods.neoastra_error_t error = default;
+            uint posted;
+            var result = NativeMethods.neoastra_view_post_messages(view, views, (uint)messages.Length, 1, &posted, &error);
+            NativeError.ThrowIfFailed(result, error, operation, cancellationToken);
+        }
+        finally
+        {
+            for (var index = 0; index < pinned; index++) handles[index].Dispose();
+            handles.AsSpan(0, pinned).Clear();
+            ArrayPool<System.Buffers.MemoryHandle>.Shared.Return(handles);
+        }
+    }
+
+    private static unsafe void PostNativeMessagesOneByOne(NativeMethods.neoastra_view_t view, ReadOnlySpan<ReadOnlyMemory<byte>> messages, string operation, CancellationToken cancellationToken)
     {
         foreach (var message in messages)
         {

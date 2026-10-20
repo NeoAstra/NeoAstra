@@ -490,6 +490,12 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
 
     // Whether the native library raises NEOASTRA_EVENT_NAVIGATION_COMMITTED when a navigation replaces the document.
     internal bool ReportsNavigationCommit => (BuildFeatures & NavigationCommit) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH of native/include/neoastra.h.
+    private const ulong MessageBatch = 1UL << 3;
+
+    // Whether the native library has neoastra_view_post_messages, which posts the messages of a batch in one call.
+    internal bool PostsMessageBatches => (BuildFeatures & MessageBatch) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

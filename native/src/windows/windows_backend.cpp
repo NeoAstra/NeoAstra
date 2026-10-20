@@ -141,6 +141,19 @@ std::wstring widen(const std::string& value) {
     return result;
 }
 
+// Widens UTF-8 that the caller validated into a buffer that keeps its capacity from one message to the next.
+void widen_into(std::wstring& result, neoastra_string_view_t value) {
+    result.clear();
+    if (value.length == 0) return;
+    if (value.length > static_cast<uint64_t>(INT_MAX)) throw std::invalid_argument("UTF-8 string is too long");
+    const auto* data = reinterpret_cast<const char*>(value.data);
+    const auto length = static_cast<int>(value.length);
+    const auto count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, length, nullptr, 0);
+    if (count <= 0) throw std::invalid_argument("invalid UTF-8");
+    result.resize(static_cast<size_t>(count));
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, data, length, result.data(), count)) throw std::invalid_argument("invalid UTF-8");
+}
+
 std::string narrow(const wchar_t* value) {
     if (!value || !*value) return {};
     const auto length = static_cast<int>(wcslen(value));
@@ -3317,6 +3330,21 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
 }
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
+neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t** error) noexcept {
+    try {
+        auto* state=static_cast<windows_view*>(view->platform);
+        if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");
+        // WebView2 copies each message when it is posted: one buffer serves them all.
+        std::wstring value;
+        for(uint32_t index=0;index<count;index++){
+            widen_into(value,messages[index]);
+            const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());
+            if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");
+            if(posted)*posted=index+1;
+        }
+        return NEOASTRA_OK;
+    } catch(const std::exception& ex) { return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what()); }
+}
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view,double* factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->get_ZoomFactor(factor))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view,double factor) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_ZoomFactor(factor))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_view_setting_t setting,bool enabled) noexcept {

@@ -62,6 +62,7 @@ neoastra_result_t neo_platform_view_evaluate(neoastra_view_t*, const std::string
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t*, const std::string&, const neoastra_script_options_t*, neoastra_string_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t*, const std::string&) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t*, const std::string&, bool, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_post_messages(neoastra_view_t*, const neoastra_string_view_t*, uint32_t, bool, uint32_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t*, double) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t*, neoastra_view_setting_t, bool) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }

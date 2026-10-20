@@ -2157,6 +2157,17 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_post_message(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_string_view_t arg1, uint arg2, NativeMethods.neoastra_error_t* arg3);
 
+        /// <summary>
+        /// Posts count messages to the page in order, as neoastra_view_post_message posts each with the same json flag, in one call:
+        /// WebView2 posts them one after the other, and WKWebView and WebKitGTK dispatch them all with one script, so that the messages
+        /// of a batch must all be valid JSON when json is nonzero. Nothing is posted when an argument is invalid. *posted, when not null,
+        /// is the number of messages posted: all of them on success, those before the one the engine refused on a failure. A library
+        /// has it when it reports NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_post_messages")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_post_messages(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_string_view_t* arg1, uint arg2, uint arg3, uint* arg4, NativeMethods.neoastra_error_t* arg5);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_get_zoom_factor")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_get_zoom_factor(NativeMethods.neoastra_view_t arg0, double* arg1);

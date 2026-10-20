@@ -905,6 +905,8 @@ neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::s
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view, const std::string& identifier) noexcept;
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const std::string& message, bool json, neoastra_error_t** error) noexcept;
+// Posts the messages in order, which the caller validated, and counts in *posted (when not null) those it posted.
+neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const neoastra_string_view_t* messages, uint32_t count, bool json, uint32_t* posted, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view, double* factor) noexcept;
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view, double factor) noexcept;
 // Enabling a feature the engine does not have reports NEOASTRA_ERROR_NOT_SUPPORTED; disabling one succeeds.
