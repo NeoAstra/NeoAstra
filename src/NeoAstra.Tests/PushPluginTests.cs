@@ -148,6 +148,19 @@ public sealed class PushPluginTests
         Assert.IsNotInstanceOfType<INeoExternalNotificationSource>(new NeoFakeNotifications());
     }
 
+    [TestMethod]
+    public void AndroidPush_ShowsADataMessageAsTheManifestNamesItsKeys()
+    {
+        // Firebase shows no data message: the service shows it from the keys that the manifest names, a string resource for a key.
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra.Push", "Android"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var java = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Android", "com", "neoastra", "push", "NeoAstraPush.java"));
+        StringAssert.Contains(java, "String[] shown = presentation(context, message.getData());");
+        StringAssert.Contains(java, "meta.getString(\"com.neoastra.push.\" + name)");
+        StringAssert.Contains(java, "key.replaceAll(\"[^A-Za-z0-9_]\", \"_\"), \"string\"");
+        StringAssert.Contains(java, "if (body == null || body.isEmpty()) return null;");
+    }
+
     private static NeoRpcSession Session(INeoPush push, string[] permissions, out ConcurrentQueue<string> frames)
     {
         var manifest = NeoCapabilityManifest.Resolve(System.Text.Encoding.UTF8.GetBytes($$"""

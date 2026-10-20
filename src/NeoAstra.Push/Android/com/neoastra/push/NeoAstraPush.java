@@ -19,6 +19,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.RemoteMessage;
 import com.neoastra.backend.NeoAstraServices;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Map;
@@ -32,7 +33,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The push service of the push plugin of NeoAstra, which the platform services reach as {@code neoastra.push}: the token of
  * Firebase Cloud Messaging, and a queue of what happens while nobody asks (a new token, a message that arrives, a notification
  * that the user taps), which the managed side takes one event at a time. A message that arrives while the application is in the
- * foreground is shown here, since Firebase shows a notification only while the application is in the background.
+ * foreground is shown here, since Firebase shows a notification only while the application is in the background. A data message
+ * (no notification) is shown here too, also while the application does not run, when the application names in the meta-data of
+ * its manifest the keys of its data that hold the title and the body, or the names of string resources for them (see
+ * {@link #presentation}).
  */
 public final class NeoAstraPush implements NeoAstraServices.Service {
     static final String NAME = "neoastra.push";
@@ -91,8 +95,62 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
             JSONObject value = message(message);
             post(new JSONObject().put("kind", "received").put("message", value));
             RemoteMessage.Notification notification = message.getNotification();
-            if (notification != null && FOREGROUND.get() > 0) show(context, message.getMessageId(), notification, value);
+            if (notification != null) { if (FOREGROUND.get() > 0) show(context, message.getMessageId(), notification.getTitle(), notification.getBody(), null, value); }
+            else {
+                String[] shown = presentation(context, message.getData());
+                if (shown != null) show(context, shown[2] != null ? shown[2] : message.getMessageId(), shown[0], shown[1], shown[3], value);
+            }
         } catch (Exception ignored) { }
+    }
+
+    /**
+     * The notification of a data message, as the meta-data of the manifest names its data keys: {@code com.neoastra.push.title} and
+     * {@code com.neoastra.push.body} hold the text, {@code com.neoastra.push.title_key} and {@code com.neoastra.push.body_key} the
+     * name of a string resource of the application (its characters other than letters, digits and {@code _} become {@code _}, so
+     * {@code push.item.added} is {@code push_item_added}), formatted with the JSON array of strings under
+     * {@code com.neoastra.push.args}; {@code com.neoastra.push.tag} identifies the notification (a later one with the same tag
+     * replaces it) and {@code com.neoastra.push.group} groups it. A message without a body is not shown; a missing title is the
+     * label of the application. Returns title, body, tag and group, or null.
+     */
+    static String[] presentation(Context context, Map<String, String> data) {
+        Bundle meta;
+        try { meta = context.getPackageManager().getApplicationInfo(context.getPackageName(), PackageManager.GET_META_DATA).metaData; }
+        catch (PackageManager.NameNotFoundException exception) { return null; }
+        if (meta == null) return null;
+        String[] args = arguments(value(data, meta, "args"));
+        String bodyKey = value(data, meta, "body_key");
+        String body = bodyKey != null ? resolve(context, bodyKey, args) : null;
+        if (body == null) body = value(data, meta, "body");
+        if (body == null || body.isEmpty()) return null;
+        String title = value(data, meta, "title");
+        String titleKey = value(data, meta, "title_key");
+        if (title == null && titleKey != null) title = resolve(context, titleKey, args);
+        if (title == null) title = context.getApplicationInfo().loadLabel(context.getPackageManager()).toString();
+        return new String[] { title, body, value(data, meta, "tag"), value(data, meta, "group") };
+    }
+
+    private static String value(Map<String, String> data, Bundle meta, String name) {
+        String key = meta.getString("com.neoastra.push." + name);
+        String value = key == null ? null : data.get(key);
+        return value == null || value.isEmpty() ? null : value;
+    }
+
+    private static String[] arguments(String json) {
+        if (json == null) return new String[0];
+        try {
+            JSONArray array = new JSONArray(json);
+            String[] values = new String[array.length()];
+            for (int i = 0; i < values.length; i++) values[i] = array.optString(i, "");
+            return values;
+        } catch (Exception exception) { return new String[0]; }
+    }
+
+    // A key that names no string, or a string whose placeholders the arguments do not fill, shows nothing rather than a raw key.
+    private static String resolve(Context context, String key, String[] args) {
+        int id = context.getResources().getIdentifier(key.replaceAll("[^A-Za-z0-9_]", "_"), "string", context.getPackageName());
+        if (id == 0) return null;
+        try { return context.getString(id, (Object[]) args); }
+        catch (java.util.IllegalFormatException exception) { return null; }
     }
 
     // A tapped notification launches the activity of the application with the message: a notification of Firebase with its data and
@@ -136,7 +194,7 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
         return new JSONObject().putOpt("messageId", message.getMessageId()).put("payload", payload);
     }
 
-    private static void show(Context context, String id, RemoteMessage.Notification notification, JSONObject message) {
+    private static void show(Context context, String id, String title, String body, String group, JSONObject message) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager == null || !manager.areNotificationsEnabled()) return;
         Notification.Builder builder;
@@ -146,7 +204,8 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
         } else {
             builder = new Notification.Builder(context);
         }
-        builder.setSmallIcon(NeoAstraServices.smallIcon(context)).setContentTitle(notification.getTitle()).setContentText(notification.getBody()).setAutoCancel(true);
+        builder.setSmallIcon(NeoAstraServices.smallIcon(context)).setContentTitle(title).setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body)).setAutoCancel(true);
+        if (group != null) builder.setGroup(group);
         Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         int code = id == null ? 0 : id.hashCode();
         if (launchIntent != null) {
