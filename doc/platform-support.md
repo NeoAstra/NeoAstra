@@ -33,6 +33,10 @@ Every platform needs:
   includes it. A host can instead name a fixed-version runtime through the environment options.
 - NeoAstra links the WebView2 loader statically. It does not ship the WebView2 runtime or another
   Chromium distribution.
+- The Microsoft Visual C++ runtime (`MSVCP140.dll`, `VCRUNTIME140.dll`) for the architecture of the
+  process, which `neoastra_native.dll` imports. Most machines have it; a clean one needs the
+  [latest Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist),
+  or the DLLs copied beside the application.
 
 ### macOS
 
@@ -54,6 +58,50 @@ Every platform needs:
 - WebKitGTK runs its web process in a sandbox that needs unprivileged user namespaces. Where a system
   restricts them, pages do not load. That was met on the Ubuntu 24.04 runner of GitHub Actions, not in
   a desktop session.
+
+## Troubleshooting
+
+### The native library does not load
+
+`NeoApplication.Run` and `NeoApplication.AttachToCurrentThread` load the native library first. NeoAstra
+tries, in order, the path in the `NEOASTRA_NATIVE_LIBRARY` environment variable, the application
+directory, `runtimes/<rid>/native/` below it, and the development build directories of the
+repository; then the .NET runtime tries its own default places. When nothing loads, a
+`NeoAstraNativeLibraryException` is thrown. Its message gives:
+
+- the runtime identifier, architecture, and operating system of the process;
+- every path tried, with what went wrong and the error of the platform loader: the text of
+  `dlerror()` on Linux and macOS, the Win32 error code and its message on Windows;
+- what to do, for each kind of failure that was met.
+
+The same details are in the properties of the exception: `Probes` (one `NeoNativeLibraryProbe` for
+each path, with its `Result`, `Error`, `NativeErrorCode`, `ImageArchitectures`, and
+`MissingDependencies`), `Guidance`, `RuntimeIdentifier`, `ProcessArchitecture`, and
+`OperatingSystemDescription`. Log the whole message: the cause is in it.
+
+| What the message says for a path | Cause | Fix |
+| --- | --- | --- |
+| `not found` for every path, and `No usable neoastra_native.dll was found` | The library is not beside the application, for example in a framework-dependent build that has no RID, or a deployment that left out `runtimes/` | Reference `NeoAstra.Core` (the `NeoAstra` package references it), publish for a supported RID (`dotnet publish -r win-x64`), or set `NEOASTRA_NATIVE_LIBRARY` to the full path of the library |
+| `missing dependency MSVCP140.dll, VCRUNTIME140.dll (Win32 error 126)` | Windows: the Visual C++ runtime is not installed | Install the [latest Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for the architecture of the process, or copy the DLLs beside the application |
+| `missing dependency libwebkitgtk-6.0.so.4` (or `libgtk-4.so.1`, `libjavascriptcoregtk-6.0.so.1`, `libsoup-3.0.so.0`), with `cannot open shared object file` | Linux: GTK 4 or WebKitGTK 6.0 is not installed | `sudo apt-get install libgtk-4-1 libwebkitgtk-6.0-4` on Debian and Ubuntu; `sudo dnf install gtk4 webkitgtk6.0` on Fedora, which NeoAstra does not check. `ldd libneoastra_native.so \| grep "not found"` lists every missing library |
+| `version 'GLIBC_2.xx' not found` | Linux: the glibc of the system is older than the one the library was built with | Use Ubuntu 24.04 or later, or another glibc distribution of the same age |
+| `Library not loaded: ...`, or `built for macOS 26.0 which is newer than running OS` | macOS: the release is older than the one the library needs | Run the `osx-x64` library on macOS 15 or later and the `osx-arm64` library on macOS 26 or later |
+| `built for X64, not Arm64` (Win32 error 11 or 193 on Windows, `incompatible architecture` on macOS) | The library is for another architecture than the process, for example an x64 library in an ARM64 process | Use `runtimes/<rid of the process>/native/`, publish for the architecture of the process, or run the application with the architecture of the library |
+| `not a valid Windows native library` (or macOS, Linux) | The file is empty, truncated, a text file, or a library of another operating system | Restore the file from the `NeoAstra.Core` package |
+| `NeoAstra ships native libraries for ... only; this process runs as linux-musl-x64 (X64)` | The RID of the process is not supported | Run the application as one of the RIDs in the table at the top of this page |
+
+When the library loads but its ABI or its exports do not match the managed assemblies, the message
+says from which path it was loaded: replace it with the library of the same `NeoAstra.Core` version.
+
+### The browser does not start on Windows
+
+The WebView2 Runtime is not needed to load the native library; it is looked for when the first
+browser environment is created. Without it, that operation fails with a `NeoAstraException` whose
+`Code` is `NeoErrorCode.RuntimeUnavailable` and whose message is `Microsoft Edge WebView2 Runtime is
+unavailable. Install the Evergreen Runtime or configure BrowserRuntimePath.` Install the
+[Evergreen WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) for the
+architecture of the process, or set `NeoEnvironmentOptions.BrowserRuntimePath` to a fixed-version
+runtime.
 
 ## How the platforms are checked
 

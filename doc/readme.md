@@ -5,7 +5,7 @@ Build native desktop apps with web technologies.
 ## Start here
 
 - [Getting started](getting-started.md) — packages, a minimal application, and samples.
-- [Platforms and runtime dependencies](platform-support.md) — supported targets, browser engines, and what each needs installed.
+- [Platforms and runtime dependencies](platform-support.md) — supported targets, browser engines, what each needs installed, and what to do when the native library does not load.
 - [Known limitations](known-limitations.md) — what differs between the platforms, and other limits to know about.
 
 ## Application development
