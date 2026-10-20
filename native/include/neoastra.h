@@ -125,6 +125,11 @@ typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_PROCESS_FAILURE_CRASHED (UINT64_C(1) << 32)
 #define NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW (UINT64_C(1) << 33)
 #define NEOASTRA_PROCESS_FAILURE_RESTART_APPLICATION (UINT64_C(1) << 34)
+/* DOCUMENT_INTACT says that the main document of the view still runs: the process that failed was a GPU, utility, sandbox,
+   or plugin process, or the renderer of subframes only (the kind is then UNKNOWN or WEB_PROCESS_EXITED), or the renderer of the
+   document stopped answering without exiting. A failure without it ended the main document. WebView2 is the only backend that
+   reports it; a library from before the bit reports every failure without it. */
+#define NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT (UINT64_C(1) << 35)
 /* Bits of the value of NEOASTRA_EVENT_NAVIGATION_REQUESTED and NEOASTRA_EVENT_NEW_WINDOW_REQUESTED.
    USER_INITIATED says that the engine attributes the request to an action of the user and that it is not a redirect: WebView2 and
    WebKitGTK report the user gesture a script runs in, so a navigation that a script starts from a click handler has it; WKWebView

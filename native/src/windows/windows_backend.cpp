@@ -785,11 +785,27 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
 }
 
 uint64_t portable_process_failure(COREWEBVIEW2_PROCESS_FAILED_KIND kind, COREWEBVIEW2_PROCESS_FAILED_REASON reason) noexcept {
-    uint64_t value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
-    if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+    uint64_t value{};
+    switch (kind) {
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED:
         value = NEOASTRA_PROCESS_FAILURE_BROWSER_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RESTART_APPLICATION;
-    } else if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE) {
-        value = NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
+        break;
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED:
+        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;
+        break;
+    // The document still runs in its renderer and may answer again.
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE:
+        value = NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
+    // Only the subframes that renderer drew are gone; the main document runs on.
+    case COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED:
+        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
+    // A GPU, utility, sandbox helper, or plugin process, or one WebView2 does not name: WebView2 starts another one
+    // when it needs it, and the document runs on.
+    default:
+        value = NEOASTRA_PROCESS_FAILURE_UNKNOWN | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;
+        break;
     }
     if (reason == COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED ||
         reason == COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED ||

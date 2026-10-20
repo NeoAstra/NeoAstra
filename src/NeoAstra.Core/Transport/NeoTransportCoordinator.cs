@@ -261,6 +261,20 @@ internal sealed class NeoTransportCoordinator
         _closed = true;
     }
 
+    // The renderer of the main document is gone with the document: its session ends, and nothing is posted to it. Unlike
+    // Close, the view stays usable, so that the document of a reload or a navigation handshakes as after any navigation.
+    internal void RendererLost()
+    {
+        if (_closed) return;
+        CloseActive("renderer_lost", sendClose: false);
+        if (_pendingHello is { } pending) RememberClosedRendererDocumentId(pending.RendererDocumentId);
+        _pendingHello = null;
+        _navigationPending = false;
+        _revokedUntilNavigation = false;
+        _handshakeAttempts = 0;
+        _navigationGeneration++;
+    }
+
     internal void ExpireHandshake(long generation)
     {
         if (_closed || generation != _navigationGeneration || _active is not null || _pendingHello is null) return;

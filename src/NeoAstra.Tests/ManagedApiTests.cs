@@ -287,7 +287,8 @@ public sealed class ManagedApiTests
         StringAssert.Contains(gtk, "WebKitGTK custom schemes do not support service workers");
         StringAssert.Contains(common, "WebKitGTK 6.0 script messages do not expose trustworthy source-origin data");
         StringAssert.Contains(managed, "!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()");
-        StringAssert.Contains(managedView, "_transport?.Close(\"renderer_lost\")");
+        StringAssert.Contains(managedView, "NotifyTransportOfProcessFailure(_transport, value.value)");
+        StringAssert.Contains(managedView, "if ((value & ProcessFailureDocumentIntact) == 0) transport?.RendererLost()");
         StringAssert.Contains(managedView, "_transport?.Close(\"view_disposed\")");
         StringAssert.Contains(managedApplication, "NotifyViewsOfShutdown()");
     }
@@ -580,6 +581,29 @@ public sealed class ManagedApiTests
         Assert.AreEqual("browser", failure.ProcessDescription);
         Assert.AreEqual(NeoProcessFailureKind.Unknown, unknown.Kind);
         Assert.IsNull(unknown.ProcessDescription);
+
+        // The exit of a GPU or other helper process leaves the document: no recovery is recommended.
+        var helper = NeoAstra.DecodeProcessFailure((ulong)NeoProcessFailureKind.Unknown | (1UL << 32) | (1UL << 35), 3, string.Empty);
+        Assert.AreEqual(NeoProcessFailureKind.Unknown, helper.Kind);
+        Assert.IsTrue(helper.IsCrash);
+        Assert.AreEqual(NeoProcessRecoveryAction.None, helper.RecoveryAction);
+    }
+
+    [TestMethod]
+    public void ProcessFailure_WindowsTellsTheFailuresThatLeaveTheMainDocument()
+    {
+        var windows = File.ReadAllText(FindRepositoryFile("native", "src", "windows", "windows_backend.cpp")).ReplaceLineEndings("\n");
+        var header = File.ReadAllText(FindRepositoryFile("native", "include", "neoastra.h"));
+        StringAssert.Contains(header, "#define NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT (UINT64_C(1) << 35)");
+        var mapping = windows[windows.IndexOf("uint64_t portable_process_failure(", StringComparison.Ordinal)..];
+        mapping = mapping[..mapping.IndexOf("\n}\n", StringComparison.Ordinal)];
+
+        // Only the renderer of the main document and the browser process end the document; every other kind of exit
+        // (GPU, utility, sandbox helper, plugin, subframe renderer) is reported with DOCUMENT_INTACT and no recovery.
+        StringAssert.Contains(mapping, "case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED:\n        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW;");
+        StringAssert.Contains(mapping, "case COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED:\n        value = NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;");
+        StringAssert.Contains(mapping, "default:\n        value = NEOASTRA_PROCESS_FAILURE_UNKNOWN | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT;");
+        StringAssert.Contains(mapping, "NEOASTRA_PROCESS_FAILURE_PROCESS_UNRESPONSIVE | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW | NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT");
     }
 
     [TestMethod]

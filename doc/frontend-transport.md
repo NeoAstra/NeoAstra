@@ -44,14 +44,19 @@ copies of `@neoastra/client` in their source trees.
 `connect()` is idempotent in one module realm and shares concurrent handshakes. The host assigns an
 opaque document-session ID only after a compatible hello and committed navigation. Navigation,
 renderer loss, view disposal, and application shutdown invalidate the old session. Late old-document
-frames are ignored rather than retargeted. A connection exposes an `AbortSignal` through `closed`, a
+frames are ignored rather than retargeted. Renderer loss is a `NeoAstra.ProcessFailed` that ends
+the main document: the view stays usable, and the document that a reload or a navigation loads next
+handshakes and gets a new session. A failure that leaves the document running does not touch its
+session: with WebView2, the exit of the GPU process or another helper process, or of a renderer of
+subframes only (all reported with `RecoveryAction.None`), and a renderer that stops answering. A
+connection exposes an `AbortSignal` through `closed`, a
 single receive-handler registration, negotiated feature lookup, bounded `send`, and deterministic
 `close()`.
 
 A connection closed by the host reports why through `closeReason`, set before `closed` aborts, and
 through one `connection_closed` information diagnostic. `client_close` follows the document's own
-`close()`. `navigation`, `view_disposed`, `application_shutdown`, and `renderer_lost` end a document
-that is going away. `rpc_session_closed` is different: the host closed the RPC session of a document
+`close()`. `navigation`, `view_disposed`, and `application_shutdown` end a document that is going
+away; a document whose renderer is lost is gone before anything can reach it, and is told nothing. `rpc_session_closed` is different: the host closed the RPC session of a document
 that keeps running (see [RPC and bindings](rpc-and-bindings.md)). A close without a valid reason
 token reports `unspecified`. A document handshakes once, so `connect()` then rejects with
 `connection_closed` and every RPC call fails immediately; a reload is the only way to reconnect, and

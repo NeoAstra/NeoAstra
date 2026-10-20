@@ -224,6 +224,64 @@ public sealed class TransportTests
         Assert.AreEqual("invalid_frame", rejection.RootElement.GetProperty("frame").GetProperty("code").GetString());
     }
 
+    // The bits of a process failure, as native/include/neoastra.h defines them.
+    private const ulong Crashed = 1UL << 32;
+    private const ulong RecreateView = 1UL << 33;
+    private const ulong DocumentIntact = 1UL << 35;
+
+    [TestMethod]
+    public void RendererLossLeavesTheTransportReadyForTheReloadedDocument()
+    {
+        var sent = new List<string>();
+        var sessions = new List<NeoTransportSessionSnapshot?>();
+        var nextId = 0;
+        var coordinator = new NeoTransportCoordinator(Options(), RuntimeInfo, sent.Add, _ => { }, idFactory: () => $"session-{++nextId}", sessionChanged: sessions.Add);
+        Connect(coordinator, "crashed-document");
+
+        global::NeoAstra.NeoAstra.NotifyTransportOfProcessFailure(coordinator, (ulong)NeoProcessFailureKind.WebProcessExited | Crashed | RecreateView);
+        Assert.IsFalse(coordinator.IsConnected);
+        Assert.IsNull(sessions[^1], "The RPC session of the lost document is closed.");
+        Assert.HasCount(1, sent, "Nothing is posted to a renderer that is gone.");
+
+        // The application reloads the view: the new document handshakes as after any navigation.
+        Connect(coordinator, "reloaded-document");
+        Assert.IsTrue(coordinator.IsConnected);
+        Assert.AreEqual("session-2", sessions[^1]!.Value.DocumentSessionId);
+        Assert.HasCount(2, sent);
+        using (var ack = JsonDocument.Parse(sent[^1]))
+        {
+            Assert.AreEqual("reloaded-document", ack.RootElement.GetProperty("rendererDocumentId").GetString());
+            Assert.AreEqual("hello_ack", ack.RootElement.GetProperty("frame").GetProperty("kind").GetString());
+        }
+        Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "reloaded-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+        Assert.AreEqual(NeoTransportReceiveKind.Consumed, coordinator.Receive(Envelope(coordinator, "crashed-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind,
+            "A late frame of the lost document is not rebound.");
+    }
+
+    [TestMethod]
+    public void ProcessFailuresThatLeaveTheMainDocumentKeepItsSession()
+    {
+        // A GPU, utility, sandbox, or plugin process; a renderer of subframes only; a renderer that stopped answering.
+        ulong[] failures =
+        [
+            (ulong)NeoProcessFailureKind.Unknown | Crashed | DocumentIntact,
+            (ulong)NeoProcessFailureKind.WebProcessExited | Crashed | DocumentIntact,
+            (ulong)NeoProcessFailureKind.ProcessUnresponsive | RecreateView | DocumentIntact,
+        ];
+        foreach (var failure in failures)
+        {
+            var sent = new List<string>();
+            var coordinator = CreateCoordinator(sent);
+            Connect(coordinator, "running-document");
+
+            global::NeoAstra.NeoAstra.NotifyTransportOfProcessFailure(coordinator, failure);
+
+            Assert.IsTrue(coordinator.IsConnected, $"Failure 0x{failure:x} leaves the session of the running document.");
+            Assert.HasCount(1, sent);
+            Assert.AreEqual(NeoTransportReceiveKind.Application, coordinator.Receive(Envelope(coordinator, "running-document", "{\"neoastra\":1,\"kind\":\"invoke\"}")).Kind);
+        }
+    }
+
     private static NeoTransportCoordinator CreateCoordinator(
         List<string> sent,
         List<NeoTransportDiagnosticEventArgs>? diagnostics = null,

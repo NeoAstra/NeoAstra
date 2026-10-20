@@ -334,9 +334,12 @@ public enum NeoPermissionKind
 /// <summary>Identifies the portable category of a browser process failure.</summary>
 public enum NeoProcessFailureKind
 {
-    /// <summary>The backend could not classify the failure.</summary>
+    /// <summary>
+    /// The backend could not classify the failure, or the process that failed is of no portable kind, such as the GPU
+    /// process or another helper process of WebView2.
+    /// </summary>
     Unknown,
-    /// <summary>A web-content or renderer process exited.</summary>
+    /// <summary>A web-content or renderer process exited: the one of the main document or, with WebView2, one that rendered subframes only.</summary>
     WebProcessExited,
     /// <summary>The browser process exited.</summary>
     BrowserProcessExited,

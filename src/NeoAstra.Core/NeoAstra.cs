@@ -168,6 +168,13 @@ public sealed class NeoAstra : IAsyncDisposable
     public event EventHandler<NeoTransportDiagnosticEventArgs>? TransportDiagnostic;
 
     /// <summary>Occurs when a browser or web-content process exits or becomes unresponsive.</summary>
+    /// <remarks>
+    /// A failure that ended the main document closes the frontend transport session of the view; the document that
+    /// <see cref="Reload()"/> or a navigation loads next connects again. With WebView2, the exit of a GPU, utility,
+    /// sandbox, or plugin process, or of a renderer of subframes only, leaves the document running: it is reported with
+    /// <see cref="NeoProcessRecoveryAction.None"/>, and the session stays open. So does a renderer that stops answering,
+    /// for which <see cref="NeoProcessRecoveryAction.RecreateView"/> is recommended in case it does not recover.
+    /// </remarks>
     public event EventHandler<NeoProcessFailedEventArgs>? ProcessFailed;
 
     /// <summary>Occurs when a drag that started in the page of this view ends, and tells how it ended and where.</summary>
@@ -798,7 +805,7 @@ public sealed class NeoAstra : IAsyncDisposable
                 try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WEB_PROCESS_TERMINATED:
-                _transport?.Close("renderer_lost");
+                NotifyTransportOfProcessFailure(_transport, value.value);
                 try { ProcessFailed?.Invoke(this, DecodeProcessFailure(value.value, value.native_code, Utf8String.Decode(value.text))); } catch { }
                 break;
         }
@@ -927,6 +934,18 @@ public sealed class NeoAstra : IAsyncDisposable
     // A status this version does not know is one that did not open the address.
     internal static NeoExternalOpenCompletedEventArgs DecodeExternalOpen(Uri? uri, ulong value, long nativeCode) =>
         new(uri, value <= (ulong)NeoExternalOpenStatus.Failed ? (NeoExternalOpenStatus)(int)value : NeoExternalOpenStatus.Failed, nativeCode);
+
+    // NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT of native/include/neoastra.h: the failed process was not the one of the
+    // main document (a GPU or other helper process, or the renderer of subframes only), or that renderer only stopped
+    // answering. A native library from before the bit reports every failure as one that ended the document.
+    private const ulong ProcessFailureDocumentIntact = 1UL << 35;
+
+    // A failure that ended the main document ends its transport session, and the view stays ready for the document of a
+    // reload; any other failure leaves the running document and its session alone.
+    internal static void NotifyTransportOfProcessFailure(NeoTransportCoordinator? transport, ulong value)
+    {
+        if ((value & ProcessFailureDocumentIntact) == 0) transport?.RendererLost();
+    }
 
     internal static NeoProcessFailedEventArgs DecodeProcessFailure(ulong value, long nativeCode, string? description)
     {
