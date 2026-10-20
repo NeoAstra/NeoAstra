@@ -656,7 +656,25 @@ public sealed class NeoRpcSession : IAsyncDisposable
     private static (int Start, int Length) WriteValue<T>(NeoTransportFrame frame, T value, JsonTypeInfo<T> typeInfo)
     {
         var start = frame.Length;
-        using (var writer = new Utf8JsonWriter(frame, WriterOptions(typeInfo.Options))) JsonSerializer.Serialize(writer, value, typeInfo);
+        // The writer of the thread for these options is taken while it writes: a converter that comes back here gets one of
+        // its own. A writer left in the middle of a value by a failure is reset before it writes again.
+        var writer = t_valueWriter;
+        t_valueWriter = null;
+        if (writer is null || !ReferenceEquals(t_valueWriterOptions, typeInfo.Options))
+        {
+            writer = new Utf8JsonWriter(frame, WriterOptions(typeInfo.Options));
+        }
+        else writer.Reset(frame);
+        try
+        {
+            JsonSerializer.Serialize(writer, value, typeInfo);
+            writer.Flush();
+        }
+        finally
+        {
+            t_valueWriter = writer;
+            t_valueWriterOptions = typeInfo.Options;
+        }
         var length = frame.Length - start;
         frame.Write((byte)'}');
         return (start, length);
@@ -1497,6 +1515,12 @@ public sealed class NeoRpcSession : IAsyncDisposable
 
     [ThreadStatic]
     private static Utf8JsonWriter? t_frameWriter;
+
+    [ThreadStatic]
+    private static Utf8JsonWriter? t_valueWriter;
+
+    [ThreadStatic]
+    private static JsonSerializerOptions? t_valueWriterOptions;
 
     private static NeoRpcError FrameworkError(string code, string message, string? correlationId, bool retryable = false)
         => new(code, message, correlationId) { Retryable = retryable };
