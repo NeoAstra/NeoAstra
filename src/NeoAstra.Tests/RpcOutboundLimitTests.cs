@@ -168,10 +168,12 @@ public sealed class RpcOutboundLimitTests
         await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"stream\",\"command\":\"flow.stream\",\"args\":{\"id\":\"x\"}}");
         await WaitUntilAsync(() => session.ActiveChannelCount == 0 && frames.Any(static frame => Kind(frame) is "channel_complete" or "channel_error"));
 
+        // What the page got, should an assertion fail: the frames tell which step went otherwise.
+        var sent = string.Join(" | ", frames);
         var terminal = frames.Single(static frame => Kind(frame) is "channel_complete" or "channel_error");
-        Assert.AreEqual("channel_error", Kind(terminal));
-        Assert.AreEqual(code, ErrorCode(terminal));
-        Assert.AreEqual(1, frames.Count(static frame => Kind(frame) == "channel_item"), "The item before the one refused was delivered.");
+        Assert.AreEqual("channel_error", Kind(terminal), sent);
+        Assert.AreEqual(code, ErrorCode(terminal), sent);
+        Assert.AreEqual(1, frames.Count(static frame => Kind(frame) == "channel_item"), "The item before the one refused was delivered: " + sent);
         await session.ReceiveAsync("{\"neoastra\":1,\"kind\":\"invoke\",\"id\":\"after\",\"command\":\"flow.echo\",\"args\":{\"id\":\"x\"}}");
         Assert.IsNull(ErrorCode(Single(frames, "after")), "The session keeps serving.");
         Assert.IsFalse(session.Closed.IsCancellationRequested);
