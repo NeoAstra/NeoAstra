@@ -22,7 +22,13 @@ namespace NeoAstra.Rpc;
 public delegate ValueTask NeoRpcSendFrame(string json, CancellationToken cancellationToken);
 
 // Sends frames a session queued, in order, in one call: a view posts them in one turn of its UI thread.
-internal delegate ValueTask NeoRpcSendFrames(IReadOnlyList<string> frames);
+internal enum NeoRpcFrameRefusal : byte { None = 0, TooLarge = 1, Refused = 2 }
+// Returns null when every frame was posted, or an array with exactly frames.Count entries: None = posted,
+// TooLarge = that frame alone was not posted because its envelope exceeds the view's MaximumMessageSize,
+// Refused = that frame alone was not posted for another reason and the connection still carries later frames.
+// The frames after a refused one are still attempted, in order. Throwing = the transport failed: every frame
+// of the batch fails and the session closes (as today).
+internal delegate ValueTask<NeoRpcFrameRefusal[]?> NeoRpcSendFrames(IReadOnlyList<string> frames);
 
 /// <summary>Owns an immutable command registry and all active document RPC sessions.</summary>
 public sealed class NeoRpcHost : IAsyncDisposable
@@ -1146,15 +1152,6 @@ public sealed class NeoRpcSession : IAsyncDisposable
                     await sendBatch(frames).ConfigureAwait(false);
                     foreach (var frame in batch) frame.Done.TrySetResult();
                 }
-                catch (NeoRpcFramesRejectedException rejected)
-                {
-                    // The view posted every frame but these, too large for it: only their own sends fail.
-                    for (var index = 0; index < batch.Count; index++)
-                    {
-                        if (rejected.FrameIndexes.Contains(index)) batch[index].Done.TrySetException(NeoRpcFramesRejectedException.CreateFrameException());
-                        else batch[index].Done.TrySetResult();
-                    }
-                }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();
@@ -1174,7 +1171,6 @@ public sealed class NeoRpcSession : IAsyncDisposable
                 // The caller withdrew its own frame while it was sent (a closed channel or subscription): the
                 // transport did not fail. Session teardown cancels every caller token too.
                 catch (OperationCanceledException exception) when (frame.Token.IsCancellationRequested) { frame.Done.TrySetCanceled(exception.CancellationToken); }
-                catch (NeoRpcFramesRejectedException) { frame.Done.TrySetException(NeoRpcFramesRejectedException.CreateFrameException()); }
                 catch (Exception exception)
                 {
                     CloseAfterSendFailure();

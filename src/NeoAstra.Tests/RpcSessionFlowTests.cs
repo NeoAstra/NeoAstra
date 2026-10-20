@@ -33,6 +33,7 @@ public sealed class RpcSessionFlowTests
             {
                 batches.Enqueue([.. frames]);
                 if (batches.Count == 1) { firstSent.TrySetResult(); await releaseFirst.Task; }
+                return null;
             }, null, null);
 
         var first = session.ReceiveAsync(Invoke("first", "flow.echo", "{\"id\":\"first\"}")).AsTask();
