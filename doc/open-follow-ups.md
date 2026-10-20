@@ -57,7 +57,7 @@ checks that have not been run. Remove an entry when it is done. What an applicat
 - **Displays, virtual desktops, hit-testing, and point conversion were run on Windows with one display.**
   The native functions of 2026-10-20 (`neoastra_app_get_display_count` and the others of
   `native/include/neoastra.h`) and the managed members over them were run on Windows 11 ARM64 with
-  one display at 200 percent, in a thread aware of display scaling and in one that is not
+  one display, in a thread aware of display scaling and in one that is not
   (`DisplayTests`). Not run: two displays (`Window_MovedToAnotherDisplayReportsIt` and the test of
   displays of different scales are inconclusive with one); a change of the displays
   (`WM_DISPLAYCHANGE` and the others on the dispatcher window), which no test makes; the macOS
