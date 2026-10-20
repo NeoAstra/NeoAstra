@@ -41,8 +41,8 @@ public sealed class WindowsRpcSessionRecoveryTests
                         {
                             ViewLabel = "main", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = ["app://neoastra"],
                         });
-                        // One request per second and one tolerated denial: a second call within the same second closes
-                        // the session on the host while its document keeps running.
+                        // One request per second and one tolerated denial: a second call sent with the first closes the
+                        // session on the host while its document keeps running.
                         var builder = new NeoRpcBuilder(new NeoRpcOptions
                         {
                             RequestRatePerSecond = 1,
@@ -61,20 +61,21 @@ public sealed class WindowsRpcSessionRecoveryTests
                         var firstSession = await view.EvaluateScriptAsync("globalThis.session", timeout.Token);
 
                         stage = "host closes the session";
-                        // Background commands answer from the thread pool, so two calls in flight may be answered in
-                        // either order; the first one is answered before the second is sent.
-                        _ = await view.EvaluateScriptAsync("globalThis.ping(); true", timeout.Token);
-                        await WaitAsync(view, "globalThis.results.length === 1", timeout.Token);
-                        _ = await view.EvaluateScriptAsync("globalThis.ping(); true", timeout.Token);
+                        // Both calls leave in one turn of the page, so the second is over the rate however slow the
+                        // machine is. Background commands answer from the thread pool, in either order, and the
+                        // closure may cancel the first call before it answers; nothing of the session follows its close.
+                        _ = await view.EvaluateScriptAsync("globalThis.ping(); globalThis.ping(); true", timeout.Token);
                         await WaitAsync(view, "globalThis.closes.length === 1", timeout.Token);
                         Assert.AreEqual("\"rpc_session_closed\"", await view.EvaluateScriptAsync("globalThis.closes[0]", timeout.Token));
-                        Assert.AreEqual("[true,false]", await view.EvaluateScriptAsync("globalThis.results.map(frame => frame.ok)", timeout.Token));
+                        Assert.AreEqual("[\"too_many_requests\"]", await view.EvaluateScriptAsync("globalThis.results.filter(frame => !frame.ok).map(frame => frame.error.code)", timeout.Token));
+                        var answered = await view.EvaluateScriptAsync("globalThis.results.length", timeout.Token);
+                        Assert.IsTrue(answered is "1" or "2", $"Each call is answered at most once ({answered}).");
 
                         stage = "revoked document stays disconnected";
                         _ = await view.EvaluateScriptAsync("globalThis.ready = false; globalThis.hello(); globalThis.ping(); true", timeout.Token);
                         await Task.Delay(300, timeout.Token);
                         Assert.AreEqual("false", await view.EvaluateScriptAsync("globalThis.ready", timeout.Token), "A revoked document must not handshake again.");
-                        Assert.AreEqual("2", await view.EvaluateScriptAsync("globalThis.results.length", timeout.Token), "A revoked document must not be answered.");
+                        Assert.AreEqual(answered, await view.EvaluateScriptAsync("globalThis.results.length", timeout.Token), "A revoked document must not be answered.");
                         Assert.AreEqual(0, rpc.ActiveSessionCount);
 
                         stage = "reload reconnects";
