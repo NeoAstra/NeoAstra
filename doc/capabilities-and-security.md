@@ -71,7 +71,38 @@ Configure `NeoCapabilityAuthorizationService` and the same manifest on `NeoRpcOp
 
 - **Windows / WebView2:** application integration may attach authenticated top-level source origin from the native navigation/message source. It must not read JavaScript fields or use the mutable current URL as identity.
 - **macOS / WKWebView:** use backend-owned top-level frame/source metadata when the integration can prove it. If unavailable, any capability with `origins` denies. WKWebView process/frame provenance is not a sandbox boundary by itself.
-- **Linux / WebKitGTK:** authenticated per-message origin and sender-frame provenance are not considered available. Resolution rejects Linux capabilities containing `origins`. Only an explicitly trusted whole view (`WholeViewTrust = true`) can invoke; that trust covers every script in the view, so use separate views/processes for differently trusted content. This is an honest limitation, not an origin fallback.
+- **Linux / WebKitGTK:** authenticated per-message origin is not considered available. Resolution rejects Linux capabilities containing `origins`. Only an explicitly trusted whole view (`WholeViewTrust = true`) can invoke; that trust covers every script of the top-level document of the view, whatever document the view navigates to, so use separate views/processes for differently trusted top-level content. This is an honest limitation, not an origin fallback.
+
+## Frames and content of other origins
+
+Only the top-level document of a view reaches its bridge, on every backend and whatever the `BridgePolicy`: a frame, of any origin, can neither send a message that the host receives nor receive one that the host posts.
+
+- **Windows / WebView2** gives every frame a `chrome.webview` object, but raises the message event of the view for its top-level document only, and posts the messages of the host to that document only.
+- **macOS / WKWebView** gives every frame the private message handler and tells the frame of each message: the native library refuses every message that is not of the main frame, before it checks the origin.
+- **Linux / WebKitGTK** tells neither the frame nor the origin of a message. The native library registers the private handler in a script world of its own, whose only script is a relay injected into the top-level document; the bootstrap of the page hands each envelope to that relay through an event of its window, which a frame of another origin cannot reach. A frame, or an empty frame that a frame creates, has no handler to post to.
+
+The bootstrap of the transport itself only runs in the top-level document. A frame of the same origin as the page can still reach the objects of the page, as any same-origin document can: give content that is not the application an origin of its own.
+
+An application can show content that it does not trust, such as the view of an extension, in an `<iframe>` of its page, served from another custom scheme by a provider of its own. An environment takes any number of such schemes, each with its own provider:
+
+```csharp
+CustomSchemes =
+[
+    NeoCustomScheme.Application("app", applicationAssets),
+    NeoCustomScheme.Create("mcpapp", viewProvider),
+    NeoCustomScheme.Create("ui", widgetProvider),
+],
+```
+
+```html
+<iframe src="mcpapp://3f9c2a/view/index.html" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+```
+
+- Each host of such a scheme is an origin of its own, distinct from the application origin: a different host for each untrusted source keeps them from reaching each other. Without `allow-same-origin` the frame has an opaque origin and no storage.
+- The page allows the scheme in its content security policy (`frame-src mcpapp:`), and talks with the frame only through `window.postMessage`, checking `event.source` and `event.origin` of what it receives.
+- The provider sets the policy of the frame with the headers of its response: `NeoResourceResponse.FromBytes(bytes, "text/html; charset=utf-8", headers)` with, for example, `Content-Security-Policy`, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. Headers apply on every backend as the headers of an HTTP response.
+- The provider of a scheme only receives the requests of that scheme. What a backend tells of a frame document differs: see [known limitations](known-limitations.md#custom-schemes-and-the-managed-bridge). Tell the requests apart by their URI.
+- A frame can navigate itself to another address, such as an `https:` page, within the limits of its sandbox and of the `frame-src` of the page. Such a page reaches no more of the bridge than the frame did. Navigations of a frame are not reported to the host on Windows: see [links that open outside the web view](#links-that-open-outside-the-web-view).
 
 ## Scope families
 

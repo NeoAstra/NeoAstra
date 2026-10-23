@@ -46,7 +46,10 @@ public enum NeoResourceKind
 /// <param name="Headers">The request headers.</param>
 /// <param name="InitiatingOrigin">The initiating origin when exposed by the backend.</param>
 /// <param name="Kind">The browser resource category.</param>
-/// <param name="IsMainFrame">Whether the backend identified a main-document request.</param>
+/// <param name="IsMainFrame">
+/// Whether the backend identified a main-document request. WebView2 reports the document of a frame as one too: tell a
+/// frame document by its URI.
+/// </param>
 /// <param name="Body">The request body when exposed by the backend.</param>
 public sealed record NeoResourceRequest(
     Uri Uri,

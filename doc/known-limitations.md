@@ -445,7 +445,19 @@ of an environment on the same root that is not private.
 - WebKitGTK 6.0 does not provide trustworthy initiating-origin, frame, or resource-kind metadata for
   custom-scheme requests, and its script-message callback does not provide trustworthy sender-origin
   data. Linux therefore rejects `NeoBridgePolicy.TrustedOrigins`; `TrustEntireView` reports a null
-  source origin and trusts every script able to reach the handler.
+  source origin and trusts every script of the top-level document. Frames have no handler: see
+  [frames and content of other origins](capabilities-and-security.md#frames-and-content-of-other-origins).
+- Only the top-level document of a view reaches the bridge, on every backend and under every policy.
+  A message that WKWebView reports from a frame is refused, even from a trusted origin.
+- The request of a frame document reaches the provider of its scheme as follows:
+
+  | | Windows / WebView2 | macOS / WKWebView | Linux / WebKitGTK 6.0 |
+  | --- | --- | --- | --- |
+  | `NeoResourceRequest.Kind` | `Document` | `Other` | `Other` |
+  | `NeoResourceRequest.IsMainFrame` | `true`, as for the top-level document | `false` | `false`, as for every request |
+
+  Tell the document of a frame from the top-level document by its URI, such as by serving them from
+  different schemes.
 - Linux custom schemes support secure and CORS flags but not authority, per-origin CORS, or service
   workers. WKWebView also does not support service workers for application-defined schemes.
 - `TrustEntireView` is unsafe for content that can navigate remotely or load uncontrolled frames,

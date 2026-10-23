@@ -126,9 +126,15 @@ the request is still actionable. `ReconcileRecoverableSessionCacheAsync` is **no
 - CodeAlta's runtime “sanitization” removes scheduling markup, **not HTML/XSS**. Render text safely;
   disable raw Markdown HTML or use a reviewed sanitizer, restrict link schemes, and review SVG/plugin
   cards/attachments. Open external URLs only through a scoped backend action.
-- Active untrusted previews require an isolated view with **no bridge**. An origin string/current
-  top-level URL does not authenticate a subframe on Linux's whole-view trust path. Same-document XSS
-  inherits that document's bridge authority. Keep production CSP and local asset verification enabled.
+- Active untrusted previews require an isolated view with **no bridge**, or an `<iframe>` of an origin
+  of their own: only the top-level document of a view reaches its bridge, on every backend, Linux's
+  whole-view trust included. Serve such a frame from a custom scheme of its own
+  (`NeoCustomScheme.Create("mcpapp", provider)`, a host per source), set its policy with the headers
+  of `NeoResourceResponse.FromBytes(bytes, mimeType, headers)`, allow it with `frame-src` in the page,
+  and exchange with it through `window.postMessage` only, checking `event.source` and `event.origin`.
+  See [frames and content of other origins](capabilities-and-security.md#frames-and-content-of-other-origins).
+  Same-document XSS inherits that document's bridge authority. Keep production CSP and local asset
+  verification enabled.
 - Distinguish durable session/run, native window/view, replaceable RPC document session and frontend
   tab. Never use any one ID as authority for the others.
 - Marshal window/dialog work through `NeoDispatcher`; keep provider, history and event processing off
