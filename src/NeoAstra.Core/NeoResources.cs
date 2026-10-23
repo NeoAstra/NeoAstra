@@ -137,6 +137,38 @@ public sealed class NeoResourceResponse
         return new(200, "OK", mimeType, null, bytes, null, bytes.Length);
     }
 
+    /// <summary>Creates a successful in-memory response with response headers.</summary>
+    /// <param name="bytes">The response body.</param>
+    /// <param name="mimeType">The MIME type, sent as the <c>Content-Type</c> header.</param>
+    /// <param name="headers">
+    /// The response headers, such as <c>Content-Security-Policy</c>, <c>Cache-Control</c>, or <c>X-Content-Type-Options</c>,
+    /// which the browser applies as it applies the headers of an HTTP response. Names are compared without regard to case.
+    /// </param>
+    /// <returns>The response.</returns>
+    /// <remarks>
+    /// The headers are copied. <c>Content-Type</c> comes from <paramref name="mimeType"/> and <c>Content-Length</c> from the
+    /// length of <paramref name="bytes"/>; neither may be given in <paramref name="headers"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="mimeType"/> or a header is invalid or exceeds its limit, a header is given twice with names that differ
+    /// only in case, or <paramref name="headers"/> contains <c>Content-Type</c> or <c>Content-Length</c>.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="mimeType"/> or <paramref name="headers"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytes"/> exceeds the 64 MiB buffered-response limit.</exception>
+    public static NeoResourceResponse FromBytes(ReadOnlyMemory<byte> bytes, string mimeType, IReadOnlyDictionary<string, string> headers)
+    {
+        ArgumentNullException.ThrowIfNull(mimeType);
+        ArgumentNullException.ThrowIfNull(headers);
+        foreach (var name in headers.Keys)
+        {
+            if (string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase) || string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"The '{name}' header comes from the MIME type and the body of the response.", nameof(headers));
+            }
+        }
+        return new(200, "OK", mimeType, headers, bytes, null, bytes.Length);
+    }
+
     /// <summary>Creates a successful file-backed response.</summary>
     /// <param name="filePath">A fully qualified file path.</param>
     /// <param name="mimeType">The MIME type.</param>

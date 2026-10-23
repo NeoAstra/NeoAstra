@@ -20,6 +20,10 @@ internal static class LiveBrowser
     /// the pixels of the display. The test host is not such an application by itself.
     /// </param>
     /// <param name="browserArguments">Arguments for the browser process of the test, which then gets a data folder of its own.</param>
+    /// <param name="customSchemes">
+    /// The schemes of the environment in place of the one that serves <paramref name="pages"/>, or <see langword="null"/>. The
+    /// browser process of the test then gets a data folder of its own, which WebView2 registers the schemes for.
+    /// </param>
     /// <remarks>The test is inconclusive off Windows and where the native runtime is not staged.</remarks>
     internal static async Task RunAsync(
         IReadOnlyDictionary<string, string> pages,
@@ -27,7 +31,8 @@ internal static class LiveBrowser
         NeoAstraOptions? viewOptions = null,
         TimeSpan? timeout = null,
         bool perMonitorDpiAware = false,
-        string? browserArguments = null)
+        string? browserArguments = null,
+        IReadOnlyList<NeoCustomScheme>? customSchemes = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -54,12 +59,13 @@ internal static class LiveBrowser
                         window.Show();
                         await using var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions
                         {
-                            CustomSchemes = [NeoCustomScheme.Application("app", new PageProvider(pages))],
+                            CustomSchemes = customSchemes ?? [NeoCustomScheme.Application("app", new PageProvider(pages))],
                             // WebView2 runs the views of one data folder in one browser process, which takes the windows
                             // of one kind of awareness only: the others would be refused while that process lives. The same
                             // holds for the arguments of that process.
                             UserDataRoot = perMonitorDpiAware ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "per-monitor-dpi-aware")
                                 : browserArguments is not null ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "browser-arguments-" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(browserArguments)))[..12])
+                                : customSchemes is not null ? Path.Combine(Path.GetTempPath(), "neoastra-tests", "schemes-" + string.Join("-", customSchemes.Select(static scheme => scheme.Name)))
                                 : TestUserData.Shared,
                             BrowserArguments = browserArguments,
                         });

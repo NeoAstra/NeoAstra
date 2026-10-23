@@ -80,6 +80,49 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void CustomScheme_CreateWithProviderIsSecureContentThatIsNotTheApplication()
+    {
+        var provider = new NullResourceProvider();
+        var scheme = NeoCustomScheme.Create("McpApp", provider);
+
+        Assert.AreEqual("mcpapp", scheme.Name);
+        Assert.AreSame(provider, scheme.ResourceProvider);
+        Assert.IsTrue(scheme is { HasAuthority: true, IsSecure: true, IsApplicationScheme: false, IsCorsEnabled: false });
+        new NeoEnvironmentOptions { CustomSchemes = [NeoCustomScheme.Application("app", provider), scheme] }.Validate();
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoCustomScheme.Create("mcpapp", null!));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoCustomScheme.Create("http", provider));
+    }
+
+    [TestMethod]
+    public void ResourceResponse_FromBytesWithHeadersCopiesAndValidatesThem()
+    {
+        var headers = new Dictionary<string, string>
+        {
+            ["Content-Security-Policy"] = "default-src 'none'",
+            ["Cache-Control"] = "no-store",
+            ["X-Content-Type-Options"] = "nosniff",
+        };
+        var response = NeoResourceResponse.FromBytes("<p>view</p>"u8.ToArray(), "text/html; charset=utf-8", headers);
+        headers["Cache-Control"] = "changed";
+
+        Assert.AreEqual(200, response.StatusCode);
+        Assert.AreEqual("text/html; charset=utf-8", response.MimeType);
+        Assert.AreEqual(11L, response.ContentLength);
+        Assert.AreEqual("no-store", response.Headers["cache-control"]);
+        Assert.AreEqual("default-src 'none'", response.Headers["Content-Security-Policy"]);
+        Assert.HasCount(3, response.Headers);
+
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoResourceResponse.FromBytes(default, "text/plain", null!));
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoResourceResponse.FromBytes(default, null!, headers));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoResourceResponse.FromBytes(default, "text/plain", new Dictionary<string, string> { ["content-type"] = "text/html" }));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoResourceResponse.FromBytes(default, "text/plain", new Dictionary<string, string> { ["Content-Length"] = "4" }));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoResourceResponse.FromBytes(default, "text/plain", new Dictionary<string, string> { ["Bad Name"] = "value" }));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoResourceResponse.FromBytes(default, "text/plain", new Dictionary<string, string> { ["X-Header"] = "line\r\nInjected: yes" }));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoResourceResponse.FromBytes(default, "text/plain",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["X-Twice"] = "a", ["x-twice"] = "b" }));
+    }
+
+    [TestMethod]
     public void ResourceLimitsAndBridgeOrigins_RejectUnsafeConfiguration()
     {
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>

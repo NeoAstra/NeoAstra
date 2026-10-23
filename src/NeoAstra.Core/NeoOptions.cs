@@ -154,6 +154,24 @@ public sealed class NeoCustomScheme
         return new NeoCustomScheme(name.ToLowerInvariant());
     }
 
+    /// <summary>Creates a custom scheme definition backed by a resource provider.</summary>
+    /// <param name="name">A valid URI scheme name.</param>
+    /// <param name="resourceProvider">The provider used to resolve resources.</param>
+    /// <returns>The new definition, secure and with an authority component, which is not marked as application content.</returns>
+    /// <remarks>
+    /// Use it for content that is not the application itself, such as documents that an application page shows in an
+    /// <c>&lt;iframe&gt;</c>. Each origin of the scheme is an origin of its own, distinct from those of the application scheme.
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is invalid or identifies a built-in browser scheme.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="resourceProvider"/> is <see langword="null"/>.</exception>
+    public static NeoCustomScheme Create(string name, INeoResourceProvider resourceProvider)
+    {
+        ArgumentNullException.ThrowIfNull(resourceProvider);
+        var scheme = Create(name);
+        scheme.ResourceProvider = resourceProvider;
+        return scheme;
+    }
+
     /// <summary>Creates a secure scheme intended for trusted application content.</summary>
     /// <param name="name">A valid URI scheme name.</param>
     /// <returns>The new application scheme definition.</returns>
