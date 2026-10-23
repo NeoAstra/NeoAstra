@@ -253,9 +253,10 @@ public sealed class DisplayTests
                 foreach (var zoom in new[] { 1d, 1.5d })
                 {
                     view.ZoomFactor = zoom;
-                    // A CSS pixel is the zoom times the scale of the display in the units of the window.
+                    // A CSS pixel is the zoom times the scale of the display in the units of the window. A half unit rounds away
+                    // from zero: at a scale of 1.5 and a zoom of 1.5, 50 CSS pixels are 112.5 units, which make 113.
                     var converted = view.ClientToScreen(new NeoViewPoint(100, 50));
-                    Assert.AreEqual(new NeoPoint(origin.X + (int)Math.Round(100 * zoom * scale), origin.Y + (int)Math.Round(50 * zoom * scale)), converted, $"{message}, zoom {zoom}");
+                    Assert.AreEqual(new NeoPoint(origin.X + Whole(100 * zoom * scale), origin.Y + Whole(50 * zoom * scale)), converted, $"{message}, zoom {zoom}");
                     // A screen point comes back exactly, and a point of the view within the size of a unit.
                     foreach (var screen in new[] { new NeoPoint(origin.X, origin.Y), new NeoPoint(origin.X + 37, origin.Y + 91), new NeoPoint(origin.X - 400, origin.Y + 5000) })
                     {
@@ -277,6 +278,8 @@ public sealed class DisplayTests
                 Assert.AreEqual(window.Display, session.Application.GetDisplayAt(center), message);
             }, perMonitorDpiAware: aware);
         }
+
+        static int Whole(double units) => (int)Math.Round(units, MidpointRounding.AwayFromZero);
     }
 
     [TestMethod]

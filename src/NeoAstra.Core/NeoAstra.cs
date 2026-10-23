@@ -112,7 +112,10 @@ public sealed class NeoAstra : IAsyncDisposable
 
     /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>
     /// <param name="point">The point in the CSS pixels of the main viewport of the view; it may be outside the view, as during a drag.</param>
-    /// <returns>The screen point, rounded to the nearest unit, or <see langword="null"/> where the backend does not know where its windows are on screen.</returns>
+    /// <returns>
+    /// The screen point, rounded to the nearest unit, a half unit away from zero, or <see langword="null"/> where the backend does
+    /// not know where its windows are on screen.
+    /// </returns>
     /// <remarks>
     /// <para>
     /// The bounds of the view in its window, the place of the client area of the window on screen, the scale of its display, and
