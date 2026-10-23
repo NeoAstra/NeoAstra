@@ -35,7 +35,8 @@
   // A UTF-16 code unit takes one to three UTF-8 bytes: the string is encoded only when its length cannot decide.
   const exceedsBytes = (json, limit) => json.length * 3 > limit && (json.length > limit || encoder.encode(json).byteLength > limit);
   // The envelope adds the same bytes around every frame: they are measured once.
-  const envelopeBytes = encoder.encode(JSON.stringify({ __neoastraTransport: 1, hostViewBinding, rendererDocumentId, frame: null })).byteLength - "null".length;
+  const emptyEnvelope = JSON.stringify({ __neoastraTransport: 1, hostViewBinding, rendererDocumentId, frame: null });
+  const envelopeBytes = encoder.encode(emptyEnvelope).byteLength - "null".length;
 
   // The host bounds every envelope it sends by the same limit before posting it: measuring it again here would
   // only cost a serialization, and a throw from this listener would drop an answer the client is waiting for.
@@ -46,17 +47,26 @@
     receiveHandler?.(value.frame);
   };
 
+  // `json` is the frame as JSON text.
   let postEnvelope;
   if (metadata.backend === "webview2") {
     const adapter = globalThis.chrome?.webview;
     if (!adapter || typeof adapter.postMessage !== "function" || typeof adapter.addEventListener !== "function") return;
     adapter.addEventListener("message", event => receiveEnvelope(event.data));
-    postEnvelope = value => adapter.postMessage(value);
+    postEnvelope = (value, json) => adapter.postMessage(value);
   } else {
     const adapter = globalThis.webkit?.messageHandlers?._neoastra_transport_v1;
-    if (!adapter || typeof adapter.postMessage !== "function") return;
+    if (adapter && typeof adapter.postMessage === "function") {
+      postEnvelope = (value, json) => adapter.postMessage(value);
+    } else if (metadata.backend === "webkitgtk") {
+      // The native library keeps the handler in a script world of its own, out of reach of the frames, and relays to it
+      // the envelopes that this window dispatches as JSON text.
+      const dispatch = EventTarget.prototype.dispatchEvent;
+      const Event = globalThis.CustomEvent;
+      const prefix = emptyEnvelope.slice(0, -"null}".length);
+      postEnvelope = (value, json) => dispatch.call(globalThis, new Event("neoastra-transport-v1-post", { detail: prefix + json + "}" }));
+    } else return;
     globalThis.addEventListener("neoastramessage", event => receiveEnvelope(event.detail));
-    postEnvelope = value => adapter.postMessage(value);
   }
 
   // A document that the engine keeps in its back-forward cache is hidden, not unloaded, once the next document has
@@ -83,7 +93,7 @@
         hostViewBinding,
         rendererDocumentId,
         frame,
-      });
+      }, json);
     },
     setReceiveHandler(handler) {
       if (typeof handler !== "function") throw new TypeError("A receive handler is required.");

@@ -316,11 +316,13 @@ public sealed class ManagedApiTests
         StringAssert.Contains(gtk, "webkit_uri_scheme_request_finish_with_response");
         StringAssert.Contains(gtk, "native_headers.release()");
         StringAssert.Contains(gtk, "neo_resource_response_release_guard");
-        StringAssert.Contains(gtk, "const std::string origin;neo_emit_bridge_message(view,message,origin,false)");
+        // WebKitGTK tells no origin: the message is of the top-level document, the only one with the relay of the handler.
+        StringAssert.Contains(gtk, "const std::string origin;neo_emit_bridge_message(view,message,origin,true)");
+        StringAssert.Contains(gtk, "webkit_user_content_manager_register_script_message_handler(state->content,\"_neoastra_transport_v1\",bridge_world)");
+        StringAssert.Contains(gtk, "webkit_user_script_new_for_world(bridge_relay_source,WEBKIT_USER_CONTENT_INJECT_TOP_FRAME");
         StringAssert.Contains(gtk, "script-message-received::_neoastra_transport_v1");
         StringAssert.Contains(gtk, "webkit_user_content_manager_unregister_script_message_handler");
         StringAssert.Contains(gtk, "view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED");
-        StringAssert.Contains(gtk, "neo_emit_bridge_message(view,message,origin,false)");
         StringAssert.Contains(gtk, "view->bridge_policy==NEOASTRA_BRIDGE_TRUSTED_ORIGINS");
         StringAssert.Contains(windows, "neo_valid_resource_response(response)");
         StringAssert.Contains(windows, "neo_emit_bridge_message(view, message_utf8, source_utf8, true)");

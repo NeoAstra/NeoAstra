@@ -214,11 +214,14 @@ inline bool neo_bridge_access_allowed_for(const std::vector<neo_custom_scheme_re
     return false;
 }
 
+// Only the top-level document reaches the bridge, whatever the policy: a frame, even of a trusted origin, is refused. WebView2
+// raises the message event of a view for its top-level document only, WKWebView tells the frame of each message, and the
+// WebKitGTK backend gives the handler to the top-level document alone.
 inline bool neo_bridge_message_allowed_for(const std::vector<neo_custom_scheme_registration>& custom_schemes,
                                            const std::vector<std::string>& bridge_origins,
                                            neoastra_bridge_policy_t policy, uint32_t maximum_message_size, bool destroyed,
-                                           std::string_view message, std::string_view uri) noexcept {
-    return !destroyed && message.size() <= maximum_message_size &&
+                                           bool main_frame, std::string_view message, std::string_view uri) noexcept {
+    return !destroyed && main_frame && message.size() <= maximum_message_size &&
         neo_bridge_access_allowed_for(custom_schemes, bridge_origins, policy, uri);
 }
 

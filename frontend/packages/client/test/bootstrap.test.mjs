@@ -20,7 +20,7 @@ function scriptFor(backend, platform = "windows", maximumFrameBytes = 1048576) {
     .replaceAll("__NEOASTRA_WHOLE_VIEW_TRUST__", platform === "linux" ? "true" : "false");
 }
 
-function runBackend(backend, platform, maximumFrameBytes) {
+function runBackend(backend, platform, maximumFrameBytes, relayed = false) {
   const outbound = [];
   const listeners = new Map();
   const context = {
@@ -40,6 +40,16 @@ function runBackend(backend, platform, maximumFrameBytes) {
       postMessage(value) { outbound.push(value); },
       addEventListener(name, listener) { listeners.set(`webview:${name}`, listener); },
     } };
+  } else if (relayed) {
+    // The handler is in a script world of its own: the window dispatches the envelopes as JSON text for its relay.
+    context.webkit = { messageHandlers: {} };
+    context.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init.detail; } };
+    context.EventTarget = { prototype: { dispatchEvent(event) {
+      assert.equal(this.webkit, context.webkit);
+      assert.equal(event.type, "neoastra-transport-v1-post");
+      outbound.push(JSON.parse(event.detail));
+      return true;
+    } } };
   } else {
     context.webkit = { messageHandlers: { _neoastra_transport_v1: { postMessage(value) { outbound.push(value); } } } };
   }
@@ -63,6 +73,24 @@ for (const [backend, platform] of [["webview2", "windows"], ["wkwebview", "macos
     assert.equal("webkit" in fixture.transport, false);
   });
 }
+
+test("bootstrap relays its envelopes as JSON text when WebKitGTK keeps the handler out of the main world", () => {
+  const fixture = runBackend("webkitgtk", "linux", 1048576, true);
+  fixture.transport.send({ neoastra: 1, kind: "hello", text: "\"quoted\" é" });
+  fixture.transport.send({ neoastra: 1, kind: "invoke" }, JSON.stringify({ neoastra: 1, kind: "invoke" }));
+  assert.equal(fixture.outbound.length, 2);
+  assert.equal(fixture.outbound[0].__neoastraTransport, 1);
+  assert.equal(fixture.outbound[0].hostViewBinding, "host-binding");
+  assert.match(fixture.outbound[0].rendererDocumentId, /^[0-9a-f]{32}$/);
+  assert.deepEqual(fixture.outbound[0].frame, { neoastra: 1, kind: "hello", text: "\"quoted\" é" });
+  assert.deepEqual(fixture.outbound[1].frame, { neoastra: 1, kind: "invoke" });
+  assert.equal(typeof fixture.listeners.get("neoastramessage"), "function");
+});
+
+test("bootstrap leaves the transport out on WebKit without a handler or a relay", () => {
+  const fixture = runBackend("wkwebview", "macos", 1048576, true);
+  assert.equal(fixture.transport, undefined);
+});
 
 test("bootstrap accepts only its host view binding and renderer document correlation", () => {
   const fixture = runBackend("webview2", "windows");

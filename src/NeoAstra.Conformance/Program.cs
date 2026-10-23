@@ -64,7 +64,8 @@ internal static partial class Program
             Require(Directory.Exists(assetsPath), $"Fixture assets were not copied to '{assetsPath}'.");
 
             var provider = new ObservedResourceProvider(new NeoDirectoryResourceProvider(assetsPath));
-            var environmentOptions = CreateEnvironmentOptions(provider);
+            using var frames = new FrameFixtureProvider(provider);
+            var environmentOptions = CreateEnvironmentOptions(frames);
             await using var environment = await application.CreateEnvironmentAsync(environmentOptions).AsTask().WaitAsync(options.Timeout);
             PrintRuntime(environment.RuntimeInfo);
             Console.WriteLine($"MODE stress={options.Stress.ToString().ToLowerInvariant()} timeout={options.Timeout.TotalSeconds:F0}s network=disabled interactive=disabled");
@@ -422,6 +423,7 @@ internal static partial class Program
                 if (firstProfile is not null) await firstProfile.DisposeAsync();
             }
 
+            await RunFrameScenariosAsync(environment, frames, bridgeMode);
             await RunAutomationScenariosAsync(environment);
             await RunHistoryScenariosAsync(environment);
             await RunCaptureScenariosAsync(environment);
@@ -901,11 +903,11 @@ internal static partial class Program
         }
     }
 
-    private static NeoEnvironmentOptions CreateEnvironmentOptions(INeoResourceProvider provider)
+    private static NeoEnvironmentOptions CreateEnvironmentOptions(FrameFixtureProvider provider)
         => new()
         {
             IsPrivate = true,
-            CustomSchemes = [NeoCustomScheme.Application("conformance", provider)],
+            CustomSchemes = [NeoCustomScheme.Application("conformance", provider), NeoCustomScheme.Create(FrameScheme, provider.Frames)],
         };
 
     private static NeoAstraOptions CreateViewOptions(NeoProfile? profile, BridgeMode bridgeMode)

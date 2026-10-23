@@ -142,11 +142,15 @@ bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, 
     if (!view) return false;
     const auto destroyed = view->ui_destroyed.load(std::memory_order_acquire) || view->destroying;
     if (neo_bridge_message_allowed_for(view->environment->custom_schemes, view->bridge_origins,
-                                       view->bridge_policy, view->maximum_message_size, destroyed, message, uri)) {
+                                       view->bridge_policy, view->maximum_message_size, destroyed, main_frame, message, uri)) {
         neo_emit_view_message(view, message, uri, main_frame ? 1u : 0u);
         return true;
     }
     if (destroyed) return false;
+    if (!main_frame) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a web message of a frame that is not the top-level document");
+        return false;
+    }
     if (!neo_bridge_access_allowed(view, uri)) {
         neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a web message by the configured bridge policy");
         return false;

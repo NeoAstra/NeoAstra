@@ -13,6 +13,8 @@
   <ItemGroup>
     <!-- The automation scenarios check the pixels of screenshots with the decoder of the test project. -->
     <Compile Include="../NeoAstra.Tests/Fixtures/TestPng.cs" Link="TestPng.cs" />
+    <!-- The frame scenarios share the probe page and its loopback server with the live tests. -->
+    <Compile Include="../NeoAstra.Tests/Fixtures/FrameProbe.cs" Link="FrameProbe.cs" />
   </ItemGroup>
 
   <Import Project="../NeoAstra/Build/Sdk/NeoAstra.props" />
