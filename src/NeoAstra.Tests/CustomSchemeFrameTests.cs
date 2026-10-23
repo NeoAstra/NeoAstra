@@ -49,17 +49,24 @@ public sealed class CustomSchemeFrameTests
         using var server = new LoopbackPageServer(FrameProbe.Document);
         var application = new HeaderSite("app");
         application.Add("index.html", "text/html; charset=utf-8", "<!doctype html><title>Host</title><script src=\"index.js\"></script>",
-            new Dictionary<string, string> { ["Content-Security-Policy"] = $"default-src 'self'; script-src 'self'; frame-src mcpapp: {server.Origin}" });
+            new Dictionary<string, string> { ["Content-Security-Policy"] = $"default-src 'self'; script-src 'self'; frame-src 'self' mcpapp: ui: {server.Origin}" });
+        application.Add("probe.html", "text/html; charset=utf-8", FrameProbe.Document, new Dictionary<string, string>());
         application.Add("index.js", "text/javascript; charset=utf-8", FrameProbe.HostScript(
         [
             ("mcpapp://view-a/view/frame.html?name=same-origin", "allow-scripts allow-same-origin allow-forms"),
             ("mcpapp://view-b/view/frame.html?name=opaque", "allow-scripts allow-forms"),
             ("mcpapp://view-c/view/frame.html?name=unsandboxed", null),
+            ("ui://view-d/view/frame.html?name=second-scheme", "allow-scripts allow-same-origin"),
+            // A frame of the trusted origin itself, with an opaque origin.
+            ($"{LiveBrowser.Origin}/probe.html?name=application-opaque", "allow-scripts"),
             ($"{server.Origin}/frame.html?name=web", "allow-scripts allow-same-origin"),
         ]), new Dictionary<string, string>());
+        // Two schemes for content that is not the application, each with a provider of its own.
         var views = new HeaderSite("mcpapp");
         views.Add("view/frame.html", "text/html; charset=utf-8", FrameProbe.Document,
             new Dictionary<string, string> { ["Cache-Control"] = "no-store", ["X-Content-Type-Options"] = "nosniff" });
+        var ui = new HeaderSite("ui");
+        ui.Add("view/frame.html", "text/html; charset=utf-8", FrameProbe.Document, new Dictionary<string, string> { ["Cache-Control"] = "no-store" });
 
         await LiveBrowser.RunAsync(new Dictionary<string, string>(), async session =>
         {
@@ -69,7 +76,7 @@ public sealed class CustomSchemeFrameTests
             await session.NavigateAsync("index.html");
 
             session.Stage = "the reports of the frames";
-            await session.WaitUntilAsync("globalThis.frameReports.length === 4");
+            await session.WaitUntilAsync("globalThis.frameReports.length === 6");
             // Each frame saw an adapter and posted through it: the test would see a message that got through.
             Assert.AreEqual("true", await view.EvaluateScriptAsync("globalThis.frameReports.every(report => report.webview)", session.CancellationToken),
                 await view.EvaluateScriptAsync("JSON.stringify(globalThis.frameReports)", session.CancellationToken));
@@ -78,6 +85,7 @@ public sealed class CustomSchemeFrameTests
             Assert.IsNotNull(frameRequest, "The provider of the second scheme did not serve the document of the frame.");
             Assert.AreEqual("/view/frame.html", frameRequest.Uri.AbsolutePath);
             Assert.AreEqual(NeoResourceKind.Document, frameRequest.Kind);
+            Assert.IsTrue(ui.Requests.Any(static request => request.Uri.Host == "view-d"), "The provider of the third scheme did not serve the document of its frame.");
 
             // The page itself still reaches the host, after the messages of the frames.
             session.Stage = "a message of the page";
@@ -97,7 +105,7 @@ public sealed class CustomSchemeFrameTests
             Assert.AreEqual("0", await view.EvaluateScriptAsync("globalThis.frameReceived.length", session.CancellationToken),
                 await view.EvaluateScriptAsync("JSON.stringify(globalThis.frameReceived)", session.CancellationToken));
         }, viewOptions: new NeoAstraOptions { ViewLabel = "main", BridgePolicy = NeoBridgePolicy.TrustedOrigins, BridgeOrigins = [LiveBrowser.Origin] },
-        customSchemes: [NeoCustomScheme.Application("app", application), NeoCustomScheme.Create("mcpapp", views)]);
+        customSchemes: [NeoCustomScheme.Application("app", application), NeoCustomScheme.Create("mcpapp", views), NeoCustomScheme.Create("ui", ui)]);
     }
 
     private static async Task<NeoWebMessageReceivedEventArgs> WaitForMessageAsync(ConcurrentQueue<NeoWebMessageReceivedEventArgs> messages, string kind, CancellationToken cancellationToken)

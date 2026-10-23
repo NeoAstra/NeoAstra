@@ -6,7 +6,9 @@ using NeoAstra.Tests;
 
 internal static partial class Program
 {
+    // Two schemes for content that is not the application, to show that a view takes any number of them.
     private const string FrameScheme = "conformanceframe";
+    private const string SecondFrameScheme = "conformanceview";
     private static readonly Uri CspUri = new("conformance://fixture/csp.html");
     private static readonly Uri FramesUri = new("conformance://fixture/frames.html");
 
@@ -43,17 +45,18 @@ internal static partial class Program
                 await NavigateAndWaitAsync(view, FramesUri, options.Timeout);
                 await WaitForDocumentLoadAsync(view, options.Timeout);
                 await WaitUntilScriptAsync(view, "globalThis.__fixtureTransportConnected === true", "The @neoastra/client handshake did not complete.", options.Timeout);
-                await WaitUntilScriptAsync(view, "globalThis.frameReports.filter(report => report.origin.startsWith('conformanceframe:') || report.origin === 'null').length === 3",
-                    "The frames of the second scheme did not report.", options.Timeout);
+                await WaitUntilScriptAsync(view, "globalThis.frameReports.filter(report => report.name !== 'web').length === 5",
+                    "The frames of the other schemes and of the application did not report.", options.Timeout);
                 // A web frame needs the loopback interface and plain HTTP, which a platform may refuse: it is waited for
                 // a moment, and reported.
                 var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
-                while (DateTime.UtcNow < deadline && await view.EvaluateScriptAsync("globalThis.frameReports.length === 4") != "true") await Task.Delay(25);
+                while (DateTime.UtcNow < deadline && await view.EvaluateScriptAsync("globalThis.frameReports.length === 6") != "true") await Task.Delay(25);
                 Console.WriteLine($"INFO frame reports {await view.EvaluateScriptAsync("JSON.stringify(globalThis.frameReports)")}");
                 Console.WriteLine($"INFO frame requests {string.Join(", ", frames.Requests.Select(static request => $"{request.Uri} kind={request.Kind} main={request.IsMainFrame}"))}");
                 Require(await view.EvaluateScriptAsync("globalThis.frameReports.some(report => report.transport)") == "false", "A frame has the transport of the page.");
-                Require(frames.Requests.Any(static request => request.Uri.Host == "view-a" && request.Uri.AbsolutePath == "/view/frame.html"),
-                    "The provider of the second scheme did not serve the document of the frame.");
+                Require(frames.Requests.Any(static request => request.Uri.Scheme == FrameScheme && request.Uri.Host == "view-a" && request.Uri.AbsolutePath == "/view/frame.html") &&
+                        frames.Requests.Any(static request => request.Uri.Scheme == SecondFrameScheme && request.Uri.Host == "view-d"),
+                    "The providers of the other schemes did not serve the documents of the frames.");
 
                 // The page still reaches the host after the frames posted, and the host reaches the page.
                 await WaitForMessageAsync(view, "page-marker", async () => _ = await view.EvaluateScriptAsync("globalThis.__fixturePostMessage({ kind: 'page-marker' }); true"), options.Timeout);
@@ -109,12 +112,16 @@ internal static partial class Program
                     new() { ["Cache-Control"] = "max-age=60", ["X-Content-Type-Options"] = "nosniff", ["X-Neo-Test"] = "served" }),
                 ["/frames.html"] = ("text/html; charset=utf-8",
                     Encoding.UTF8.GetBytes("<!doctype html><title>Frames</title><script type=\"module\" src=\"fixture.js\"></script><script src=\"frames.js\"></script>"),
-                    new() { ["Content-Security-Policy"] = $"default-src 'self'; script-src 'self'; frame-src {FrameScheme}: {_web.Origin}" }),
+                    new() { ["Content-Security-Policy"] = $"default-src 'self'; script-src 'self'; frame-src 'self' {FrameScheme}: {SecondFrameScheme}: {_web.Origin}" }),
+                ["/probe.html"] = ("text/html; charset=utf-8", Encoding.UTF8.GetBytes(FrameProbe.Document), new()),
                 ["/frames.js"] = ("text/javascript; charset=utf-8", Encoding.UTF8.GetBytes(FrameProbe.HostScript(
                 [
                     ($"{FrameScheme}://view-a/view/frame.html?name=same-origin", "allow-scripts allow-same-origin allow-forms"),
                     ($"{FrameScheme}://view-b/view/frame.html?name=opaque", "allow-scripts allow-forms"),
                     ($"{FrameScheme}://view-c/view/frame.html?name=unsandboxed", null),
+                    ($"{SecondFrameScheme}://view-d/view/frame.html?name=second-scheme", "allow-scripts allow-same-origin"),
+                    // A frame of the trusted origin itself, with an opaque origin: its address passes an origin check.
+                    ("conformance://fixture/probe.html?name=application-opaque", "allow-scripts"),
                     ($"{_web.Origin}/frame.html?name=web", "allow-scripts allow-same-origin"),
                 ])), new()),
             };
@@ -122,7 +129,7 @@ internal static partial class Program
 
         internal IEnumerable<NeoResourceRequest> Requests => _requests;
 
-        // The provider of the second scheme.
+        // A provider of a scheme of frames.
         internal INeoResourceProvider Frames => new FrameDocuments(this);
 
         internal void ClearRequests() => _requests.Clear();

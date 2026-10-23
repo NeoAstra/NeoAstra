@@ -907,7 +907,12 @@ internal static partial class Program
         => new()
         {
             IsPrivate = true,
-            CustomSchemes = [NeoCustomScheme.Application("conformance", provider), NeoCustomScheme.Create(FrameScheme, provider.Frames)],
+            CustomSchemes =
+            [
+                NeoCustomScheme.Application("conformance", provider),
+                NeoCustomScheme.Create(FrameScheme, provider.Frames),
+                NeoCustomScheme.Create(SecondFrameScheme, provider.Frames),
+            ],
         };
 
     private static NeoAstraOptions CreateViewOptions(NeoProfile? profile, BridgeMode bridgeMode)
