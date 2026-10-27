@@ -27,6 +27,7 @@ public sealed class NeoApplication : IAsyncDisposable
     private GCHandle _eventRoot;
     private GCHandle _logRoot;
     private NeoWindow? _mainWindow;
+    private readonly bool _automated;
     private NeoApplicationShutdownMode _shutdownMode;
     private ExceptionDispatchInfo? _startupException;
     private readonly TaskCompletionSource _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -44,6 +45,7 @@ public sealed class NeoApplication : IAsyncDisposable
         _handle = handle;
         _logRoot = logRoot;
         _shutdownMode = options.ShutdownMode;
+        _automated = options.Automated;
         _maximumPendingLaunchEvents = options.MaximumPendingLaunchEvents;
         _logCallback = options.LogCallback;
         Dispatcher = new NeoDispatcher(this, Environment.CurrentManagedThreadId);
@@ -112,6 +114,12 @@ public sealed class NeoApplication : IAsyncDisposable
 
     /// <summary>Gets the UI-thread dispatcher.</summary>
     public NeoDispatcher Dispatcher { get; }
+
+    /// <summary>Gets whether an automated process, not a person, started this application. See <see cref="NeoApplicationOptions.Automated"/>.</summary>
+    public bool IsAutomated => _automated;
+
+    internal static NeoWindowCloseReason ResolveCloseReason(NeoWindowCloseReason reason, bool automated)
+        => automated && reason is NeoWindowCloseReason.User or NeoWindowCloseReason.ApplicationQuit ? NeoWindowCloseReason.Automated : reason;
 
     /// <summary>Gets the current deterministic application lifecycle state.</summary>
     public NeoApplicationState State { get { lock (_sync) return _state; } }
@@ -724,7 +732,7 @@ public sealed class NeoApplication : IAsyncDisposable
             {
                 foreach (var window in windows)
                 {
-                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : NeoWindowCloseReason.ApplicationQuit, !forced, deadline.Token).ConfigureAwait(true))
+                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : ResolveCloseReason(NeoWindowCloseReason.ApplicationQuit, _automated), !forced, deadline.Token).ConfigureAwait(true))
                     {
                         CancelQuit(completion);
                         CompletePlatformQuitDecision(platformDecision, false);
@@ -739,7 +747,7 @@ public sealed class NeoApplication : IAsyncDisposable
                 TransitionTo(NeoApplicationState.ClosingWindows);
                 foreach (var window in windows)
                 {
-                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : NeoWindowCloseReason.ApplicationQuit, !forced, deadline.Token).ConfigureAwait(true))
+                    if (!await window.EvaluateCloseAsync(forced ? NeoWindowCloseReason.SessionEnd : ResolveCloseReason(NeoWindowCloseReason.ApplicationQuit, _automated), !forced, deadline.Token).ConfigureAwait(true))
                     {
                         CancelQuit(completion);
                         CompletePlatformQuitDecision(platformDecision, false);
@@ -1402,9 +1410,10 @@ public sealed class NeoApplication : IAsyncDisposable
         switch (type)
         {
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_CLOSE_REQUESTED:
-                window.OnClosing(value.decision.Handle, (NeoWindowCloseReason)value.value, value.native_code != 0,
+                var closeReason = ResolveCloseReason((NeoWindowCloseReason)value.value, _automated);
+                window.OnClosing(value.decision.Handle, closeReason, value.native_code != 0,
                     NativeMethods.neoastra_decision_get_deadline_ns(value.decision),
-                    cancellationToken => EvaluateCloseTreeAsync(window, (NeoWindowCloseReason)value.value, value.native_code != 0, cancellationToken));
+                    cancellationToken => EvaluateCloseTreeAsync(window, closeReason, value.native_code != 0, cancellationToken));
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_WINDOW_CLOSED:
                 OnWindowClosed(window);

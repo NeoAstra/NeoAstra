@@ -35,6 +35,27 @@ or independently owned backend services, use explicit `NeoApplication` compositi
 
 `NeoWindow.CloseRequested` handlers run in registration order. `Cancel()` by any handler cancels an ordinary close; exceptions, renderer loss, and deadline expiration also cancel. The legacy synchronous `Closing` event runs first and now has an effective `Cancel` value. `NeoQuitRequest.CanCancel` and `Deadline` describe the particular request: normal AppKit termination is cancelable and deferred, while Windows' query notification is non-cancelable because Windows cannot wait for asynchronous policy. Final/forced phases ignore cancellation.
 
+## Automated processes
+
+A program that starts and stops the application, such as a bot that restarts it after an update, has no person to answer a prompt. Set the `NEOASTRA_AUTOMATED` environment variable to any value other than empty, `0` or `false`, or pass `--automated` on the command line, and `NeoApplication.IsAutomated` is true. `NeoApplicationOptions.Automated` reads the same signals by default and can be set explicitly.
+
+While the application is automated, a window close that would report `NeoWindowCloseReason.User` (the window chrome) or `NeoWindowCloseReason.ApplicationQuit` (an approved quit) reports `NeoWindowCloseReason.Automated` instead. `Owner`, `SessionEnd`, `System` and `Programmatic` are unchanged, and `CanCancel` keeps its value: the application decides what a graceful stop means, such as skipping the unsaved-work prompt and waiting for running work to end.
+
+```csharp
+window.CloseRequested += async request =>
+{
+    if (request.Reason == NeoWindowCloseReason.Automated)
+    {
+        await editor.SaveAsync(request.DeadlineToken); // no prompt
+        return;
+    }
+    if (request.CanCancel && !await editor.ConfirmAndSaveAsync(request.DeadlineToken))
+        request.Cancel();
+};
+```
+
+`Automated` exists only in managed code; the native close reasons are unchanged. The renderer receives it as `"Automated"` in `DesktopWindowCloseReason`.
+
 `RequestQuitAsync` coalesces reentrant/concurrent callers. `BeforeQuit` runs first. Windows are snapshotted child-before-owner and then either:
 
 - preflighted completely before any destruction (the default), or

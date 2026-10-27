@@ -97,7 +97,10 @@ public sealed class AbiLayoutTests
         AssertEquivalent<NeoApplicationShutdownMode, NativeMethods.neoastra_app_shutdown_mode>();
         AssertEquivalent<NeoWindowState, NativeMethods.neoastra_window_state>();
         AssertEquivalent<NeoWindowResizeEdge, NativeMethods.neoastra_window_resize_edge>();
-        AssertEquivalent<NeoWindowCloseReason, NativeMethods.neoastra_window_close_reason>();
+        // Automated is resolved by the managed application from the native User and ApplicationQuit reasons.
+        CollectionAssert.AreEqual(
+            Values<NeoWindowCloseReason>().Where(static value => value != (long)NeoWindowCloseReason.Automated).ToArray(),
+            Values<NativeMethods.neoastra_window_close_reason>(), nameof(NeoWindowCloseReason));
         AssertEquivalent<NeoOptionState, NativeMethods.neoastra_option_state>();
         AssertEquivalent<NeoBridgePolicy, NativeMethods.neoastra_bridge_policy>();
         AssertEquivalent<NeoDecisionAction, NativeMethods.neoastra_decision_action>();

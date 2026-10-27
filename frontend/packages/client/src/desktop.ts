@@ -29,7 +29,7 @@ export interface DesktopNotificationRequest {
 export interface DesktopScopedPath { readonly root: string; readonly relativePath: string; }
 export interface DesktopOutboundDragItem { readonly kind: "Text" | "File" | "Url"; readonly value?: string; readonly root?: string; readonly relativePath?: string; }
 export type DesktopWindowState = "Normal" | "Minimized" | "Maximized" | "Fullscreen";
-export type DesktopWindowCloseReason = "User" | "Owner" | "ApplicationQuit" | "SessionEnd" | "System" | "Programmatic";
+export type DesktopWindowCloseReason = "User" | "Owner" | "ApplicationQuit" | "SessionEnd" | "System" | "Programmatic" | "Automated";
 export interface DesktopWindowSnapshot {
   readonly title: string; readonly position: { readonly x: number; readonly y: number }; readonly size: { readonly width: number; readonly height: number };
   readonly minimumSize: { readonly width: number; readonly height: number }; readonly maximumSize: { readonly width: number; readonly height: number };

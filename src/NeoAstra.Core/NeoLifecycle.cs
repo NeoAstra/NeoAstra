@@ -37,6 +37,16 @@ public enum NeoWindowCloseReason
     System,
     /// <summary>Managed application code requested close.</summary>
     Programmatic,
+    /// <summary>
+    /// An automated process stopped the application: the user closed the window chrome or an approved
+    /// quit was closing the window, while <see cref="NeoApplication.IsAutomated"/> is true.
+    /// </summary>
+    /// <remarks>
+    /// The reason replaces <see cref="User"/> and <see cref="ApplicationQuit"/> so that a handler can skip any
+    /// prompt, such as unsaved-work confirmation, and shut down gracefully without a person to answer.
+    /// It is a managed value: the native backend never reports it.
+    /// </remarks>
+    Automated,
 }
 
 /// <summary>Provides an asynchronous, exactly-once native window close negotiation.</summary>

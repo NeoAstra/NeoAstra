@@ -14,6 +14,49 @@ namespace NeoAstra.Tests;
 public sealed class LifecycleTests
 {
     [TestMethod]
+    [DataRow(null, false)]
+    [DataRow("", false)]
+    [DataRow("  ", false)]
+    [DataRow("0", false)]
+    [DataRow("false", false)]
+    [DataRow("FALSE", false)]
+    [DataRow("1", true)]
+    [DataRow("true", true)]
+    [DataRow("yes", true)]
+    public void AutomatedEnvironmentVariableMarksTheProcess(string? value, bool expected)
+        => Assert.AreEqual(expected, NeoApplicationOptions.IsAutomatedProcess(value, ["app.exe"]));
+
+    [TestMethod]
+    public void AutomatedCommandLineArgumentMarksTheProcess()
+    {
+        Assert.IsTrue(NeoApplicationOptions.IsAutomatedProcess(null, ["app.exe", "--automated"]));
+        Assert.IsTrue(NeoApplicationOptions.IsAutomatedProcess("0", ["app.exe", "file.txt", "--automated"]));
+        Assert.IsFalse(NeoApplicationOptions.IsAutomatedProcess(null, ["--automated"]), "The first entry is the program, not an argument.");
+        Assert.IsFalse(NeoApplicationOptions.IsAutomatedProcess(null, ["app.exe", "--automatedly", "automated"]));
+    }
+
+    [TestMethod]
+    [DataRow(NeoWindowCloseReason.User, true, NeoWindowCloseReason.Automated)]
+    [DataRow(NeoWindowCloseReason.ApplicationQuit, true, NeoWindowCloseReason.Automated)]
+    [DataRow(NeoWindowCloseReason.User, false, NeoWindowCloseReason.User)]
+    [DataRow(NeoWindowCloseReason.ApplicationQuit, false, NeoWindowCloseReason.ApplicationQuit)]
+    [DataRow(NeoWindowCloseReason.Owner, true, NeoWindowCloseReason.Owner)]
+    [DataRow(NeoWindowCloseReason.SessionEnd, true, NeoWindowCloseReason.SessionEnd)]
+    [DataRow(NeoWindowCloseReason.System, true, NeoWindowCloseReason.System)]
+    [DataRow(NeoWindowCloseReason.Programmatic, true, NeoWindowCloseReason.Programmatic)]
+    public void AutomatedApplicationReportsUserAndQuitClosesAsAutomated(NeoWindowCloseReason reason, bool automated, NeoWindowCloseReason expected)
+        => Assert.AreEqual(expected, NeoApplication.ResolveCloseReason(reason, automated));
+
+    [TestMethod]
+    public void AutomatedOptionDefaultsFromTheProcessAndCanBeOverridden()
+    {
+        var options = new NeoApplicationOptions { Automated = true };
+        Assert.IsTrue(options.Automated);
+        options.Automated = false;
+        Assert.IsFalse(options.Automated);
+    }
+
+    [TestMethod]
     public async Task CloseHandlersRunInOrderAndAnyCancellationWins()
     {
         var window = (NeoWindow)RuntimeHelpers.GetUninitializedObject(typeof(NeoWindow));

@@ -21,6 +21,28 @@ public sealed class NeoApplicationOptions
     /// <summary>Gets or sets whether initial process arguments and working directory are queued as one authoritative initial launch event.</summary>
     public bool QueueInitialLaunchEvent { get; set; } = true;
 
+    /// <summary>Gets or sets whether the application is started and stopped by an automated process rather than a person.</summary>
+    /// <remarks>
+    /// The default is true when the <c>NEOASTRA_AUTOMATED</c> environment variable is set to a value other than
+    /// empty, <c>0</c> or <c>false</c>, or when the process command line contains <c>--automated</c>. While true,
+    /// window close requests from the user and from an approved quit report <see cref="NeoWindowCloseReason.Automated"/>.
+    /// </remarks>
+    public bool Automated { get; set; } = IsAutomatedProcess(Environment.GetEnvironmentVariable(AutomatedEnvironmentVariable), Environment.GetCommandLineArgs());
+
+    /// <summary>The name of the environment variable that marks a process as automated.</summary>
+    internal const string AutomatedEnvironmentVariable = "NEOASTRA_AUTOMATED";
+
+    internal static bool IsAutomatedProcess(string? variable, IReadOnlyList<string> commandLine)
+    {
+        if (!string.IsNullOrWhiteSpace(variable)
+            && !variable.Trim().Equals("0", StringComparison.Ordinal)
+            && !variable.Trim().Equals("false", StringComparison.OrdinalIgnoreCase))
+            return true;
+        for (var i = 1; i < commandLine.Count; i++)
+            if (string.Equals(commandLine[i], "--automated", StringComparison.Ordinal)) return true;
+        return false;
+    }
+
     /// <summary>Gets or sets the callback that receives native diagnostic log messages.</summary>
     /// <remarks>The callback can run on any native thread. Exceptions are contained and ignored.</remarks>
     public Action<NeoLogMessage>? LogCallback { get; set; }
