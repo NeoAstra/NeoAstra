@@ -845,6 +845,9 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
                 state->webview.navigationDelegate = state->delegate;
                 state->webview.UIDelegate = state->delegate;
                 if (view->fill_parent) state->webview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                // The page meets the safe area itself, through env(safe-area-inset-*): a scroll view that also insets its content for
+                // the status bar (iOS 26 does) would move the page down by it a second time.
+                state->webview.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
                 [state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:nullptr];
