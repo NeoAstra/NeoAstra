@@ -173,6 +173,26 @@ dotnet neoastra contract check --typescript obj/neoastra/neoastra.ts --manifest 
 dotnet publish -c Release -r "$RID" --self-contained
 ```
 
+## Pages on iOS and Android
+
+A page on a phone runs in WKWebView or the Android System WebView, which give it less than a mobile browser does, and it does
+the rest itself:
+
+- **Safe area.** With `NeoAstraAndroidEdgeToEdge` the Android window draws under the system bars as an iOS window does, and the
+  page keeps its content clear of them with `env(safe-area-inset-*)` in CSS on both platforms.
+- **Keyboard.** With `NeoAstraIOSKeyboardOverlay` and `NeoAstraAndroidKeyboardOverlay` the keyboard lies over the page;
+  `onKeyboard` of `@neoastra/client` tells its height and the duration of its animation (see [building](building.md)).
+- **Back.** Android reports its back button as a request to close the window; the page steps back out of what it shows with
+  `window.onCloseRequested` and `preventDefault()` (see [building](building.md)).
+- **Theme.** `window.setBackgroundColor` gives the window the color of the page, which the window shows while the page loads and,
+  on Android, under the system bars, whose symbols follow it.
+- **Gestures and lists.** The WebView has no pull to refresh and draws every element of a long list: a page builds its own pull
+  gesture with `overscroll-behavior` and pointer events, and renders a long result in parts that an `IntersectionObserver`
+  asks for as they scroll in.
+- **Scheduled notifications.** Neither Android nor every desktop lists what an application scheduled, so a page that plans
+  reminders keeps the identifiers it scheduled and unschedules those that its next plan no longer holds (see
+  [desktop services](desktop-services.md)).
+
 ## Runtime hosting and security
 
 Load `neoastra-assets.json` with `NeoAssetManifest.Load`, then construct `NeoManifestResourceProvider`. It serves only listed regular files using `GET`/`HEAD`, decodes strict UTF-8 exactly once, ignores query/fragment for lookup, rejects encoded separators/dot traversal/NUL/device forms, linked asset-root ancestors, and escaping links, and applies manifest MIME/cache metadata plus `nosniff`, CSP, and referrer policy. Missing recognized assets remain 404. SPA fallback is limited by Accept, static extensions, optional route prefixes, and excluded `/api` and `/_neoastra` prefixes. Entry HTML and mutable manifests revalidate; content-hashed files may be immutable. There is no permissive CORS default and no development fallback header in production.

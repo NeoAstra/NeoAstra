@@ -30,6 +30,12 @@ dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64
 dotnet build NeoAstra.Sample.Android -c Release -r android-arm64
 ```
 
+`run.sh` builds one of them, installs it, and starts it: `./run.sh ios-simulator NeoAstra.Sample.Hello` on the booted simulator,
+`./run.sh ios-device NeoAstra.Sample.iOS` on a connected iPhone (signed with the `Apple Development` identity and the profile
+that Xcode manages for the bundle, which must include the device), and `./run.sh android NeoAstra.Sample.Android` on the device
+or emulator that adb sees; a third argument names the simulator, the iPhone, or the adb serial. It reads the bundle or package
+identifier from what it built, so an application of its own can take a copy of it.
+
 They reference the NeoAstra projects and import the targets that the `NeoAstra.Core` package gives a mobile application
 (and `NeoAstra.Sample.Android` those of the location plugin);
 see [building](../../doc/building.md) for what those targets do and for what the mobile backends do not offer yet. These
