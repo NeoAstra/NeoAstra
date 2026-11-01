@@ -28,6 +28,7 @@
         "purchases:finish",
         "system-info:theme",
         "system-info:metadata",
+        "system-info:displays",
         {
           "id": "clipboard:read-text",
           "scope": {

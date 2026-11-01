@@ -32,6 +32,9 @@ card("System theme", (row, run) => {
   button(row, "Read", () => run(() => desktop.system.theme()));
   run(() => desktop.system.theme());
 });
+card("Displays", (row, run) => {
+  button(row, "Read", () => run(() => desktop.system.displays()));
+});
 card("Application metadata", (row, run) => {
   button(row, "Read", () => run(() => desktop.system.metadata()));
 });
