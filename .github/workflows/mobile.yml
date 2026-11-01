@@ -36,7 +36,8 @@ permissions:
 jobs:
   mobile:
     name: Mobile samples and template (iOS simulator, Android)
-    runs-on: macos-latest
+    # The iOS workload of .NET 11 binds the iOS 27 SDK, which only Xcode 27 has; this image is a preview of GitHub.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
       - uses: lukka/get-cmake@latest
@@ -79,7 +80,7 @@ jobs:
         run: |
           npm ci
           npm run build
-      # The installed Xcode may be older than the one that the iOS workload names; the simulator build does not need it newer.
+      # The Xcode of the image may be another build than the one that the iOS workload names.
       - name: Build the mobile samples
         working-directory: samples/mobile
         run: |
