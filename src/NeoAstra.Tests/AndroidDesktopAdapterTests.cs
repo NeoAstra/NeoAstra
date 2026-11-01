@@ -116,13 +116,13 @@ public sealed class AndroidDesktopAdapterTests
     [TestMethod]
     public void PlatformCall_IsNotSupportedByTheDesktopBackends()
     {
-        Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformCall.Invoke("clipboard", "{}"));
+        DesktopPlatformCall.AssertNotSupported(() => NeoPlatformCall.Invoke("clipboard", "{}"));
     }
 
     [TestMethod]
     public void PlatformServices_ValidateTheServiceAndAreNotSupportedByTheDesktopBackends()
     {
-        Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformServices.Call("neoastra.test", "{}"));
+        DesktopPlatformCall.AssertNotSupported(() => NeoPlatformServices.Call("neoastra.test", "{}"));
         Assert.ThrowsExactly<ArgumentNullException>(() => NeoPlatformServices.Call(null!, "{}"));
         Assert.ThrowsExactly<ArgumentNullException>(() => NeoPlatformServices.Call("neoastra.test", null!));
         Assert.ThrowsExactly<ArgumentException>(() => NeoPlatformServices.Call("", "{}"));

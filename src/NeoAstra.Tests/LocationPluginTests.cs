@@ -131,7 +131,7 @@ public sealed class LocationPluginTests
         Assert.AreEqual(NeoLocation.TimeoutCode, timeout.Code);
         Assert.AreEqual(NeoDesktopStatus.Failed, AndroidLocation.Position(JsonDocument.Parse("{}")).Status);
         // A desktop backend has no platform services to reach the Java service with.
-        Assert.ThrowsExactly<NotSupportedException>(() => AndroidLocation.Call("authorization", null));
+        DesktopPlatformCall.AssertNotSupported(() => AndroidLocation.Call("authorization", null));
     }
 
     [TestMethod]

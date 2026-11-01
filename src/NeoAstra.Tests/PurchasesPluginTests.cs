@@ -152,7 +152,7 @@ public sealed class PurchasesPluginTests
         await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(new("credits_100", NeoProductType.Subscription), new() { OfferId = "" }));
         Assert.AreEqual(NeoSupportLevel.Native, new AndroidPurchases(null).Support.SupportLevel);
         // A desktop backend has no platform services to reach the Java service with.
-        Assert.ThrowsExactly<NotSupportedException>(() => AndroidPurchases.Call("list", null));
+        DesktopPlatformCall.AssertNotSupported(() => AndroidPurchases.Call("list", null));
     }
 
     private static NeoRpcSession Session(INeoPurchases store, string[] permissions, out ConcurrentQueue<string> frames)

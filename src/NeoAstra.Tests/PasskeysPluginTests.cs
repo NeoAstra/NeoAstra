@@ -126,7 +126,7 @@ public sealed class PasskeysPluginTests
         Assert.AreEqual(NeoPasskeys.ExcludedCode, excluded.Code);
         Assert.AreEqual(NeoDesktopStatus.Failed, AndroidPasskeys.Result(JsonDocument.Parse("""{"status":"Success"}""")).Status);
         // A desktop backend has no platform services to reach the Java service with.
-        Assert.ThrowsExactly<NotSupportedException>(() => AndroidPasskeys.Call("get", Request));
+        DesktopPlatformCall.AssertNotSupported(() => AndroidPasskeys.Call("get", Request));
     }
 
     private static NeoRpcSession Session(INeoPasskeys passkeys, string[] permissions, out ConcurrentQueue<string> frames)
