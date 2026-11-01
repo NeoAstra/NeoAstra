@@ -106,7 +106,7 @@ jobs:
           $templateArchive = [IO.Compression.ZipFile]::OpenRead($templatePackage.FullName)
           $templateEntries = $templateArchive.Entries.FullName
           $templateArchive.Dispose()
-          @('content/neoastra-vanilla/.template.config/template.json', 'content/neoastra-react/.template.config/template.json', 'content/neoastra-vue/.template.config/template.json') | ForEach-Object { if ($_ -notin $templateEntries) { throw "Missing template package asset: $_" } }
+          @('content/neoastra-vanilla/.template.config/template.json', 'content/neoastra-react/.template.config/template.json', 'content/neoastra-vue/.template.config/template.json', 'content/neoastra-mobile/.template.config/template.json') | ForEach-Object { if ($_ -notin $templateEntries) { throw "Missing template package asset: $_" } }
       - name: Verify one-reference package consumer
         shell: pwsh
         run: |

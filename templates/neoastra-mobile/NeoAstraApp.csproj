@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- One project for both platforms: the application in App.cs, its page in frontend/, and a folder of each platform. Building it
+       needs the .NET 11 SDK with the ios and android workloads. -->
+  <PropertyGroup>
+    <TargetFrameworks>net11.0-ios;net11.0-android</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationId>dev.neoastra.app</ApplicationId>
+    <ApplicationTitle>NeoAstra App</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <TrimMode Condition="'$(Configuration)' == 'Release'">full</TrimMode>
+  </PropertyGroup>
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <AndroidManifest>Platforms/Android/AndroidManifest.xml</AndroidManifest>
+    <TrimMode>full</TrimMode>
+  </PropertyGroup>
+  <!-- Variants such as a beta and a production build take an MSBuild property of their own, for example
+       dotnet publish -p:AppVariant=beta, and a PropertyGroup per variant that sets ApplicationId, ApplicationTitle, the icon, and
+       the entitlements; see doc/building.md of NeoAstra. Signing identities, keystores, and google-services.json stay out of the
+       repository and come in as properties at build time. -->
+  <ItemGroup>
+    <PackageReference Include="NeoAstra" Version="NeoAstraPackageVersion" />
+    <Compile Remove="Platforms/**" />
+    <Compile Include="Platforms/iOS/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'" />
+    <Compile Include="Platforms/Android/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />
+  </ItemGroup>
+  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
+    <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
+  </ItemGroup>
+</Project>
