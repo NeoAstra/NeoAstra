@@ -4,9 +4,13 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Application;
 import android.content.pm.PackageManager;
+import android.content.Context;
 import android.graphics.Color;
+import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.DisplayMetrics;
+import android.view.Display;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsetsController;
@@ -115,6 +119,42 @@ public final class NeoAstraWindow {
     public int height() { return content.getHeight() > 0 ? content.getHeight() : activity.getWindow().getDecorView().getHeight(); }
 
     public float density() { return activity.getResources().getDisplayMetrics().density; }
+
+    /** The identifier of the display that shows the activity, or -1 when it has none. */
+    @SuppressWarnings("deprecation")
+    public int displayId() {
+        Display display = Build.VERSION.SDK_INT >= 30 ? activity.getDisplay() : activity.getWindowManager().getDefaultDisplay();
+        return display != null ? display.getDisplayId() : -1;
+    }
+
+    /** The values of each display that DisplayManager knows, in a flat array of {@link #DISPLAY_VALUES} values per display. */
+    public static final int DISPLAY_VALUES = 7;
+
+    /**
+     * The displays, each as its identifier, its size in pixels, its density, its refresh rate, its rotation in degrees, and 1 for the
+     * default display or 0, in that order.
+     */
+    @SuppressWarnings("deprecation")
+    public static double[] displays() {
+        Context current = NeoAstraServices.context();
+        DisplayManager manager = current != null ? current.getSystemService(DisplayManager.class) : null;
+        Display[] values = manager != null ? manager.getDisplays() : new Display[0];
+        double[] output = new double[values.length * DISPLAY_VALUES];
+        for (int index = 0; index < values.length; index++) {
+            Display display = values[index];
+            DisplayMetrics metrics = new DisplayMetrics();
+            display.getRealMetrics(metrics);
+            int offset = index * DISPLAY_VALUES;
+            output[offset] = display.getDisplayId();
+            output[offset + 1] = metrics.widthPixels;
+            output[offset + 2] = metrics.heightPixels;
+            output[offset + 3] = metrics.density;
+            output[offset + 4] = display.getRefreshRate();
+            output[offset + 5] = display.getRotation() * 90;
+            output[offset + 6] = display.getDisplayId() == Display.DEFAULT_DISPLAY ? 1 : 0;
+        }
+        return output;
+    }
 
     /** Closes the window: the activity finishes, and its end is reported as the end of the window. */
     public void close() { if (!activity.isFinishing()) activity.finish(); else report(EVENT_CLOSED); }

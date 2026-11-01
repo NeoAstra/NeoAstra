@@ -186,7 +186,7 @@ jclass js_result_class{}, js_prompt_result_class{};
 jmethodID js_result_confirm{}, js_result_cancel{}, js_prompt_result_confirm{};
 jclass window_class{};
 jmethodID window_create{}, window_set_title{}, window_set_visible{}, window_set_background{}, window_content{}, window_width{}, window_height{};
-jmethodID window_density{}, window_close{}, window_destroy{};
+jmethodID window_density{}, window_close{}, window_destroy{}, window_display_id{}, window_displays{};
 
 // A custom-scheme origin such as app://neoastra is served to the WebView as https://neoastra.app.invalid: Android has no
 // custom schemes, and the reserved top-level domain can never reach the network. The managed side only ever sees the
@@ -799,6 +799,8 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         window_width = env->GetMethodID(window_class, "width", "()I");
         window_height = env->GetMethodID(window_class, "height", "()I");
         window_density = env->GetMethodID(window_class, "density", "()F");
+        window_display_id = env->GetMethodID(window_class, "displayId", "()I");
+        window_displays = env->GetStaticMethodID(window_class, "displays", "()[D");
         window_close = env->GetMethodID(window_class, "close", "()V");
         window_destroy = env->GetMethodID(window_class, "destroy", "()V");
         const JNINativeMethod window_methods[] = {
@@ -1248,15 +1250,49 @@ neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoa
     return NEOASTRA_OK;
 }
 
-// An activity tells its window, not the displays: the backend reports none, and a window is on no display that it names.
-void neo_platform_get_displays(neoastra_app_t*, std::vector<neo_display>& displays) noexcept { displays.clear(); }
-uint64_t neo_platform_window_display_handle(neoastra_window_t*) noexcept { return 0; }
+// The displays that DisplayManager knows, in density-independent pixels as the bounds of a window, each at the origin: an
+// activity fills its display and Android tells no layout of displays. The handle is the display identifier plus one.
+void neo_platform_get_displays(neoastra_app_t* app, std::vector<neo_display>& displays) noexcept {
+    displays.clear();
+    JNIEnv* env = jni();
+    if (!env || !window_class || !window_displays) return;
+    auto values = static_cast<jdoubleArray>(env->CallStaticObjectMethod(window_class, window_displays));
+    if (failed(env, app, "Could not read the displays of Android") || !values) return;
+    try {
+        const jsize length = env->GetArrayLength(values);
+        std::vector<jdouble> buffer(static_cast<size_t>(length));
+        env->GetDoubleArrayRegion(values, 0, length, buffer.data());
+        for (jsize offset = 0; offset + 7 <= length; offset += 7) {
+            const double* value = buffer.data() + offset;
+            const double density = value[3] > 0 ? value[3] : 1.0;
+            neo_display display;
+            display.handle = static_cast<uint64_t>(value[0]) + 1;
+            display.id = "android:" + std::to_string(static_cast<int64_t>(value[0]));
+            display.bounds = {0, 0, static_cast<int32_t>(std::lround(value[1] / density)), static_cast<int32_t>(std::lround(value[2] / density))};
+            display.work_area = display.bounds;
+            display.scale_factor = density;
+            display.refresh_rate = value[4];
+            display.rotation_degrees = static_cast<uint32_t>(value[5]);
+            display.flags = NEOASTRA_DISPLAY_ROTATION_REPORTED | (value[6] != 0 ? NEOASTRA_DISPLAY_PRIMARY : 0u);
+            displays.push_back(std::move(display));
+        }
+    } catch (...) { displays.clear(); }
+    env->DeleteLocalRef(values);
+}
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept {
+    auto* state = window_state(window);
+    JNIEnv* env = jni();
+    if (!state || !state->host || !env || !window_display_id) return 0;
+    const jint id = env->CallIntMethod(state->host, window_display_id);
+    if (failed(env, window->app, "Could not read the display of the Android window") || id < 0) return 0;
+    return static_cast<uint64_t>(id) + 1;
+}
 void neo_platform_window_capability(neoastra_app_t*, neoastra_window_capability_t capability, neoastra_capability_info_t* info) noexcept {
-    static const std::string displays = "The Android backend reports no displays: an activity knows its own window";
+    static const std::string displays = "DisplayManager displays at the origin, in density-independent pixels; no work area apart from the system bars and no persistent identifier";
     static const std::string placement = "A window fills its activity: Android, not the application, decides where it is and how large";
     static const std::string desktops = "Android has no virtual desktops";
     switch (capability) {
-        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS: info->details = neo_string_view(displays); break;
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS: info->support = NEOASTRA_SUPPORT_LIMITED; info->details = neo_string_view(displays); break;
         case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT: info->details = neo_string_view(placement); break;
         case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:
         case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE:

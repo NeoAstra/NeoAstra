@@ -98,6 +98,22 @@ public sealed class AndroidDesktopAdapterTests
     }
 
     [TestMethod]
+    public void Displays_AreThoseOfTheDisplayManagerInDensityIndependentPixels()
+    {
+        // The Java side gives each display as seven values, which the backend reads in that order; the handle of a display is its
+        // identifier plus one, since 0 means that a window names no display.
+        var window = File.ReadAllText(Path.Combine(RepositoryRoot(), "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, "public static final int DISPLAY_VALUES = 7;");
+        StringAssert.Contains(window, "public static double[] displays()");
+        StringAssert.Contains(window, "public int displayId()");
+        var backend = File.ReadAllText(Path.Combine(RepositoryRoot(), "native", "src", "android", "android_backend.cpp"));
+        StringAssert.Contains(backend, "env->GetStaticMethodID(window_class, \"displays\", \"()[D\")");
+        StringAssert.Contains(backend, "for (jsize offset = 0; offset + 7 <= length; offset += 7)");
+        StringAssert.Contains(backend, "value[1] / density");
+        StringAssert.Contains(backend, "return static_cast<uint64_t>(id) + 1;");
+    }
+
+    [TestMethod]
     public void PlatformCall_IsNotSupportedByTheDesktopBackends()
     {
         Assert.ThrowsExactly<NotSupportedException>(() => NeoPlatformCall.Invoke("clipboard", "{}"));
