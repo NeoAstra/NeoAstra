@@ -139,7 +139,7 @@ public sealed class PushPluginTests
         Assert.AreEqual("{}", AndroidPush.Message(empty.RootElement).Payload);
         // A desktop backend has no platform services to reach the Java service with.
         DesktopPlatformCall.AssertNotSupported(() => AndroidPush.Call("launch", null));
-        Assert.IsNull(new AndroidPush().LaunchMessage);
+        DesktopPlatformCall.AssertAnswers(() => new AndroidPush().LaunchMessage, null);
     }
 
     [TestMethod]
