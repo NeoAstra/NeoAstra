@@ -20,7 +20,31 @@ public enum NeoPushService
 /// <param name="Token">The token: the hexadecimal device token of APNs, or the registration token of Firebase Cloud Messaging.</param>
 /// <param name="Service">The push service of the token.</param>
 /// <param name="CanDisplay">Whether the user lets the application show the notifications of the messages; a message reaches the application without it.</param>
-public sealed record NeoPushRegistration(string Token, NeoPushService Service, bool CanDisplay);
+public sealed record NeoPushRegistration(string Token, NeoPushService Service, bool CanDisplay)
+{
+    /// <summary>
+    /// Gets the environment of APNs that the token belongs to, which the server sends to: the one of the <c>aps-environment</c>
+    /// entitlement of the provisioning profile that signed the application, or <see langword="null"/> for Firebase.
+    /// </summary>
+    /// <remarks>
+    /// A development profile, which a debug build and a release build signed for development both have, gives tokens of the sandbox;
+    /// a build for the App Store or TestFlight has no profile in its bundle and gives tokens of production.
+    /// </remarks>
+    public NeoApnsEnvironment? ApnsEnvironment { get; init; }
+
+    /// <summary>Gets the topic that the server addresses at APNs, the bundle identifier of the application, or <see langword="null"/> for Firebase.</summary>
+    public string? Topic { get; init; }
+}
+
+/// <summary>Identifies an environment of the Apple Push Notification service.</summary>
+public enum NeoApnsEnvironment
+{
+    /// <summary>The sandbox (<c>api.sandbox.push.apple.com</c>), for applications signed for development and the simulator.</summary>
+    Development,
+
+    /// <summary>Production (<c>api.push.apple.com</c>), for the App Store, TestFlight, and ad hoc distribution.</summary>
+    Production,
+}
 
 /// <summary>Contains one message of the push service.</summary>
 /// <param name="MessageId">The identifier of the message, when the service gives one.</param>

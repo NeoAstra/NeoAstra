@@ -157,7 +157,7 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         try
         {
             var (token, error) = await registration.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-            if (token is not null) return NeoDesktopResult<NeoPushRegistration>.Success(new(token, NeoPushService.Apns, _canDisplay));
+            if (token is not null) return NeoDesktopResult<NeoPushRegistration>.Success(Registration(token, _canDisplay));
             // Without the aps-environment entitlement iOS does not register the application.
             return error is not null && error.Contains("aps-environment", StringComparison.Ordinal)
                 ? NeoPush.Failure(NeoDesktopStatus.Unsupported, NeoPush.NotConfiguredCode)
@@ -199,7 +199,7 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         bool changed;
         lock (_sync) { registration = _registration; changed = token is not null && !string.Equals(token, _token, StringComparison.Ordinal); if (token is not null) _token = token; }
         registration?.TrySetResult((token, error));
-        if (changed && Volatile.Read(ref _disposed) == 0) Raise(() => TokenChanged?.Invoke(this, new(token!, NeoPushService.Apns, _canDisplay)));
+        if (changed && Volatile.Read(ref _disposed) == 0) Raise(() => TokenChanged?.Invoke(this, Registration(token!, _canDisplay)));
     }
 
     internal void Opened(NeoPushMessage message, bool launch)
@@ -278,6 +278,28 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         var descriptor = (BlockDescriptor*)NativeMemory.Alloc((nuint)sizeof(BlockDescriptor));
         *descriptor = new() { Size = (nuint)sizeof(Block) };
         s_descriptor = descriptor;
+    }
+
+    private static readonly Lazy<NeoApnsEnvironment> s_environment = new(static () =>
+    {
+        byte[]? profile = null;
+        try { if (Text(Send(Send(Class("NSBundle"), "mainBundle"), "bundlePath")) is { } bundle && Path.Combine(bundle, "embedded.mobileprovision") is var path && File.Exists(path)) profile = File.ReadAllBytes(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        return ApnsEnvironment(profile, RuntimeInformation.RuntimeIdentifier.StartsWith("iossimulator", StringComparison.Ordinal));
+    });
+    private static readonly Lazy<string?> s_topic = new(static () => Text(Send(Send(Class("NSBundle"), "mainBundle"), "bundleIdentifier")));
+
+    private static NeoPushRegistration Registration(string token, bool canDisplay) => new(token, NeoPushService.Apns, canDisplay) { ApnsEnvironment = s_environment.Value, Topic = s_topic.Value };
+
+    // The provisioning profile is a signed property list whose entitlements name the environment of APNs; the signature is the
+    // concern of iOS, which installed the application, so the property list is read as the text it holds.
+    internal static NeoApnsEnvironment ApnsEnvironment(byte[]? profile, bool simulator)
+    {
+        if (profile is null) return simulator ? NeoApnsEnvironment.Development : NeoApnsEnvironment.Production;
+        var text = Encoding.Latin1.GetString(profile);
+        var key = text.IndexOf("<key>aps-environment</key>", StringComparison.Ordinal);
+        var start = key < 0 ? -1 : text.IndexOf("<string>", key, StringComparison.Ordinal);
+        var end = start < 0 ? -1 : text.IndexOf("</string>", start, StringComparison.Ordinal);
+        return end > start && text.AsSpan(start + "<string>".Length, end - start - "<string>".Length).Trim().SequenceEqual("production") ? NeoApnsEnvironment.Production : NeoApnsEnvironment.Development;
     }
 
     private static string? Text(nint value) => value == 0 ? null : Marshal.PtrToStringUTF8(Send(value, "UTF8String"));

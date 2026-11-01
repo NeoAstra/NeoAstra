@@ -224,9 +224,9 @@ internal sealed class PushRendererRegistration(INeoPush push, NeoPushRendererOpt
 }
 
 internal sealed record PushEmptyRequest;
-internal sealed record PushRegistrationDto(string Token, NeoPushService Service, bool CanDisplay)
+internal sealed record PushRegistrationDto(string Token, NeoPushService Service, bool CanDisplay, NeoApnsEnvironment? ApnsEnvironment, string? Topic)
 {
-    internal static PushRegistrationDto From(NeoPushRegistration value) => new(value.Token, value.Service, value.CanDisplay);
+    internal static PushRegistrationDto From(NeoPushRegistration value) => new(value.Token, value.Service, value.CanDisplay, value.ApnsEnvironment, value.Topic);
 }
 internal sealed record PushRegistrationResult(NeoDesktopStatus Status, PushRegistrationDto? Value, string? Code);
 // The payload goes to the page as the JSON object it is, not as a string of it.

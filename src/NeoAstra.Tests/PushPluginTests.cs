@@ -61,7 +61,7 @@ public sealed class PushPluginTests
     {
         var push = new NeoFakePush
         {
-            Registration = NeoDesktopResult<NeoPushRegistration>.Success(new("a1b2c3", NeoPushService.Apns, true)),
+            Registration = NeoDesktopResult<NeoPushRegistration>.Success(new("a1b2c3", NeoPushService.Apns, true) { ApnsEnvironment = NeoApnsEnvironment.Development, Topic = "dev.neoastra.tests" }),
             LaunchMessage = new("launch-1", null, Payload),
         };
         await using var session = Session(push, ["push:register", "push:receive"], out var frames);
@@ -69,6 +69,8 @@ public sealed class PushPluginTests
         Assert.AreEqual("Success", registration.GetProperty("status").GetString());
         Assert.AreEqual("a1b2c3", registration.GetProperty("value").GetProperty("token").GetString());
         Assert.AreEqual("Apns", registration.GetProperty("value").GetProperty("service").GetString());
+        Assert.AreEqual("Development", registration.GetProperty("value").GetProperty("apnsEnvironment").GetString());
+        Assert.AreEqual("dev.neoastra.tests", registration.GetProperty("value").GetProperty("topic").GetString());
         var launch = (await InvokeAsync(session, frames, "2", "push.launch-message")).GetProperty("value");
         Assert.AreEqual("launch-1", launch.GetProperty("messageId").GetString());
         // The page receives the payload as the object it is.
@@ -268,6 +270,21 @@ public sealed class PushPluginTests
         new NeoRpcBuilder().AddNeoAstraPushHandlers(push);
         Assert.AreSame(application, push.ForegroundPresentation);
         Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder().AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = TimeSpan.Zero }));
+    }
+
+    [TestMethod]
+    public void ApplePush_TellsTheEnvironmentOfAPNsFromTheProvisioningProfile()
+    {
+        // A provisioning profile is a signed property list; a build for the App Store or TestFlight has none and is production.
+        static byte[] Profile(string environment) => System.Text.Encoding.UTF8.GetBytes(
+            "0\u0082\u0001\u00ff<?xml version=\"1.0\"?><plist><dict><key>Entitlements</key><dict><key>aps-environment</key>\n\t\t<string>" + environment + "</string></dict></dict></plist>\u0000\u0001");
+        Assert.AreEqual(NeoApnsEnvironment.Development, IosPush.ApnsEnvironment(Profile("development"), simulator: false));
+        Assert.AreEqual(NeoApnsEnvironment.Production, IosPush.ApnsEnvironment(Profile("production"), simulator: false));
+        Assert.AreEqual(NeoApnsEnvironment.Production, IosPush.ApnsEnvironment(null, simulator: false));
+        Assert.AreEqual(NeoApnsEnvironment.Development, IosPush.ApnsEnvironment(null, simulator: true));
+        // A profile without the entitlement gives no token at all; it is taken for what a development profile is.
+        Assert.AreEqual(NeoApnsEnvironment.Development, IosPush.ApnsEnvironment(System.Text.Encoding.UTF8.GetBytes("<plist><dict></dict></plist>"), simulator: false));
+        Assert.IsNull(new NeoPushRegistration("t", NeoPushService.Firebase, true).ApnsEnvironment);
     }
 
     // Records which registration a page asked for.
