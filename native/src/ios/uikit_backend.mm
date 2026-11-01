@@ -543,6 +543,14 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
     std::string uri = utf8(webView.URL.absoluteString);
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_STARTED, 0, nullptr, &uri, 1);
 }
+// The document is replaced here; a download, an answer without content, or a stopped navigation never commits.
+- (void)webView:(WKWebView*)webView didCommitNavigation:(WKNavigation*)navigation {
+    (void)navigation;
+    auto* view = self.nativeView;
+    if (!view) return;
+    std::string uri = utf8(webView.URL.absoluteString);
+    neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &uri);
+}
 - (void)webView:(WKWebView*)webView didFinishNavigation:(WKNavigation*)navigation {
     (void)navigation;
     auto* view = self.nativeView;
@@ -746,6 +754,63 @@ neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoa
     handle->value = (__bridge void*)state->controller.view;
     handle->kind = kind;
     return NEOASTRA_OK;
+}
+
+// The displays are the screens of the connected scenes, in points as the bounds of a window, each at the origin: a scene
+// fills its screen, and UIKit tells no layout of screens, no persistent identifier, and no work area apart from the safe area.
+void neo_platform_get_displays(neoastra_app_t*, std::vector<neo_display>& displays) noexcept {
+    @autoreleasepool {
+        try {
+            displays.clear();
+            for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
+                if (![scene isKindOfClass:UIWindowScene.class]) continue;
+                UIScreen* screen = ((UIWindowScene*)scene).screen;
+                const auto handle = static_cast<uint64_t>(reinterpret_cast<uintptr_t>((__bridge void*)screen));
+                if (std::any_of(displays.begin(), displays.end(), [handle](const neo_display& value) { return value.handle == handle; })) continue;
+                neo_display value;
+                value.handle = handle;
+                const CGSize size = screen.bounds.size;
+                value.bounds = {0, 0, (int32_t)lround(size.width), (int32_t)lround(size.height)};
+                value.work_area = value.bounds;
+                value.scale_factor = screen.scale > 0 ? screen.scale : 1.0;
+                value.refresh_rate = screen.maximumFramesPerSecond;
+                value.id = "uikit:" + std::to_string(displays.size());
+                displays.push_back(std::move(value));
+            }
+        } catch (...) { displays.clear(); }
+    }
+}
+uint64_t neo_platform_window_display_handle(neoastra_window_t* window) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    if (!state || !state->window || !state->window.windowScene) return 0;
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>((__bridge void*)state->window.windowScene.screen));
+}
+void neo_platform_window_capability(neoastra_app_t*, neoastra_window_capability_t capability, neoastra_capability_info_t* info) noexcept {
+    static const std::string displays = "UIScreen of each connected window scene, at the origin and in points; no persistent identifier, no work area, and no rotation";
+    static const std::string placement = "A window fills its scene: iOS, not the application, decides where it is and how large";
+    static const std::string desktops = "iOS has no virtual desktops";
+    switch (capability) {
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS: info->support = NEOASTRA_SUPPORT_LIMITED; info->details = neo_string_view(displays); break;
+        case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT: info->details = neo_string_view(placement); break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE:
+        case NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS: info->details = neo_string_view(desktops); break;
+        default: break;
+    }
+}
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* window, uint32_t*, std::string*) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    return !state || !state->window ? NEOASTRA_ERROR_DISPOSED : NEOASTRA_ERROR_NOT_SUPPORTED;
+}
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* window, const std::string&) noexcept {
+    auto* state = static_cast<uikit_window*>(window->platform);
+    return !state || !state->window ? NEOASTRA_ERROR_DISPOSED : NEOASTRA_ERROR_NOT_SUPPORTED;
+}
+// The windows of the scenes share no coordinate space that a point could name.
+neoastra_result_t neo_platform_window_at(neoastra_app_t*, neoastra_point_t, const neoastra_window_t*, uint64_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool, double, double, double*, double*) noexcept {
+    auto* state = static_cast<uikit_view*>(view->platform);
+    return !state || !state->webview ? NEOASTRA_ERROR_NOT_INITIALIZED : NEOASTRA_ERROR_NOT_SUPPORTED;
 }
 
 
@@ -1010,8 +1075,26 @@ neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const st
     @autoreleasepool {
         auto* state = static_cast<uikit_view*>(view->platform);
         if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
-        std::string script = "window.dispatchEvent(new CustomEvent('neoastramessage',{detail:" + (json ? message : "null") + "}));";
+        std::string script;
+        try { neo_append_post_script(script, message, json); } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
         [state->webview evaluateJavaScript:ns_string(script) completionHandler:nil];
+        return NEOASTRA_OK;
+    }
+}
+// A batch is one script, which dispatches the messages in order.
+neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const neoastra_string_view_t* messages, uint32_t count, bool json, uint32_t* posted, neoastra_error_t**) noexcept {
+    @autoreleasepool {
+        auto* state = static_cast<uikit_view*>(view->platform);
+        if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+        try {
+            std::string script;
+            size_t size = 0;
+            for (uint32_t index = 0; index < count; index++) size += static_cast<size_t>(messages[index].length) + 64;
+            script.reserve(size);
+            for (uint32_t index = 0; index < count; index++) neo_append_post_script(script, neo_view_text(messages[index]), json);
+            [state->webview evaluateJavaScript:ns_string(script) completionHandler:nil];
+        } catch (...) { return NEOASTRA_ERROR_NATIVE_FAILURE; }
+        if (posted) *posted = count;
         return NEOASTRA_OK;
     }
 }

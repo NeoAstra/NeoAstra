@@ -432,8 +432,11 @@ void JNICALL on_event(JNIEnv* env, jclass, jlong pointer, jint kind, jstring url
         std::string uri = url_value ? unproject(view->environment, to_utf8(env, url_value)) : std::string{};
         switch (kind) {
             case 0:
+                // The WebView calls onPageStarted once a main-frame navigation has committed a new document; a download,
+                // an answer without content, or a stopped navigation does not reach it.
                 view->source = uri;
                 neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_STARTED, 0, nullptr, &uri, 1);
+                neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &uri);
                 neo_emit_view(view, NEOASTRA_EVENT_SOURCE_CHANGED, 0, nullptr, &view->source);
                 break;
             case 1: neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMPLETED, 0, nullptr, &uri); break;
@@ -1017,6 +1020,19 @@ neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const st
     if (!delivered) neo_log(view->environment->app, NEOASTRA_LOG_DEBUG, "bridge", "The page has not sent a message yet, so the Android view has no reply channel; the message was dropped");
     return NEOASTRA_OK;
 }
+// The reply proxy takes one message at a time.
+neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const neoastra_string_view_t* messages, uint32_t count, bool json, uint32_t* posted, neoastra_error_t** error) noexcept {
+    uint32_t done = 0;
+    neoastra_result_t result = NEOASTRA_OK;
+    try {
+        for (; done < count; done++) {
+            result = neo_platform_view_post_message(view, neo_string(messages[done]), json, error);
+            if (result != NEOASTRA_OK) break;
+        }
+    } catch (...) { result = neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Posting to the Android view failed", 0, android_domain); }
+    if (posted) *posted = done;
+    return result;
+}
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t*, double) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept {
@@ -1229,3 +1245,24 @@ neoastra_result_t neo_platform_window_get_handle(neoastra_window_t* window, neoa
     handle->kind = kind;
     return NEOASTRA_OK;
 }
+
+// An activity tells its window, not the displays: the backend reports none, and a window is on no display that it names.
+void neo_platform_get_displays(neoastra_app_t*, std::vector<neo_display>& displays) noexcept { displays.clear(); }
+uint64_t neo_platform_window_display_handle(neoastra_window_t*) noexcept { return 0; }
+void neo_platform_window_capability(neoastra_app_t*, neoastra_window_capability_t capability, neoastra_capability_info_t* info) noexcept {
+    static const std::string displays = "The Android backend reports no displays: an activity knows its own window";
+    static const std::string placement = "A window fills its activity: Android, not the application, decides where it is and how large";
+    static const std::string desktops = "Android has no virtual desktops";
+    switch (capability) {
+        case NEOASTRA_WINDOW_CAPABILITY_DISPLAYS: info->details = neo_string_view(displays); break;
+        case NEOASTRA_WINDOW_CAPABILITY_PLACEMENT: info->details = neo_string_view(placement); break;
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS:
+        case NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE:
+        case NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS: info->details = neo_string_view(desktops); break;
+        default: break;
+    }
+}
+neoastra_result_t neo_platform_window_get_virtual_desktop(neoastra_window_t* window, uint32_t*, std::string*) noexcept { return window_state(window) ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_ERROR_DISPOSED; }
+neoastra_result_t neo_platform_window_move_to_virtual_desktop(neoastra_window_t* window, const std::string&) noexcept { return window_state(window) ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_ERROR_DISPOSED; }
+neoastra_result_t neo_platform_window_at(neoastra_app_t*, neoastra_point_t, const neoastra_window_t*, uint64_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool, double, double, double*, double*) noexcept { return view_state(view) ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_ERROR_NOT_INITIALIZED; }
