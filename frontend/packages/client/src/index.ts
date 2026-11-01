@@ -486,5 +486,7 @@ export type {
   NeoDesktopClient,
 } from "./desktop.js";
 
+export { keyboardHeight, onKeyboard } from "./mobile.js";
+export type { NeoKeyboardState } from "./mobile.js";
 export { createUpdateClient, updateCommands } from "./updates.js";
 export type { NeoUpdateClient, NeoUpdateMode, NeoUpdatePhase, NeoUpdateRpc, NeoUpdateStatus } from "./updates.js";
