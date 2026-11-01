@@ -21,7 +21,7 @@ public sealed class AndroidDesktopAdapterTests
         Assert.AreEqual(NeoSupportLevel.Limited, clipboard.Support.SupportLevel);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await clipboard.ReadAsync(NeoClipboardFormat.Png)).Status);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await clipboard.ReadAsync(NeoClipboardFormat.FileList)).Status);
-        Assert.AreEqual(NeoDesktopStatus.Unsupported, await clipboard.WriteAsync(NeoClipboardFormat.FileList, "[\"/tmp/a\"]"u8.ToArray()));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await clipboard.WriteAsync(NeoClipboardFormat.FileList, FileList(Path.Combine(Path.GetTempPath(), "a"))));
     }
 
     [TestMethod]
@@ -137,4 +137,7 @@ public sealed class AndroidDesktopAdapterTests
         Assert.IsNotInstanceOfType<AndroidKeystoreSafeStorage>(NeoSafeStorage.CreateSystem("dev.neoastra.tests", Path.GetTempPath()));
         Assert.IsNotInstanceOfType<AndroidNotifications>(NeoNotifications.CreateSystem("dev.neoastra.tests", "Tests"));
     }
+
+    // An absolute path of the platform that runs the tests, which a file list must hold.
+    private static byte[] FileList(string path) => System.Text.Encoding.UTF8.GetBytes(new System.Text.Json.Nodes.JsonArray(path).ToJsonString());
 }
