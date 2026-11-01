@@ -16,7 +16,9 @@
   <Target Name="NeoAstraCollectRpcArtifacts"
           BeforeTargets="_GetCopyToOutputDirectoryItemsFromThisProject"
           DependsOnTargets="Compile">
-    <ItemGroup>
+    <!-- The contract files serve the build of the frontend and the tooling: an iOS or Android application does not ship them, and
+         the iOS SDK warns for each file that has no place in its bundle. -->
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' != 'ios' and '$(TargetPlatformIdentifier)' != 'android'">
       <ContentWithTargetPath Include="$(NeoRpcTypeScriptOutput)" Condition="Exists('$(NeoRpcTypeScriptOutput)')">
         <TargetPath>neoastra/$([System.IO.Path]::GetFileName('$(NeoRpcTypeScriptOutput)'))</TargetPath>
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

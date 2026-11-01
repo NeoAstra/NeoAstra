@@ -221,6 +221,17 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void RpcArtifacts_AreOutputOnlyForApplicationsThatShipThem()
+    {
+        // A mobile application does not ship the contract files, and the iOS SDK warns for each file without a place in its bundle.
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets"));
+        var collect = targets.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraCollectRpcArtifacts");
+        var items = collect.Elements("ItemGroup").Single();
+        Assert.AreEqual("'$(TargetPlatformIdentifier)' != 'ios' and '$(TargetPlatformIdentifier)' != 'android'", (string?)items.Attribute("Condition"));
+        Assert.AreEqual(3, items.Elements("ContentWithTargetPath").Count());
+    }
+
+    [TestMethod]
     public void CorePackage_DeclaresEveryImportedExportForIOSAndShipsItsMobileTargets()
     {
         var root = FindRepositoryRoot();
