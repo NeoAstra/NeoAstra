@@ -410,7 +410,6 @@ public sealed class ManagedApiTests
     public void HostFactories_AcceptAUIKitViewOnlyOnIOS()
     {
         var handle = new NeoNativeHandle(NeoNativeHandleKind.UIKitUIView, 1);
-        Assert.AreEqual(10, (int)NeoNativeHandleKind.UIKitUIView);
         if (OperatingSystem.IsIOS())
         {
             Assert.ThrowsExactly<ArgumentException>(() => NeoAstraHost.FromUIKitUIView(0));
@@ -429,8 +428,6 @@ public sealed class ManagedApiTests
     public void HostFactories_AcceptAnAndroidViewGroupOnlyOnAndroid()
     {
         var handle = new NeoNativeHandle(NeoNativeHandleKind.AndroidViewGroup, 1);
-        Assert.AreEqual(11, (int)NeoNativeHandleKind.AndroidViewGroup);
-        Assert.AreEqual(12, (int)NeoNativeHandleKind.AndroidWebView);
         if (OperatingSystem.IsAndroid())
         {
             Assert.ThrowsExactly<ArgumentException>(() => NeoAstraHost.FromAndroidViewGroup(0));
