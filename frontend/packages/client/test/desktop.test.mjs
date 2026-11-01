@@ -16,6 +16,25 @@ test("desktop clients use the static command contract and typed intent fields", 
   ]);
 });
 
+test("desktop notifications schedule, unschedule, ask, and take the activation that waited", async () => {
+  const mock = createMockDesktop();
+  for (const command of [desktopCommands.notifications.schedule, desktopCommands.notifications.unschedule]) mock.setResult(command, { status: "Success" });
+  mock.setResult(desktopCommands.notifications.requestPermission, { status: "Granted" });
+  mock.setResult(desktopCommands.notifications.launchActivation, { activation: { id: "reminder.1", payload: "open:list/1" } });
+  const reminder = { appIdentity: "app", category: "reminders", urgency: "normal", persistent: false, id: "reminder.1", title: "Milk", body: "Buy milk", actions: [], deliverAt: "2026-11-02T08:00:00+01:00" };
+  assert.deepEqual(await mock.client.notifications.schedule(reminder), { status: "Success" });
+  await mock.client.notifications.unschedule("reminder.1");
+  assert.deepEqual(await mock.client.notifications.requestPermission(), { status: "Granted" });
+  assert.deepEqual(await mock.client.notifications.takeLaunchActivation(), { id: "reminder.1", payload: "open:list/1" });
+  mock.setResult(desktopCommands.notifications.launchActivation, { activation: null });
+  assert.equal(await mock.client.notifications.takeLaunchActivation(), undefined);
+  assert.deepEqual(mock.invocations.map(value => value.command), [
+    "desktop.notifications.schedule", "desktop.notifications.unschedule", "desktop.notifications.request-permission",
+    "desktop.notifications.launch-activation", "desktop.notifications.launch-activation",
+  ]);
+  assert.deepEqual(mock.invocations[0].args, reminder);
+});
+
 test("desktop haptics send the portable feedback name", async () => {
   const mock = createMockDesktop();
   mock.setResult(desktopCommands.haptics.play, { status: "Unsupported" });

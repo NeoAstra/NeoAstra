@@ -128,6 +128,31 @@
       "audited": true
     },
     {
+      "name": "desktop.notifications.schedule",
+      "permission": "notifications:schedule",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/notifications.scope.schema.json"
+    },
+    {
+      "name": "desktop.notifications.unschedule",
+      "permission": "notifications:unschedule",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.request-permission",
+      "permission": "notifications:request",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.launch-activation",
+      "permission": "notifications:launch-activation",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
       "name": "desktop.shortcuts.register",
       "permission": "shortcuts:register",
       "risk": "high",
@@ -663,6 +688,50 @@
       "revision": 1,
       "operations": [
         "desktop.notifications.activated"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:schedule",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.schedule"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "notifications",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "notifications:unschedule",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.unschedule"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:request",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.request-permission"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:launch-activation",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.launch-activation"
       ],
       "risk": "sensitive",
       "scopeFamily": "none",

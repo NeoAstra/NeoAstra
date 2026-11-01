@@ -26,6 +26,11 @@ export interface DesktopNotificationRequest {
   readonly appIdentity: string; readonly category: string; readonly urgency: string; readonly persistent: boolean; readonly payload?: string;
   readonly id: string; readonly title: string; readonly body: string; readonly actions: readonly { readonly id: string; readonly title: string }[];
 }
+export interface DesktopScheduledNotificationRequest extends DesktopNotificationRequest {
+  /** The moment of delivery, ISO 8601 with its offset, such as `2026-11-02T08:00:00+01:00`. */
+  readonly deliverAt: string;
+}
+export interface DesktopNotificationActivation { readonly id: string; readonly actionId?: string; readonly payload?: string; }
 export interface DesktopScopedPath { readonly root: string; readonly relativePath: string; }
 export interface DesktopOutboundDragItem { readonly kind: "Text" | "File" | "Url"; readonly value?: string; readonly root?: string; readonly relativePath?: string; }
 export type DesktopWindowState = "Normal" | "Minimized" | "Maximized" | "Fullscreen";
@@ -73,7 +78,7 @@ export const desktopCommands = Object.freeze({
   menus: Object.freeze({ activate: "desktop.menus.activate", set: "desktop.menus.set", popup: "desktop.menus.popup" }),
   tray: Object.freeze({ create: "desktop.tray.create", update: "desktop.tray.update", remove: "desktop.tray.remove", activated: "desktop.tray.activated" }),
   clipboard: Object.freeze({ readText: "desktop.clipboard.read-text", writeText: "desktop.clipboard.write-text", readRich: "desktop.clipboard.read-rich", writeRich: "desktop.clipboard.write-rich", clear: "desktop.clipboard.clear" }),
-  notifications: Object.freeze({ status: "desktop.notifications.status", show: "desktop.notifications.show", remove: "desktop.notifications.remove", activated: "desktop.notifications.activated" }),
+  notifications: Object.freeze({ status: "desktop.notifications.status", show: "desktop.notifications.show", remove: "desktop.notifications.remove", activated: "desktop.notifications.activated", schedule: "desktop.notifications.schedule", unschedule: "desktop.notifications.unschedule", requestPermission: "desktop.notifications.request-permission", launchActivation: "desktop.notifications.launch-activation" }),
   shortcuts: Object.freeze({ register: "desktop.shortcuts.register", unregister: "desktop.shortcuts.unregister", activated: "desktop.shortcuts.activated" }),
   system: Object.freeze({ theme: "desktop.system.theme", displays: "desktop.system.displays", metadata: "desktop.system.metadata", themeChanged: "desktop.system.theme-changed", displaysChanged: "desktop.system.displays-changed" }),
   opener: Object.freeze({ url: "desktop.opener.url", file: "desktop.opener.file", reveal: "desktop.opener.reveal" }),
@@ -265,7 +270,15 @@ export function createDesktopClient(rpc: DesktopRpc) {
       status: (options?: NeoRpcCallOptions) => invoke<{ readonly status: string }>(desktopCommands.notifications.status, {}, options),
       show: (value: DesktopNotificationRequest, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.notifications.show, value, options),
       remove: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.notifications.remove, { id }, options),
-      onActivated: (handler: (value: { readonly id: string; readonly actionId?: string; readonly payload?: string }) => void, options?: NeoRpcCallOptions) => subscribe(desktopCommands.notifications.activated, handler, options),
+      onActivated: (handler: (value: DesktopNotificationActivation) => void, options?: NeoRpcCallOptions) => subscribe(desktopCommands.notifications.activated, handler, options),
+      /** Schedules a notification that outlives the page and the application, until it is delivered or unscheduled. */
+      schedule: (value: DesktopScheduledNotificationRequest, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.notifications.schedule, value, options),
+      /** Cancels a scheduled notification, also one that an earlier page or run scheduled. */
+      unschedule: (id: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.notifications.unschedule, { id }, options),
+      /** Asks the user to allow notifications when the system has not asked yet; call it from an action of the user. */
+      requestPermission: (options?: NeoRpcCallOptions) => invoke<{ readonly status: string }>(desktopCommands.notifications.requestPermission, {}, options),
+      /** Takes, once, the activation of a scheduled notification that came while no page listened, as the tap that launched the application. */
+      takeLaunchActivation: async (options?: NeoRpcCallOptions) => (await invoke<{ readonly activation?: DesktopNotificationActivation | null }>(desktopCommands.notifications.launchActivation, {}, options)).activation ?? undefined,
     }),
     shortcuts: Object.freeze({
       register: (id: string, accelerator: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.shortcuts.register, { id, accelerator }, options),

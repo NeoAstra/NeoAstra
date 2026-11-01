@@ -126,6 +126,7 @@ internal static class NeoDesktopRendererContract
         "desktop.menus.activate", "desktop.menus.set", "desktop.menus.popup", "desktop.tray.create", "desktop.tray.update", "desktop.tray.remove",
         "desktop.clipboard.read-text", "desktop.clipboard.write-text", "desktop.clipboard.read-rich", "desktop.clipboard.write-rich", "desktop.clipboard.clear",
         "desktop.notifications.status", "desktop.notifications.show", "desktop.notifications.remove",
+        "desktop.notifications.schedule", "desktop.notifications.unschedule", "desktop.notifications.request-permission", "desktop.notifications.launch-activation",
         "desktop.shortcuts.register", "desktop.shortcuts.unregister", "desktop.system.theme", "desktop.system.displays", "desktop.system.metadata",
         "desktop.opener.url", "desktop.opener.file", "desktop.opener.reveal", "desktop.drag-drop.outbound", "desktop.drag-drop.resolve-file",
         "desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size",
@@ -146,6 +147,11 @@ internal static class NeoDesktopRendererContract
 
 internal sealed class DesktopRendererRegistration(NeoDesktopServices services, NeoDesktopRendererOptions applicationOptions) : INeoRpcServiceRegistration, IAsyncDisposable
 {
+    // A notification that a page schedules outlives the page and the process. Its native ID carries this prefix, so that the
+    // activation of one that an earlier run scheduled is recognized, and a page names it without the prefix.
+    internal const string ScheduledNotificationPrefix = "neoastra.page:";
+    // The system shows its question until the user answers it.
+    internal static readonly TimeSpan NotificationPermissionTimeout = TimeSpan.FromMinutes(5);
     private readonly object _sync = new();
     private readonly SemaphoreSlim _ownershipGate = new(1, 1);
     private readonly Dictionary<(string Session, string Id), long> _ownedTray = [];
@@ -159,6 +165,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private long _nextGeneration;
     private NeoRpcEvent<DesktopIdEvent>? _trayActivated;
     private NeoRpcEvent<DesktopNotificationActivatedEvent>? _notificationActivated;
+    private DesktopNotificationActivatedEvent? _waitingActivation;
     private NeoRpcEvent<DesktopIdEvent>? _shortcutActivated;
     private NeoRpcEvent<DesktopThemeChangedEvent>? _themeChanged;
     private NeoRpcEvent<DesktopDisplaysChangedEvent>? _displaysChanged;
@@ -191,6 +198,10 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.notifications.status", "notifications:status", NotificationStatusAsync, json.DesktopEmptyRequest, json.DesktopNotificationStatusResult);
         Add(builder, "desktop.notifications.show", "notifications:display", ShowNotificationAsync, json.DesktopNotificationRequestDto, json.DesktopStatusResult);
         Add(builder, "desktop.notifications.remove", "notifications:remove", RemoveNotificationAsync, json.DesktopIdRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.notifications.schedule", "notifications:schedule", ScheduleNotificationAsync, json.DesktopNotificationScheduleRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.notifications.unschedule", "notifications:unschedule", UnscheduleNotificationAsync, json.DesktopIdRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.notifications.request-permission", "notifications:request", RequestNotificationPermissionAsync, json.DesktopEmptyRequest, json.DesktopNotificationStatusResult, NotificationPermissionTimeout);
+        Add(builder, "desktop.notifications.launch-activation", "notifications:launch-activation", TakeLaunchActivationAsync, json.DesktopEmptyRequest, json.DesktopNotificationLaunchResult);
         Add(builder, "desktop.shortcuts.register", "shortcuts:register", RegisterShortcutAsync, json.DesktopShortcutRequest, json.DesktopStatusResult);
         Add(builder, "desktop.shortcuts.unregister", "shortcuts:control", UnregisterShortcutAsync, json.DesktopIdRequest, json.DesktopStatusResult);
         Add(builder, "desktop.system.theme", "system-info:theme", ThemeAsync, json.DesktopEmptyRequest, json.DesktopThemeResult);
@@ -387,6 +398,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private async ValueTask<DesktopStatusResult> ShowNotificationAsync(DesktopNotificationRequestDto request, NeoRpcContext context, CancellationToken token)
     {
         if (request.AppIdentity != services.SystemInfo.Metadata.ApplicationId) throw NeoDesktopRendererOptions.Denied("The notification identity is invalid.");
+        if (request.Id.StartsWith(ScheduledNotificationPrefix, StringComparison.Ordinal)) throw NeoDesktopRendererOptions.Denied("The prefix of the notification ID is reserved for scheduled notifications.");
         var key = (context.DocumentSessionId, request.Id);
         await _ownershipGate.WaitAsync(token).ConfigureAwait(false);
         var added = false; var generation = 0L;
@@ -409,6 +421,42 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         return Status(status);
         }
         finally { _ownershipGate.Release(); }
+    }
+    // Scheduled notifications belong to the pages of the application rather than to one document session: the session that
+    // scheduled one ends long before it is delivered, so it is neither removed with the session nor owned by it.
+    private async ValueTask<DesktopStatusResult> ScheduleNotificationAsync(DesktopNotificationScheduleRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        if (request.AppIdentity != services.SystemInfo.Metadata.ApplicationId) throw NeoDesktopRendererOptions.Denied("The notification identity is invalid.");
+        var value = new NeoNotificationRequest
+        {
+            Id = ScheduledId(request.Id), Title = request.Title, Body = request.Body, ActivationData = request.Payload, DeliverAt = ParseMoment(request.DeliverAt),
+            Actions = request.Actions.Select(static action => new NeoNotificationAction(action.Id, action.Title)).ToArray(),
+        };
+        return Status(await services.Notifications.ShowAsync(value, token).ConfigureAwait(false));
+    }
+    private async ValueTask<DesktopStatusResult> UnscheduleNotificationAsync(DesktopIdRequest request, NeoRpcContext context, CancellationToken token)
+        => Status(await services.Notifications.RemoveAsync(ScheduledId(request.Id), token).ConfigureAwait(false));
+    private async ValueTask<DesktopNotificationStatusResult> RequestNotificationPermissionAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+        => new(await services.Notifications.RequestPermissionAsync(token).ConfigureAwait(false));
+    private ValueTask<DesktopNotificationLaunchResult> TakeLaunchActivationAsync(DesktopEmptyRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        DesktopNotificationActivatedEvent? waiting;
+        lock (_sync) { waiting = _waitingActivation; _waitingActivation = null; }
+        return ValueTask.FromResult(new DesktopNotificationLaunchResult(waiting));
+    }
+    internal static string ScheduledId(string? id)
+    {
+        NeoNotificationRequest.ValidateId(id!, nameof(id));
+        if (id!.Length > 128 - ScheduledNotificationPrefix.Length) throw new ArgumentException("A scheduled notification ID is too long.", nameof(id));
+        return ScheduledNotificationPrefix + id;
+    }
+    // The moment is ISO 8601 with its offset: a moment without one would depend on the time zone that the device has then.
+    internal static DateTimeOffset ParseMoment(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var moment)
+            || !(value.EndsWith('Z') || value.EndsWith('z') || value.Length > 6 && value[^6] is '+' or '-' && value[^3] == ':'))
+            throw new ArgumentException("The moment of a scheduled notification must be ISO 8601 with its offset.", nameof(value));
+        return moment;
     }
     private async ValueTask<DesktopStatusResult> RemoveNotificationAsync(DesktopIdRequest request, NeoRpcContext context, CancellationToken token)
     {
@@ -777,7 +825,20 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
     private static ValueTask<DesktopStatusResult> MutateWindowAsync(NeoRpcContext context, Action<NeoWindow> action, CancellationToken token)
         => InvokeWindowAsync(context, window => { action(window); return Status(NeoDesktopStatus.Success); }, token);
     private void OnTrayActivated(object? sender, NeoTrayActivation e) { if (!IsDisposed()) _ = PublishContainedAsync(_trayActivated, new(e.ItemId, e.Secondary), context => IsOwned(_ownedTray, context, e.ItemId)); }
-    private void OnNotificationActivated(object? sender, NeoNotificationActivation e) { if (!IsDisposed()) _ = PublishContainedAsync(_notificationActivated, new(e.NotificationId, e.ActionId, e.ActivationData), context => IsOwned(_ownedNotifications, context, e.NotificationId)); }
+    private void OnNotificationActivated(object? sender, NeoNotificationActivation e)
+    {
+        if (IsDisposed()) return;
+        if (e.NotificationId.StartsWith(ScheduledNotificationPrefix, StringComparison.Ordinal)) { if (!e.Dismissed) _ = PublishScheduledActivationAsync(new(e.NotificationId[ScheduledNotificationPrefix.Length..], e.ActionId, e.ActivationData)); }
+        else _ = PublishContainedAsync(_notificationActivated, new(e.NotificationId, e.ActionId, e.ActivationData), context => IsOwned(_ownedNotifications, context, e.NotificationId));
+    }
+    // A scheduled notification goes to every page that listens; when none does, as when its tap launched the application, the
+    // activation waits until a page takes it.
+    private async Task PublishScheduledActivationAsync(DesktopNotificationActivatedEvent activation)
+    {
+        var delivered = 0;
+        try { if (_notificationActivated is { } publisher) delivered = await publisher.PublishAsync(activation).ConfigureAwait(false); } catch { }
+        if (delivered == 0) lock (_sync) if (!_disposed) _waitingActivation = activation;
+    }
     private void OnShortcutActivated(object? sender, string e) { if (!IsDisposed()) _ = PublishContainedAsync(_shortcutActivated, new(e), context => IsOwned(_ownedShortcuts, context, e)); }
     private void OnThemeChanged(object? sender, NeoThemeSnapshot e) { if (!IsDisposed()) _ = PublishContainedAsync(_themeChanged, new(e), null); }
     private void OnDisplaysChanged(object? sender, IReadOnlyList<NeoDisplaySnapshot> e) { if (!IsDisposed()) _ = PublishContainedAsync(_displaysChanged, new(e), null); }
@@ -936,6 +997,8 @@ internal sealed record DesktopHapticRequest(NeoHapticFeedback Feedback);
 internal sealed record DesktopColorRequest(string? Color);
 internal sealed record DesktopIdEvent(string Id, bool Secondary = false);
 internal sealed record DesktopNotificationActivatedEvent(string Id, string? ActionId, string? Payload);
+internal sealed record DesktopNotificationScheduleRequest(string AppIdentity, string Category, string Urgency, bool Persistent, string? Payload, string Id, string Title, string Body, IReadOnlyList<DesktopNotificationActionDto> Actions, string? DeliverAt);
+internal sealed record DesktopNotificationLaunchResult(DesktopNotificationActivatedEvent? Activation);
 internal sealed record DesktopThemeChangedEvent(NeoThemeSnapshot Theme);
 internal sealed record DesktopDisplaysChangedEvent(IReadOnlyList<NeoDisplaySnapshot> Displays);
 internal sealed record DesktopDropEvent(NeoDropEvent Drop);
@@ -987,6 +1050,8 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopColorRequest))]
 [JsonSerializable(typeof(DesktopIdEvent))]
 [JsonSerializable(typeof(DesktopNotificationActivatedEvent))]
+[JsonSerializable(typeof(DesktopNotificationScheduleRequest))]
+[JsonSerializable(typeof(DesktopNotificationLaunchResult))]
 [JsonSerializable(typeof(DesktopThemeChangedEvent))]
 [JsonSerializable(typeof(DesktopDisplaysChangedEvent))]
 [JsonSerializable(typeof(DesktopDropEvent))]
