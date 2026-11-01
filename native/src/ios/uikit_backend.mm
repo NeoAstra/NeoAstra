@@ -42,7 +42,8 @@
 @end
 
 namespace {
-struct uikit_app {};
+// `wake_pending` is true, under the platform mutex, while a drain block waits on the main queue: that one block stands for all queued work.
+struct uikit_app { bool wake_pending{}; };
 struct uikit_environment { WKWebsiteDataStore* data_store; };
 struct uikit_profile { WKWebsiteDataStore* data_store; };
 struct uikit_view {
@@ -640,9 +641,21 @@ bool neo_platform_schedule_app_destruction(neoastra_app_t* app) noexcept {
 int32_t neo_platform_run(neoastra_app_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 // An iOS application cannot end its own process, so a quit request only leaves the application state.
 void neo_platform_quit(neoastra_app_t*) noexcept {}
+// Called under the platform mutex. A drain runs for one slice, so that touches, drawing, and the messages of the page are not held
+// behind a busy queue; the rest waits for a new block, after the events of the run loop.
 void neo_platform_wake(neoastra_app_t* app) noexcept {
+    auto* state = static_cast<uikit_app*>(app->platform);
+    if (!state || state->wake_pending) return;
+    state->wake_pending = true;
     app->retain();
-    dispatch_async(dispatch_get_main_queue(), ^{ neo_drain_dispatch(app); app->release(); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        {
+            std::lock_guard lock(app->platform_mutex);
+            if (auto* current = static_cast<uikit_app*>(app->platform)) current->wake_pending = false;
+        }
+        if (neo_drain_dispatch_slice(app)) neo_wake_app(app);
+        app->release();
+    });
 }
 bool neo_platform_schedule_decision_timeout(neoastra_app_t*, neoastra_decision_t* decision) noexcept {
     const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(decision->deadline - std::chrono::steady_clock::now()).count();

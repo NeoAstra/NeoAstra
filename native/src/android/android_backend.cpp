@@ -65,7 +65,9 @@ int drain_wake(int descriptor, int, void* data) noexcept {
         neo_destroy_app_on_ui(app);
         return 0;
     }
-    neo_drain_dispatch(app);
+    // One slice, so that input, drawing, and the messages of the page are not held behind a busy queue; the rest wakes the
+    // looper again, after the events that wait.
+    if (neo_drain_dispatch_slice(app)) neo_wake_app(app);
     return 1;
 }
 
