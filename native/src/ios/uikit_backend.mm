@@ -455,7 +455,8 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     auto* value = self.nativeWindow;
-    if (value) sync_window_bounds(value, self.view.window, true);
+    neo_retain_guard owner(value);
+    if (owner) sync_window_bounds(value, self.view.window, true);
 }
 @end
 
@@ -463,7 +464,9 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webView:(WKWebView*)webView decidePolicyForNavigationAction:(WKNavigationAction*)action decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     (void)webView;
     auto* view = self.nativeView;
-    if (!view) { handler(WKNavigationActionPolicyCancel); return; }
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) { handler(WKNavigationActionPolicyCancel); return; }
     // An action without a target frame asks for a new window: WebKit asks to create its view next, and that request decides.
     if (!action.targetFrame) { handler(WKNavigationActionPolicyAllow); return; }
     const uint64_t kind = navigation_kind(action);
@@ -482,26 +485,34 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webView:(WKWebView*)webView runJavaScriptAlertPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(void))completionHandler {
     (void)webView;
     auto* view = self.nativeView;
-    if (!view) { completionHandler(); return; }
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) { completionHandler(); return; }
     request_dialog(view, NEOASTRA_SCRIPT_DIALOG_ALERT, message, nil, frame, NEOASTRA_DECISION_ALLOW, ^(BOOL, NSString*) { completionHandler(); });
 }
 - (void)webView:(WKWebView*)webView runJavaScriptConfirmPanelWithMessage:(NSString*)message initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(BOOL))completionHandler {
     (void)webView;
     auto* view = self.nativeView;
-    if (!view) { completionHandler(NO); return; }
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) { completionHandler(NO); return; }
     request_dialog(view, NEOASTRA_SCRIPT_DIALOG_CONFIRM, message, nil, frame, NEOASTRA_DECISION_CANCEL, ^(BOOL accepted, NSString*) { completionHandler(accepted); });
 }
 - (void)webView:(WKWebView*)webView runJavaScriptTextInputPanelWithPrompt:(NSString*)prompt defaultText:(NSString*)defaultText initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void (^)(NSString*))completionHandler {
     (void)webView;
     auto* view = self.nativeView;
-    if (!view) { completionHandler(nil); return; }
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) { completionHandler(nil); return; }
     request_dialog(view, NEOASTRA_SCRIPT_DIALOG_PROMPT, prompt, defaultText, frame, NEOASTRA_DECISION_CANCEL, ^(BOOL accepted, NSString* value) { completionHandler(accepted ? (value ? value : @"") : nil); });
 }
 - (void)webView:(WKWebView*)webView requestMediaCapturePermissionForOrigin:(WKSecurityOrigin*)origin initiatedByFrame:(WKFrameInfo*)frame type:(WKMediaCaptureType)type decisionHandler:(void (^)(WKPermissionDecision))handler {
     (void)webView;
     (void)frame;
     auto* view = self.nativeView;
-    if (!view) { handler(WKPermissionDecisionDeny); return; }
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) { handler(WKPermissionDecisionDeny); return; }
     NSString* raw = origin.port ? [NSString stringWithFormat:@"%@://%@:%ld", origin.protocol, origin.host, (long)origin.port] : [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
     std::string uri = utf8(raw);
     const bool both = type == WKMediaCaptureTypeCameraAndMicrophone;
@@ -524,7 +535,9 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
     (void)configuration;
     (void)features;
     auto* view = self.nativeView;
-    if (!view) return nil;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return nil;
     std::string uri = utf8(action.request.URL.absoluteString);
     std::string name;
     auto* decision = new neoastra_decision;
@@ -540,7 +553,9 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webView:(WKWebView*)webView didStartProvisionalNavigation:(WKNavigation*)navigation {
     (void)navigation;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     std::string uri = utf8(webView.URL.absoluteString);
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_STARTED, 0, nullptr, &uri, 1);
 }
@@ -548,21 +563,27 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webView:(WKWebView*)webView didCommitNavigation:(WKNavigation*)navigation {
     (void)navigation;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     std::string uri = utf8(webView.URL.absoluteString);
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMMITTED, 0, nullptr, &uri);
 }
 - (void)webView:(WKWebView*)webView didFinishNavigation:(WKNavigation*)navigation {
     (void)navigation;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     std::string uri = utf8(webView.URL.absoluteString);
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_COMPLETED, 0, nullptr, &uri);
 }
 - (void)webView:(WKWebView*)webView didFailNavigation:(WKNavigation*)navigation withError:(NSError*)error {
     (void)navigation;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     std::string uri = utf8(webView.URL.absoluteString);
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_FAILED, 0, nullptr, &uri, NEOASTRA_ERROR_NATIVE_FAILURE, error.code);
 }
@@ -572,12 +593,16 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webViewWebContentProcessDidTerminate:(WKWebView*)webView {
     (void)webView;
     auto* view = self.nativeView;
-    if (view) neo_emit_view(view, NEOASTRA_EVENT_WEB_PROCESS_TERMINATED, 0, nullptr, nullptr, NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW);
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (owner) neo_emit_view(view, NEOASTRA_EVENT_WEB_PROCESS_TERMINATED, 0, nullptr, nullptr, NEOASTRA_PROCESS_FAILURE_WEB_PROCESS_EXITED | NEOASTRA_PROCESS_FAILURE_RECREATE_VIEW);
 }
 - (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message {
     (void)controller;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     @try {
         try {
             NSError* error = nil;
@@ -594,7 +619,9 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
     (void)change;
     (void)context;
     auto* view = self.nativeView;
-    if (!view) return;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    if (!owner) return;
     WKWebView* webview = (WKWebView*)object;
     if ([keyPath isEqualToString:@"title"]) {
         view->title = utf8(webview.title);
@@ -609,7 +636,9 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 // animation of the keyboard, in seconds. A hidden keyboard covers 0.
 - (void)keyboardWillChangeFrame:(NSNotification*)notification {
     auto* view = self.nativeView;
-    auto* state = view ? static_cast<uikit_view*>(view->platform) : nullptr;
+    // The view stays alive until the callback returns, also when a handler of its event disposes it.
+    neo_retain_guard owner(view);
+    auto* state = owner ? static_cast<uikit_view*>(view->platform) : nullptr;
     WKWebView* webview = state ? state->webview : nil;
     UIScreen* screen = webview.window.windowScene.screen;
     if (!webview || !screen) return;
