@@ -22,6 +22,12 @@
       "permission": "push:receive",
       "risk": "sensitive",
       "audited": true
+    },
+    {
+      "name": "push.present",
+      "permission": "push:foreground",
+      "risk": "sensitive",
+      "audited": true
     }
   ],
   "events": [
@@ -42,6 +48,12 @@
       "permission": "push:receive",
       "risk": "sensitive",
       "audited": true
+    },
+    {
+      "name": "push.foreground-message",
+      "permission": "push:foreground",
+      "risk": "sensitive",
+      "audited": true
     }
   ],
   "permissions": [
@@ -58,6 +70,15 @@
       "id": "push:receive",
       "revision": 1,
       "operations": ["push.launch-message", "push.message-received", "push.message-opened"],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "push:foreground",
+      "revision": 1,
+      "operations": ["push.foreground-message", "push.present"],
       "risk": "sensitive",
       "scopeFamily": "none",
       "scopeRequired": false,

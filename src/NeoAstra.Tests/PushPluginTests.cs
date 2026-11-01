@@ -216,13 +216,84 @@ public sealed class PushPluginTests
         StringAssert.Contains(java, "if (body == null || body.isEmpty()) return null;");
     }
 
+    [TestMethod]
+    public async Task Renderer_RegistersWithoutAskingWhenThePageSaysSo()
+    {
+        var push = new RecordingPush();
+        await using var session = Session(push, ["push:register"], out var frames);
+        await InvokeAsync(session, frames, "1", "push.register");
+        await InvokeAsync(session, frames, "2", "push.register", """{"ask":true}""");
+        await InvokeAsync(session, frames, "3", "push.register", """{"ask":false}""");
+        CollectionAssert.AreEqual(new[] { "ask", "ask", "silent" }, push.Registrations);
+    }
+
+    [TestMethod]
+    public async Task Renderer_LetsThePagesDecideTheForegroundPresentation()
+    {
+        var push = new NeoFakePush();
+        await using var session = Session(push, ["push:foreground"], out var frames, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true });
+        Assert.IsNotNull(push.ForegroundPresentation);
+        // No page listens: the message is shown at once.
+        Assert.IsTrue(await push.ForegroundPresentation!(new("m0", null, Payload), CancellationToken.None));
+
+        await session.ReceiveAsync("""{"neoastra":1,"kind":"subscribe","id":"s1","event":"push.foreground-message"}""");
+        await WaitUntilAsync(() => frames.Any(static json => json.Contains("\"s1\"", StringComparison.Ordinal)));
+        var decision = push.ForegroundPresentation!(new("m1", null, Payload), CancellationToken.None).AsTask();
+        await WaitUntilAsync(() => Events(frames).Length == 1);
+        var message = Events(frames).Single().GetProperty("value");
+        Assert.AreEqual("m1", message.GetProperty("message").GetProperty("messageId").GetString());
+        Assert.AreEqual(42, message.GetProperty("message").GetProperty("payload").GetProperty("order").GetInt32());
+        var answered = await InvokeAsync(session, frames, "1", "push.present", $$"""{"decisionId":"{{message.GetProperty("decisionId").GetString()}}","show":false}""");
+        Assert.IsTrue(answered.GetProperty("accepted").GetBoolean());
+        Assert.IsFalse(await decision);
+        // A decision that nobody waits for any more is not accepted.
+        Assert.IsFalse((await InvokeAsync(session, frames, "2", "push.present", """{"decisionId":"gone","show":false}""")).GetProperty("accepted").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task Renderer_ShowsAForegroundMessageThatThePageDoesNotDecideInTime()
+    {
+        var push = new NeoFakePush();
+        await using var session = Session(push, ["push:foreground"], out var frames, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = TimeSpan.FromMilliseconds(50) });
+        await session.ReceiveAsync("""{"neoastra":1,"kind":"subscribe","id":"s1","event":"push.foreground-message"}""");
+        await WaitUntilAsync(() => frames.Any(static json => json.Contains("\"s1\"", StringComparison.Ordinal)));
+        Assert.IsTrue(await push.ForegroundPresentation!(new("m1", null, Payload), CancellationToken.None));
+    }
+
+    [TestMethod]
+    public void Renderer_LeavesTheForegroundPresentationOfTheApplicationWithoutTheOption()
+    {
+        Func<NeoPushMessage, CancellationToken, ValueTask<bool>> application = static (_, _) => ValueTask.FromResult(false);
+        var push = new NeoFakePush { ForegroundPresentation = application };
+        new NeoRpcBuilder().AddNeoAstraPushHandlers(push);
+        Assert.AreSame(application, push.ForegroundPresentation);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder().AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = TimeSpan.Zero }));
+    }
+
+    // Records which registration a page asked for.
+    private sealed class RecordingPush : INeoPush
+    {
+        public List<string> Registrations { get; } = [];
+        public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Emulated, 1, 0, "Recording push.");
+        public NeoPushMessage? LaunchMessage => null;
+        public event EventHandler<NeoPushRegistration>? TokenChanged { add { } remove { } }
+        public event EventHandler<NeoPushMessage>? MessageReceived { add { } remove { } }
+        public event EventHandler<NeoPushMessage>? MessageOpened { add { } remove { } }
+        public Func<NeoPushMessage, CancellationToken, ValueTask<bool>>? ForegroundPresentation { get; set; }
+        public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default) { Registrations.Add("ask"); return ValueTask.FromResult(NeoDesktopResult<NeoPushRegistration>.Success(new("t", NeoPushService.Apns, true))); }
+        public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default) { Registrations.Add("silent"); return ValueTask.FromResult(NeoDesktopResult<NeoPushRegistration>.Success(new("t", NeoPushService.Apns, false))); }
+    }
+
     private static NeoRpcSession Session(INeoPush push, string[] permissions, out ConcurrentQueue<string> frames)
+        => Session(push, permissions, out frames, null);
+
+    private static NeoRpcSession Session(INeoPush push, string[] permissions, out ConcurrentQueue<string> frames, NeoPushRendererOptions? options)
     {
         var manifest = NeoCapabilityManifest.Resolve(System.Text.Encoding.UTF8.GetBytes($$"""
             {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"permissions":[{{string.Join(",", permissions.Select(static item => $"\"{item}\""))}}]}]}
             """), new NeoPermissionCatalogBuilder().AddNeoAstraPushPermissions().Build(), new() { Platform = NeoCapabilityPlatform.IOS, Release = true, Profile = NeoSecurityProfile.ProductionLocalApp });
         var builder = new NeoRpcBuilder(new NeoRpcOptions { CapabilityManifest = manifest, SecurityProfile = manifest.Profile, AuthorizationService = new NeoCapabilityAuthorizationService(manifest) });
-        builder.AddNeoAstraPushHandlers(push);
+        if (options is null) builder.AddNeoAstraPushHandlers(push); else builder.AddNeoAstraPushHandlers(push, options);
         var rpc = builder.Build();
         var queue = new ConcurrentQueue<string>();
         frames = queue;
@@ -238,9 +309,9 @@ public sealed class PushPluginTests
         Assert.IsTrue(predicate());
     }
 
-    private static async Task<JsonElement> InvokeAsync(NeoRpcSession session, ConcurrentQueue<string> frames, string id, string command)
+    private static async Task<JsonElement> InvokeAsync(NeoRpcSession session, ConcurrentQueue<string> frames, string id, string command, string args = "{}")
     {
-        var frame = await ResponseAsync(session, frames, id, command);
+        var frame = await ResponseAsync(session, frames, id, command, args);
         Assert.IsTrue(frame.TryGetProperty("value", out var value), frame.ToString());
         return value;
     }
@@ -252,9 +323,9 @@ public sealed class PushPluginTests
         return error.GetProperty("code").GetString()!;
     }
 
-    private static async Task<JsonElement> ResponseAsync(NeoRpcSession session, ConcurrentQueue<string> frames, string id, string command)
+    private static async Task<JsonElement> ResponseAsync(NeoRpcSession session, ConcurrentQueue<string> frames, string id, string command, string args = "{}")
     {
-        await session.ReceiveAsync($$$"""{"neoastra":1,"kind":"invoke","id":"{{{id}}}","command":"{{{command}}}","args":{}}""");
+        await session.ReceiveAsync($$$"""{"neoastra":1,"kind":"invoke","id":"{{{id}}}","command":"{{{command}}}","args":{{{args}}}}""");
         JsonElement? found = null;
         await WaitUntilAsync(() =>
         {
