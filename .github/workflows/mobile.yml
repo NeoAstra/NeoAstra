@@ -80,13 +80,14 @@ jobs:
         run: |
           npm ci
           npm run build
-      # The Xcode of the image may be another build than the one that the iOS workload names.
+      # The Xcode of the image may be another build than the one that the iOS workload names. A simulator build with entitlements,
+      # such as the aps-environment of the iOS sample, is signed ad hoc: the runner has no signing identity.
       - name: Build the mobile samples
         working-directory: samples/mobile
         run: |
-          dotnet build NeoAstra.Sample.Hello -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build NeoAstra.Sample.Hello -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false -p:CodesignKey=-
           dotnet build NeoAstra.Sample.Hello -f net11.0-android -c Release -r android-arm64
-          dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false -p:CodesignKey=-
           dotnet build NeoAstra.Sample.Android -c Release -r android-arm64
       - name: Pack NeoAstra and its templates for the template application
         working-directory: src
@@ -107,5 +108,5 @@ jobs:
           <configuration><packageSources><clear /><add key="local" value="$GITHUB_WORKSPACE/artifacts/mobile-feed" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
           CONFIG
           cd "$root/PocketApp"
-          dotnet build -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false -p:CodesignKey=-
           dotnet build -f net11.0-android -c Release -r android-arm64
