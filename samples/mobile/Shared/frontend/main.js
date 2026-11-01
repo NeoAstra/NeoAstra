@@ -82,11 +82,23 @@ card("Location", (row, run) => {
 card("Push", (row, run) => {
   const rpc = rpcClient();
   button(row, "Register", () => run(() => invoke("push.register", {})));
+  // Silent messages need no permission: the question is left to a later action of the user.
+  button(row, "Register silently", () => run(() => invoke("push.register", { ask: false })));
+  // A message that arrives while the page is shown waits for its decision, the first answer decides.
+  const show = document.createElement("input");
+  show.type = "checkbox";
+  show.checked = true;
+  show.title = "Show messages in the foreground";
+  row.append(show);
   button(row, "Launch message", () => run(() => invoke("push.launch-message", {})));
   rpc.then(client => {
     client.subscribe("push.message-received", message => run(async () => ({ status: "Received", ...message })));
     client.subscribe("push.message-opened", message => run(async () => ({ status: "Opened", ...message })));
     client.subscribe("push.token-changed", registration => run(async () => ({ status: "Token", ...registration })));
+    client.subscribe("push.foreground-message", ({ decisionId, message }) => run(async () => {
+      await invoke("push.present", { decisionId, show: show.checked });
+      return { status: show.checked ? "Shown" : "Kept", ...message };
+    }));
   });
 });
 // A passkey belongs to a relying party whose domain lists this application; the page creates the options that its server
@@ -126,6 +138,37 @@ card("Purchases", (row, run) => {
   button(row, "Restore", () => run(() => invoke("purchases.restore", {})));
   button(row, "Finish", () => run(() => last ? invoke("purchases.finish", { purchase: last, consume: type.value === "InApp" }) : { status: "NotFound" }));
   rpcClient().then(client => client.subscribe("purchases.updated", purchase => run(async () => ({ status: "Updated", ...purchase }))));
+});
+// Android reports its back button as a request to close the window: the page steps back out of what it shows first, and
+// only lets the window close when there is nothing left.
+card("Back button (Android)", (row, run) => {
+  let layers = 0;
+  const report = () => ({ status: "Success", layers });
+  button(row, "Open a layer", () => run(async () => { layers++; return report(); }));
+  desktop.window.onCloseRequested(event => {
+    if (event.reason !== "User" || !event.canCancel || layers === 0) return;
+    layers--;
+    event.preventDefault();
+    run(async () => ({ ...report(), back: "stepped back" }));
+  }).catch(error => run(() => { throw error; }));
+});
+// The window shows its color before and behind the page; on Android the symbols of the system bars follow it.
+card("Window color", (row, run) => {
+  const apply = (page, color) => run(async () => { document.documentElement.style.background = page; return desktop.window.setBackgroundColor(color); });
+  button(row, "Light", () => apply("#f2f2f7", "#f2f2f7"));
+  button(row, "Dark", () => apply("#1c1c1e", "#1c1c1e"));
+});
+// A scheduled notification outlives the page and the application; a tap on it reaches the page that listens, or waits for
+// the page of the next start.
+card("Reminder", (row, run) => {
+  const reminder = () => ({ appIdentity: "dev.neoastra.sample.mobile", category: "reminders", urgency: "normal", persistent: false, id: "reminder.sample",
+    title: "Reminder", body: "Scheduled ten seconds ago by the page.", payload: "sample:reminder", actions: [], deliverAt: new Date(Date.now() + 10000).toISOString() });
+  button(row, "Ask", () => run(() => desktop.notifications.requestPermission()));
+  button(row, "In 10 s", () => run(() => desktop.notifications.schedule(reminder())));
+  button(row, "Cancel", () => run(() => desktop.notifications.unschedule("reminder.sample")));
+  button(row, "Waiting tap", () => run(async () => ({ status: "Success", activation: await desktop.notifications.takeLaunchActivation() ?? null })));
+  desktop.notifications.onActivated(activation => run(async () => ({ status: "Activated", ...activation })));
+  run(async () => { const activation = await desktop.notifications.takeLaunchActivation(); return activation ? { status: "Launched", ...activation } : { status: "Success", activation: null }; });
 });
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));

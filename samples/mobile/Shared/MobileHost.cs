@@ -85,7 +85,6 @@ internal sealed class MobileHost
         var passkeys = NeoPasskeys.CreateSystem(application.Dispatcher);
         var purchases = NeoPurchases.CreateSystem(application.Dispatcher);
         var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).AddNeoAstraPush(push).AddNeoAstraPasskeys(passkeys).AddNeoAstraPurchases(purchases).Build();
-        await plugins.StartAsync(application);
 
         var capabilities = LoadCapabilities();
         var builder = new NeoRpcBuilder(new NeoRpcOptions
@@ -101,10 +100,15 @@ internal sealed class MobileHost
             AllowedTrayIds = new HashSet<string>(StringComparer.Ordinal) { "hello" },
         });
         builder.AddNeoAstraLocationHandlers(location);
-        builder.AddNeoAstraPushHandlers(push);
+        // The page decides whether a push that arrives while it is shown is shown too.
+        builder.AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true });
         builder.AddNeoAstraPasskeysHandlers(passkeys);
         builder.AddNeoAstraPurchasesHandlers(purchases);
-        var mobile = new MobileHost(application, environment, builder.Build(), desktop);
+        var rpc = builder.Build();
+        // The plugins start once the handlers listen: starting binds the notifications, which hand over the tap of a scheduled
+        // notification that launched the application, and the handlers keep it for the page.
+        await plugins.StartAsync(application);
+        var mobile = new MobileHost(application, environment, rpc, desktop);
         await mobile.OpenWindowAsync();
         // An application that attaches to a run loop of its own reports when its startup is complete.
         application.NotifyReady();

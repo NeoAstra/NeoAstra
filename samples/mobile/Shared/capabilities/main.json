@@ -20,6 +20,7 @@
         "location:read",
         "push:register",
         "push:receive",
+        "push:foreground",
         "passkeys:create",
         "passkeys:get",
         "purchases:read",
@@ -78,8 +79,28 @@
             ]
           }
         },
+        "notifications:activation",
+        {
+          "id": "notifications:schedule",
+          "scope": {
+            "appIdentity": "dev.neoastra.sample.mobile",
+            "categories": [
+              "reminders"
+            ],
+            "maximumPayloadBytes": 1024,
+            "persistent": false,
+            "urgencies": [
+              "normal"
+            ]
+          }
+        },
+        "notifications:unschedule",
+        "notifications:request",
+        "notifications:launch-activation",
         "dialogs:message",
         "window:management",
+        "window:close",
+        "window:polish",
         "tray:create"
       ]
     }
