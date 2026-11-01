@@ -51,6 +51,38 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public void CapabilityDocumentGrantsTheScopedPermissionsOfThePlugins()
+    {
+        // The page of a conventional application reaches the commands of its plugins with the scopes that its document gives.
+        var builder = CreateBuilder(ApplicationPermission());
+        builder.UseCapabilities(System.Text.Encoding.UTF8.GetBytes("""
+            {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"permissions":[
+              "greeting:read","haptics:play","push:foreground",
+              {"id":"notifications:schedule","scope":{"appIdentity":"dev.neoastra.tests","categories":["reminders"],"maximumPayloadBytes":1024,"persistent":false,"urgencies":["normal"]}}]}]}
+            """));
+        builder.ValidateConfiguration();
+        var manifest = builder.CreateCapabilityManifest(NeoSecurityProfile.ProductionLocalApp, release: true, [global::NeoAstra.Desktop.NeoDesktopEssentialsPlugin.PermissionCatalog, global::NeoAstra.Push.NeoPushPlugin.PermissionCatalog]);
+        StringAssert.Contains(manifest.Json, "notifications:schedule");
+        StringAssert.Contains(manifest.Json, "\"reminders\"");
+        Assert.IsTrue(manifest.GrantSummaries.Any(static summary => summary.StartsWith("main: views=1, permissions=4", StringComparison.Ordinal)), string.Join("; ", manifest.GrantSummaries));
+
+        // A permission that neither the contract nor a plugin declares is refused when the document is resolved.
+        Assert.ThrowsExactly<NeoCapabilityValidationException>(() => builder.CreateCapabilityManifest(NeoSecurityProfile.ProductionLocalApp, release: true, [global::NeoAstra.Push.NeoPushPlugin.PermissionCatalog]));
+    }
+
+    [TestMethod]
+    public void CapabilityDocumentAndCodeFirstGrantsAreExclusiveAndRegisteredOnce()
+    {
+        var both = CreateBuilder(ApplicationPermission()).GrantMainView("greeting:read").UseCapabilities("{}"u8.ToArray());
+        StringAssert.Contains(Assert.Throws<InvalidOperationException>(both.ValidateConfiguration).Message, "either");
+        Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAppBuilder().UseCapabilities(null!));
+        Assert.ThrowsExactly<ArgumentException>(() => new NeoAppBuilder().UseCapabilities([]));
+        Assert.ThrowsExactly<InvalidOperationException>(() => new NeoAppBuilder().UseCapabilities("{}"u8.ToArray()).UseCapabilities("{}"u8.ToArray()));
+        Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAppBuilder().UsePlugins(null!));
+        Assert.ThrowsExactly<InvalidOperationException>(() => new NeoAppBuilder().UsePlugins(static (_, _) => { }).UsePlugins(static (_, _) => { }));
+    }
+
+    [TestMethod]
     public async Task AttachIsForMobileApplicationsOnly()
     {
         var configured = false;

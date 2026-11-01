@@ -2,6 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Text.Json;
+using NeoAstra.Desktop;
 using NeoAstra.Rpc;
 using NeoExternalUrlScope = NeoAstra.Desktop.Opener.NeoUrlScope;
 
@@ -107,6 +108,8 @@ public sealed class NeoAppBuilder
     private NeoExternalUrlScope? _externalLinkScope;
     private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
     private Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? _fileChooser;
+    private Action<NeoApplication, NeoPluginBuilder>? _configurePlugins;
+    private byte[]? _capabilities;
     private Session? _session;
     private Uri? _target;
     private string? _assetsDirectory;
@@ -163,6 +166,47 @@ public sealed class NeoAppBuilder
                 throw new ArgumentException("Permission identifiers must be non-empty and bounded.", nameof(permissions));
             _mainViewPermissions.Add(permission);
         }
+        return this;
+    }
+
+    /// <summary>Registers the plugins of the application, such as the desktop services, push, or passkeys, whose renderer handlers the generated <c>UseRpc</c> callback adds.</summary>
+    /// <param name="configure">Adds the plugins; it receives the application, whose dispatcher the services of a plugin take.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The callback runs once during startup on the native UI thread, before the RPC services are registered, so that the
+    /// services it creates are there for the handlers. The plugins start once the RPC host is built: starting binds the
+    /// notifications, which then hand over the tap that launched the application to the handlers that already listen. They stop
+    /// with the application. Registering a plugin or its handlers grants nothing: the page reaches their commands only with
+    /// the permissions of <see cref="UseCapabilities"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">Plugins were already registered.</exception>
+    public NeoAppBuilder UsePlugins(Action<NeoApplication, NeoPluginBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_configurePlugins is not null) throw new InvalidOperationException("Plugins can be registered only once.");
+        _configurePlugins = configure;
+        return this;
+    }
+
+    /// <summary>Opts the main view into capability authorization with a capability document, which can grant the scoped permissions of plugins.</summary>
+    /// <param name="utf8Json">The capability document as UTF-8 JSON; a capability that names the view <c>main</c> applies to the page.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The document is resolved at startup against the permissions of the generated contract and those of the plugins of
+    /// <see cref="UsePlugins"/>, for the platform that runs the application, so one document can serve several platforms through
+    /// its <c>platforms</c> selectors. It replaces <see cref="GrantMainView"/>, which grants only unscoped permissions of the
+    /// generated contract; an application uses one or the other.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="utf8Json"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="utf8Json"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">A capability document was already registered.</exception>
+    public NeoAppBuilder UseCapabilities(byte[] utf8Json)
+    {
+        ArgumentNullException.ThrowIfNull(utf8Json);
+        if (utf8Json.Length == 0) throw new ArgumentException("The capability document is empty.", nameof(utf8Json));
+        if (_capabilities is not null) throw new InvalidOperationException("A capability document can be registered only once.");
+        _capabilities = (byte[])utf8Json.Clone();
         return this;
     }
 
@@ -310,13 +354,21 @@ public sealed class NeoAppBuilder
     {
         NeoRpcHost? rpc = null;
         NeoEnvironment? environment = null;
+        NeoPluginHost? plugins = null;
         try
         {
+            if (_configurePlugins is not null)
+            {
+                var pluginBuilder = new NeoPluginBuilder();
+                _configurePlugins(application, pluginBuilder);
+                plugins = pluginBuilder.Build();
+            }
             var developmentUrl = DevelopmentUrl();
             var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
             var release = developmentOrigin is null;
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
-            var manifest = _mainViewPermissions.Count == 0 ? null : CreateCapabilityManifest(profile, release);
+            var manifest = _mainViewPermissions.Count == 0 && _capabilities is null ? null
+                : CreateCapabilityManifest(profile, release, plugins?.Plugins.Select(static plugin => plugin.PermissionCatalog).OfType<NeoPluginPermissionCatalog>() ?? []);
             var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions
             {
                 ContractHash = _contractHash!,
@@ -347,14 +399,18 @@ public sealed class NeoAppBuilder
                     cancellationToken).ConfigureAwait(true);
                 _target = new Uri("app://neoastra/index.html");
             }
-            _session = new Session(rpc, environment);
+            // The handlers listen before the plugins start, so that what a plugin reports while it starts reaches them.
+            if (plugins is not null) await plugins.StartAsync(application, cancellationToken).ConfigureAwait(true);
+            _session = new Session(rpc, environment, plugins);
             rpc = null;
             environment = null;
+            plugins = null;
         }
         finally
         {
             if (environment is not null) await environment.DisposeAsync().ConfigureAwait(true);
             if (rpc is not null) await rpc.DisposeAsync().ConfigureAwait(true);
+            if (plugins is not null) await plugins.DisposeAsync().ConfigureAwait(true);
         }
     }
 
@@ -429,12 +485,19 @@ public sealed class NeoAppBuilder
             if (declaration.ScopeRequired || declaration.ScopeFamily != NeoScopeFamily.None)
                 throw new InvalidOperationException($"Permission '{permission}' requires an explicit scoped capability manifest.");
         }
+        if (_capabilities is not null && _mainViewPermissions.Count != 0)
+            throw new InvalidOperationException("Grant the main view either with GrantMainView or with a capability document, not both.");
     }
 
-    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release)
+    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release) => CreateCapabilityManifest(profile, release, []);
+
+    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release, IEnumerable<NeoPluginPermissionCatalog> plugins)
     {
         var catalog = new NeoPermissionCatalogBuilder();
         foreach (var declaration in _permissionDeclarations!) catalog.Add(declaration);
+        foreach (var plugin in plugins) catalog.AddPlugin(plugin);
+        var options = new NeoCapabilityResolutionOptions { Platform = CurrentPlatform(), Release = release, Profile = profile };
+        if (_capabilities is not null) return NeoCapabilityManifest.Resolve(_capabilities, catalog.Build(), options);
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
@@ -454,15 +517,7 @@ public sealed class NeoAppBuilder
             writer.WriteEndArray();
             writer.WriteEndObject();
         }
-        return NeoCapabilityManifest.Resolve(
-            stream.ToArray(),
-            catalog.Build(),
-            new NeoCapabilityResolutionOptions
-            {
-                Platform = CurrentPlatform(),
-                Release = release,
-                Profile = profile,
-            });
+        return NeoCapabilityManifest.Resolve(stream.ToArray(), catalog.Build(), options);
     }
 
     // The development server of `dotnet neoastra dev`: an environment variable on the desktop and in the iOS simulator, which
@@ -573,7 +628,7 @@ public sealed class NeoAppBuilder
         await disposal.ConfigureAwait(false);
     }
 
-    private sealed class Session(NeoRpcHost rpc, NeoEnvironment environment) : IAsyncDisposable
+    private sealed class Session(NeoRpcHost rpc, NeoEnvironment environment, NeoPluginHost? plugins) : IAsyncDisposable
     {
         private readonly List<(global::NeoAstra.NeoAstra View, NeoRpcViewBinding Binding)> _views = [];
 
@@ -604,6 +659,8 @@ public sealed class NeoAppBuilder
             }
             await Environment.DisposeAsync().ConfigureAwait(false);
             await Rpc.DisposeAsync().ConfigureAwait(false);
+            // The plugins own the services that the handlers used.
+            if (plugins is not null) await plugins.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

@@ -47,6 +47,33 @@ await NeoApp.AttachAsync(app =>
 });
 ```
 
+A `NeoApp` application reaches the desktop services and the plugins through `UsePlugins` and `UseCapabilities`. `UsePlugins`
+adds the plugins on the UI thread with the application, whose dispatcher their services take, before the generated `UseRpc`
+callback registers their renderer handlers, and starts them once the RPC host is built, so that the tap of a notification that
+launched the application reaches handlers that already listen; they stop with the application. `UseCapabilities` takes the
+capability document that grants the page the permissions of the contract and of the plugins, with their scopes, resolved for the
+platform that runs it; it replaces `GrantMainView`, which grants only unscoped permissions of the contract.
+
+```csharp
+NeoDesktopServices? desktop = null;
+INeoPush? push = null;
+await NeoApp.AttachAsync(app =>
+{
+    app.UsePlugins((application, plugins) =>
+    {
+        desktop = NeoDesktopServices.CreateSystem("com.example.notes", "Notes", "1.0", dataDirectory, [], [], [], [], application.Dispatcher);
+        push = NeoPush.CreateSystem(desktop.Notifications, application.Dispatcher);
+        plugins.AddNeoAstraDesktop(desktop).AddNeoAstraPush(push);
+    });
+    app.UseCapabilities(capabilitiesJson);
+    app.UseRpc(rpc =>
+    {
+        rpc.AddNeoAstraDesktopHandlers(desktop!, new NeoDesktopRendererOptions());
+        rpc.AddNeoAstraPushHandlers(push!);
+    });
+});
+```
+
 ## Managed ordering
 
 `NeoApplication.State` transitions through `Created`, `Starting`, `Ready`, `QuitRequested`, `ClosingWindows`, `Stopping`, and `Stopped`. `Run` enters `Ready` after its startup callback; attached hosts call `NotifyReady`. State changes and launch delivery are serialized by the application dispatcher.
