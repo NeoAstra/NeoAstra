@@ -93,6 +93,10 @@ public sealed class DesktopServicesTests
         Assert.AreEqual(new NeoColor(0xAB, 0xCD, 0xEF, 0x80), DesktopRendererRegistration.ParseColor("#abcdef80"));
         foreach (var malformed in new[] { "102030", "#12345", "#12345g", "#1234567", "red" })
             Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.ParseColor(malformed));
+        // A window background has a color: no value is refused rather than taken for transparent.
+        Assert.AreEqual(new NeoColor(0x1C, 0x1C, 0x1E), DesktopRendererRegistration.RequiredColor("#1c1c1e"));
+        Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.RequiredColor(null));
+        Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.RequiredColor(""));
         var snapshotJson = JsonSerializer.Serialize(
             new DesktopWindowStateResult(new("Title", default, new(800, 600), default, default, true, true, false, 1, NeoWindowState.Maximized, true, true, false, true, false,
                 new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138), "display-1")),
@@ -196,6 +200,7 @@ public sealed class DesktopServicesTests
             var pluginPermissions = metadata.PermissionCatalog!;
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Commands, metadata.Commands.Select(static value => value.Name).ToArray());
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Events, metadata.Events.Select(static value => value.Name).ToArray());
+            Assert.AreEqual("window:polish", metadata.Commands.Single(static value => value.Name == "desktop.window.set-background-color").Permission);
             var allOperations = pluginPermissions.Permissions.SelectMany(static value => value.Commands).ToArray();
             CollectionAssert.AreEquivalent(allOperations, metadata.Commands.Select(static value => value.Name).Concat(metadata.Events.Select(static value => value.Name)).ToArray());
             Assert.IsTrue(metadata.Commands.All(command => pluginPermissions.Permissions.Single(permission => permission.Id == command.Permission).Commands.Contains(command.Name, StringComparer.Ordinal)));

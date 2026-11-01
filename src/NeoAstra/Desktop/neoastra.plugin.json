@@ -416,6 +416,12 @@
       "audited": true
     },
     {
+      "name": "desktop.window.set-background-color",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
       "name": "desktop.application.request-quit",
       "permission": "application:quit",
       "risk": "high",

@@ -86,7 +86,7 @@ export const desktopCommands = Object.freeze({
     setDecorations: "desktop.window.set-decorations", setResizable: "desktop.window.set-resizable", setAlwaysOnTop: "desktop.window.set-always-on-top", setTaskbarVisible: "desktop.window.set-taskbar-visible", close: "desktop.window.close",
     interceptClose: "desktop.window.intercept-close", completeClose: "desktop.window.complete-close", closeRequested: "desktop.window.close-requested",
     setTitleBar: "desktop.window.set-title-bar", startDrag: "desktop.window.start-drag", startResize: "desktop.window.start-resize", stateChanged: "desktop.window.state-changed",
-    setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", getExtraSupport: "desktop.window.get-extra-support", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme",
+    setIcon: "desktop.window.set-icon", setRepresentedFile: "desktop.window.set-represented-file", getExtraSupport: "desktop.window.get-extra-support", requestAttention: "desktop.window.request-attention", setProgress: "desktop.window.set-progress", setBadge: "desktop.window.set-badge", setDocumentEdited: "desktop.window.set-document-edited", setContentProtection: "desktop.window.set-content-protection", setTitleBarTheme: "desktop.window.set-titlebar-theme", setBackgroundColor: "desktop.window.set-background-color",
   }),
   application: Object.freeze({ requestQuit: "desktop.application.request-quit" }),
 } as const);
@@ -333,6 +333,8 @@ export function createDesktopClient(rpc: DesktopRpc) {
       setDocumentEdited: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setDocumentEdited, { value }, options),
       setContentProtection: (value: boolean, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setContentProtection, { value }, options),
       setTitleBarTheme: (theme: "System" | "Light" | "Dark", options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setTitleBarTheme, { theme }, options),
+      /** Sets the color that the window shows before and behind the page, as `#rrggbb` or `#rrggbbaa`; on Android the symbols of the system bars follow it. */
+      setBackgroundColor: (color: string, options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.window.setBackgroundColor, { color }, options),
     }),
     application: Object.freeze({
       requestQuit: (options?: NeoRpcCallOptions) => invoke<DesktopResult>(desktopCommands.application.requestQuit, {}, options),

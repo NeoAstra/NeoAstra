@@ -132,7 +132,7 @@ internal static class NeoDesktopRendererContract
         "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen",
         "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible", "desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close",
         "desktop.window.set-title-bar", "desktop.window.start-drag", "desktop.window.start-resize",
-        "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme",
+        "desktop.window.set-icon", "desktop.window.set-represented-file", "desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme", "desktop.window.set-background-color",
         "desktop.application.request-quit",
         "desktop.safe-storage.store", "desktop.safe-storage.retrieve", "desktop.safe-storage.delete", "desktop.safe-storage.contains",
         "desktop.haptics.play",
@@ -233,6 +233,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         Add(builder, "desktop.window.set-document-edited", "window:polish", SetWindowDocumentEditedAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-content-protection", "window:polish", SetWindowContentProtectionAsync, json.DesktopBoolRequest, json.DesktopStatusResult);
         Add(builder, "desktop.window.set-titlebar-theme", "window:polish", SetWindowTitleBarThemeAsync, json.DesktopWindowThemeRequest, json.DesktopStatusResult);
+        Add(builder, "desktop.window.set-background-color", "window:polish", SetWindowBackgroundColorAsync, json.DesktopColorRequest, json.DesktopStatusResult);
         Add(builder, "desktop.application.request-quit", "application:quit", RequestApplicationQuitAsync, json.DesktopEmptyRequest, json.DesktopStatusResult, TimeSpan.FromSeconds(35));
         Add(builder, "desktop.safe-storage.store", "safe-storage:store", StoreSecretAsync, json.DesktopSecretWriteRequest, json.DesktopStatusResult);
         Add(builder, "desktop.safe-storage.retrieve", "safe-storage:retrieve", RetrieveSecretAsync, json.DesktopIdRequest, json.DesktopBytesResult);
@@ -561,6 +562,7 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         catch (InvalidOperationException) { return Status(NeoDesktopStatus.Canceled, "pointer_released"); }
         catch (NotSupportedException) { return Status(NeoDesktopStatus.Unsupported); }
     }
+    internal static NeoColor RequiredColor(string? value) => string.IsNullOrEmpty(value) ? throw new ArgumentException("A color is required.", nameof(value)) : ParseColor(value);
     internal static NeoColor ParseColor(string? value)
     {
         if (string.IsNullOrEmpty(value)) return default;
@@ -670,6 +672,13 @@ internal sealed class DesktopRendererRegistration(NeoDesktopServices services, N
         => Status(await services.WindowPolish.SetContentProtectionAsync(RequiredWindow(context), request.Value, token).ConfigureAwait(false));
     private async ValueTask<DesktopStatusResult> SetWindowTitleBarThemeAsync(DesktopWindowThemeRequest request, NeoRpcContext context, CancellationToken token)
         => Status(await services.WindowPolish.SetTitleBarThemeAsync(RequiredWindow(context), request.Theme, token).ConfigureAwait(false));
+    // A page that changes its theme sets the color that the window shows before and behind it; on Android the symbols of the
+    // system bars follow it.
+    private static ValueTask<DesktopStatusResult> SetWindowBackgroundColorAsync(DesktopColorRequest request, NeoRpcContext context, CancellationToken token)
+    {
+        var color = RequiredColor(request.Color);
+        return MutateWindowAsync(context, window => window.BackgroundColor = color, token);
+    }
     private async ValueTask<DesktopStatusResult> StoreSecretAsync(DesktopSecretWriteRequest request, NeoRpcContext context, CancellationToken token)
     {
         EnsureAllowed(applicationOptions.AllowedSafeStorageKeys, request.Id, "safe-storage key");
@@ -924,6 +933,7 @@ internal sealed record DesktopDropFileRequest(string Token);
 internal sealed record DesktopWindowProgressRequest(NeoWindowProgressState State, double Value);
 internal sealed record DesktopWindowThemeRequest(NeoWindowTitleBarTheme Theme);
 internal sealed record DesktopHapticRequest(NeoHapticFeedback Feedback);
+internal sealed record DesktopColorRequest(string? Color);
 internal sealed record DesktopIdEvent(string Id, bool Secondary = false);
 internal sealed record DesktopNotificationActivatedEvent(string Id, string? ActionId, string? Payload);
 internal sealed record DesktopThemeChangedEvent(NeoThemeSnapshot Theme);
@@ -974,6 +984,7 @@ internal sealed record DesktopDropEvent(NeoDropEvent Drop);
 [JsonSerializable(typeof(DesktopWindowProgressRequest))]
 [JsonSerializable(typeof(DesktopWindowThemeRequest))]
 [JsonSerializable(typeof(DesktopHapticRequest))]
+[JsonSerializable(typeof(DesktopColorRequest))]
 [JsonSerializable(typeof(DesktopIdEvent))]
 [JsonSerializable(typeof(DesktopNotificationActivatedEvent))]
 [JsonSerializable(typeof(DesktopThemeChangedEvent))]

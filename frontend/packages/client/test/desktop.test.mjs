@@ -48,6 +48,7 @@ test("window extras use scoped files and focused typed payloads", async () => {
   await mock.client.window.setProgress("Paused", 0.5);
   await mock.client.window.setContentProtection(true);
   await mock.client.window.setTitleBarTheme("Dark");
+  await mock.client.window.setBackgroundColor("#1c1c1e");
   assert.deepEqual(mock.invocations, [
     { command: "desktop.window.get-extra-support", args: {} },
     { command: "desktop.window.set-icon", args: { root: "assets", relativePath: "app.ico", operation: "read" } },
@@ -55,6 +56,7 @@ test("window extras use scoped files and focused typed payloads", async () => {
     { command: "desktop.window.set-progress", args: { state: "Paused", value: 0.5 } },
     { command: "desktop.window.set-content-protection", args: { value: true } },
     { command: "desktop.window.set-titlebar-theme", args: { theme: "Dark" } },
+    { command: "desktop.window.set-background-color", args: { color: "#1c1c1e" } },
   ]);
 });
 
