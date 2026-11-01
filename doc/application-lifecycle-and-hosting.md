@@ -52,7 +52,7 @@ adds the plugins on the UI thread with the application, whose dispatcher their s
 callback registers their renderer handlers, and starts them once the RPC host is built, so that the tap of a notification that
 launched the application reaches handlers that already listen; they stop with the application. `UseCapabilities` takes the
 capability document that grants the page the permissions of the contract and of the plugins, with their scopes, resolved for the
-platform that runs it; it replaces `GrantMainView`, which grants only unscoped permissions of the contract.
+platform that runs it; it replaces `GrantMainView`, which grants only unscoped permissions of the contract. The RPC host of a `NeoApp` application takes only requests that name the contract hash of its generated bindings, the commands of the plugins included, so a page passes `neoRpcContractHash` of its generated module as the `contractHash` of the call options, for example in an adapter that it gives `createDesktopClient`.
 
 ```csharp
 NeoDesktopServices? desktop = null;
