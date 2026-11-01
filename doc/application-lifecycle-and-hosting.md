@@ -61,7 +61,8 @@ await NeoApp.AttachAsync(app =>
 {
     app.UsePlugins((application, plugins) =>
     {
-        desktop = NeoDesktopServices.CreateSystem("com.example.notes", "Notes", "1.0", dataDirectory, [], [], [], [], application.Dispatcher);
+        desktop = NeoDesktopServices.CreateSystem("com.example.notes", "Notes", "1.0", dataDirectory,
+            ["https://example.com"], [dataDirectory], [dataDirectory], [NeoOpenFileIntent.TextDocument], application.Dispatcher);
         push = NeoPush.CreateSystem(desktop.Notifications, application.Dispatcher);
         plugins.AddNeoAstraDesktop(desktop).AddNeoAstraPush(push);
     });
