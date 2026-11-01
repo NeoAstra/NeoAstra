@@ -13,8 +13,9 @@ iOS, the content of the activity on Android) with the page in it, so that the wi
 view when the platform ends its web content process. A later activity on Android, after back closed the previous window,
 takes a new window in the same application.
 
-The samples need the .NET 11 SDK with the `ios` and `android` workloads, which `global.json` selects, and the native libraries
-of the targets, which `eng/build_native.py` builds and stages:
+The samples need the .NET 11 SDK with the `ios` and `android` workloads, which `global.json` selects. The native libraries of
+the four mobile targets are checked in, as CI builds them; after a change of the native code, `eng/build_native.py` builds and
+stages them again:
 
 ```sh
 python eng/build_native.py --rid iossimulator-arm64
