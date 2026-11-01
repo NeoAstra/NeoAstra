@@ -1,0 +1,110 @@
+name: mobile
+
+# Builds what an iOS or Android application of NeoAstra builds: the mobile samples and an application of the neoastra-mobile
+# template, for the iOS simulator and for Android with the debug key. Nothing is signed for a device, and no Firebase project,
+# Apple team, or store account takes part.
+on:
+  push:
+    paths:
+      - 'native/**'
+      - 'src/**'
+      - 'frontend/packages/client/**'
+      - 'samples/mobile/**'
+      - 'templates/neoastra-mobile/**'
+      - 'templates/shared/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'eng/build_native.py'
+      - '.github/workflows/mobile.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'src/**'
+      - 'frontend/packages/client/**'
+      - 'samples/mobile/**'
+      - 'templates/neoastra-mobile/**'
+      - 'templates/shared/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'eng/build_native.py'
+      - '.github/workflows/mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    name: Mobile samples and template (iOS simulator, Android)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up the Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          add-to-path: false
+      # .NET 10 builds and packs NeoAstra (src/global.json); the .NET 11 SDK of samples/mobile/global.json builds the applications.
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: src/global.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: samples/mobile/global.json
+      - name: Install the iOS and Android workloads
+        working-directory: samples/mobile
+        run: dotnet workload install ios android
+      - name: Build the mobile native libraries
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          python eng/build_native.py --rid iossimulator-arm64 --skip-tests
+          python eng/build_native.py --rid android-arm64 --skip-tests
+      - name: Build the frontend client
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      # The installed Xcode may be older than the one that the iOS workload names; the simulator build does not need it newer.
+      - name: Build the mobile samples
+        working-directory: samples/mobile
+        run: |
+          dotnet build NeoAstra.Sample.Hello -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build NeoAstra.Sample.Hello -f net11.0-android -c Release -r android-arm64
+          dotnet build NeoAstra.Sample.iOS -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build NeoAstra.Sample.Android -c Release -r android-arm64
+      - name: Pack NeoAstra and its templates for the template application
+        working-directory: src
+        run: |
+          for project in NeoAstra.Core NeoAstra NeoAstra.Templates; do
+            dotnet pack "$project" -c Release -p:MinVerVersionOverride=0.0.0-mobile.ci -o "$GITHUB_WORKSPACE/artifacts/mobile-feed"
+          done
+      - name: Build an application of the neoastra-mobile template
+        run: |
+          root="$RUNNER_TEMP/template-mobile"
+          hive="$root/hive"
+          mkdir -p "$root"
+          cp samples/mobile/global.json "$root/global.json"
+          dotnet new install artifacts/mobile-feed/NeoAstra.Templates.0.0.0-mobile.ci.nupkg --debug:custom-hive "$hive"
+          dotnet new neoastra-mobile -n PocketApp -o "$root/PocketApp" --appIdentifier com.example.pocket --appDisplayName "Pocket App" --neoAstraVersion 0.0.0-mobile.ci --debug:custom-hive "$hive"
+          cat > "$root/PocketApp/NuGet.config" <<CONFIG
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration><packageSources><clear /><add key="local" value="$GITHUB_WORKSPACE/artifacts/mobile-feed" /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>
+          CONFIG
+          cd "$root/PocketApp"
+          dotnet build -f net11.0-ios -c Release -r iossimulator-arm64 -p:ValidateXcodeVersion=false
+          dotnet build -f net11.0-android -c Release -r android-arm64

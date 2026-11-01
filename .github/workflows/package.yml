@@ -53,6 +53,22 @@ jobs:
         with:
           name: native-osx-arm64
           path: src/NeoAstra.Core/runtimes/osx-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-ios-arm64
+          path: src/NeoAstra.Core/runtimes/ios-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-iossimulator-arm64
+          path: src/NeoAstra.Core/runtimes/iossimulator-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-android-arm64
+          path: src/NeoAstra.Core/runtimes/android-arm64/native
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-android-x64
+          path: src/NeoAstra.Core/runtimes/android-x64/native
       - name: Build and pack
         shell: pwsh
         run: |
