@@ -133,13 +133,13 @@ public static class NeoPushPluginExtensions
     /// shown when no page listens or none answers within <see cref="NeoPushRendererOptions.ForegroundDecisionTimeout"/>.
     /// </remarks>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The foreground decision timeout is not positive or longer than ten seconds.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The foreground decision timeout is not positive or longer than <see cref="NeoPushRendererOptions.MaximumForegroundDecisionTimeout"/>.</exception>
     public static NeoRpcBuilder AddNeoAstraPushHandlers(this NeoRpcBuilder builder, INeoPush push, NeoPushRendererOptions options)
     {
         ArgumentNullException.ThrowIfNull(builder); ArgumentNullException.ThrowIfNull(push); ArgumentNullException.ThrowIfNull(options);
         // iOS and Android hold the presentation only a few seconds before they show the message anyway.
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.ForegroundDecisionTimeout, TimeSpan.Zero, nameof(options));
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.ForegroundDecisionTimeout, TimeSpan.FromSeconds(10), nameof(options));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.ForegroundDecisionTimeout, NeoPushRendererOptions.MaximumForegroundDecisionTimeout, nameof(options));
         new PushRendererRegistration(push, options).Register(builder);
         return builder;
     }
@@ -151,8 +151,14 @@ public sealed class NeoPushRendererOptions
     /// <summary>Gets or sets whether the pages decide whether a message that arrives in the foreground is shown; <see langword="false"/> by default.</summary>
     public bool PagesDecideForegroundPresentation { get; set; }
 
-    /// <summary>Gets or sets how long a message in the foreground waits for the decision of a page before it is shown; three seconds by default, at most ten.</summary>
-    public TimeSpan ForegroundDecisionTimeout { get; set; } = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// The longest <see cref="ForegroundDecisionTimeout"/>, three seconds: Android shows a message after three and a half seconds
+    /// and iOS after four, whatever a page answers later.
+    /// </summary>
+    public static TimeSpan MaximumForegroundDecisionTimeout { get; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>Gets or sets how long a message in the foreground waits for the decision of a page before it is shown; three seconds by default, at most <see cref="MaximumForegroundDecisionTimeout"/>.</summary>
+    public TimeSpan ForegroundDecisionTimeout { get; set; } = MaximumForegroundDecisionTimeout;
 }
 
 internal sealed class PushRendererRegistration(INeoPush push, NeoPushRendererOptions options)

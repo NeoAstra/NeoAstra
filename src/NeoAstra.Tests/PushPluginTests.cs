@@ -270,6 +270,26 @@ public sealed class PushPluginTests
         new NeoRpcBuilder().AddNeoAstraPushHandlers(push);
         Assert.AreSame(application, push.ForegroundPresentation);
         Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder().AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = TimeSpan.Zero }));
+        // Android shows the message after three and a half seconds and iOS after four, whatever a page answers later.
+        Assert.Throws<ArgumentOutOfRangeException>(() => new NeoRpcBuilder().AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = TimeSpan.FromSeconds(3.5) }));
+        new NeoRpcBuilder().AddNeoAstraPushHandlers(push, new NeoPushRendererOptions { PagesDecideForegroundPresentation = true, ForegroundDecisionTimeout = NeoPushRendererOptions.MaximumForegroundDecisionTimeout });
+    }
+
+    [TestMethod]
+    public async Task ApplePush_ACallerThatGivesUpLeavesTheOthersTheAnswerOfApns()
+    {
+        await using var push = (IosPush)IosPush.Create(new NeoFakeNotifications(), null);
+        var first = push.BeginRegistration();
+        var second = push.BeginRegistration();
+        Assert.AreSame(first, second);
+        using var canceled = new CancellationTokenSource();
+        await canceled.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => first.WaitAsync(canceled.Token));
+        // The registration still waits for APNs, and its answer reaches the caller that kept waiting.
+        Assert.AreSame(second, push.BeginRegistration());
+        push.Registered("token", null);
+        Assert.AreEqual("token", (await second.WaitAsync(TimeSpan.FromSeconds(5))).Token);
+        Assert.AreNotSame(second, push.BeginRegistration());
     }
 
     [TestMethod]

@@ -151,12 +151,11 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         var dispatcher = _dispatcher ?? throw new InvalidOperationException("The iOS push service must be bound to the UI dispatcher before use.");
         // APNs registers the application without the permission of the user, which only showing the notifications needs.
         _canDisplay = ask ? await AuthorizeAsync(dispatcher, cancellationToken).ConfigureAwait(false) : await CanDisplayAsync(cancellationToken).ConfigureAwait(false);
-        TaskCompletionSource<(string? Token, string? Error)> registration;
-        lock (_sync) registration = _registration ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registration = BeginRegistration();
         await Invoke(dispatcher, () => Send(Send(Class("UIApplication"), "sharedApplication"), "registerForRemoteNotifications"), cancellationToken).ConfigureAwait(false);
         try
         {
-            var (token, error) = await registration.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+            var (token, error) = await registration.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
             if (token is not null) return NeoDesktopResult<NeoPushRegistration>.Success(Registration(token, _canDisplay));
             // Without the aps-environment entitlement iOS does not register the application.
             return error is not null && error.Contains("aps-environment", StringComparison.Ordinal)
@@ -164,7 +163,13 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
                 : NeoPush.Failure(NeoDesktopStatus.Failed, null);
         }
         catch (TimeoutException) { return NeoPush.Failure(NeoDesktopStatus.Failed, NeoPush.TimeoutCode); }
-        finally { lock (_sync) if (ReferenceEquals(_registration, registration)) _registration = null; }
+    }
+
+    // The callers that register while APNs has not answered wait for the same answer, which alone ends the registration: a
+    // caller that gives up or times out leaves it to the others.
+    internal Task<(string? Token, string? Error)> BeginRegistration()
+    {
+        lock (_sync) return (_registration ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
     }
 
     // iOS asks once and then answers at once.
@@ -189,7 +194,9 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
         NeoApplePush.Detach(this);
         if (_source is not null) { _source.ExternalReceived -= OnReceived; _source.ExternalActivated -= OnActivated; }
         TokenChanged = null; MessageReceived = null; MessageOpened = null;
-        lock (_sync) _registration?.TrySetResult((null, null));
+        TaskCompletionSource<(string? Token, string? Error)>? registration;
+        lock (_sync) { registration = _registration; _registration = null; }
+        registration?.TrySetResult((null, null));
         return ValueTask.CompletedTask;
     }
 
@@ -197,7 +204,7 @@ internal sealed partial class IosPush : INeoPush, INeoPushDispatcherBinding, IAs
     {
         TaskCompletionSource<(string? Token, string? Error)>? registration;
         bool changed;
-        lock (_sync) { registration = _registration; changed = token is not null && !string.Equals(token, _token, StringComparison.Ordinal); if (token is not null) _token = token; }
+        lock (_sync) { registration = _registration; _registration = null; changed = token is not null && !string.Equals(token, _token, StringComparison.Ordinal); if (token is not null) _token = token; }
         registration?.TrySetResult((token, error));
         if (changed && Volatile.Read(ref _disposed) == 0) Raise(() => TokenChanged?.Invoke(this, Registration(token!, _canDisplay)));
     }
