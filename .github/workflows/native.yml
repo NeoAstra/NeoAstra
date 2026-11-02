@@ -78,8 +78,9 @@ jobs:
           - rid: osx-arm64
             runner: macos-latest
             skip_tests: false
+          # Build the shipped Linux runtimes on the oldest supported glibc (Ubuntu 24.04).
           - rid: linux-x64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             skip_tests: false
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
