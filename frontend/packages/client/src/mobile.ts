@@ -8,7 +8,8 @@ export interface NeoKeyboardState {
 
 /**
  * Calls `handler` each time the keyboard of iOS or Android comes up, changes, or goes, while the application keeps it over the page
- * (`NeoAstraIOSKeyboardOverlay`, `NeoAstraAndroidKeyboardOverlay`); the page then keeps its fields clear of it itself.
+ * (`NeoAstraIOSKeyboardOverlay`, `NeoAstraAndroidKeyboardOverlay` with `NeoAstraAndroidEdgeToEdge`); the page then keeps its
+ * fields clear of it itself.
  * Returns a function that stops the calls.
  */
 export function onKeyboard(handler: (state: NeoKeyboardState) => void, target: EventTarget = globalThis): () => void {
