@@ -1,4 +1,5 @@
 #include "../common/native_internal.hpp"
+#include "gtk_renderer.hpp"
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
@@ -733,6 +734,18 @@ void clear_finished(GObject* object,GAsyncResult* result,void* data){std::unique
 }
 
 namespace {
+// Whether GSK_RENDERER is the one NeoAstra chose, which the applications it opens addresses with do not get.
+std::atomic<bool> gsk_renderer_set{};
+// GTK reads GSK_RENDERER when it creates the renderer of a window, so the display it has opened can decide it. g_setenv
+// is not safe while another thread reads the environment, as threads of .NET and of GLib already can, and glibc before
+// 2.41 can free the array that such a thread reads: the variable is set at most once, before the first window.
+void choose_renderer(bool gtk_initialized_before) noexcept {
+    auto* display=gdk_display_get_default();
+    // Of the Wayland backend of GDK, which GTK may be built without.
+    const auto wayland=g_type_from_name("GdkWaylandDisplay");
+    const neo_gtk_renderer_facts facts{g_getenv("GSK_RENDERER"),gtk_get_minor_version(),gtk_initialized_before,display&&wayland&&G_TYPE_CHECK_INSTANCE_TYPE(display,wayland),neo_nvidia_driver_loaded()};
+    if(const auto* renderer=neo_gtk_renderer_override(facts)){g_setenv("GSK_RENDERER",renderer,TRUE);gsk_renderer_set=true;}
+}
 void unwatch_monitors(gtk_app* state,neoastra_app_t* app) noexcept {for(auto* monitor:state->watched){g_signal_handlers_disconnect_by_data(monitor,app);g_object_unref(monitor);}state->watched.clear();}
 void watch_monitors(neoastra_app_t* app) noexcept;
 gboolean read_changed_displays(void* data){
@@ -759,7 +772,11 @@ void watch_monitors(neoastra_app_t* app) noexcept {
 }
 }
 
-bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t** error) noexcept {if(!gtk_init_check()){neo_fail(error,NEOASTRA_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();state->loop=g_main_loop_new(state->context,FALSE);if(!state->loop){g_main_context_unref(state->context);delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK main-loop allocation failed");return false;}app->platform=state;
+bool neo_platform_initialize(neoastra_app_t* app,neoastra_error_t** error) noexcept {
+    // An application that hosts NeoAstra in its own GTK windows has initialized GTK and chosen their renderer.
+    const bool gtk_initialized_before=gtk_is_initialized();
+    if(!gtk_init_check()){neo_fail(error,NEOASTRA_ERROR_BACKEND_UNAVAILABLE,"GTK could not connect to a display",0,"gtk");return false;}
+    choose_renderer(gtk_initialized_before);auto* state=new(std::nothrow) gtk_app;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK backend allocation failed");return false;}state->context=g_main_context_ref_thread_default();state->loop=g_main_loop_new(state->context,FALSE);if(!state->loop){g_main_context_unref(state->context);delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"GTK main-loop allocation failed");return false;}app->platform=state;
     // A monitor that comes or goes changes the list, and one that changes its geometry, scale, or work area notifies.
     if(auto* display=gdk_display_get_default()){state->monitors=G_LIST_MODEL(g_object_ref(gdk_display_get_monitors(display)));state->monitors_changed=g_signal_connect(state->monitors,"items-changed",G_CALLBACK(monitors_changed),app);}
     watch_monitors(app);return true;}
@@ -951,7 +968,7 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }
-bool neo_platform_open_external(const std::string& uri,int64_t* native_code) noexcept {GError* error{};const bool opened=g_app_info_launch_default_for_uri(uri.c_str(),nullptr,&error);if(error){*native_code=error->code;g_error_free(error);}return opened;}
+bool neo_platform_open_external(const std::string& uri,int64_t* native_code) noexcept {GError* error{};auto* context=neo_external_launch_context(gsk_renderer_set);const bool opened=g_app_info_launch_default_for_uri(uri.c_str(),context,&error);if(context)g_object_unref(context);if(error){*native_code=error->code;g_error_free(error);}return opened;}
 // GTK 4 has no public way to hand a widget a synthesized pointer event.
 neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t* view,double,double) noexcept {auto* state=static_cast<gtk_view*>(view->platform);return !state||!state->widget?NEOASTRA_ERROR_NOT_INITIALIZED:NEOASTRA_ERROR_NOT_SUPPORTED;}
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept {

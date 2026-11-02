@@ -57,6 +57,14 @@ Every platform needs:
 - WebKitGTK runs its web process in a sandbox that needs unprivileged user namespaces. Where a system
   restricts them, pages do not load. That was met on the Ubuntu 24.04 runner of GitHub Actions, not in
   a desktop session.
+- On Wayland, where the NVIDIA driver is loaded (`/sys/module/nvidia_drm` or `/proc/driver/nvidia/version`),
+  on a laptop with two GPUs too, NeoAstra sets `GSK_RENDERER=gl` (`ngl` before GTK 4.20) when it starts, if
+  GTK is 4.16 or later, the variable is not set or empty, and the application has not initialized GTK itself.
+  GTK's Vulkan renderer, its default on Wayland, refuses the DMA-BUF frames of WebKitGTK with that driver and
+  copies each frame to memory and back; X11 already draws with GL. Start the application with
+  `GSK_RENDERER=vulkan` in its environment (the shell, the `.desktop` file) to keep Vulkan. The applications
+  that open an address from a page do not get the variable, but the processes that the application or
+  NeoAstra's desktop services start do.
 
 ## Troubleshooting
 
