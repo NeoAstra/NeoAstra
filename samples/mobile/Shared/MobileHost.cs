@@ -94,6 +94,7 @@ internal sealed class MobileHost
             AuthorizationService = new NeoCapabilityAuthorizationService(capabilities),
         });
         builder.AddGreetingService(new GreetingService());
+        builder.AddLinkDecisionService(LinkDecisionService.Instance);
         builder.AddNeoAstraDesktopHandlers(desktop, new NeoDesktopRendererOptions
         {
             AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
@@ -148,6 +149,8 @@ internal sealed class MobileHost
             ViewLabel = "main",
             BridgePolicy = NeoBridgePolicy.TrustedOrigins,
             BridgeOrigins = ["app://neoastra"],
+            // The page cannot walk back to a document it left: the history card shows that history.back() stays.
+            BrowserFeatures = new NeoBrowserFeatures { HistoryNavigation = false },
         });
         _binding = NeoRpcViewBinding.Bind(_rpc, _view);
         // What the page asks of the browser: its dialogs show as a native dialog, a file input opens the picker of the system,
@@ -155,6 +158,10 @@ internal sealed class MobileHost
         _view.ScriptDialogRequested = ShowScriptDialogAsync;
         _view.FileChooserRequested = _ => ValueTask.FromResult(new NeoFileChooserDecision(NeoDecisionAction.Default));
         _view.PermissionRequested = request => ValueTask.FromResult(request.Kind is NeoPermissionKind.Camera or NeoPermissionKind.Microphone ? NeoPermissionDecision.Default : NeoPermissionDecision.DenyOnce);
+        // A link leaves the application only when the user tapped it, as NeoApp decides: the page stays on its own documents, an
+        // address of GitHub opens in the browser, and a link that a script clicks opens nothing. The link card shows the decision.
+        _view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(LinkDecisionService.Instance.Decide(request.Uri, request.IsMainFrame, request.IsUserInitiated, request.IsLinkActivation)));
+        _view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(request.TargetUri is { } target ? LinkDecisionService.Instance.Decide(target, true, request.IsUserInitiated, request.IsLinkActivation, newWindow: true) : NeoDecisionAction.Cancel));
         // iOS and Android end the web content process of a view under memory pressure; a lost view is recreated.
         _view.ProcessFailed += async (_, _) => await RecreateAsync();
         await _view.NavigateAsync(new Uri("app://neoastra/index.html"));
@@ -195,10 +202,33 @@ internal sealed class GreetingService
         ValueTask.FromResult(new GreetingResponse($"Hello, {request.Name}!"));
 }
 
+// The decisions about links, the last of which the page reads to show what the host saw.
+[NeoRpcService("links")]
+internal sealed class LinkDecisionService
+{
+    public static LinkDecisionService Instance { get; } = new();
+    private LinkDecision? _last;
+
+    public NeoDecisionAction Decide(Uri target, bool isMainFrame, bool isUserInitiated, bool? isLinkActivation, bool newWindow = false)
+    {
+        if (target.Scheme == "app") return newWindow ? NeoDecisionAction.Cancel : NeoDecisionAction.Allow;
+        var action = isMainFrame && isUserInitiated && target.Scheme == "https" && target.Host == "github.com" ? NeoDecisionAction.OpenExternal : NeoDecisionAction.Cancel;
+        _last = new LinkDecision(target.ToString(), isUserInitiated, isLinkActivation, action.ToString());
+        return action;
+    }
+
+    [NeoRpcMethod("last")]
+    public ValueTask<LinkDecision> LastAsync(LinkDecisionRequest request) => ValueTask.FromResult(_last ?? new LinkDecision(null, false, null, "None"));
+}
+
+internal sealed record LinkDecisionRequest;
+internal sealed record LinkDecision(string? Uri, bool UserInitiated, bool? LinkActivation, string Decision);
 internal sealed record GreetingRequest(string Name);
 internal sealed record GreetingResponse(string Message);
 
 [JsonSerializable(typeof(GreetingRequest))]
 [JsonSerializable(typeof(GreetingResponse))]
+[JsonSerializable(typeof(LinkDecisionRequest))]
+[JsonSerializable(typeof(LinkDecision))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class AppJsonContext : JsonSerializerContext;

@@ -51,6 +51,28 @@
             ]
           }
         },
+        {
+          "id": "clipboard:read-rich",
+          "scope": {
+            "formats": [
+              "html"
+            ],
+            "operations": [
+              "read"
+            ]
+          }
+        },
+        {
+          "id": "clipboard:write-rich",
+          "scope": {
+            "formats": [
+              "html"
+            ],
+            "operations": [
+              "write"
+            ]
+          }
+        },
         "safe-storage:store",
         "safe-storage:retrieve",
         "safe-storage:delete",

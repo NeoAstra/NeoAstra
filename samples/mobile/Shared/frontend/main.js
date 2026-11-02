@@ -1,4 +1,4 @@
-import { invoke, rpcClient, getRuntimeInfo, createDesktopClient } from "./client/index.js";
+import { invoke, rpcClient, getRuntimeInfo, createDesktopClient, onKeyboard, keyboardHeight } from "./client/index.js";
 
 const features = document.querySelector("#features");
 const encode = text => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
@@ -172,6 +172,49 @@ card("Reminder", (row, run) => {
   button(row, "Waiting tap", () => run(async () => ({ status: "Success", activation: await desktop.notifications.takeLaunchActivation() ?? null })));
   desktop.notifications.onActivated(activation => run(async () => ({ status: "Activated", ...activation })));
   run(async () => { const activation = await desktop.notifications.takeLaunchActivation(); return activation ? { status: "Launched", ...activation } : { status: "Success", activation: null }; });
+});
+// A link leaves the application only when the user tapped it (MobileHost decides as NeoApp does): the tapped link opens GitHub in
+// the browser, the same link clicked by a script a few seconds after a tap opens nothing. The host tells what it saw.
+card("Link: tap versus script", (row, run) => {
+  const link = document.createElement("a");
+  link.href = "https://github.com/NeoAstra/NeoAstra";
+  link.textContent = "Tap: opens GitHub";
+  row.append(link);
+  // The badge says whether the host decided as expected: OpenExternal for the tap, Cancel for the script.
+  const decision = expected => run(async () => { const last = await invoke("links.last", {}); return { status: last.decision === expected ? "Success" : "Failed", expected, ...last }; });
+  const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+  link.addEventListener("click", event => { if (event.isTrusted) setTimeout(() => decision("OpenExternal"), 1000); });
+  button(row, "Script clicks it in 6 s: opens nothing", () => run(async () => {
+    await wait(6000);
+    link.click();
+    await wait(1000);
+    return decision("Cancel");
+  }));
+});
+// HTML on the clipboard: copied here, or copied in Safari or Chrome, which may keep it as data rather than as text.
+card("Clipboard HTML", (row, run) => {
+  button(row, "Copy HTML", () => run(() => desktop.clipboard.write("html", encode("<b>NeoAstra</b> <i>rich text</i>"))));
+  button(row, "Paste HTML", () => run(async () => { const value = await desktop.clipboard.read("html"); return value.base64 ? { ...value, html: decode(value.base64) } : value; }));
+});
+// The view refuses to walk back to a document it left (HistoryNavigation off): on the second page, history.back() stays there.
+card("History off", (row, run) => {
+  button(row, "Open a second page", () => { location.href = "second.html"; });
+  run(async () => ({ status: "Success", historyLength: history.length }));
+});
+// Two notifications whose IDs have the same hash code in Java ("FB" and "Ea"): each tap brings its own payload, which the
+// Reminder card reports as "Activated".
+card("Notifications FB and Ea", (row, run) => {
+  const show = id => desktop.notifications.show({ appIdentity: "dev.neoastra.sample.mobile", category: "general", urgency: "normal", persistent: false,
+    id, title: `Notification ${id}`, body: `Tap me: the page must report the payload "${id}".`, payload: id, actions: [] });
+  button(row, "Show both", () => run(async () => ({ status: "Success", FB: (await show("FB")).status, Ea: (await show("Ea")).status })));
+});
+// The keyboard lies over the page (NeoAstraIOSKeyboardOverlay, NeoAstraAndroidKeyboardOverlay): the page learns what it covers.
+card("Keyboard", (row, run) => {
+  const field = input(row, "");
+  field.placeholder = "Tap to open the keyboard";
+  // The page keeps the field clear of the keyboard itself, with the room that the body leaves below.
+  onKeyboard(state => { if (state.height > 0 && document.activeElement === field) setTimeout(() => field.scrollIntoView({ block: "center", behavior: "smooth" }), state.duration * 1000); });
+  onKeyboard(state => run(async () => ({ status: "Success", ...state, variable: keyboardHeight() })));
 });
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));

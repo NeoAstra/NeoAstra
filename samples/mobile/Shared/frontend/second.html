@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Second page</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Second page</h1>
+    <p>The view refuses the documents of its history: back stays here.</p>
+  </header>
+  <main>
+    <section class="card">
+      <h2><span>history.back()</span><span class="badge" id="badge">…</span></h2>
+      <div class="row"><button id="back">history.back()</button><a href="index.html">Home</a></div>
+      <pre id="output"></pre>
+    </section>
+  </main>
+  <script>
+    const output = document.querySelector("#output"), badge = document.querySelector("#badge");
+    document.querySelector("#back").onclick = () => {
+      const before = location.href;
+      history.back();
+      setTimeout(() => {
+        const stayed = location.href === before;
+        badge.textContent = stayed ? "Success" : "Failed";
+        badge.className = `badge ${stayed ? "Success" : "Failed"}`;
+        output.textContent = stayed ? "Still on the second page: the history navigation was refused." : "The view went back.";
+      }, 1500);
+    };
+  </script>
+</body>
+</html>

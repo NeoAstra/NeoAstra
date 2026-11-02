@@ -41,3 +41,31 @@ They reference the NeoAstra projects and import the targets that the `NeoAstra.C
 (and `NeoAstra.Sample.Android` those of the location plugin);
 see [building](../../doc/building.md) for what those targets do and for what the mobile backends do not offer yet. These
 samples are not part of `src/NeoAstra.slnx`, so the desktop build needs no mobile workload.
+
+## Trying it on a device
+
+- **Android**: a phone with USB debugging that `adb devices` lists; `./run.sh android NeoAstra.Sample.Android` builds a release
+  build signed with the debug key of the SDK, installs it, and starts it. Push needs a `google-services.json` of a Firebase
+  project of your own next to the project; without one, the push card answers `Unsupported` and everything else works.
+- **iOS simulator**: `./run.sh ios-simulator NeoAstra.Sample.iOS` on the booted simulator, push included (`xcrun simctl push`).
+- **iPhone**: `./run.sh ios-device NeoAstra.Sample.iOS`, signed with your `Apple Development` identity and the team profile that
+  Xcode manages, which the iPhone must be in. A build for a device leaves push out, which a wildcard profile does not allow;
+  `-p:NeoAstraSamplePush=true` adds it for a profile of the bundle with push. Passkeys and purchases need a domain and products
+  of your own (`NeoAstraSamplePasskeyDomain`, the product field of the card).
+
+## Checking that it works
+
+Every card calls one capability and shows the status and the answer of the host; a green badge is a success. These cards check
+behavior that a quick look does not show:
+
+| Card | What to do | What happens |
+| --- | --- | --- |
+| Link: tap versus script | Tap the link. Then tap the button and wait six seconds | The tap opens GitHub in the browser and the card reports `OpenExternal`, user-initiated. The script's click opens nothing and reports `Cancel`, not user-initiated |
+| Clipboard HTML | Copy HTML, then Paste HTML; also copy a part of a web page in Safari or Chrome first | The HTML comes back, also when the browser kept it as data |
+| History off | Open a second page, tap `history.back()` | The page stays: the view refuses the documents of its history |
+| Notifications FB and Ea | Show both, tap each in the notification center | The Reminder card reports `Activated` with the ID and the payload of the one tapped: `FB` brings `FB`, `Ea` brings `Ea`, although the two IDs have the same hash code in Java |
+| Keyboard | Tap the field | The keyboard lies over the page, the card reports its height and the duration of its animation, and the page moves the field above it |
+| Reminder | Ask, then In 10 s, and close the application | The notification comes after ten seconds; tapping it starts the application, and the card reports the tap as `Launched` |
+| Back button (Android) | Open a layer twice, then press back three times | Back closes the two layers first, then the window |
+| Window color | Dark, then Light | The window behind the page and, on Android, the symbols of the system bars follow |
+| Displays | Read | The screen of the phone with its size, scale, and safe area |

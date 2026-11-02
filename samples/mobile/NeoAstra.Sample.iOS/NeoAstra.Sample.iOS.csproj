@@ -8,12 +8,15 @@
     <ApplicationId>dev.neoastra.sample.mobile</ApplicationId>
     <ApplicationTitle>NeoAstra</ApplicationTitle>
     <IsPackable>false</IsPackable>
+    <!-- The keyboard lies over the page, which learns its height (the Keyboard card). -->
+    <NeoAstraIOSKeyboardOverlay>true</NeoAstraIOSKeyboardOverlay>
     <TrimMode Condition="'$(Configuration)' == 'Release'">full</TrimMode>
   </PropertyGroup>
   <!-- APNs registers only an application with the aps-environment entitlement. The simulator takes it as it is; a device needs a
-       provisioning profile with push, so a device build asks for it with NeoAstraSamplePush=true. -->
+       provisioning profile with push, so a device build asks for it with NeoAstraSamplePush=true. The file is not named
+       Entitlements.plist, which the iOS SDK would take for every build, the one for a device without push included. -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-x64' Or '$(NeoAstraSamplePush)' == 'true'">
-    <CodesignEntitlements>Entitlements.plist</CodesignEntitlements>
+    <CodesignEntitlements>Entitlements.Push.plist</CodesignEntitlements>
   </PropertyGroup>
   <!-- A passkey needs a relying party whose apple-app-site-association lists this application: a local build names its domain
        with NeoAstraSamplePasskeyDomain, which becomes the webcredentials of the associated domains entitlement. -->

@@ -10,6 +10,10 @@
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <IsPackable>false</IsPackable>
+    <!-- The keyboard lies over the page, which learns its height (the Keyboard card); Android reports it to an edge-to-edge
+         window, which draws under the system bars while the page keeps clear of them with env(safe-area-inset-*). -->
+    <NeoAstraAndroidKeyboardOverlay>true</NeoAstraAndroidKeyboardOverlay>
+    <NeoAstraAndroidEdgeToEdge>true</NeoAstraAndroidEdgeToEdge>
     <TrimMode>full</TrimMode>
   </PropertyGroup>
   <ItemGroup>
