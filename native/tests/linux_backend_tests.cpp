@@ -1,4 +1,5 @@
 #include "neoastra.h"
+#include "../src/linux/gtk_renderer.hpp"
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
@@ -9,6 +10,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -130,6 +132,88 @@ GtkWindow* gtk_window(neoastra_window_t* window) {
     handle.version = 1;
     assert(neoastra_window_get_native_handle(window, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW, &handle) == NEOASTRA_OK);
     return GTK_WINDOW(handle.value);
+}
+
+// GTK draws with GL instead of Vulkan on Wayland where the NVIDIA driver is loaded, whose DMA-BUF frames Vulkan would
+// read back to memory at every frame. GTK before 4.16 and on X11 draws with GL by itself. The renderer that GSK_RENDERER
+// names is the one of the user, and so are those of an application that initialized GTK before NeoAstra.
+void test_renderer_is_gl_on_wayland_with_the_nvidia_driver() {
+    const auto renderer = [](const char* variable, unsigned minor, bool initialized_before, bool wayland, bool nvidia) {
+        return neo_gtk_renderer_override({variable, minor, initialized_before, wayland, nvidia});
+    };
+    assert(g_strcmp0(renderer(nullptr, 22, false, true, true), "gl") == 0);
+    assert(g_strcmp0(renderer(nullptr, 20, false, true, true), "gl") == 0);
+    // GTK 4.18 warns that gl named the old GL renderer, which it has removed, and 4.16 still draws with that one.
+    assert(g_strcmp0(renderer(nullptr, 19, false, true, true), "ngl") == 0);
+    assert(g_strcmp0(renderer(nullptr, 18, false, true, true), "ngl") == 0);
+    assert(g_strcmp0(renderer(nullptr, 17, false, true, true), "ngl") == 0);
+    assert(g_strcmp0(renderer(nullptr, 16, false, true, true), "ngl") == 0);
+    assert(renderer(nullptr, 14, false, true, true) == nullptr);
+    // GTK ignores an empty variable.
+    assert(g_strcmp0(renderer("", 22, false, true, true), "gl") == 0);
+    assert(renderer(nullptr, 22, false, true, false) == nullptr);
+    assert(renderer(nullptr, 22, false, false, true) == nullptr);
+    assert(renderer(nullptr, 22, true, true, true) == nullptr);
+    assert(renderer("vulkan", 22, false, true, true) == nullptr);
+    assert(renderer("cairo", 22, false, true, true) == nullptr);
+}
+
+bool environment_has(const gchar* const* environment, const char* name) {
+    for (auto* entry = environment; entry && *entry; ++entry)
+        if (g_str_has_prefix(*entry, name) && (*entry)[strlen(name)] == '=') return true;
+    return false;
+}
+
+// The applications that NeoAstra opens addresses with do not get the renderer it chose: in another version of GTK, the
+// same name is another renderer or a warning. A renderer of the user is theirs to pass on.
+void test_opened_applications_do_not_get_the_renderer_of_neoastra() {
+    auto* before = g_strdup(g_getenv("GSK_RENDERER"));
+    g_setenv("GSK_RENDERER", "gl", TRUE);
+    assert(neo_external_launch_context(false) == nullptr);
+    auto* context = neo_external_launch_context(true);
+    assert(context != nullptr);
+    auto* environment = g_app_launch_context_get_environment(context);
+    assert(!environment_has(environment, "GSK_RENDERER") && environment_has(environment, "XDG_DATA_HOME"));
+    g_strfreev(environment);
+    g_object_unref(context);
+    if (before) g_setenv("GSK_RENDERER", before, TRUE);
+    else g_unsetenv("GSK_RENDERER");
+    g_free(before);
+}
+
+int gsk_warnings{};
+GLogWriterOutput count_gsk_warnings(GLogLevelFlags level, const GLogField* fields, gsize count, gpointer data) {
+    if (level & (G_LOG_LEVEL_WARNING | G_LOG_LEVEL_CRITICAL))
+        for (gsize index = 0; index < count; ++index)
+            if (g_str_equal(fields[index].key, "GLIB_DOMAIN") && fields[index].length < 0 && g_str_equal(static_cast<const char*>(fields[index].value), "Gsk")) ++gsk_warnings;
+    return g_log_writer_default(level, fields, count, data);
+}
+
+// The renderer is chosen once GTK has opened its display, before the first window. `before` is GSK_RENDERER before the
+// attach. A window of a session on Wayland with the NVIDIA driver and GTK 4.16 or later draws with GL, without a warning.
+void test_windows_draw_with_the_renderer_chosen_for_them(neoastra_app_t* app, const char* before) {
+    const auto minor = gtk_get_minor_version();
+    auto* display = gdk_display_get_default();
+    const auto wayland_type = g_type_from_name("GdkWaylandDisplay");
+    const bool wayland = display && wayland_type && G_TYPE_CHECK_INSTANCE_TYPE(display, wayland_type);
+    const bool chosen = wayland && neo_nvidia_driver_loaded() && minor >= 16 && (!before || !*before);
+    assert(g_strcmp0(g_getenv("GSK_RENDERER"), chosen ? (minor >= 20 ? "gl" : "ngl") : before) == 0);
+    if (!chosen) {
+        std::fprintf(stderr, "SKIP the renderer of windows: NeoAstra chooses none here (GTK 4.%u, %s, NVIDIA driver %s, GSK_RENDERER %s)\n",
+            minor, wayland ? "Wayland" : "not Wayland", neo_nvidia_driver_loaded() ? "loaded" : "not loaded", before ? before : "not set");
+        return;
+    }
+    const auto warnings = gsk_warnings;
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(GTK_WIDGET(host)) > 0; });
+    auto* renderer = gtk_native_get_renderer(GTK_NATIVE(host));
+    assert(renderer != nullptr);
+    // Up to GTK 4.17 GskGLRenderer is the old GL renderer, and GskNglRenderer the one of ngl.
+    assert(g_str_equal(G_OBJECT_TYPE_NAME(renderer), minor >= 18 ? "GskGLRenderer" : "GskNglRenderer"));
+    assert(gsk_warnings == warnings);
+    neoastra_window_release(window);
 }
 
 // A window reports the size it has. The size it was asked for is what it starts with: once it is on screen GTK lays
@@ -742,6 +826,8 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
 } // namespace
 
 int main() {
+    // Before anything logs: the renderer test counts the warnings of GTK's renderers.
+    g_log_set_writer_func(count_gsk_warnings, nullptr, nullptr);
     char* created = g_dir_make_tmp("neoastra-linux-backend-tests-XXXXXX", nullptr);
     assert(created != nullptr);
     const auto base = std::filesystem::canonical(created);
@@ -753,6 +839,12 @@ int main() {
     // keeps unprivileged user namespaces from it, as a runner of GitHub Actions does, and a page then does not load.
     g_setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", TRUE);
 
+    test_renderer_is_gl_on_wayland_with_the_nvidia_driver();
+    test_opened_applications_do_not_get_the_renderer_of_neoastra();
+    // A copy: the attach may set the variable, which can free the value read before.
+    auto* renderer_before = g_strdup(g_getenv("GSK_RENDERER"));
+    assert(!gtk_is_initialized());
+
     neoastra_app_options_t options{};
     options.size = sizeof(options);
     options.version = 1;
@@ -760,6 +852,8 @@ int main() {
     neoastra_app_t* app = nullptr;
     assert(neoastra_app_attach(&options, &app, nullptr) == NEOASTRA_OK && app != nullptr);
 
+    test_windows_draw_with_the_renderer_chosen_for_them(app, renderer_before);
+    g_free(renderer_before);
     test_window_reports_the_size_it_has(app);
     test_view_leaves_its_window(app);
     test_view_can_be_released_from_a_multi_event_drop(app);
