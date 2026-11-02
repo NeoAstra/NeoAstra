@@ -5,22 +5,24 @@ using System.Text;
 
 namespace NeoAstra.Desktop.Clipboard;
 
-internal sealed class IosClipboard(NeoDispatcher? dispatcher) : INeoClipboard
+internal sealed class IosClipboard(NeoDispatcher? dispatcher) : INeoClipboard, INeoApplicationBoundDesktopService
 {
     private const string HtmlType = "public.html";
-    private readonly NeoDispatcher? _dispatcher = dispatcher;
+    private NeoDispatcher? _dispatcher = dispatcher;
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Limited, 1, 0, "The general UIPasteboard with UTF-8 text and HTML. iOS asks the user before an application reads what another application copied; images and file lists are not exposed.");
+
+    void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); _dispatcher ??= application.Dispatcher; }
 
     public ValueTask<NeoDesktopResult<byte[]>> ReadAsync(NeoClipboardFormat format, CancellationToken cancellationToken = default)
     {
         NeoFakeClipboard.ValidateFormat(format);
+        if (format is not (NeoClipboardFormat.Text or NeoClipboardFormat.Html)) return ValueTask.FromResult(NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Unsupported));
         return Invoke(() =>
         {
-            if (format is not (NeoClipboardFormat.Text or NeoClipboardFormat.Html)) return NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.Unsupported);
             var board = IosObjC.Send(IosObjC.Class("UIPasteboard"), "generalPasteboard");
-            var value = format == NeoClipboardFormat.Text ? IosObjC.Send(board, "string") : IosObjC.Send(board, "valueForPasteboardType:", IosObjC.String(HtmlType));
-            var text = IosObjC.Text(value);
+            // Another application may keep the HTML as data rather than as a string.
+            var text = format == NeoClipboardFormat.Text ? IosObjC.Text(IosObjC.Send(board, "string")) : IosObjC.PasteboardText(IosObjC.Send(board, "valueForPasteboardType:", IosObjC.String(HtmlType)));
             return text is null ? NeoDesktopResult<byte[]>.Failure(NeoDesktopStatus.NotFound) : NeoDesktopResult<byte[]>.Success(Encoding.UTF8.GetBytes(text));
         }, cancellationToken);
     }
@@ -28,10 +30,10 @@ internal sealed class IosClipboard(NeoDispatcher? dispatcher) : INeoClipboard
     public ValueTask<NeoDesktopStatus> WriteAsync(NeoClipboardFormat format, ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
     {
         NeoFakeClipboard.Validate(format, content);
+        if (format is not (NeoClipboardFormat.Text or NeoClipboardFormat.Html)) return ValueTask.FromResult(NeoDesktopStatus.Unsupported);
         var text = Encoding.UTF8.GetString(content.Span);
         return Invoke(() =>
         {
-            if (format is not (NeoClipboardFormat.Text or NeoClipboardFormat.Html)) return NeoDesktopStatus.Unsupported;
             var board = IosObjC.Send(IosObjC.Class("UIPasteboard"), "generalPasteboard");
             if (format == NeoClipboardFormat.Text) IosObjC.Send(board, "setString:", IosObjC.String(text));
             else IosObjC.Send(board, IosObjC.Selector("setValue:forPasteboardType:"), IosObjC.String(text), IosObjC.String(HtmlType));
@@ -42,11 +44,11 @@ internal sealed class IosClipboard(NeoDispatcher? dispatcher) : INeoClipboard
     public ValueTask<NeoDesktopStatus> ClearAsync(CancellationToken cancellationToken = default)
         => Invoke(() => { IosObjC.Send(IosObjC.Send(IosObjC.Class("UIPasteboard"), "generalPasteboard"), "setItems:", IosObjC.Send(IosObjC.Class("NSArray"), "array")); return NeoDesktopStatus.Success; }, cancellationToken);
 
-    // UIKit objects belong to the main thread.
+    // UIKit objects belong to the main thread, which only the dispatcher of the application reaches.
     private ValueTask<T> Invoke<T>(Func<T> operation, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (_dispatcher is null || _dispatcher.CheckAccess()) return ValueTask.FromResult(operation());
-        return _dispatcher.InvokeAsync(operation, token);
+        var dispatcher = _dispatcher ?? throw new InvalidOperationException("The iOS clipboard must be bound to the UI dispatcher before use.");
+        return dispatcher.CheckAccess() ? ValueTask.FromResult(operation()) : dispatcher.InvokeAsync(operation, token);
     }
 }

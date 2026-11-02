@@ -31,4 +31,17 @@ internal static unsafe partial class IosObjC
 
     /// <summary>Reads an NSString as UTF-8 text.</summary>
     internal static string? Text(nint value) => value == 0 ? null : Marshal.PtrToStringUTF8(Send(value, Selector("UTF8String")));
+
+    /// <summary>Reads a pasteboard value as UTF-8 text: an NSString, or the bytes of NSData; anything else is no text.</summary>
+    internal static string? PasteboardText(nint value)
+    {
+        if (value == 0) return null;
+        if (IsKindOf(value, "NSString")) return Text(value);
+        if (!IsKindOf(value, "NSData")) return null;
+        var length = checked((int)(nuint)Send(value, Selector("length")));
+        return length == 0 ? string.Empty : Encoding.UTF8.GetString(new ReadOnlySpan<byte>((void*)Send(value, Selector("bytes")), length));
+    }
+
+    // A BOOL comes back in the low byte of the register.
+    private static bool IsKindOf(nint value, string className) => (byte)Send(value, Selector("isKindOfClass:"), Class(className)) != 0;
 }

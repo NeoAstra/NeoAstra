@@ -23,6 +23,32 @@ public sealed class IosDesktopAdapterTests
     }
 
     [TestMethod]
+    public async Task Clipboard_IsBoundToTheApplicationAndNeverReachesUIKitWithoutItsDispatcher()
+    {
+        var clipboard = new IosClipboard(null);
+        Assert.IsInstanceOfType<INeoApplicationBoundDesktopService>(clipboard);
+        // A clipboard that NeoDesktopServices.CreateSystem made without a dispatcher waits for the plugin to bind it; a call
+        // before that is refused instead of reaching UIKit from the thread of the caller.
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await clipboard.ReadAsync(NeoClipboardFormat.Text));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await clipboard.WriteAsync(NeoClipboardFormat.Text, "a"u8.ToArray()));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await clipboard.ClearAsync());
+    }
+
+    [TestMethod]
+    public void PasteboardText_ReadsAStringAndTheUtf8BytesOfData()
+    {
+        // The pasteboard keeps a value as an NSString or as NSData; Foundation is the same on macOS as on iOS.
+        if (!OperatingSystem.IsMacOS()) { Assert.Inconclusive("Foundation is only on Apple platforms."); return; }
+        System.Runtime.InteropServices.NativeLibrary.Load("/System/Library/Frameworks/Foundation.framework/Foundation");
+        var text = IosObjC.String("<b>Grüße</b>");
+        Assert.AreEqual("<b>Grüße</b>", IosObjC.PasteboardText(text));
+        // NSUTF8StringEncoding is 4.
+        Assert.AreEqual("<b>Grüße</b>", IosObjC.PasteboardText(IosObjC.Send(text, IosObjC.Selector("dataUsingEncoding:"), 4)));
+        Assert.IsNull(IosObjC.PasteboardText(IosObjC.Send(IosObjC.Class("NSArray"), "array")));
+        Assert.IsNull(IosObjC.PasteboardText(0));
+    }
+
+    [TestMethod]
     public async Task SafeStorage_ValidatesKeysAndSecretsBeforeTheKeychain()
     {
         var storage = new IosKeychainSafeStorage("dev.neoastra.tests");
