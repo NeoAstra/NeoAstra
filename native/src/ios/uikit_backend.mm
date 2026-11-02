@@ -11,6 +11,7 @@
 
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
+#import <UIKit/UIGestureRecognizerSubclass.h>
 
 // Module imports make the object file name the frameworks it uses, which the linker of an application honors.
 @import Foundation;
@@ -36,6 +37,12 @@
 @property(nonatomic, assign) neoastra_view_t* nativeView;
 @end
 
+// Remembers when the user last lifted a finger from the web view, without taking part in its gestures: WKNavigationAction
+// tells no user gesture on iOS, so a link that activates right after a touch is the one the user tapped.
+@interface NeoAstraTouchRecorder : UIGestureRecognizer <UIGestureRecognizerDelegate>
+@property(nonatomic, readonly) NSTimeInterval lastTouch;
+@end
+
 // The root view controller of a window, which reports the size of the scene as the bounds of the window.
 @interface NeoAstraWindowController : UIViewController
 @property(nonatomic, assign) neoastra_window_t* nativeWindow;
@@ -50,6 +57,7 @@ struct uikit_view {
     WKWebView* webview;
     NeoAstraDelegate* delegate;
     NSMutableArray<NeoURLSchemeHandler*>* scheme_handlers;
+    NeoAstraTouchRecorder* touches;
     std::unordered_map<std::string, WKUserScript*> scripts;
     uint64_t history{};
     ~uikit_view() { if (delegate) delegate.nativeView = nullptr; }
@@ -142,12 +150,16 @@ void fail_scheme_task(id<WKURLSchemeTask> task, NSInteger code, NSString* messag
     } @catch (NSException*) { }
 }
 
-// The public interface of WKNavigationAction has no user-gesture flag on iOS and no mouse button either, so a link that was
-// activated is reported without user initiation: a script can activate a link as well as a tap.
-// A link activates only when the user taps it, so an activated link is also a navigation that the user started.
-uint64_t link_activation(WKNavigationAction* action, uint64_t user_initiated) {
+// The public interface of WKNavigationAction has no user-gesture flag on iOS and no mouse button either, and a script that
+// calls click() on a link activates it as well as a tap. An activated link is therefore user-initiated only when the user
+// lifted a finger from the view just before; a link that a script clicks later, or a key that activates one, is not.
+constexpr NSTimeInterval link_tap_window = 1.0;
+uint64_t link_activation(neoastra_view_t* view, WKNavigationAction* action, uint64_t user_initiated) {
     const bool activated = action.navigationType == WKNavigationTypeLinkActivated;
-    return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED | (activated ? NEOASTRA_REQUEST_LINK_ACTIVATED | user_initiated : 0);
+    auto* state = static_cast<uikit_view*>(view->platform);
+    const NSTimeInterval touch = state && state->touches ? state->touches.lastTouch : 0;
+    const bool tapped = touch > 0 && NSProcessInfo.processInfo.systemUptime - touch <= link_tap_window;
+    return NEOASTRA_REQUEST_LINK_ACTIVATION_REPORTED | (activated ? NEOASTRA_REQUEST_LINK_ACTIVATED | (tapped ? user_initiated : 0) : 0);
 }
 // WKWebView names the reload and the history navigation of a submitted form with one type, which does not tell the kind.
 uint64_t navigation_kind(WKNavigationAction* action) {
@@ -451,6 +463,31 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 - (void)webView:(WKWebView*)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task { (void)webView; (void)task; }
 @end
 
+@implementation NeoAstraTouchRecorder
+- (instancetype)init {
+    if ((self = [super initWithTarget:nil action:nil])) {
+        self.cancelsTouchesInView = NO;
+        self.delaysTouchesBegan = NO;
+        self.delaysTouchesEnded = NO;
+        self.delegate = self;
+    }
+    return self;
+}
+- (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    [super touchesEnded:touches withEvent:event];
+    _lastTouch = NSProcessInfo.processInfo.systemUptime;
+    self.state = UIGestureRecognizerStateFailed;
+}
+- (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
+    [super touchesCancelled:touches withEvent:event];
+    self.state = UIGestureRecognizerStateFailed;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer*)recognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer*)other {
+    (void)recognizer; (void)other;
+    return YES;
+}
+@end
+
 @implementation NeoAstraWindowController
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -477,7 +514,7 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
     decision->completion = navigation_decided;
     decision->completion_context = new navigation_context{[handler copy], uri};
     decision->external_uri = uri;
-    const uint64_t flags = (action.targetFrame.isMainFrame ? NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME : 0) | link_activation(action, NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED) | kind;
+    const uint64_t flags = (action.targetFrame.isMainFrame ? NEOASTRA_NAVIGATION_REQUEST_MAIN_FRAME : 0) | link_activation(view, action, NEOASTRA_NAVIGATION_REQUEST_USER_INITIATED) | kind;
     neo_emit_view(view, NEOASTRA_EVENT_NAVIGATION_REQUESTED, 0, nullptr, &uri, flags, 0, decision);
     neo_finish_decision_event(view, decision);
     decision->release();
@@ -545,7 +582,7 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
     decision->completion = new_window_decided;
     decision->completion_context = new new_window_context{view, uri};
     decision->external_uri = uri;
-    neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, link_activation(action, NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED), 0, decision);
+    neo_emit_view(view, NEOASTRA_EVENT_NEW_WINDOW_REQUESTED, 0, &name, &uri, link_activation(view, action, NEOASTRA_NEW_WINDOW_REQUEST_USER_INITIATED), 0, decision);
     neo_finish_decision_event(view, decision);
     decision->release();
     return nil;
@@ -951,6 +988,8 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
                 }
                 state->webview.navigationDelegate = state->delegate;
                 state->webview.UIDelegate = state->delegate;
+                state->touches = [NeoAstraTouchRecorder new];
+                [state->webview addGestureRecognizer:state->touches];
                 if (view->fill_parent) state->webview.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
                 // The page meets the safe area itself, through env(safe-area-inset-*): a scroll view that also insets its content for
                 // the status bar (iOS 26 does) would move the page down by it a second time.

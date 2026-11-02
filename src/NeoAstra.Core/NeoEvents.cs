@@ -249,6 +249,12 @@ public enum NeoNavigationKind
 /// handler, and neither is a link that a script clicks. WKWebView does not tell the redirect of a clicked link apart,
 /// so such a redirect is reported like the link.
 /// </para>
+/// <para>
+/// On iOS, where WKWebView has no mouse button either, the value is <see langword="true"/> only for a link that
+/// activates within a second after the user lifted a finger from the view, as a tapped link does: a link that a script
+/// clicks on its own later is not user-initiated, nor is one that a hardware keyboard activates, nor a navigation that a
+/// script starts.
+/// </para>
 /// </remarks>
 public sealed record NeoNavigationRequest(Uri Uri, bool IsMainFrame = true, bool IsUserInitiated = false)
 {
@@ -390,7 +396,8 @@ public sealed class NeoNewWindowRequest
     /// <remarks>
     /// The engines tell the same as for <see cref="NeoNavigationRequest.IsUserInitiated"/>: WebView2 and WebKitGTK report
     /// the user gesture, which <c>window.open</c> has in a click handler, and on macOS the value is
-    /// <see langword="true"/> only for a link that the user clicked or activated with the Enter key.
+    /// <see langword="true"/> only for a link that the user clicked or activated with the Enter key, and on iOS only for a
+    /// link that activates within a second after the user lifted a finger from the view.
     /// </remarks>
     public bool IsUserInitiated { get; }
     /// <summary>
