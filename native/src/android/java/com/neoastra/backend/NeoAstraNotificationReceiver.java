@@ -61,6 +61,16 @@ public final class NeoAstraNotificationReceiver extends BroadcastReceiver {
     static void tag(Intent intent, String id, String data) {
         intent.putExtra(EXTRA_ID, id);
         intent.putExtra(EXTRA_DATA, data);
+        identify(intent, "neoastra.notification:" + id);
+    }
+
+    /**
+     * Gives the intent of a notification an identity of its own, so that two notifications whose IDs have the same hash code
+     * do not share one pending intent and the extras of the other. The extras and the request code do not tell intents apart.
+     */
+    public static void identify(Intent intent, String identity) {
+        if (Build.VERSION.SDK_INT >= 29) intent.setIdentifier(identity);
+        else intent.addCategory(identity);
     }
 
     /**

@@ -310,7 +310,7 @@ public final class NeoAstraServices {
         Intent launch = current.getPackageManager().getLaunchIntentForPackage(current.getPackageName());
         if (launch != null) {
             NeoAstraNotificationReceiver.tag(launch, id, data);
-            // One request code per notification, so that each keeps its own extras.
+            // The intent has the identity of the notification, so that each keeps its own extras.
             builder.setContentIntent(PendingIntent.getActivity(current, id.hashCode(), launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
         }
         manager.notify(id, 0, builder.build());

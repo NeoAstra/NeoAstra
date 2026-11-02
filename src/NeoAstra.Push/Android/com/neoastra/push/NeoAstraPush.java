@@ -17,6 +17,7 @@ import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.messaging.FirebaseMessaging;
 import com.google.firebase.messaging.RemoteMessage;
+import com.neoastra.backend.NeoAstraNotificationReceiver;
 import com.neoastra.backend.NeoAstraServices;
 
 import org.json.JSONArray;
@@ -229,12 +230,14 @@ public final class NeoAstraPush implements NeoAstraServices.Service {
         builder.setSmallIcon(NeoAstraServices.smallIcon(context)).setContentTitle(title).setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body)).setAutoCancel(true);
         if (group != null) builder.setGroup(group);
         Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
-        int code = id == null ? 0 : id.hashCode();
+        // The tag and the intent carry the whole ID: two IDs with the same hash code are two notifications with their own messages.
+        String tag = id == null ? NAME : NAME + ":" + id;
         if (launchIntent != null) {
             launchIntent.putExtra(EXTRA, message.toString());
-            builder.setContentIntent(PendingIntent.getActivity(context, code, launchIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
+            NeoAstraNotificationReceiver.identify(launchIntent, tag);
+            builder.setContentIntent(PendingIntent.getActivity(context, tag.hashCode(), launchIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
         }
-        manager.notify(NAME, code, builder.build());
+        manager.notify(tag, 0, builder.build());
     }
 
     // The queue keeps the latest events when nobody takes them.
