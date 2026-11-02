@@ -98,6 +98,7 @@ public final class NeoAstraWebHost {
     private volatile JavaScriptReplyProxy reply;
     private int nextScript = 1;
     private volatile boolean engineDialogs = true;
+    private boolean keepsHistory = true;
     private final NeoAstraKeyboard keyboard;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
@@ -206,6 +207,17 @@ public final class NeoAstraWebHost {
 
     /** Whether the WebView shows its own JavaScript dialogs; while it does not, the host answers them. */
     public void setEngineDialogs(boolean value) { engineDialogs = value; }
+
+    /**
+     * Whether the WebView keeps the documents it showed. The WebView cannot refuse a walk through its history, so while it does
+     * not keep them it forgets them after each navigation, and history.back() finds nothing to load.
+     */
+    public void setKeepsHistory(boolean value) {
+        keepsHistory = value;
+        if (!value) webView.clearHistory();
+        long current = view;
+        if (current != 0) nativeEvent(current, EVENT_HISTORY, null, null, (webView.canGoBack() ? 1 : 0) | (webView.canGoForward() ? 2 : 0));
+    }
 
     /** Gives the page the files that the host chose, or none. */
     public static void deliverFiles(ValueCallback<Uri[]> callback, String[] paths) {
@@ -419,6 +431,7 @@ public final class NeoAstraWebHost {
 
         @Override public void onPageStarted(WebView source, String url, Bitmap favicon) {
             reply = null;
+            if (!keepsHistory) source.clearHistory();
             long current = view;
             if (current != 0) nativeEvent(current, EVENT_STARTED, url, null, 0);
         }
@@ -429,6 +442,7 @@ public final class NeoAstraWebHost {
         }
 
         @Override public void doUpdateVisitedHistory(WebView source, String url, boolean isReload) {
+            if (!keepsHistory) source.clearHistory();
             long current = view;
             if (current != 0) nativeEvent(current, EVENT_HISTORY, url, null, (source.canGoBack() ? 1 : 0) | (source.canGoForward() ? 2 : 0));
         }

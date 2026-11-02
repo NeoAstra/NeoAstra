@@ -181,7 +181,7 @@ jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
-jmethodID host_set_engine_dialogs{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
+jmethodID host_set_engine_dialogs{}, host_set_keeps_history{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
 jclass js_result_class{}, js_prompt_result_class{};
 jmethodID js_result_confirm{}, js_result_cancel{}, js_prompt_result_confirm{};
 jclass window_class{};
@@ -210,6 +210,23 @@ std::mutex live_mutex;
 std::vector<neoastra_view_t*> live_views;
 
 bool is_live(neoastra_view_t* view) noexcept { return std::find(live_views.begin(), live_views.end(), view) != live_views.end(); }
+
+// Keeps a view that is still live alive through a whole callback: a handler that releases the view during one of the events
+// that the callback emits leaves it valid until the callback returns, and the lock is not held while application code runs.
+class live_view final {
+public:
+    explicit live_view(neoastra_view_t* value) noexcept {
+        std::lock_guard lock(live_mutex);
+        if (is_live(value) && value->retain()) _view = value;
+    }
+    ~live_view() { if (_view) _view->release(); }
+    live_view(const live_view&) = delete;
+    live_view& operator=(const live_view&) = delete;
+    explicit operator bool() const noexcept { return _view != nullptr; }
+
+private:
+    neoastra_view_t* _view{};
+};
 
 JNIEnv* jni() noexcept {
     if (!java_vm) return nullptr;
@@ -356,10 +373,8 @@ void complete_script_added(void* pointer) {
 
 void JNICALL on_message(JNIEnv* env, jclass, jlong pointer, jstring data, jstring origin, jboolean main_frame) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) return;
-    }
+    live_view owner(view);
+    if (!owner) return;
     try {
         const auto text = to_utf8(env, data);
         const auto uri = origin_of(unproject(view->environment, to_utf8(env, origin)));
@@ -369,8 +384,10 @@ void JNICALL on_message(JNIEnv* env, jclass, jlong pointer, jstring data, jstrin
 
 jobject JNICALL on_resource(JNIEnv* env, jclass, jlong pointer, jstring url, jstring method_value, jstring headers_value, jboolean main_frame) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    std::lock_guard lock(live_mutex);
-    if (!is_live(view)) return nullptr;
+    // The WebView asks from a thread of its own; the view stays alive while the provider runs, without the lock that its
+    // destruction on the UI thread takes.
+    live_view owner(view);
+    if (!owner) return nullptr;
     auto* environment = view->environment;
     try {
         const auto uri = unproject(environment, to_utf8(env, url));
@@ -426,10 +443,8 @@ jobject JNICALL on_resource(JNIEnv* env, jclass, jlong pointer, jstring url, jst
 
 void JNICALL on_event(JNIEnv* env, jclass, jlong pointer, jint kind, jstring url_value, jstring text_value, jint value) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) return;
-    }
+    live_view owner(view);
+    if (!owner) return;
     try {
         std::string uri = url_value ? unproject(view->environment, to_utf8(env, url_value)) : std::string{};
         switch (kind) {
@@ -506,10 +521,8 @@ struct navigation_context {
 };
 
 void load_decided(neoastra_view_t* view, const std::string& uri) noexcept {
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) return;
-    }
+    live_view owner(view);
+    if (!owner) return;
     neoastra_error_t* error{};
     (void)neo_platform_view_navigate(view, uri, &error);
     if (error) neoastra_error_release(error);
@@ -524,10 +537,8 @@ void navigation_decided(void* pointer, const neoastra_decision_response_t* respo
 
 jboolean JNICALL on_navigation(JNIEnv* env, jclass, jlong pointer, jstring url_value, jboolean main_frame, jboolean gesture) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) return JNI_TRUE;
-    }
+    live_view owner(view);
+    if (!owner) return JNI_TRUE;
     try {
         std::string uri = unproject(view->environment, to_utf8(env, url_value));
         int immediate = -1;
@@ -566,10 +577,8 @@ void new_window_decided(void* pointer, const neoastra_decision_response_t* respo
 
 void JNICALL on_new_window(JNIEnv* env, jclass, jlong pointer, jstring url_value, jboolean gesture) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) return;
-    }
+    live_view owner(view);
+    if (!owner) return;
     try {
         std::string uri = unproject(view->environment, to_utf8(env, url_value));
         std::string name;
@@ -609,10 +618,8 @@ void dialog_decided(void* pointer, const neoastra_decision_response_t* response)
 
 void JNICALL on_script_dialog(JNIEnv* env, jclass, jlong pointer, jint kind, jstring message_value, jstring initial_value, jstring url_value, jobject result) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) { env->CallVoidMethod(result, js_result_cancel); return; }
-    }
+    live_view owner(view);
+    if (!owner) { env->CallVoidMethod(result, js_result_cancel); return; }
     try {
         std::string text = to_utf8(env, message_value), initial = to_utf8(env, initial_value);
         std::string origin = origin_of(unproject(view->environment, to_utf8(env, url_value)));
@@ -660,10 +667,8 @@ void chooser_decided(void* pointer, const neoastra_decision_response_t* response
 
 void JNICALL on_file_chooser(JNIEnv* env, jclass, jlong pointer, jstring types_value, jboolean multiple, jobject host, jobject callback, jobject parameters) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) { env->CallStaticVoidMethod(host_class, host_deliver_files, callback, nullptr); return; }
-    }
+    live_view owner(view);
+    if (!owner) { env->CallStaticVoidMethod(host_class, host_deliver_files, callback, nullptr); return; }
     try {
         std::string accepted = to_utf8(env, types_value);
         auto* decision = new neoastra_decision;
@@ -700,10 +705,8 @@ void permission_decided(void* pointer, const neoastra_decision_response_t* respo
 
 void JNICALL on_permission(JNIEnv* env, jclass, jlong pointer, jstring origin_value, jintArray kinds_value, jobject host, jobject request) {
     auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
-    {
-        std::lock_guard lock(live_mutex);
-        if (!is_live(view)) { env->CallVoidMethod(host, host_answer_permission, request, JNI_FALSE); return; }
-    }
+    live_view owner(view);
+    if (!owner) { env->CallVoidMethod(host, host_answer_permission, request, JNI_FALSE); return; }
     try {
         std::string origin = origin_of(unproject(view->environment, to_utf8(env, origin_value)));
         const jsize count = env->GetArrayLength(kinds_value);
@@ -725,7 +728,8 @@ void JNICALL on_permission(JNIEnv* env, jclass, jlong pointer, jstring origin_va
 // Runs on the main thread; the Java side stops reporting once the window is destroyed.
 void JNICALL on_window_event(JNIEnv*, jclass, jlong pointer, jint kind, jint width, jint height, jfloat density) {
     auto* window = reinterpret_cast<neoastra_window_t*>(pointer);
-    if (!window) return;
+    neo_retain_guard owner(window);
+    if (!owner) return;
     switch (kind) {
         case 0: sync_window_bounds(window, width, height, density, true); break;
         case 1: neo_window_request_close(window, NEOASTRA_WINDOW_CLOSE_USER, true); break;
@@ -771,6 +775,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         {const_cast<char*>("nativePermission"), const_cast<char*>("(JLjava/lang/String;[ILcom/neoastra/backend/NeoAstraWebHost;Landroid/webkit/PermissionRequest;)V"), reinterpret_cast<void*>(on_permission)},
     };
     host_set_engine_dialogs = env->GetMethodID(host_class, "setEngineDialogs", "(Z)V");
+    host_set_keeps_history = env->GetMethodID(host_class, "setKeepsHistory", "(Z)V");
     host_deliver_files = env->GetStaticMethodID(host_class, "deliverFiles", "(Landroid/webkit/ValueCallback;[Ljava/lang/String;)V");
     host_choose_with_system = env->GetMethodID(host_class, "chooseWithSystem", "(Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)V");
     host_answer_permission = env->GetMethodID(host_class, "answerPermission", "(Landroid/webkit/PermissionRequest;Z)V");
@@ -1056,7 +1061,13 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:
         case NEOASTRA_VIEW_SETTING_DEVTOOLS:
             return enabled ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_OK;
-        case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION: return NEOASTRA_OK;
+        // Android asks about no walk through the history, so the WebView forgets the documents it showed while it is off.
+        case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION: {
+            JNIEnv* env = jni();
+            if (!env) return NEOASTRA_ERROR_NOT_INITIALIZED;
+            env->CallVoidMethod(view_state(view)->host, host_set_keeps_history, enabled ? JNI_TRUE : JNI_FALSE);
+            return failed(env, view->environment->app, "Could not switch the history navigation") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+        }
         default: return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }

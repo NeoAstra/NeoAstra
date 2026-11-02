@@ -66,7 +66,7 @@ public interface INeoResourceProvider
     /// <summary>Resolves a custom-scheme request synchronously.</summary>
     /// <param name="request">The request to resolve.</param>
     /// <returns>A response, or <see langword="null"/> for a 404 response.</returns>
-    /// <remarks>The callback runs on the native browser UI thread and should not block on unrelated work.</remarks>
+    /// <remarks>The callback runs on the native browser UI thread, except on Android, where the WebView asks from a thread of its own while the UI thread goes on; it should not block on unrelated work, and on Android it must not wait for the UI thread.</remarks>
     NeoResourceResponse? GetResponse(NeoResourceRequest request);
 }
 
