@@ -16,8 +16,10 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-    <!-- StoreKit 2 is a Swift API: on macOS the build compiles its bridge into a framework that iOS applications embed. -->
-    <NeoAstraPurchasesAppleFramework>$(MSBuildThisFileDirectory)obj/apple/NeoAstraPurchases.xcframework</NeoAstraPurchasesAppleFramework>
+    <!-- StoreKit 2 is a Swift API: its bridge is a framework that iOS applications embed. The native workflow builds it on macOS
+         and it is checked in, like the native libraries, so that a package built anywhere carries it and a desktop build needs no
+         iOS SDK; NeoAstraBuildApplePurchases=true builds it again on macOS after a change of the bridge. -->
+    <NeoAstraPurchasesAppleFramework>$(MSBuildThisFileDirectory)xcframework/NeoAstraPurchases.xcframework</NeoAstraPurchasesAppleFramework>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);NeoAstraCollectApplePurchases</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
@@ -37,12 +39,15 @@
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
   </ItemGroup>
 
-  <Target Name="NeoAstraBuildApplePurchases" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))"
+  <Target Name="NeoAstraBuildApplePurchases" BeforeTargets="Build" Condition="'$(NeoAstraBuildApplePurchases)' == 'true' And $([MSBuild]::IsOSPlatform('OSX'))"
           Inputs="Apple/NeoAstraPurchases.swift;Apple/build.sh" Outputs="$(NeoAstraPurchasesAppleFramework)/Info.plist">
     <Exec Command="/bin/sh &quot;$(MSBuildThisFileDirectory)Apple/build.sh&quot; &quot;$(MSBuildThisFileDirectory)Apple/NeoAstraPurchases.swift&quot; &quot;$(NeoAstraPurchasesAppleFramework)&quot;" />
   </Target>
 
   <Target Name="NeoAstraCollectApplePurchases" DependsOnTargets="NeoAstraBuildApplePurchases">
+    <!-- A package without the bridge would fail every iOS application that references it. -->
+    <Error Condition="!Exists('$(NeoAstraPurchasesAppleFramework)/Info.plist')"
+           Text="The StoreKit bridge $(NeoAstraPurchasesAppleFramework) is missing: take it from the native-purchases-xcframework artifact of the native workflow, or build it on macOS with -p:NeoAstraBuildApplePurchases=true." />
     <ItemGroup>
       <_NeoAstraApplePurchasesFile Include="$(NeoAstraPurchasesAppleFramework)/**/*" />
       <TfmSpecificPackageFile Include="@(_NeoAstraApplePurchasesFile)" PackagePath="xcframework/NeoAstraPurchases.xcframework/" />

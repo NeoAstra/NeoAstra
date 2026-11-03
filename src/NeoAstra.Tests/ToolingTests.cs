@@ -232,6 +232,22 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void PurchasesBridge_IsCheckedInAndBuiltOnlyOnRequest()
+    {
+        // A desktop build on macOS needs no iOS SDK, and a package packed on Windows carries the bridge that the native workflow
+        // built, or fails: without it every iOS application of the package would fail to build.
+        var root = FindRepositoryRoot();
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Purchases", "NeoAstra.Purchases.csproj"));
+        Assert.AreEqual("$(MSBuildThisFileDirectory)xcframework/NeoAstraPurchases.xcframework", (string)project.Descendants("NeoAstraPurchasesAppleFramework").Single());
+        var build = project.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraBuildApplePurchases");
+        StringAssert.StartsWith((string?)build.Attribute("Condition"), "'$(NeoAstraBuildApplePurchases)' == 'true'");
+        var collect = project.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraCollectApplePurchases");
+        Assert.AreEqual("!Exists('$(NeoAstraPurchasesAppleFramework)/Info.plist')", (string?)collect.Element("Error")!.Attribute("Condition"));
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Purchases", "Build", "NeoAstra.Purchases.targets"));
+        Assert.AreEqual("$(MSBuildThisFileDirectory)../xcframework/NeoAstraPurchases.xcframework", (string)targets.Descendants("NeoAstraPurchasesAppleFramework").Single());
+    }
+
+    [TestMethod]
     public void AndroidAssets_AreLinkedWithTheSeparatorThatTheAndroidBuildStrips()
     {
         // The Android build removes the Assets prefix of a link only when the separator of the platform follows it: a link

@@ -10,6 +10,8 @@ on:
       - 'eng/build_native.py'
       - 'eng/native/**'
       - 'eng/release_readiness.py'
+      - 'src/NeoAstra.Purchases/Apple/**'
+      - 'src/NeoAstra.Purchases/xcframework/**'
       - '.github/workflows/native.yml'
   pull_request:
     paths:
@@ -20,6 +22,8 @@ on:
       - 'eng/build_native.py'
       - 'eng/native/**'
       - 'eng/release_readiness.py'
+      - 'src/NeoAstra.Purchases/Apple/**'
+      - 'src/NeoAstra.Purchases/xcframework/**'
       - '.github/workflows/native.yml'
   workflow_call:
   workflow_dispatch:
@@ -59,6 +63,21 @@ jobs:
           cmake --preset macos-x64-asan-ubsan
           cmake --build --preset macos-x64-asan-ubsan
           ctest --preset macos-x64-asan-ubsan
+
+  # StoreKit 2 is a Swift API: the purchases plugin embeds this bridge into iOS applications, checked in under
+  # src/NeoAstra.Purchases/xcframework like the native libraries.
+  purchases-bridge:
+    name: StoreKit bridge of the purchases plugin (iOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the XCFramework
+        run: sh src/NeoAstra.Purchases/Apple/build.sh src/NeoAstra.Purchases/Apple/NeoAstraPurchases.swift src/NeoAstra.Purchases/xcframework/NeoAstraPurchases.xcframework
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-purchases-xcframework
+          path: src/NeoAstra.Purchases/xcframework/
+          if-no-files-found: error
 
   build:
     name: Native (${{ matrix.rid }})
