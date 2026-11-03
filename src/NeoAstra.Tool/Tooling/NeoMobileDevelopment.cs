@@ -93,17 +93,27 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         await RunAsync("build", install, project, environment, log, cancellationToken).ConfigureAwait(false);
         var identifier = Required(await PropertiesAsync(project, environment, log, cancellationToken, [$"-p:TargetFramework={framework}", "-p:Configuration=Debug"], "ApplicationId").ConfigureAwait(false), "ApplicationId");
         var port = $"tcp:{project.DevUrl.Port}";
-        await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
-        await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
-        await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
-        await RunAsync("launch", [adb, .. device, "shell", "monkey", "-p", identifier, "-c", "android.intent.category.LAUNCHER", "1"], project, environment, log, cancellationToken).ConfigureAwait(false);
-        var logcat = processFactory.Start(new("app", new([adb, .. device, "logcat", "-v", "brief", "-s", "NeoAstra:*", "DOTNET:*", "AndroidRuntime:E", "chromium:*"]), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => log("app", line, error)));
-        return new AndroidSession(logcat, async () =>
+        // The address goes with the session: a later launch of the debug build loads its packaged assets again. A launch that
+        // fails or is canceled once the forwarding is in place removes it too.
+        async Task CleanupAsync()
         {
-            // The address goes with the session: a later launch of the debug build loads its packaged assets again.
             await RunQuietlyAsync([adb, .. device, "shell", $"run-as {identifier} rm -f {AndroidAddressFile}"], project, environment).ConfigureAwait(false);
             await RunQuietlyAsync([adb, .. device, "reverse", "--remove", port], project, environment).ConfigureAwait(false);
-        });
+        }
+        try
+        {
+            await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
+            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
+            await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
+            await RunAsync("launch", [adb, .. device, "shell", "monkey", "-p", identifier, "-c", "android.intent.category.LAUNCHER", "1"], project, environment, log, cancellationToken).ConfigureAwait(false);
+            var logcat = processFactory.Start(new("app", new([adb, .. device, "logcat", "-v", "brief", "-s", "NeoAstra:*", "DOTNET:*", "AndroidRuntime:E", "chromium:*"]), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => log("app", line, error)));
+            return new AndroidSession(logcat, CleanupAsync);
+        }
+        catch
+        {
+            await CleanupAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     private async Task RunAsync(string label, IReadOnlyList<string> arguments, NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)

@@ -886,6 +886,27 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task DevelopmentOrchestrator_RemovesTheAndroidForwardingWhenTheLaunchFails()
+    {
+        // The forwarding and the address file are in place before the launch: a launch that fails must not leave them, or a
+        // later launch of the debug build would still load the development server instead of its packaged assets.
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
+        factory.ExitCodes["launch"] = 1;
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        try { await new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (NeoToolException) { }
+
+        Assert.IsFalse(factory.AppStarted.Task.IsCompleted);
+        var starts = factory.Starts;
+        var cleanups = starts.Where(static start => start.Label == "cleanup").ToArray();
+        Assert.AreEqual(2, cleanups.Length);
+        StringAssert.Contains(cleanups[0].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, cleanups[1].Command.Arguments.Skip(1).ToArray());
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_LaunchesAnIOSApplicationWithTheServerInItsEnvironment()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -1228,6 +1249,7 @@ public sealed class ToolingTests
     private sealed class ScriptedFactory(List<string> order) : INeoProcessFactory
     {
         internal Dictionary<string, Queue<string>> Output { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, int> ExitCodes { get; } = new(StringComparer.Ordinal);
         internal List<NeoProcessStart> Starts { get; } = [];
         internal FakeProcess? App { get; private set; }
         internal TaskCompletionSource AppStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1237,7 +1259,7 @@ public sealed class ToolingTests
             var process = new FakeProcess();
             if (Output.TryGetValue(start.Label, out var lines) && lines.Count != 0) foreach (var line in lines.Dequeue().Split('\n')) start.Log(line, false);
             if (start.Label == "app") { App = process; AppStarted.TrySetResult(); }
-            else if (start.Label != "frontend") process.Exit(0);
+            else if (start.Label != "frontend") process.Exit(ExitCodes.TryGetValue(start.Label, out var code) ? code : 0);
             return process;
         }
     }
