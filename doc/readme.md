@@ -1,10 +1,11 @@
 # NeoAstra User Guide
 
-Build native desktop apps with web technologies.
+Build desktop and mobile apps with .NET and a web UI, on the platform's own webview.
 
 ## Start here
 
 - [Getting started](getting-started.md) — packages, a minimal application, and samples.
+- [iOS and Android (preview)](application-lifecycle-and-hosting.md#the-simple-host-on-ios-and-android-preview) — the same application on a phone, with the [mobile samples](../samples/mobile/readme.md) to try it.
 - [Platforms and runtime dependencies](platform-support.md) — supported targets, browser engines, what each needs installed, and what to do when the native library does not load.
 - [Known limitations](known-limitations.md) — what differs between the platforms, and other limits to know about.
 
@@ -15,7 +16,7 @@ Build native desktop apps with web technologies.
 - [Capabilities and security](capabilities-and-security.md) — authorize renderer operations with explicit permissions and scopes.
 - [Frontend tooling, production assets, and templates](frontend-tooling-and-assets.md) — configure development, builds, and secure asset hosting.
 - [Application lifecycle, launch routing, and hosting](application-lifecycle-and-hosting.md) — manage startup, shutdown, windows, and host integration.
-- [Plugins and desktop services](desktop-services.md) — use native desktop features without granting implicit renderer authority.
+- [Plugins and desktop services](desktop-services.md) — use native features, such as notifications, the clipboard, or the location of a phone, without granting implicit renderer authority.
 - [Displays and window placement](displays-and-window-placement.md) — find the displays, put windows on them, follow a dragged tab across windows, and use virtual desktops.
 - [Chromeless windows and web title bars](chromeless-windows.md) — extend web content into the title bar while keeping native window behavior, and turn off built-in browser shortcuts and menus.
 - [Browser automation](browser-automation.md) — drive the views of an application with the operations of Chrome DevTools MCP, and surface them through an MCP server.

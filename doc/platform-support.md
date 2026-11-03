@@ -1,8 +1,8 @@
 # Platforms and runtime dependencies
 
-NeoAstra shows the browser engine of the platform and does not bundle one. The `NeoAstra.Core`
-package, which the `NeoAstra` application package depends on, carries a native library for each of
-these targets:
+NeoAstra shows the browser engine of the platform and does not bundle one, on the desktop and on
+phones. The `NeoAstra.Core` package, which the `NeoAstra` application package depends on, carries a
+native library for each of these targets:
 
 | Operating system | Architecture / RID | Browser engine | Checked with |
 | --- | --- | --- | --- |
@@ -12,20 +12,40 @@ these targets:
 | macOS 26 or later | ARM64 / `osx-arm64` | WKWebView | Native tests, and the conformance harness on a development machine |
 | Ubuntu 24.04 or later | x64 / `linux-x64` | WebKitGTK 6.0 | Native tests and the conformance harness |
 | Ubuntu 24.04 or later | ARM64 / `linux-arm64` | WebKitGTK 6.0 | Native tests; no browser run |
+| iOS 15 or later (preview) | ARM64 / `ios-arm64` | WKWebView | Mobile builds; the samples run by hand on an iPhone |
+| iOS Simulator (preview) | ARM64 / `iossimulator-arm64` | WKWebView | Mobile builds; the samples run by hand |
+| Android 7.0 (API 24) or later (preview) | ARM64 / `android-arm64` | Android System WebView | Mobile builds; the samples run by hand on a Pixel phone |
+| Android 7.0 (API 24) or later (preview) | x64 / `android-x64` | Android System WebView | Mobile builds; the samples run by hand on an emulator |
 
-Linux distributions that use musl, such as Alpine, 32-bit architectures, and other RIDs are not
-supported.
+Linux distributions that use musl, such as Alpine, 32-bit architectures (Android included), the iOS
+Simulator on an Intel Mac, and other RIDs are not supported.
+
+iOS and Android are a preview: they do not have every browser feature of the desktop yet, and their
+APIs may still change.
 
 The engines do not offer the same features. [Known limitations](known-limitations.md) lists what
 differs, and `NeoEnvironment.GetCapability` tells an application what the engine it runs on supports.
 
 ## Runtime requirements
 
-Every platform needs:
+Every desktop platform needs:
 
 - A .NET 10 runtime, unless the application is published self-contained or with NativeAOT.
 - A graphical desktop session. Application and browser operations start on the UI thread of the
   platform.
+
+A phone needs nothing: an iOS or Android application carries its .NET runtime. To build one, install
+the .NET 11 SDK and its mobile workloads, then start from the template:
+
+```sh
+dotnet workload install ios android
+dotnet new install NeoAstra.Templates::<VERSION>
+dotnet new neoastra-mobile -n MyApp --appIdentifier com.example.myapp --neoAstraVersion <VERSION>
+```
+
+The application targets `net11.0-ios` and `net11.0-android`, while the NeoAstra libraries stay on
+.NET 10. See [the simple host on iOS and Android](application-lifecycle-and-hosting.md#the-simple-host-on-ios-and-android-preview)
+and the [mobile samples](../samples/mobile/readme.md).
 
 ### Windows
 
@@ -65,6 +85,22 @@ Every platform needs:
   `GSK_RENDERER=vulkan` in its environment (the shell, the `.desktop` file) to keep Vulkan. The applications
   that open an address from a page do not get the variable, but the processes that the application or
   NeoAstra's desktop services start do.
+
+### iOS (preview)
+
+- iOS 15 or later. WKWebView is part of the system: nothing to install.
+- A Mac with Xcode 27 to build, since the iOS workload of .NET 11 uses the iOS 27 SDK.
+- The `NeoAstra.Core` package links the native library into the application for you: iOS does not let an
+  application load a library of its own at run time.
+
+### Android (preview)
+
+- Android 7.0 (API 24) or later, on a 64-bit device or emulator.
+- An up-to-date Android System WebView. The application references `Xamarin.AndroidX.WebKit`, as the
+  template does.
+- The Android SDK and JDK 17 or later to build, as for any .NET for Android application.
+- The application declares the permissions of the features it uses, such as `POST_NOTIFICATIONS` to show
+  notifications: [desktop services](desktop-services.md) says which one each feature needs.
 
 ## Troubleshooting
 
@@ -110,6 +146,13 @@ unavailable. Install the Evergreen Runtime or configure BrowserRuntimePath.` Ins
 architecture of the process, or set `NeoEnvironmentOptions.BrowserRuntimePath` to a fixed-version
 runtime.
 
+### The browser does not start on Android
+
+NeoAstra needs two features of the Android System WebView: web message listeners and document-start
+scripts. On a device whose WebView is too old for them, creating the first browser environment fails
+with a `NeoAstraException` whose `Code` is `NeoErrorCode.RuntimeUnavailable`. Update Android System
+WebView from Google Play, or use an emulator image with Google APIs.
+
 ## How the platforms are checked
 
 - **Native tests** run in the native workflow for every target except Windows ARM64. They cover the
@@ -122,6 +165,10 @@ runtime.
   x64, and on Ubuntu 24.04 x64, where a workflow runs it on request. Its runners have no camera, and
   only the macOS one has a microphone, so the capture of both was run on a Windows machine and that of
   a microphone also in a Linux desktop session.
+- **Mobile builds**: the native workflow builds the iOS and Android libraries and checks their exports,
+  and the mobile workflow builds the mobile samples and the `neoastra-mobile` template for the iOS
+  Simulator and for Android. Unit tests cover the mobile services with fakes of the platform, and the
+  checklist of the [mobile samples](../samples/mobile/readme.md) is run by hand on devices.
 
 [Building and verification](building.md) has the commands to run these checks on your own machine,
 and [open follow-ups](open-follow-ups.md) lists what is still to check.
