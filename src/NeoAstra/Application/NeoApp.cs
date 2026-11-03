@@ -346,7 +346,8 @@ public sealed class NeoAppBuilder
         application.MainWindow = window;
         _configureMainWindow?.Invoke(application, window);
         await PrepareAsync(application, cancellationToken).ConfigureAwait(true);
-        await OpenViewAsync(window, cancellationToken).ConfigureAwait(true);
+        // The desktop application ends with its main window, and StopAsync then releases the view with the session.
+        await OpenViewAsync(window, releaseOnClose: false, cancellationToken).ConfigureAwait(true);
     }
 
     // Creates what every main window of the application shares: the RPC host and the browser environment.
@@ -427,10 +428,10 @@ public sealed class NeoAppBuilder
         });
         application.MainWindow = window;
         _configureMainWindow?.Invoke(application, window);
-        await OpenViewAsync(window, cancellationToken).ConfigureAwait(true);
+        await OpenViewAsync(window, releaseOnClose: true, cancellationToken).ConfigureAwait(true);
     }
 
-    private async ValueTask OpenViewAsync(NeoWindow window, CancellationToken cancellationToken)
+    private async ValueTask OpenViewAsync(NeoWindow window, bool releaseOnClose, CancellationToken cancellationToken)
     {
         var session = _session ?? throw new InvalidOperationException("The application is not prepared.");
         var target = _target!;
@@ -450,7 +451,7 @@ public sealed class NeoAppBuilder
             if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
             binding = NeoRpcViewBinding.Bind(session.Rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
-            session.Add(window, view, binding);
+            session.Add(window, view, binding, releaseOnClose);
             view = null;
             binding = null;
         }
@@ -636,15 +637,25 @@ public sealed class NeoAppBuilder
 
         public NeoEnvironment Environment { get; } = environment;
 
-        public void Add(NeoWindow window, global::NeoAstra.NeoAstra view, NeoRpcViewBinding binding)
+        // A mobile application outlives its main windows, so a closed one releases its view at once; a desktop application
+        // releases its single view in DisposeAsync, which its shutdown runs.
+        public void Add(NeoWindow window, global::NeoAstra.NeoAstra view, NeoRpcViewBinding binding, bool releaseOnClose)
         {
             var entry = (view, binding);
             _views.Add(entry);
+            if (!releaseOnClose) return;
             window.Closed += async (_, _) =>
             {
                 if (!_views.Remove(entry)) return;
-                await binding.DisposeAsync().ConfigureAwait(false);
-                await DisposeOnDispatcherAsync(Environment.Application.Dispatcher, view).ConfigureAwait(false);
+                // An event handler must not throw: a view that fails to release must not end the application.
+                try
+                {
+                    await binding.DisposeAsync().ConfigureAwait(false);
+                    await DisposeOnDispatcherAsync(Environment.Application.Dispatcher, view).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is ObjectDisposedException or OperationCanceledException or InvalidOperationException or NeoAstraException)
+                {
+                }
             };
         }
 
