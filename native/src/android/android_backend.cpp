@@ -6,7 +6,7 @@
 // inside a ViewGroup of the application or of a window, driven through JNI. A window is the content of the current activity,
 // which com.neoastra.backend.NeoAstraWindow replaces with a layout of its own; it fills the activity and ends with it, so it
 // cannot be moved, resized, or minimized. Android has no custom schemes, so a custom-scheme origin is served as a projected
-// HTTPS origin under the reserved .invalid domain. Popups, downloads, dialogs, permissions, cookies, zoom, and capture answer
+// HTTPS origin under the reserved .invalid domain. Popups, downloads, cookies, and zoom answer
 // NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows.
 #include "../common/native_internal.hpp"
 
@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -178,7 +179,7 @@ JavaVM* java_vm{};
 jclass host_class{};
 jclass response_class{};
 jclass string_class{};
-jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{};
+jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
@@ -374,6 +375,10 @@ void report_history(neoastra_view_t* view, bool back, bool forward) {
 }
 
 struct evaluation { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; };
+struct capture_request { neoastra_buffer_callback_t callback; void* context; neoastra_operation_t* operation; };
+// NeoAstraWebHost.capture answers 0 for a capture that began, this for a view that is not laid out yet, and 2 (CAPTURE_OUTSIDE)
+// for a rectangle outside the view.
+constexpr jint capture_no_size = 1;
 struct script_added { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; std::string identifier; };
 
 void complete_script_added(void* pointer) {
@@ -491,6 +496,29 @@ void JNICALL on_evaluated(JNIEnv* env, jclass, jlong token, jstring json) {
     if (output.empty()) output = "null";
     neoastra_result_t actual{};
     if (pending->operation->try_complete(NEOASTRA_OK, actual)) pending->callback(pending->context, actual, actual == NEOASTRA_OK ? neo_string_view(output) : neoastra_string_view_t{}, nullptr);
+    pending->operation->release();
+}
+
+// The Java side hands the encoded image, or the reason of a failure, back on the main thread.
+void JNICALL on_captured(JNIEnv* env, jclass, jlong token, jbyteArray image, jstring failure) {
+    std::unique_ptr<capture_request> pending(reinterpret_cast<capture_request*>(token));
+    if (!pending) return;
+    neoastra_result_t requested = image ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE, actual{};
+    neoastra_buffer_t* buffer{};
+    neoastra_error_t* native_error{};
+    if (image) {
+        try {
+            std::vector<uint8_t> bytes(static_cast<size_t>(env->GetArrayLength(image)));
+            env->GetByteArrayRegion(image, 0, static_cast<jsize>(bytes.size()), reinterpret_cast<jbyte*>(bytes.data()));
+            buffer = new neoastra_buffer(std::move(bytes));
+        } catch (...) { requested = NEOASTRA_ERROR_NATIVE_FAILURE; }
+    }
+    if (requested != NEOASTRA_OK) neo_fail(&native_error, requested, failure ? to_utf8(env, failure) : std::string("Android returned no capture"), 0, android_domain);
+    if (pending->operation->try_complete(requested, actual)) {
+        pending->callback(pending->context, actual, actual == NEOASTRA_OK ? buffer : nullptr, actual == requested ? native_error : nullptr);
+        if (actual != NEOASTRA_OK && buffer) buffer->release();
+    } else if (buffer) buffer->release();
+    if (native_error) native_error->release();
     pending->operation->release();
 }
 
@@ -769,6 +797,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     host_load_html = env->GetMethodID(host_class, "loadHtml", "(Ljava/lang/String;Ljava/lang/String;)V");
     host_command = env->GetMethodID(host_class, "command", "(I)V");
     host_evaluate = env->GetMethodID(host_class, "evaluate", "(Ljava/lang/String;J)V");
+    host_capture = env->GetMethodID(host_class, "capture", "(IIIIIIJ)I");
     host_add_script = env->GetMethodID(host_class, "addScript", "(Ljava/lang/String;[Ljava/lang/String;)I");
     host_remove_script = env->GetMethodID(host_class, "removeScript", "(I)Z");
     host_post_message = env->GetMethodID(host_class, "postMessage", "(Ljava/lang/String;)Z");
@@ -780,6 +809,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         {const_cast<char*>("nativeResource"), const_cast<char*>("(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Lcom/neoastra/backend/NeoAstraWebHost$Response;"), reinterpret_cast<void*>(on_resource)},
         {const_cast<char*>("nativeEvent"), const_cast<char*>("(JILjava/lang/String;Ljava/lang/String;I)V"), reinterpret_cast<void*>(on_event)},
         {const_cast<char*>("nativeEvaluated"), const_cast<char*>("(JLjava/lang/String;)V"), reinterpret_cast<void*>(on_evaluated)},
+        {const_cast<char*>("nativeCaptured"), const_cast<char*>("(J[BLjava/lang/String;)V"), reinterpret_cast<void*>(on_captured)},
         {const_cast<char*>("nativeNavigation"), const_cast<char*>("(JLjava/lang/String;ZZ)Z"), reinterpret_cast<void*>(on_navigation)},
         {const_cast<char*>("nativeNewWindow"), const_cast<char*>("(JLjava/lang/String;Z)V"), reinterpret_cast<void*>(on_new_window)},
         {const_cast<char*>("nativeScriptDialog"), const_cast<char*>("(JILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/webkit/JsResult;)V"), reinterpret_cast<void*>(on_script_dialog)},
@@ -801,7 +831,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
         js_prompt_result_class = static_cast<jclass>(env->NewGlobalRef(prompt_class));
         js_prompt_result_confirm = env->GetMethodID(js_prompt_result_class, "confirm", "(Ljava/lang/String;)V");
     }
-    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, 9) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
+    if (env->ExceptionCheck() || env->RegisterNatives(host_class, methods, static_cast<jint>(std::size(methods))) != JNI_OK) { env->ExceptionClear(); host_class = nullptr; return JNI_VERSION_1_6; }
     if (jclass services = env->FindClass("com/neoastra/backend/NeoAstraServices")) {
         services_class = static_cast<jclass>(env->NewGlobalRef(services));
         services_call = env->GetStaticMethodID(services_class, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
@@ -1113,7 +1143,24 @@ bool neo_platform_open_external(const std::string& uri, int64_t* native_code) no
 }
 neoastra_result_t neo_platform_view_move_pointer(neoastra_view_t*, double, double) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_open_devtools(neoastra_view_t* view) noexcept { return view_state(view) ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_ERROR_NOT_INITIALIZED; }
-neoastra_result_t neo_platform_view_capture(neoastra_view_t*, const neoastra_capture_options_t&, neoastra_buffer_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return unsupported(error, "Capture"); }
+// The WebView captures what it shows; a rectangle is in CSS pixels, and the image is in the pixels of the display.
+neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastra_capture_options_t& options, neoastra_buffer_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
+    auto* state = view_state(view);
+    JNIEnv* env = jni();
+    if (!state || !state->host || !env) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    if (options.full_page) return unsupported(error, "Capture of a whole document");
+    auto* pending = new (std::nothrow) capture_request{callback, context, operation};
+    if (!pending) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Could not allocate the capture", 0, android_domain);
+    const auto quality = static_cast<jint>(options.quality ? options.quality : 80u);
+    const jint refused = env->CallIntMethod(state->host, host_capture, static_cast<jint>(options.format), quality,
+        static_cast<jint>(options.region.x), static_cast<jint>(options.region.y), static_cast<jint>(options.region.width), static_cast<jint>(options.region.height),
+        reinterpret_cast<jlong>(pending));
+    if (failed(env, view->environment->app, "Android capture failed")) { delete pending; return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Android capture failed", 0, android_domain); }
+    // A view that is not laid out yet has no state to capture; a rectangle outside it is an argument the caller gave.
+    if (refused == capture_no_size) { delete pending; return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The view has no size yet: it shows nothing to capture", 0, android_domain); }
+    if (refused != 0) { delete pending; return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The capture region is outside the visible viewport", 0, android_domain); }
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept {
     auto* state = view_state(view);
     if (!state) return NEOASTRA_ERROR_NOT_INITIALIZED;
