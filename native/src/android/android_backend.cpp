@@ -13,6 +13,7 @@
 #include <android/looper.h>
 #include <jni.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
 
@@ -228,11 +229,22 @@ private:
     neoastra_view_t* _view{};
 };
 
+// ART aborts the process when a thread that native code attached exits without detaching, as a worker of the thread pool
+// that called a platform service does: a thread that this function attaches detaches when it exits.
+pthread_key_t attached_thread_key{};
+
+void detach_attached_thread(void*) noexcept {
+    if (java_vm) java_vm->DetachCurrentThread();
+}
+
 JNIEnv* jni() noexcept {
     if (!java_vm) return nullptr;
     JNIEnv* env{};
     if (java_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return env;
-    return java_vm->AttachCurrentThread(&env, nullptr) == JNI_OK ? env : nullptr;
+    static const bool key_created = pthread_key_create(&attached_thread_key, detach_attached_thread) == 0;
+    if (java_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return nullptr;
+    if (key_created) pthread_setspecific(attached_thread_key, env);
+    return env;
 }
 
 bool failed(JNIEnv* env, neoastra_app_t* app, const char* what) noexcept {
