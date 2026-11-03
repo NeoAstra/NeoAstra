@@ -101,6 +101,8 @@ public final class NeoAstraWebHost {
     private int nextScript = 1;
     private volatile boolean engineDialogs = true;
     private boolean keepsHistory = true;
+    private boolean debugging;
+    private static final NeoAstraDebuggingSwitch DEBUGGING = new NeoAstraDebuggingSwitch(WebView::setWebContentsDebuggingEnabled);
     private final NeoAstraKeyboard keyboard;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
@@ -214,6 +216,13 @@ public final class NeoAstraWebHost {
      * Whether the WebView keeps the documents it showed. The WebView cannot refuse a walk through its history, so while it does
      * not keep them it forgets them after each navigation, and history.back() finds nothing to load.
      */
+    /** Whether DevTools, chrome://inspect on the development machine, may attach to the web contents of the process. */
+    public void setDebugging(boolean value) {
+        if (value == debugging) return;
+        DEBUGGING.change(value);
+        debugging = value;
+    }
+
     public void setKeepsHistory(boolean value) {
         keepsHistory = value;
         if (!value) webView.clearHistory();
@@ -387,6 +396,11 @@ public final class NeoAstraWebHost {
     }
 
     public void destroy() {
+        if (debugging) {
+            // The view goes anyway, also when the switch fails.
+            try { DEBUGGING.change(false); } catch (RuntimeException exception) { DEBUGGING.forget(); }
+            debugging = false;
+        }
         view = 0;
         reply = null;
         for (ScriptHandler handler : scripts.values()) handler.remove();
