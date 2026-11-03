@@ -216,6 +216,28 @@ card("Keyboard", (row, run) => {
   onKeyboard(state => { if (state.height > 0 && document.activeElement === field) setTimeout(() => field.scrollIntoView({ block: "center", behavior: "smooth" }), state.duration * 1000); });
   onKeyboard(state => run(async () => ({ status: "Success", ...state, variable: keyboardHeight() })));
 });
+// The host captures the view of the page, as an automation tool or an agent would see it, and the card shows the image.
+card("Screenshot", (row, run) => {
+  const image = document.createElement("img");
+  image.alt = "Screenshot of this page";
+  image.style.cssText = "display: none; width: 50%; margin-top: 0.5rem; border: 1px solid #8884; border-radius: 8px;";
+  const holder = document.createElement("div");
+  holder.style.flexBasis = "100%";
+  holder.append(image);
+  const show = async region => {
+    const shot = await invoke("screenshot.capture", region);
+    image.src = `data:image/png;base64,${shot.png}`;
+    image.style.display = "block";
+    return { status: "Success", width: shot.width, height: shot.height, devicePixelRatio, bytes: Math.round(shot.png.length * 3 / 4) };
+  };
+  button(row, "Capture", () => run(() => show({})));
+  // The region of this card, in CSS pixels: the image has the size of the card times the device pixel ratio.
+  button(row, "This card", () => run(() => {
+    const box = row.parentElement.getBoundingClientRect();
+    return show({ x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) });
+  }));
+  row.append(holder);
+});
 card("Window title", (row, run) => {
   button(row, "Set title", () => run(() => desktop.window.setTitle("Hello")));
 });

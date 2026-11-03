@@ -95,6 +95,7 @@ internal sealed class MobileHost
         });
         builder.AddGreetingService(new GreetingService());
         builder.AddLinkDecisionService(LinkDecisionService.Instance);
+        builder.AddScreenshotService(ScreenshotService.Instance);
         builder.AddNeoAstraDesktopHandlers(desktop, new NeoDesktopRendererOptions
         {
             AllowedSafeStorageKeys = new HashSet<string>(StringComparer.Ordinal) { "hello-secret" },
@@ -162,6 +163,9 @@ internal sealed class MobileHost
         // address of GitHub opens in the browser, and a link that a script clicks opens nothing. The link card shows the decision.
         _view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(LinkDecisionService.Instance.Decide(request.Uri, request.IsMainFrame, request.IsUserInitiated, request.IsLinkActivation)));
         _view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(request.TargetUri is { } target ? LinkDecisionService.Instance.Decide(target, true, request.IsUserInitiated, request.IsLinkActivation, newWindow: true) : NeoDecisionAction.Cancel));
+        // The screenshot card asks for an image of this view, as an automation tool or an agent would; a capture begins on the UI thread.
+        var view = _view;
+        ScreenshotService.Instance.Capture = async (options, cancellationToken) => await await _application.Dispatcher.InvokeAsync(() => view.CaptureAsync(options, cancellationToken).AsTask(), cancellationToken);
         // iOS and Android end the web content process of a view under memory pressure; a lost view is recreated.
         _view.ProcessFailed += async (_, _) => await RecreateAsync();
         await _view.NavigateAsync(new Uri("app://neoastra/index.html"));
@@ -221,6 +225,27 @@ internal sealed class LinkDecisionService
     public ValueTask<LinkDecision> LastAsync(LinkDecisionRequest request) => ValueTask.FromResult(_last ?? new LinkDecision(null, false, null, "None"));
 }
 
+// An image of the view of the page, which the screenshot card shows.
+[NeoRpcService("screenshot")]
+internal sealed class ScreenshotService
+{
+    public static ScreenshotService Instance { get; } = new();
+    internal Func<NeoCaptureOptions, CancellationToken, Task<NeoCapturedImage>>? Capture { get; set; }
+
+    // A region is in CSS pixels, as getBoundingClientRect() gives it; without one, the whole visible viewport.
+    [NeoRpcMethod("capture")]
+    public async ValueTask<Screenshot> CaptureAsync(ScreenshotRequest request)
+    {
+        var capture = Capture ?? throw new InvalidOperationException("The view is not shown.");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var options = new NeoCaptureOptions { Region = request.Width > 0 && request.Height > 0 ? new NeoRect(request.X, request.Y, request.Width, request.Height) : null };
+        var image = await capture(options, timeout.Token);
+        return new Screenshot(image.Width, image.Height, Convert.ToBase64String(image.Data.Span));
+    }
+}
+
+internal sealed record ScreenshotRequest(int X = 0, int Y = 0, int Width = 0, int Height = 0);
+internal sealed record Screenshot(int Width, int Height, string Png);
 internal sealed record LinkDecisionRequest;
 internal sealed record LinkDecision(string? Uri, bool UserInitiated, bool? LinkActivation, string Decision);
 internal sealed record GreetingRequest(string Name);
@@ -228,6 +253,8 @@ internal sealed record GreetingResponse(string Message);
 
 [JsonSerializable(typeof(GreetingRequest))]
 [JsonSerializable(typeof(GreetingResponse))]
+[JsonSerializable(typeof(ScreenshotRequest))]
+[JsonSerializable(typeof(Screenshot))]
 [JsonSerializable(typeof(LinkDecisionRequest))]
 [JsonSerializable(typeof(LinkDecision))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

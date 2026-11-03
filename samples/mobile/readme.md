@@ -65,6 +65,7 @@ behavior that a quick look does not show:
 | History off | Open a second page, tap `history.back()` | The page stays: the view refuses the documents of its history |
 | Notifications FB and Ea | Show both, tap each in the notification center | The Reminder card reports `Activated` with the ID and the payload of the one tapped: `FB` brings `FB`, `Ea` brings `Ea`, although the two IDs have the same hash code in Java |
 | Keyboard | Tap the field | The keyboard lies over the page, the card reports its height and the duration of its animation, and the page moves the field above it |
+| Screenshot | Capture, then This card | The host captures the view as an automation tool would: first the visible page, then only this card, whose image is its size in CSS pixels times the device pixel ratio |
 | Reminder | Ask, then In 10 s, and close the application | The notification comes after ten seconds; tapping it starts the application, and the card reports the tap as `Launched` |
 | Back button (Android) | Open a layer twice, then press back three times | Back closes the two layers first, then the window |
 | Window color | Dark, then Light | The window behind the page and, on Android, the symbols of the system bars follow |
