@@ -915,6 +915,8 @@ public sealed class ToolingTests
         if (!CanRun("node")) { Assert.Inconclusive("The fixture servers need Node.js."); return; }
         using var fixture = new ProjectFixture();
         var port = FreePort();
+        // Each fixture process carries the marker with its own suffix, so that the test waits for the backend and not already
+        // for the frontend, while the marker alone matches both.
         var marker = "neoastra-termination-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(fixture.ConfigurationPath, $$"""
             {
@@ -922,8 +924,8 @@ public sealed class ToolingTests
               "version": 1,
               "app": { "identifier": "dev.neoastra.fixture", "displayName": "Fixture" },
               "frontend": {
-                "root": "Client App", "devCommand": ["node", "-e", "require('http').createServer((q, r) => r.end('ok')).listen({{port}}, '127.0.0.1')", "{{marker}}"],
-                "backendCommand": ["node", "-e", "setTimeout(() => {}, 120000)", "{{marker}}"],
+                "root": "Client App", "devCommand": ["node", "-e", "require('http').createServer((q, r) => r.end('ok')).listen({{port}}, '127.0.0.1')", "{{marker}}-frontend"],
+                "backendCommand": ["node", "-e", "setTimeout(() => {}, 120000)", "{{marker}}-backend"],
                 "contractCommand": ["node", "--version"], "devUrl": "http://127.0.0.1:{{port}}",
                 "buildCommand": ["node", "--version"], "dist": "Client App/dist", "spaFallback": "index.html",
                 "packageManager": "none"
@@ -944,8 +946,8 @@ public sealed class ToolingTests
             _ = process.StandardOutput.ReadToEndAsync(); _ = process.StandardError.ReadToEndAsync();
             // The backend starts once the frontend answers: then both run.
             var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (!IsRunning(marker) && DateTime.UtcNow < deadline && !process.HasExited) await Task.Delay(200);
-            Assert.IsTrue(IsRunning(marker), "The backend of the session did not start.");
+            while (!IsRunning(marker + "-backend") && DateTime.UtcNow < deadline && !process.HasExited) await Task.Delay(200);
+            Assert.IsTrue(IsRunning(marker + "-backend"), "The backend of the session did not start.");
             using (var kill = Process.Start(new ProcessStartInfo("kill", ["-" + signal, process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]))!) await kill.WaitForExitAsync();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             deadline = DateTime.UtcNow.AddSeconds(10);
