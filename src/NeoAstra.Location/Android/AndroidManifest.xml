@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of an Android application: the provider adds the location service to the platform services of
+     NeoAstra when the process starts. The application declares the location permissions that it asks for. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <provider
+        android:name="com.neoastra.location.NeoAstraLocationInitializer"
+        android:authorities="${applicationId}.neoastra.location"
+        android:exported="false" />
+  </application>
+</manifest>

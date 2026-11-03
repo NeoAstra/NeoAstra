@@ -5,6 +5,7 @@ using NeoAstra.Desktop.Clipboard;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.DragDrop;
 using NeoAstra.Desktop.GlobalShortcuts;
+using NeoAstra.Desktop.Haptics;
 using NeoAstra.Desktop.Menus;
 using NeoAstra.Desktop.Notifications;
 using NeoAstra.Desktop.Opener;
@@ -38,6 +39,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         DragDrop = dragDrop ?? throw new ArgumentNullException(nameof(dragDrop));
         SafeStorage = safeStorage ?? throw new ArgumentNullException(nameof(safeStorage));
         WindowPolish = new NeoWindowPolishService();
+        Haptics = NeoHaptics.CreateSystem();
     }
 
     /// <summary>Creates the statically selected system adapters with explicit application identity and opener/file policy.</summary>
@@ -117,6 +119,8 @@ public sealed class NeoDesktopServices : IAsyncDisposable
     public INeoSafeStorage SafeStorage { get; }
     /// <summary>Gets native window polish operations.</summary>
     public NeoWindowPolishService WindowPolish { get; }
+    /// <summary>Gets haptic feedback, which a phone plays and a desktop answers as unsupported.</summary>
+    public INeoHaptics Haptics { get; }
 
     internal void BindApplication(NeoApplication application)
     {
@@ -129,6 +133,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         if (Notifications is INeoApplicationBoundDesktopService notifications) notifications.BindApplication(application);
         if (GlobalShortcuts is INeoApplicationBoundDesktopService shortcuts) shortcuts.BindApplication(application);
         if (DragDrop is INeoApplicationBoundDesktopService dragDrop) dragDrop.BindApplication(application);
+        if (Haptics is INeoApplicationBoundDesktopService haptics) haptics.BindApplication(application);
     }
 
     internal void TrackRendererRegistration(IAsyncDisposable registration)
@@ -235,6 +240,10 @@ public sealed class NeoDesktopEssentialsPlugin : INeoAstraPlugin
             Permission("notifications:display", ["desktop.notifications.show"], NeoPermissionRisk.Sensitive, NeoScopeFamily.Notifications),
             Permission("notifications:remove", ["desktop.notifications.remove"], NeoPermissionRisk.Sensitive),
             Permission("notifications:activation", ["desktop.notifications.activated"], NeoPermissionRisk.Sensitive),
+            Permission("notifications:schedule", ["desktop.notifications.schedule"], NeoPermissionRisk.Sensitive, NeoScopeFamily.Notifications),
+            Permission("notifications:unschedule", ["desktop.notifications.unschedule"], NeoPermissionRisk.Sensitive),
+            Permission("notifications:request", ["desktop.notifications.request-permission"], NeoPermissionRisk.Sensitive, defaultTimeout: DesktopRendererRegistration.NotificationPermissionTimeout),
+            Permission("notifications:launch-activation", ["desktop.notifications.launch-activation"], NeoPermissionRisk.Sensitive),
             Permission("shortcuts:register", ["desktop.shortcuts.register"], NeoPermissionRisk.High, NeoScopeFamily.Shortcuts),
             Permission("shortcuts:control", ["desktop.shortcuts.unregister", "desktop.shortcuts.activated"], NeoPermissionRisk.High),
             Permission("system-info:theme", ["desktop.system.theme", "desktop.system.theme-changed"], NeoPermissionRisk.Low),
@@ -248,11 +257,12 @@ public sealed class NeoDesktopEssentialsPlugin : INeoAstraPlugin
             Permission("window:management", ["desktop.window.get-state", "desktop.window.set-title", "desktop.window.set-position", "desktop.window.set-size", "desktop.window.set-minimum-size", "desktop.window.set-maximum-size", "desktop.window.show", "desktop.window.hide", "desktop.window.focus", "desktop.window.maximize", "desktop.window.minimize", "desktop.window.restore", "desktop.window.set-fullscreen", "desktop.window.set-decorations", "desktop.window.set-resizable", "desktop.window.set-always-on-top", "desktop.window.set-taskbar-visible", "desktop.window.set-title-bar", "desktop.window.start-drag", "desktop.window.start-resize", "desktop.window.state-changed"], NeoPermissionRisk.High),
             Permission("window:close", ["desktop.window.close", "desktop.window.intercept-close", "desktop.window.complete-close", "desktop.window.close-requested"], NeoPermissionRisk.High),
             Permission("window:files", ["desktop.window.set-icon", "desktop.window.set-represented-file"], NeoPermissionRisk.High, NeoScopeFamily.Filesystem),
-            Permission("window:polish", ["desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme"], NeoPermissionRisk.High),
+            Permission("window:polish", ["desktop.window.get-extra-support", "desktop.window.request-attention", "desktop.window.set-progress", "desktop.window.set-badge", "desktop.window.set-document-edited", "desktop.window.set-content-protection", "desktop.window.set-titlebar-theme", "desktop.window.set-background-color"], NeoPermissionRisk.High),
             Permission("application:quit", ["desktop.application.request-quit"], NeoPermissionRisk.High, defaultTimeout: TimeSpan.FromSeconds(35)),
             Permission("safe-storage:store", ["desktop.safe-storage.store"], NeoPermissionRisk.High),
             Permission("safe-storage:retrieve", ["desktop.safe-storage.retrieve", "desktop.safe-storage.contains"], NeoPermissionRisk.High),
             Permission("safe-storage:delete", ["desktop.safe-storage.delete"], NeoPermissionRisk.High),
+            Permission("haptics:play", ["desktop.haptics.play"], NeoPermissionRisk.Low),
         };
         return new(Id, "1.0.0", "0.1.0", declarations, new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
         {

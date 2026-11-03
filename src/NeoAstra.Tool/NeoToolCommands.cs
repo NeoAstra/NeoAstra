@@ -72,8 +72,14 @@ internal static class NeoToolCommands
         return findings.Any(static finding => finding.Status == "error") ? 2 : 0;
     }
 
-    internal static async Task<int> DevAsync(string? configurationPath, string? devUrl)
+    internal static Task<int> DevAsync(string? configurationPath, string? devUrl) => DevAsync(configurationPath, devUrl, null, null);
+
+    internal static async Task<int> DevAsync(string? configurationPath, string? devUrl, string? platform, string? device)
     {
+        var target = NeoMobileTarget.ParsePlatform(platform);
+        if (target == NeoDevelopmentPlatform.Desktop && device is not null)
+            throw new NeoToolException("development_platform", "A device is given with --platform ios or --platform android.");
+        var mobile = target == NeoDevelopmentPlatform.Desktop ? null : new NeoMobileTarget(target, device);
         var project = Load(configurationPath, devUrl);
         if (project.IsStaticFrontend)
             throw new NeoToolException("static_frontend_dev", "Static frontends are rebuilt by dotnet build; use dotnet watch run for development.");
@@ -83,7 +89,7 @@ internal static class NeoToolCommands
         {
             var processFactory = new NeoProcessFactory();
             await new NeoFrontendDependencyRestorer(processFactory).RestoreAsync(project, source.Token).ConfigureAwait(false);
-            return await new NeoDevelopmentOrchestrator(processFactory, new NeoReadinessProbe()).RunAsync(project, source.Token).ConfigureAwait(false);
+            return await new NeoDevelopmentOrchestrator(processFactory, new NeoReadinessProbe()).RunAsync(project, mobile, source.Token).ConfigureAwait(false);
         }
         finally
         {

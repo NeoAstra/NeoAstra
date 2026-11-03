@@ -93,6 +93,10 @@ public sealed class DesktopServicesTests
         Assert.AreEqual(new NeoColor(0xAB, 0xCD, 0xEF, 0x80), DesktopRendererRegistration.ParseColor("#abcdef80"));
         foreach (var malformed in new[] { "102030", "#12345", "#12345g", "#1234567", "red" })
             Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.ParseColor(malformed));
+        // A window background has a color: no value is refused rather than taken for transparent.
+        Assert.AreEqual(new NeoColor(0x1C, 0x1C, 0x1E), DesktopRendererRegistration.RequiredColor("#1c1c1e"));
+        Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.RequiredColor(null));
+        Assert.Throws<ArgumentException>(() => DesktopRendererRegistration.RequiredColor(""));
         var snapshotJson = JsonSerializer.Serialize(
             new DesktopWindowStateResult(new("Title", default, new(800, 600), default, default, true, true, false, 1, NeoWindowState.Maximized, true, true, false, true, false,
                 new(NeoWindowTitleBarStyle.Overlay, 32, 0, 138), "display-1")),
@@ -196,6 +200,7 @@ public sealed class DesktopServicesTests
             var pluginPermissions = metadata.PermissionCatalog!;
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Commands, metadata.Commands.Select(static value => value.Name).ToArray());
             CollectionAssert.AreEquivalent(NeoDesktopRendererContract.Events, metadata.Events.Select(static value => value.Name).ToArray());
+            Assert.AreEqual("window:polish", metadata.Commands.Single(static value => value.Name == "desktop.window.set-background-color").Permission);
             var allOperations = pluginPermissions.Permissions.SelectMany(static value => value.Commands).ToArray();
             CollectionAssert.AreEquivalent(allOperations, metadata.Commands.Select(static value => value.Name).Concat(metadata.Events.Select(static value => value.Name)).ToArray());
             Assert.IsTrue(metadata.Commands.All(command => pluginPermissions.Permissions.Single(permission => permission.Id == command.Permission).Commands.Contains(command.Name, StringComparer.Ordinal)));
@@ -561,6 +566,43 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void NotificationRequestsAreScheduledOnlyForAMomentInTheFuture()
+    {
+        var now = new DateTimeOffset(2026, 10, 19, 12, 0, 0, TimeSpan.Zero);
+        Assert.IsFalse(new NeoNotificationRequest { Id = "now", Title = "Now", Body = "" }.IsScheduled(now));
+        Assert.IsFalse(new NeoNotificationRequest { Id = "past", Title = "Past", Body = "", DeliverAt = now.AddMinutes(-1) }.IsScheduled(now));
+        Assert.IsFalse(new NeoNotificationRequest { Id = "same", Title = "Same", Body = "", DeliverAt = now }.IsScheduled(now));
+        Assert.IsTrue(new NeoNotificationRequest { Id = "later", Title = "Later", Body = "", DeliverAt = now.AddMinutes(1) }.IsScheduled(now));
+        // Another offset names the same instant.
+        Assert.IsTrue(new NeoNotificationRequest { Id = "zone", Title = "Zone", Body = "", DeliverAt = new DateTimeOffset(2026, 10, 19, 14, 1, 0, TimeSpan.FromHours(2)) }.IsScheduled(now));
+    }
+
+    [TestMethod]
+    public async Task RequestingPermissionWithoutAPromptAnswersTheStatus()
+    {
+        INeoNotifications fake = new NeoFakeNotifications();
+        Assert.AreEqual(NeoNotificationPermissionStatus.Granted, await fake.RequestPermissionAsync());
+        INeoNotifications none = new UnsupportedNotifications("none");
+        Assert.AreEqual(NeoNotificationPermissionStatus.Unsupported, await none.RequestPermissionAsync());
+    }
+
+    [TestMethod]
+    public void BoundNotificationAdapterRequiresAnApplication()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoNotifications.CreateSystem((NeoApplication)null!, "test.app", "Test App"));
+    }
+
+    [TestMethod]
+    public async Task PresentersWithoutScheduledDeliveryAnswerUnsupportedForALaterMoment()
+    {
+        var later = new NeoNotificationRequest { Id = "later", Title = "Later", Body = "Body", DeliverAt = DateTimeOffset.UtcNow.AddHours(1) };
+        await using var windows = new WindowsNotifications(null);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await windows.ShowAsync(later));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await new ProcessNotifications("/bin/true", macOS: false).ShowAsync(later));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await new UnsupportedNotifications("none").ShowAsync(later));
+    }
+
+    [TestMethod]
     public async Task LimitedWindowsNotificationsRejectActionsInsteadOfDiscardingThem()
     {
         await using var notifications = new WindowsNotifications(null);
@@ -584,6 +626,21 @@ public sealed class DesktopServicesTests
         Assert.AreEqual(NeoDesktopStatus.Unsupported, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Unsupported));
         Assert.AreEqual(NeoDesktopStatus.Failed, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Unknown));
         Assert.AreEqual(NeoDesktopStatus.Failed, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.NotRequested));
+    }
+
+    [TestMethod]
+    public void IosNotificationsKeepTheTapThatLaunchedTheApplication()
+    {
+        // iOS reports the tap that launched an application only to a delegate that is there while the scene connects: the attach
+        // takes one before it awaits anything, and the presenter that takes the delegate later handles what it kept.
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra", "Application"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        var app = File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Application", "NeoApp.cs"));
+        var caught = app.IndexOf("IosNotifications.CatchLaunchResponses();", StringComparison.Ordinal);
+        Assert.IsTrue(caught > 0 && caught < app.IndexOf("s_attached = StartAttachedAsync(configure);", StringComparison.Ordinal));
+        var presenter = File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "MacNotifications.cs"));
+        StringAssert.Contains(presenter, "Native.SendVoidArg(_center, Native.GetSelector(\"setDelegate:\"), _delegate); ReplayLaunchResponses();");
+        StringAssert.Contains(presenter, "if (self == s_launchDelegate)");
     }
 
     [TestMethod]

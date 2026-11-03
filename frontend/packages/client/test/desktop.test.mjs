@@ -16,6 +16,32 @@ test("desktop clients use the static command contract and typed intent fields", 
   ]);
 });
 
+test("desktop notifications schedule, unschedule, ask, and take the activation that waited", async () => {
+  const mock = createMockDesktop();
+  for (const command of [desktopCommands.notifications.schedule, desktopCommands.notifications.unschedule]) mock.setResult(command, { status: "Success" });
+  mock.setResult(desktopCommands.notifications.requestPermission, { status: "Granted" });
+  mock.setResult(desktopCommands.notifications.launchActivation, { activation: { id: "reminder.1", payload: "open:list/1" } });
+  const reminder = { appIdentity: "app", category: "reminders", urgency: "normal", persistent: false, id: "reminder.1", title: "Milk", body: "Buy milk", actions: [], deliverAt: "2026-11-02T08:00:00+01:00" };
+  assert.deepEqual(await mock.client.notifications.schedule(reminder), { status: "Success" });
+  await mock.client.notifications.unschedule("reminder.1");
+  assert.deepEqual(await mock.client.notifications.requestPermission(), { status: "Granted" });
+  assert.deepEqual(await mock.client.notifications.takeLaunchActivation(), { id: "reminder.1", payload: "open:list/1" });
+  mock.setResult(desktopCommands.notifications.launchActivation, { activation: null });
+  assert.equal(await mock.client.notifications.takeLaunchActivation(), undefined);
+  assert.deepEqual(mock.invocations.map(value => value.command), [
+    "desktop.notifications.schedule", "desktop.notifications.unschedule", "desktop.notifications.request-permission",
+    "desktop.notifications.launch-activation", "desktop.notifications.launch-activation",
+  ]);
+  assert.deepEqual(mock.invocations[0].args, reminder);
+});
+
+test("desktop haptics send the portable feedback name", async () => {
+  const mock = createMockDesktop();
+  mock.setResult(desktopCommands.haptics.play, { status: "Unsupported" });
+  assert.deepEqual(await mock.client.haptics.play("Success"), { status: "Unsupported" });
+  assert.deepEqual(mock.invocations, [{ command: "desktop.haptics.play", args: { feedback: "Success" } }]);
+});
+
 test("desktop mock is grant-free and contains event listener exceptions", async () => {
   const mock = createMockDesktop();
   await assert.rejects(() => mock.client.safeStorage.retrieve("missing"), error => error.code === "permission_denied");
@@ -41,6 +67,7 @@ test("window extras use scoped files and focused typed payloads", async () => {
   await mock.client.window.setProgress("Paused", 0.5);
   await mock.client.window.setContentProtection(true);
   await mock.client.window.setTitleBarTheme("Dark");
+  await mock.client.window.setBackgroundColor("#1c1c1e");
   assert.deepEqual(mock.invocations, [
     { command: "desktop.window.get-extra-support", args: {} },
     { command: "desktop.window.set-icon", args: { root: "assets", relativePath: "app.ico", operation: "read" } },
@@ -48,6 +75,7 @@ test("window extras use scoped files and focused typed payloads", async () => {
     { command: "desktop.window.set-progress", args: { state: "Paused", value: 0.5 } },
     { command: "desktop.window.set-content-protection", args: { value: true } },
     { command: "desktop.window.set-titlebar-theme", args: { theme: "Dark" } },
+    { command: "desktop.window.set-background-color", args: { color: "#1c1c1e" } },
   ]);
 });
 

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0-ios</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>true</ImplicitUsings>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <ApplicationId>dev.neoastra.sample.mobile</ApplicationId>
+    <ApplicationTitle>NeoAstra</ApplicationTitle>
+    <IsPackable>false</IsPackable>
+    <!-- The keyboard lies over the page, which learns its height (the Keyboard card). -->
+    <NeoAstraIOSKeyboardOverlay>true</NeoAstraIOSKeyboardOverlay>
+    <TrimMode Condition="'$(Configuration)' == 'Release'">full</TrimMode>
+  </PropertyGroup>
+  <!-- APNs registers only an application with the aps-environment entitlement. The simulator takes it as it is; a device needs a
+       provisioning profile with push, so a device build asks for it with NeoAstraSamplePush=true. The file is not named
+       Entitlements.plist, which the iOS SDK would take for every build, the one for a device without push included. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64' Or '$(RuntimeIdentifier)' == 'iossimulator-x64' Or '$(NeoAstraSamplePush)' == 'true'">
+    <CodesignEntitlements>Entitlements.Push.plist</CodesignEntitlements>
+  </PropertyGroup>
+  <!-- A passkey needs a relying party whose apple-app-site-association lists this application: a local build names its domain
+       with NeoAstraSamplePasskeyDomain, which becomes the webcredentials of the associated domains entitlement. -->
+  <ItemGroup Condition="'$(NeoAstraSamplePasskeyDomain)' != ''">
+    <CustomEntitlements Include="com.apple.developer.associated-domains" Type="StringArray" Value="webcredentials:$(NeoAstraSamplePasskeyDomain)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Purchases/NeoAstra.Purchases.csproj" />
+    <Compile Include="../Shared/*.cs" />
+    <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
+    <BundleResource Include="../Shared/frontend/**/*" LogicalName="assets/%(RecursiveDir)%(Filename)%(Extension)" />
+    <BundleResource Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" LogicalName="assets/client/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <!-- A project reference to the purchases plugin takes the targets that its package gives an iOS application: they embed
+       the StoreKit 2 bridge. -->
+  <Import Project="../../../src/NeoAstra.Purchases/Build/NeoAstra.Purchases.targets" />
+</Project>

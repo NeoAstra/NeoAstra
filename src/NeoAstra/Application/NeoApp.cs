@@ -2,6 +2,7 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Text.Json;
+using NeoAstra.Desktop;
 using NeoAstra.Rpc;
 using NeoExternalUrlScope = NeoAstra.Desktop.Opener.NeoUrlScope;
 
@@ -10,6 +11,8 @@ namespace NeoAstra;
 /// <summary>Runs a conventional secure one-window NeoAstra application.</summary>
 public static class NeoApp
 {
+    private static Task<(NeoAppBuilder Builder, NeoApplication Application)>? s_attached;
+
     /// <summary>Runs an application until its main window closes.</summary>
     /// <param name="args">The process arguments reserved for application launch handling.</param>
     /// <param name="configure">Configures the application and its generated RPC services.</param>
@@ -37,6 +40,61 @@ public static class NeoApp
             builder.StopAsync().AsTask().GetAwaiter().GetResult();
         }
     }
+
+    /// <summary>Shows a mobile application in a new main window, attached to the run loop of the platform.</summary>
+    /// <param name="configure">Configures the application and its generated RPC services; only the first call runs it.</param>
+    /// <returns>A task that completes once the main window shows the application.</returns>
+    /// <remarks>
+    /// iOS and Android own the run loop of their main thread, so a mobile application attaches to it instead of running
+    /// one. Call this method on the main thread once a window scene is connected on iOS, or in <c>OnCreate</c> of an activity
+    /// on Android. The first call attaches NeoAstra, runs <paramref name="configure"/>, and shows the main window; a later
+    /// call, such as for a new activity after the user closed the previous one, shows the same application in a new main
+    /// window. The application lives as long as the process: a closed main window releases only its own view.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="PlatformNotSupportedException">The operating system is not iOS or Android; a desktop application calls <see cref="Run"/>.</exception>
+    public static async Task AttachAsync(Action<NeoAppBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (!OperatingSystem.IsIOS() && !OperatingSystem.IsAndroid())
+            throw new PlatformNotSupportedException("Only an iOS or Android application attaches to the run loop of its platform; a desktop application calls NeoApp.Run.");
+        if (s_attached is { } attached)
+        {
+            var (builder, application) = await attached.ConfigureAwait(true);
+            await builder.ShowMainWindowAsync(application, CancellationToken.None).ConfigureAwait(true);
+            return;
+        }
+        if (OperatingSystem.IsIOS()) global::NeoAstra.Desktop.Notifications.IosNotifications.CatchLaunchResponses();
+        s_attached = StartAttachedAsync(configure);
+        try { await s_attached.ConfigureAwait(true); }
+        catch { s_attached = null; throw; }
+    }
+
+    private static async Task<(NeoAppBuilder, NeoApplication)> StartAttachedAsync(Action<NeoAppBuilder> configure)
+    {
+        var builder = new NeoAppBuilder();
+        configure(builder);
+        var application = NeoApplication.AttachToCurrentThread(new NeoApplicationOptions
+        {
+            ApplicationName = builder.Title,
+            ShutdownMode = NeoApplicationShutdownMode.Explicit,
+        });
+        try
+        {
+            builder.ValidateConfiguration();
+            await builder.PrepareAsync(application, CancellationToken.None).ConfigureAwait(true);
+            await builder.ShowMainWindowAsync(application, CancellationToken.None).ConfigureAwait(true);
+        }
+        catch
+        {
+            await builder.StopAsync().ConfigureAwait(true);
+            await application.DisposeAsync().ConfigureAwait(true);
+            throw;
+        }
+        // An application that attaches to a run loop of its own reports when its startup is complete.
+        application.NotifyReady();
+        return (builder, application);
+    }
 }
 
 /// <summary>Configures a conventional secure one-window NeoAstra application.</summary>
@@ -49,7 +107,12 @@ public sealed class NeoAppBuilder
     private string? _contractHash;
     private NeoExternalUrlScope? _externalLinkScope;
     private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
+    private Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? _fileChooser;
+    private Action<NeoApplication, NeoPluginBuilder>? _configurePlugins;
+    private byte[]? _capabilities;
     private Session? _session;
+    private Uri? _target;
+    private string? _assetsDirectory;
 
     /// <summary>Gets or sets the main window title.</summary>
     public string Title { get; set; } = AppDomain.CurrentDomain.FriendlyName;
@@ -61,7 +124,16 @@ public sealed class NeoAppBuilder
     public int Height { get; set; } = 640;
 
     /// <summary>Gets or sets the production asset directory.</summary>
-    public string AssetsDirectory { get; set; } = Path.Combine(AppContext.BaseDirectory, "assets");
+    /// <remarks>
+    /// The default is the <c>assets</c> folder next to the application, which is inside the app bundle on iOS. Android keeps
+    /// the assets in the package, so the default there is the folder into which NeoAstra copies them once per installed
+    /// version.
+    /// </remarks>
+    public string AssetsDirectory
+    {
+        get => _assetsDirectory ??= DefaultAssetsDirectory();
+        set => _assetsDirectory = value;
+    }
 
     /// <summary>Gets or sets which engine-provided browser features the main view keeps.</summary>
     public NeoBrowserFeatures BrowserFeatures { get; set; } = new();
@@ -69,7 +141,7 @@ public sealed class NeoAppBuilder
     /// <summary>Registers backend configuration for the hidden main window and its application.</summary>
     /// <param name="configure">The synchronous callback used to attach lifecycle handlers or configure window properties.</param>
     /// <returns>This builder.</returns>
-    /// <remarks>The callback runs once during startup on the native UI thread, after assigning <see cref="NeoApplication.MainWindow"/> and before RPC/browser creation, showing, or navigation. It does not change bridge or navigation policy. Attach asynchronous close/quit/launch handlers here rather than using an async-void configuration callback. A thrown exception fails startup and propagates from <see cref="NeoApp.Run"/> after application teardown.</remarks>
+    /// <remarks>The callback runs once during startup on the native UI thread, after assigning <see cref="NeoApplication.MainWindow"/> and before RPC/browser creation, showing, or navigation; a mobile application runs it again for each new main window, before its view is created. It does not change bridge or navigation policy. Attach asynchronous close/quit/launch handlers here rather than using an async-void configuration callback. A thrown exception fails startup and propagates from <see cref="NeoApp.Run"/> after application teardown.</remarks>
     /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">Main-window configuration was already registered.</exception>
     public NeoAppBuilder ConfigureMainWindow(Action<NeoApplication, NeoWindow> configure)
@@ -94,6 +166,47 @@ public sealed class NeoAppBuilder
                 throw new ArgumentException("Permission identifiers must be non-empty and bounded.", nameof(permissions));
             _mainViewPermissions.Add(permission);
         }
+        return this;
+    }
+
+    /// <summary>Registers the plugins of the application, such as the desktop services, push, or passkeys, whose renderer handlers the generated <c>UseRpc</c> callback adds.</summary>
+    /// <param name="configure">Adds the plugins; it receives the application, whose dispatcher the services of a plugin take.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The callback runs once during startup on the native UI thread, before the RPC services are registered, so that the
+    /// services it creates are there for the handlers. The plugins start once the RPC host is built: starting binds the
+    /// notifications, which then hand over the tap that launched the application to the handlers that already listen. They stop
+    /// with the application. Registering a plugin or its handlers grants nothing: the page reaches their commands only with
+    /// the permissions of <see cref="UseCapabilities"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">Plugins were already registered.</exception>
+    public NeoAppBuilder UsePlugins(Action<NeoApplication, NeoPluginBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        if (_configurePlugins is not null) throw new InvalidOperationException("Plugins can be registered only once.");
+        _configurePlugins = configure;
+        return this;
+    }
+
+    /// <summary>Opts the main view into capability authorization with a capability document, which can grant the scoped permissions of plugins.</summary>
+    /// <param name="utf8Json">The capability document as UTF-8 JSON; a capability that names the view <c>main</c> applies to the page.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The document is resolved at startup against the permissions of the generated contract and those of the plugins of
+    /// <see cref="UsePlugins"/>, for the platform that runs the application, so one document can serve several platforms through
+    /// its <c>platforms</c> selectors. It replaces <see cref="GrantMainView"/>, which grants only unscoped permissions of the
+    /// generated contract; an application uses one or the other.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="utf8Json"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="utf8Json"/> is empty.</exception>
+    /// <exception cref="InvalidOperationException">A capability document was already registered.</exception>
+    public NeoAppBuilder UseCapabilities(byte[] utf8Json)
+    {
+        ArgumentNullException.ThrowIfNull(utf8Json);
+        if (utf8Json.Length == 0) throw new ArgumentException("The capability document is empty.", nameof(utf8Json));
+        if (_capabilities is not null) throw new InvalidOperationException("A capability document can be registered only once.");
+        _capabilities = (byte[])utf8Json.Clone();
         return this;
     }
 
@@ -167,6 +280,35 @@ public sealed class NeoAppBuilder
         return this;
     }
 
+    /// <summary>Answers the file inputs of the main view with the picker of the system.</summary>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// Without a file-chooser answer the view cancels every file input. On Android the default answer shows the picker of the
+    /// system, and the camera for an image input with the <c>capture</c> attribute; WKWebView on iOS shows its own menu in any
+    /// case. This is <see cref="OnFileChooser"/> with a handler that answers <see cref="NeoFileChooserDecision.Default"/>.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">A file-chooser answer was already registered.</exception>
+    public NeoAppBuilder UseSystemFileChooser() => OnFileChooser(static _ => ValueTask.FromResult(NeoFileChooserDecision.Default));
+
+    /// <summary>Registers how the main view answers its file inputs.</summary>
+    /// <param name="handler">The callback, which runs on the native UI thread and decides each request.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// The handler can cancel, select local paths, or answer <see cref="NeoFileChooserDecision.Default"/> to let the system
+    /// show its picker. Without a handler the view cancels every file input.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A file-chooser answer was already registered.</exception>
+    public NeoAppBuilder OnFileChooser(Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_fileChooser is not null) throw new InvalidOperationException("The file-chooser answer can be registered only once.");
+        _fileChooser = handler;
+        return this;
+    }
+
+    internal Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? FileChooserHandler => _fileChooser;
+
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
     /// <param name="contractHash">The deterministic generated contract hash.</param>
     /// <param name="permissions">Generated application permission declarations.</param>
@@ -202,19 +344,32 @@ public sealed class NeoAppBuilder
             IsVisible = false,
         });
         application.MainWindow = window;
+        _configureMainWindow?.Invoke(application, window);
+        await PrepareAsync(application, cancellationToken).ConfigureAwait(true);
+        // The desktop application ends with its main window, and StopAsync then releases the view with the session.
+        await OpenViewAsync(window, releaseOnClose: false, cancellationToken).ConfigureAwait(true);
+    }
 
+    // Creates what every main window of the application shares: the RPC host and the browser environment.
+    internal async ValueTask PrepareAsync(NeoApplication application, CancellationToken cancellationToken)
+    {
         NeoRpcHost? rpc = null;
         NeoEnvironment? environment = null;
-        global::NeoAstra.NeoAstra? view = null;
-        NeoRpcViewBinding? binding = null;
+        NeoPluginHost? plugins = null;
         try
         {
-            _configureMainWindow?.Invoke(application, window);
-            var developmentUrl = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
+            if (_configurePlugins is not null)
+            {
+                var pluginBuilder = new NeoPluginBuilder();
+                _configurePlugins(application, pluginBuilder);
+                plugins = pluginBuilder.Build();
+            }
+            var developmentUrl = DevelopmentUrl();
             var developmentOrigin = developmentUrl is null ? null : ValidateDevelopmentUrl(developmentUrl);
             var release = developmentOrigin is null;
             var profile = release ? NeoSecurityProfile.ProductionLocalApp : NeoSecurityProfile.DevelopmentLocalApp;
-            var manifest = _mainViewPermissions.Count == 0 ? null : CreateCapabilityManifest(profile, release);
+            var manifest = _mainViewPermissions.Count == 0 && _capabilities is null ? null
+                : CreateCapabilityManifest(profile, release, plugins?.Plugins.Select(static plugin => plugin.PermissionCatalog).OfType<NeoPluginPermissionCatalog>() ?? []);
             var rpcBuilder = new NeoRpcBuilder(new NeoRpcOptions
             {
                 ContractHash = _contractHash!,
@@ -227,13 +382,10 @@ public sealed class NeoAppBuilder
             _configureRpc!(rpcBuilder);
             rpc = rpcBuilder.Build();
 
-            Uri target;
-            NeoAstraOptions viewOptions;
             // Native window and browser setup must resume on the application's UI dispatcher.
             if (developmentOrigin is not null)
             {
-                target = new Uri(developmentOrigin, "/");
-                viewOptions = CreateLocalViewOptions(target);
+                _target = new Uri(developmentOrigin, "/");
                 environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions(), cancellationToken).ConfigureAwait(true);
             }
             else
@@ -246,23 +398,60 @@ public sealed class NeoAppBuilder
                         CustomSchemes = [NeoCustomScheme.Application("app", new NeoManifestResourceProvider(assetRoot, assetManifest))],
                     },
                     cancellationToken).ConfigureAwait(true);
-                target = new Uri("app://neoastra/index.html");
-                viewOptions = CreateLocalViewOptions(target);
+                _target = new Uri("app://neoastra/index.html");
             }
+            // The handlers listen before the plugins start, so that what a plugin reports while it starts reaches them.
+            if (plugins is not null) await plugins.StartAsync(application, cancellationToken).ConfigureAwait(true);
+            _session = new Session(rpc, environment, plugins);
+            rpc = null;
+            environment = null;
+            plugins = null;
+        }
+        finally
+        {
+            if (environment is not null) await environment.DisposeAsync().ConfigureAwait(true);
+            if (rpc is not null) await rpc.DisposeAsync().ConfigureAwait(true);
+            if (plugins is not null) await plugins.DisposeAsync().ConfigureAwait(true);
+        }
+    }
 
+    // A mobile application shows each scene or activity in a main window of its own; a closed one releases its view.
+    internal async ValueTask ShowMainWindowAsync(NeoApplication application, CancellationToken cancellationToken)
+    {
+        var window = application.CreateWindow(new NeoWindowOptions
+        {
+            Label = application.Windows.Any(static value => value.Label == "main") ? null : "main",
+            Title = Title,
+            Width = Width,
+            Height = Height,
+            IsVisible = false,
+        });
+        application.MainWindow = window;
+        _configureMainWindow?.Invoke(application, window);
+        await OpenViewAsync(window, releaseOnClose: true, cancellationToken).ConfigureAwait(true);
+    }
+
+    private async ValueTask OpenViewAsync(NeoWindow window, bool releaseOnClose, CancellationToken cancellationToken)
+    {
+        var session = _session ?? throw new InvalidOperationException("The application is not prepared.");
+        var target = _target!;
+        global::NeoAstra.NeoAstra? view = null;
+        NeoRpcViewBinding? binding = null;
+        try
+        {
+            var viewOptions = CreateLocalViewOptions(target);
             window.Show();
             window.Activate();
             viewOptions.BrowserFeatures = BrowserFeatures;
-            view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
+            view = await session.Environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
             var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
             view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
             view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
             if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
-            binding = NeoRpcViewBinding.Bind(rpc, view);
+            if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
+            binding = NeoRpcViewBinding.Bind(session.Rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
-            _session = new Session(rpc, environment, view, binding);
-            rpc = null;
-            environment = null;
+            session.Add(window, view, binding, releaseOnClose);
             view = null;
             binding = null;
         }
@@ -270,8 +459,6 @@ public sealed class NeoAppBuilder
         {
             if (binding is not null) await binding.DisposeAsync().ConfigureAwait(true);
             if (view is not null) await view.DisposeAsync().ConfigureAwait(true);
-            if (environment is not null) await environment.DisposeAsync().ConfigureAwait(true);
-            if (rpc is not null) await rpc.DisposeAsync().ConfigureAwait(true);
         }
     }
 
@@ -299,12 +486,19 @@ public sealed class NeoAppBuilder
             if (declaration.ScopeRequired || declaration.ScopeFamily != NeoScopeFamily.None)
                 throw new InvalidOperationException($"Permission '{permission}' requires an explicit scoped capability manifest.");
         }
+        if (_capabilities is not null && _mainViewPermissions.Count != 0)
+            throw new InvalidOperationException("Grant the main view either with GrantMainView or with a capability document, not both.");
     }
 
-    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release)
+    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release) => CreateCapabilityManifest(profile, release, []);
+
+    internal NeoCapabilityManifest CreateCapabilityManifest(NeoSecurityProfile profile, bool release, IEnumerable<NeoPluginPermissionCatalog> plugins)
     {
         var catalog = new NeoPermissionCatalogBuilder();
         foreach (var declaration in _permissionDeclarations!) catalog.Add(declaration);
+        foreach (var plugin in plugins) catalog.AddPlugin(plugin);
+        var options = new NeoCapabilityResolutionOptions { Platform = CurrentPlatform(), Release = release, Profile = profile };
+        if (_capabilities is not null) return NeoCapabilityManifest.Resolve(_capabilities, catalog.Build(), options);
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
@@ -324,16 +518,56 @@ public sealed class NeoAppBuilder
             writer.WriteEndArray();
             writer.WriteEndObject();
         }
-        return NeoCapabilityManifest.Resolve(
-            stream.ToArray(),
-            catalog.Build(),
-            new NeoCapabilityResolutionOptions
-            {
-                Platform = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux,
-                Release = release,
-                Profile = profile,
-            });
+        return NeoCapabilityManifest.Resolve(stream.ToArray(), catalog.Build(), options);
     }
+
+    // The development server of `dotnet neoastra dev`: an environment variable on the desktop and in the iOS simulator, which
+    // inherits it from its launch, and on Android a file that adb gives a debuggable application.
+    private static string? DevelopmentUrl()
+    {
+        var value = Environment.GetEnvironmentVariable("NEOASTRA_DEV_URL");
+        if (value is not null || !OperatingSystem.IsAndroid()) return value;
+        using var response = Desktop.AndroidPlatform.Call("development");
+        return Desktop.AndroidPlatform.Status(response) == Desktop.NeoDesktopStatus.Success ? Desktop.AndroidPlatform.Text(response, "url") : null;
+    }
+
+    private static string DefaultAssetsDirectory()
+    {
+        // An iOS device installs an application under /var, a link to /private/var, and the resource provider refuses a root
+        // reached through a link.
+        if (OperatingSystem.IsIOS()) return ResolveLinks(Path.Combine(AppContext.BaseDirectory, "assets"));
+        if (!OperatingSystem.IsAndroid()) return Path.Combine(AppContext.BaseDirectory, "assets");
+        // The build packages the assets of the frontend in the neoastra folder of the APK assets.
+        using var response = Desktop.AndroidPlatform.Call("assets", ("source", "neoastra"));
+        return Desktop.AndroidPlatform.Status(response) == Desktop.NeoDesktopStatus.Success && Desktop.AndroidPlatform.Text(response, "path") is { } path
+            ? path
+            : throw new InvalidOperationException("The assets of the application are missing from its package.");
+    }
+
+    // The same path with every link among its directories replaced by its target, whose own links are resolved too.
+    internal static string ResolveLinks(string path) => ResolveLinks(path, 0);
+
+    private static string ResolveLinks(string path, int depth)
+    {
+        if (depth > 32) throw new IOException("The asset directory is reached through too many links.");
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? string.Empty;
+        var current = root;
+        foreach (var segment in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (NeoFileLinks.IsLink(current) && Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target)
+                current = ResolveLinks(target.FullName, depth + 1);
+        }
+        return current;
+    }
+
+    internal static NeoCapabilityPlatform CurrentPlatform() =>
+        OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows
+        : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS
+        : OperatingSystem.IsIOS() ? NeoCapabilityPlatform.IOS
+        : OperatingSystem.IsAndroid() ? NeoCapabilityPlatform.Android
+        : NeoCapabilityPlatform.Linux;
 
     internal NeoDecisionAction DecideNavigation(Uri target, bool isMainFrame, bool isUserInitiated, Uri trustedOrigin)
     {
@@ -395,14 +629,49 @@ public sealed class NeoAppBuilder
         await disposal.ConfigureAwait(false);
     }
 
-    private sealed class Session(NeoRpcHost rpc, NeoEnvironment environment, global::NeoAstra.NeoAstra view, NeoRpcViewBinding binding) : IAsyncDisposable
+    private sealed class Session(NeoRpcHost rpc, NeoEnvironment environment, NeoPluginHost? plugins) : IAsyncDisposable
     {
+        private readonly List<(global::NeoAstra.NeoAstra View, NeoRpcViewBinding Binding)> _views = [];
+
+        public NeoRpcHost Rpc { get; } = rpc;
+
+        public NeoEnvironment Environment { get; } = environment;
+
+        // A mobile application outlives its main windows, so a closed one releases its view at once; a desktop application
+        // releases its single view in DisposeAsync, which its shutdown runs.
+        public void Add(NeoWindow window, global::NeoAstra.NeoAstra view, NeoRpcViewBinding binding, bool releaseOnClose)
+        {
+            var entry = (view, binding);
+            _views.Add(entry);
+            if (!releaseOnClose) return;
+            window.Closed += async (_, _) =>
+            {
+                if (!_views.Remove(entry)) return;
+                // An event handler must not throw: a view that fails to release must not end the application.
+                try
+                {
+                    await binding.DisposeAsync().ConfigureAwait(false);
+                    await DisposeOnDispatcherAsync(Environment.Application.Dispatcher, view).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is ObjectDisposedException or OperationCanceledException or InvalidOperationException or NeoAstraException)
+                {
+                }
+            };
+        }
+
         public async ValueTask DisposeAsync()
         {
-            await binding.DisposeAsync().ConfigureAwait(false);
-            await DisposeOnDispatcherAsync(environment.Application.Dispatcher, view).ConfigureAwait(false);
-            await environment.DisposeAsync().ConfigureAwait(false);
-            await rpc.DisposeAsync().ConfigureAwait(false);
+            var views = _views.ToArray();
+            _views.Clear();
+            foreach (var (view, binding) in views)
+            {
+                await binding.DisposeAsync().ConfigureAwait(false);
+                await DisposeOnDispatcherAsync(Environment.Application.Dispatcher, view).ConfigureAwait(false);
+            }
+            await Environment.DisposeAsync().ConfigureAwait(false);
+            await Rpc.DisposeAsync().ConfigureAwait(false);
+            // The plugins own the services that the handlers used.
+            if (plugins is not null) await plugins.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

@@ -10,6 +10,8 @@ on:
       - 'eng/build_native.py'
       - 'eng/native/**'
       - 'eng/release_readiness.py'
+      - 'src/NeoAstra.Purchases/Apple/**'
+      - 'src/NeoAstra.Purchases/xcframework/**'
       - '.github/workflows/native.yml'
   pull_request:
     paths:
@@ -20,6 +22,8 @@ on:
       - 'eng/build_native.py'
       - 'eng/native/**'
       - 'eng/release_readiness.py'
+      - 'src/NeoAstra.Purchases/Apple/**'
+      - 'src/NeoAstra.Purchases/xcframework/**'
       - '.github/workflows/native.yml'
   workflow_call:
   workflow_dispatch:
@@ -60,6 +64,21 @@ jobs:
           cmake --build --preset macos-x64-asan-ubsan
           ctest --preset macos-x64-asan-ubsan
 
+  # StoreKit 2 is a Swift API: the purchases plugin embeds this bridge into iOS applications, checked in under
+  # src/NeoAstra.Purchases/xcframework like the native libraries.
+  purchases-bridge:
+    name: StoreKit bridge of the purchases plugin (iOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the XCFramework
+        run: sh src/NeoAstra.Purchases/Apple/build.sh src/NeoAstra.Purchases/Apple/NeoAstraPurchases.swift src/NeoAstra.Purchases/xcframework/NeoAstraPurchases.xcframework
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-purchases-xcframework
+          path: src/NeoAstra.Purchases/xcframework/
+          if-no-files-found: error
+
   build:
     name: Native (${{ matrix.rid }})
     strategy:
@@ -85,6 +104,19 @@ jobs:
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
             skip_tests: false
+          # The mobile libraries cannot run on the build machine, so their tests are the export checks of build_native.py.
+          - rid: ios-arm64
+            runner: macos-latest
+            skip_tests: true
+          - rid: iossimulator-arm64
+            runner: macos-latest
+            skip_tests: true
+          - rid: android-arm64
+            runner: ubuntu-latest
+            skip_tests: true
+          - rid: android-x64
+            runner: ubuntu-latest
+            skip_tests: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +124,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # r29 or later keeps the 16 KB page alignment that recent Android versions ask for.
+      - name: Set up the Android NDK
+        id: ndk
+        if: startsWith(matrix.rid, 'android-')
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+          add-to-path: false
       - name: Install Linux dependencies
         if: startsWith(matrix.rid, 'linux-')
         run: |
@@ -99,6 +139,8 @@ jobs:
           sudo apt-get install -y clang ninja-build libgtk-4-dev libwebkitgtk-6.0-dev xvfb
       - name: Build, test, and stage native runtime
         shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           args=(--rid "${{ matrix.rid }}" --clean)
           if [[ "${{ matrix.skip_tests }}" == "true" ]]; then args+=(--skip-tests); fi

@@ -252,7 +252,9 @@ public sealed class NeoRpcSessionIdentity
         if (OperatingSystem.IsWindows()) return NeoCapabilityPlatform.Windows;
         if (OperatingSystem.IsMacOS()) return NeoCapabilityPlatform.MacOS;
         if (OperatingSystem.IsLinux()) return NeoCapabilityPlatform.Linux;
-        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require Windows, macOS, or Linux.");
+        if (OperatingSystem.IsIOS()) return NeoCapabilityPlatform.IOS;
+        if (OperatingSystem.IsAndroid()) return NeoCapabilityPlatform.Android;
+        throw new PlatformNotSupportedException("NeoAstra RPC capabilities require Windows, macOS, Linux, iOS, or Android.");
     }
 }
 

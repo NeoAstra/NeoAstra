@@ -66,7 +66,7 @@ public interface INeoResourceProvider
     /// <summary>Resolves a custom-scheme request synchronously.</summary>
     /// <param name="request">The request to resolve.</param>
     /// <returns>A response, or <see langword="null"/> for a 404 response.</returns>
-    /// <remarks>The callback runs on the native browser UI thread and should not block on unrelated work.</remarks>
+    /// <remarks>The callback runs on the native browser UI thread, except on Android, where the WebView asks from a thread of its own while the UI thread goes on; it should not block on unrelated work, and on Android it must not wait for the UI thread.</remarks>
     NeoResourceResponse? GetResponse(NeoResourceRequest request);
 }
 
@@ -266,7 +266,7 @@ public sealed class NeoDirectoryResourceProvider : INeoResourceProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         _root = Path.GetFullPath(rootDirectory);
         if (!Directory.Exists(_root)) throw new DirectoryNotFoundException($"The asset root '{_root}' does not exist.");
-        if (!followSymbolicLinks && (File.GetAttributes(_root) & FileAttributes.ReparsePoint) != 0)
+        if (!followSymbolicLinks && NeoFileLinks.IsLink(_root))
         {
             throw new ArgumentException("The asset root cannot be a symbolic link or reparse point when symbolic-link following is disabled.", nameof(rootDirectory));
         }
@@ -331,7 +331,7 @@ public sealed class NeoDirectoryResourceProvider : INeoResourceProvider
         {
             current = Path.Combine(current, segment);
             if (!File.Exists(current) && !Directory.Exists(current)) break;
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            if (NeoFileLinks.IsLink(current)) return true;
         }
         return false;
     }

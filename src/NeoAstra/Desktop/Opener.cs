@@ -178,6 +178,12 @@ public sealed class NeoExternalOpener
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            // A mobile application opens web addresses only: it has no file manager to reveal in and no other files to open.
+            if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            {
+                if (reveal || !Uri.TryCreate(target, UriKind.Absolute, out var web) || web.Scheme is not ("http" or "https")) return NeoDesktopStatus.Unsupported;
+                return OperatingSystem.IsIOS() ? IosOpener.OpenUrl(target) : AndroidOpener.OpenUrl(target);
+            }
             if (OperatingSystem.IsWindows())
             {
                 var start = reveal

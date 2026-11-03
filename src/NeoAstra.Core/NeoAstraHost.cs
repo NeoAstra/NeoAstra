@@ -55,6 +55,29 @@ public sealed class NeoAstraHost
         return FromNonZero(new NeoNativeHandle(NeoNativeHandleKind.GtkWidget, gtkWidget), nameof(gtkWidget));
     }
 
+    /// <summary>Creates an iOS host from a borrowed UIKit <c>UIView*</c>.</summary>
+    /// <param name="uiView">A nonzero <c>UIView*</c> valid on the UI thread for the view lifetime.</param>
+    /// <returns>A native host descriptor.</returns>
+    /// <exception cref="PlatformNotSupportedException">The current operating system is not iOS.</exception>
+    /// <exception cref="ArgumentException"><paramref name="uiView"/> is zero.</exception>
+    public static NeoAstraHost FromUIKitUIView(nint uiView)
+    {
+        EnsurePlatform(OperatingSystem.IsIOS(), "iOS");
+        return FromNonZero(new NeoNativeHandle(NeoNativeHandleKind.UIKitUIView, uiView), nameof(uiView));
+    }
+
+    /// <summary>Creates an Android host from a borrowed JNI reference to a <c>ViewGroup</c>.</summary>
+    /// <param name="viewGroup">A nonzero JNI reference to a <c>ViewGroup</c>, such as the handle of its .NET peer, valid on the UI thread for the view lifetime.</param>
+    /// <returns>A native host descriptor.</returns>
+    /// <exception cref="PlatformNotSupportedException">The current operating system is not Android.</exception>
+    /// <exception cref="ArgumentException"><paramref name="viewGroup"/> is zero.</exception>
+    /// <remarks>The Java class <c>com.neoastra.backend.NeoAstraWebHost</c> must be loaded before the environment is created.</remarks>
+    public static NeoAstraHost FromAndroidViewGroup(nint viewGroup)
+    {
+        EnsurePlatform(OperatingSystem.IsAndroid(), "Android");
+        return FromNonZero(new NeoNativeHandle(NeoNativeHandleKind.AndroidViewGroup, viewGroup), nameof(viewGroup));
+    }
+
     /// <summary>Creates a host from a typed borrowed native-parent handle.</summary>
     /// <param name="handle">A supported nonzero native parent valid on the UI thread for the view lifetime.</param>
     /// <returns>A native host descriptor.</returns>
@@ -68,6 +91,8 @@ public sealed class NeoAstraHost
             NeoNativeHandleKind.Win32Hwnd => FromWin32Hwnd(handle.Value),
             NeoNativeHandleKind.CocoaNSView => FromCocoaNSView(handle.Value),
             NeoNativeHandleKind.GtkWidget => FromGtkWidget(handle.Value),
+            NeoNativeHandleKind.UIKitUIView => FromUIKitUIView(handle.Value),
+            NeoNativeHandleKind.AndroidViewGroup => FromAndroidViewGroup(handle.Value),
             _ => throw new ArgumentOutOfRangeException(nameof(handle), handle.Kind, "This native handle kind cannot host a view."),
         };
     }

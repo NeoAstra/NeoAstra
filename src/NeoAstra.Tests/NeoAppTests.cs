@@ -51,6 +51,71 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    public void CapabilityDocumentGrantsTheScopedPermissionsOfThePlugins()
+    {
+        // The page of a conventional application reaches the commands of its plugins with the scopes that its document gives.
+        var builder = CreateBuilder(ApplicationPermission());
+        builder.UseCapabilities(System.Text.Encoding.UTF8.GetBytes("""
+            {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"permissions":[
+              "greeting:read","haptics:play","push:foreground",
+              {"id":"notifications:schedule","scope":{"appIdentity":"dev.neoastra.tests","categories":["reminders"],"maximumPayloadBytes":1024,"persistent":false,"urgencies":["normal"]}}]}]}
+            """));
+        builder.ValidateConfiguration();
+        var manifest = builder.CreateCapabilityManifest(NeoSecurityProfile.ProductionLocalApp, release: true, [global::NeoAstra.Desktop.NeoDesktopEssentialsPlugin.PermissionCatalog, global::NeoAstra.Push.NeoPushPlugin.PermissionCatalog]);
+        StringAssert.Contains(manifest.Json, "notifications:schedule");
+        StringAssert.Contains(manifest.Json, "\"reminders\"");
+        Assert.IsTrue(manifest.GrantSummaries.Any(static summary => summary.StartsWith("main: views=1, permissions=4", StringComparison.Ordinal)), string.Join("; ", manifest.GrantSummaries));
+
+        // A permission that neither the contract nor a plugin declares is refused when the document is resolved.
+        Assert.ThrowsExactly<NeoCapabilityValidationException>(() => builder.CreateCapabilityManifest(NeoSecurityProfile.ProductionLocalApp, release: true, [global::NeoAstra.Push.NeoPushPlugin.PermissionCatalog]));
+    }
+
+    [TestMethod]
+    public void CapabilityDocumentAndCodeFirstGrantsAreExclusiveAndRegisteredOnce()
+    {
+        var both = CreateBuilder(ApplicationPermission()).GrantMainView("greeting:read").UseCapabilities("{}"u8.ToArray());
+        StringAssert.Contains(Assert.Throws<InvalidOperationException>(both.ValidateConfiguration).Message, "either");
+        Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAppBuilder().UseCapabilities(null!));
+        Assert.ThrowsExactly<ArgumentException>(() => new NeoAppBuilder().UseCapabilities([]));
+        Assert.ThrowsExactly<InvalidOperationException>(() => new NeoAppBuilder().UseCapabilities("{}"u8.ToArray()).UseCapabilities("{}"u8.ToArray()));
+        Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAppBuilder().UsePlugins(null!));
+        Assert.ThrowsExactly<InvalidOperationException>(() => new NeoAppBuilder().UsePlugins(static (_, _) => { }).UsePlugins(static (_, _) => { }));
+    }
+
+    [TestMethod]
+    public async Task AttachIsForMobileApplicationsOnly()
+    {
+        var configured = false;
+        await Assert.ThrowsExactlyAsync<PlatformNotSupportedException>(() => NeoApp.AttachAsync(_ => configured = true));
+        Assert.IsFalse(configured);
+        await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => NeoApp.AttachAsync(null!));
+    }
+
+    [TestMethod]
+    public void ResolvingLinksReplacesALinkedDirectoryWithItsTarget()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-links-" + Guid.NewGuid().ToString("N"));
+        var target = Directory.CreateDirectory(Path.Combine(root, "real", "assets")).Parent!.FullName;
+        try
+        {
+            var link = Path.Combine(root, "linked");
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { Assert.Inconclusive("Symbolic links cannot be created here."); }
+            var resolved = NeoAppBuilder.ResolveLinks(Path.Combine(link, "assets"));
+            Assert.AreEqual(NeoAppBuilder.ResolveLinks(Path.Combine(target, "assets")), resolved);
+            Assert.IsFalse(resolved.Contains("linked", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    public void CapabilityPlatformFollowsTheOperatingSystem()
+    {
+        var expected = OperatingSystem.IsWindows() ? NeoCapabilityPlatform.Windows : OperatingSystem.IsMacOS() ? NeoCapabilityPlatform.MacOS : NeoCapabilityPlatform.Linux;
+        Assert.AreEqual(expected, NeoAppBuilder.CurrentPlatform());
+    }
+
+    [TestMethod]
     public void CodeFirstGrantRejectsUnknownAndScopedPermissions()
     {
         var unknown = CreateBuilder(ApplicationPermission());
@@ -154,6 +219,25 @@ public sealed class NeoAppTests
         Assert.AreEqual(NeoDecisionAction.Cancel, builder.DecideNavigation(new Uri("mailto:someone@example.com"), true, true, origin));
         Assert.Throws<InvalidOperationException>(() => builder.OpenExternalLinksInSystemBrowser(global::NeoAstra.Desktop.Opener.NeoUrlScope.AnyWebAddress));
         Assert.Throws<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).OpenExternalLinksInSystemBrowser((global::NeoAstra.Desktop.Opener.NeoUrlScope)null!));
+    }
+
+    [TestMethod]
+    public async Task ConventionalAppAnswersFileInputsOnlyWhenItSaysHow()
+    {
+        Assert.IsNull(CreateBuilder(ApplicationPermission()).FileChooserHandler);
+
+        var system = CreateBuilder(ApplicationPermission()).UseSystemFileChooser();
+        var request = new NeoFileChooserRequest(["image/*"], false);
+        Assert.AreEqual(NeoDecisionAction.Default, (await system.FileChooserHandler!(request)).Action);
+        Assert.Throws<InvalidOperationException>(() => system.UseSystemFileChooser());
+        Assert.Throws<InvalidOperationException>(() => system.OnFileChooser(static _ => ValueTask.FromResult(NeoFileChooserDecision.Cancel)));
+
+        NeoFileChooserRequest? seen = null;
+        var custom = CreateBuilder(ApplicationPermission()).OnFileChooser(value => { seen = value; return ValueTask.FromResult(NeoFileChooserDecision.Cancel); });
+        Assert.AreEqual(NeoDecisionAction.Cancel, (await custom.FileChooserHandler!(request)).Action);
+        Assert.AreSame(request, seen);
+        Assert.Throws<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).OnFileChooser(null!));
+        Assert.AreEqual(NeoDecisionAction.Default, NeoFileChooserDecision.Default.Action);
     }
 
     [TestMethod]

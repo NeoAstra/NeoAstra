@@ -53,7 +53,8 @@ internal sealed class LinuxNotifications : INeoNotifications, INeoApplicationBou
     public async ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate();
-        if (string.IsNullOrEmpty(_gdbus)) return NeoDesktopStatus.Unsupported;
+        // The Freedesktop protocol shows at once and has no scheduled delivery.
+        if (string.IsNullOrEmpty(_gdbus) || request.IsScheduled(DateTimeOffset.UtcNow)) return NeoDesktopStatus.Unsupported;
         await _mutation.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

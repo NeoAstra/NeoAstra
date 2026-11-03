@@ -17,6 +17,8 @@ display, with a size taken from that work area, is on that display and fits in i
 | macOS | Points (logical units) | The one with the menu bar | Reported: `NSScreen.visibleFrame`, without the menu bar and the Dock |
 | GTK (X11) | Logical units | GTK tells none: the one at the origin, else the first | Reported by the X11 backend of GDK |
 | GTK (Wayland) | Logical units | GTK tells none: the one at the origin, else the first | Not reported: the bounds |
+| iOS (preview) | Points; each screen of a connected scene at the origin | The first screen | Not reported: the bounds |
+| Android (preview) | Density-independent pixels; each display of `DisplayManager` at the origin, with its rotation | `Display.DEFAULT_DISPLAY` | Not reported: the bounds |
 
 `NeoDisplay.ScaleFactor` is the number of pixels of the display for one logical unit, as `NeoWindow.ScaleFactor` reports it for
 a window on that display: on Windows it is 1 for an application that leaves the scaling to the system, and GTK reports whole

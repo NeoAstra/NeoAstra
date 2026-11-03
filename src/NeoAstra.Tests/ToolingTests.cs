@@ -29,6 +29,16 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void ToolRuntimeConfiguration_RollsForwardToALaterMajorRuntime()
+    {
+        // The build runs the tool with the runtime of the SDK that builds the application, such as .NET 11 for iOS and Android.
+        var runtimeConfig = Path.ChangeExtension(typeof(NeoProjectConfiguration).Assembly.Location, ".runtimeconfig.json");
+        Assert.IsTrue(File.Exists(runtimeConfig), runtimeConfig);
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(runtimeConfig));
+        Assert.AreEqual("Major", document.RootElement.GetProperty("runtimeOptions").GetProperty("rollForward").GetString());
+    }
+
+    [TestMethod]
     public void ProjectConfiguration_ResolvesFromConfigDirectoryAndRedactsSecrets()
     {
         using var fixture = new ProjectFixture();
@@ -208,6 +218,209 @@ public sealed class ToolingTests
         AssertConfigurationRejected(text.Replace("default-src 'self'", "default-src *"), "csp");
 
         void AssertConfigurationRejected(string json, string codeFragment) { File.WriteAllText(fixture.ConfigurationPath, json); StringAssert.Contains(Assert.ThrowsExactly<NeoToolException>(() => NeoProjectConfiguration.Load(fixture.ConfigurationPath)).Code, codeFragment); }
+    }
+
+    [TestMethod]
+    public void RpcArtifacts_AreOutputOnlyForApplicationsThatShipThem()
+    {
+        // A mobile application does not ship the contract files, and the iOS SDK warns for each file without a place in its bundle.
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets"));
+        var collect = targets.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraCollectRpcArtifacts");
+        var items = collect.Elements("ItemGroup").Single();
+        Assert.AreEqual("'$(TargetPlatformIdentifier)' != 'ios' and '$(TargetPlatformIdentifier)' != 'android'", (string?)items.Attribute("Condition"));
+        Assert.AreEqual(3, items.Elements("ContentWithTargetPath").Count());
+    }
+
+    [TestMethod]
+    public void PurchasesBridge_IsCheckedInAndBuiltOnlyOnRequest()
+    {
+        // A desktop build on macOS needs no iOS SDK, and a package packed on Windows carries the bridge that the native workflow
+        // built, or fails: without it every iOS application of the package would fail to build.
+        var root = FindRepositoryRoot();
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Purchases", "NeoAstra.Purchases.csproj"));
+        Assert.AreEqual("$(MSBuildThisFileDirectory)xcframework/NeoAstraPurchases.xcframework", (string)project.Descendants("NeoAstraPurchasesAppleFramework").Single());
+        var build = project.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraBuildApplePurchases");
+        StringAssert.StartsWith((string?)build.Attribute("Condition"), "'$(NeoAstraBuildApplePurchases)' == 'true'");
+        var collect = project.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraCollectApplePurchases");
+        Assert.AreEqual("!Exists('$(NeoAstraPurchasesAppleFramework)/Info.plist')", (string?)collect.Element("Error")!.Attribute("Condition"));
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Purchases", "Build", "NeoAstra.Purchases.targets"));
+        Assert.AreEqual("$(MSBuildThisFileDirectory)../xcframework/NeoAstraPurchases.xcframework", (string)targets.Descendants("NeoAstraPurchasesAppleFramework").Single());
+    }
+
+    [TestMethod]
+    public void AndroidAssets_AreLinkedWithTheSeparatorThatTheAndroidBuildStrips()
+    {
+        // The Android build removes the Assets prefix of a link only when the separator of the platform follows it: a link
+        // written as Assets/neoastra/ kept an Assets folder in an APK built on Windows, and NeoApp did not find the assets.
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets"));
+        var add = targets.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraAddAssetsToMobilePackage");
+        var link = (string)add.Descendants("AndroidAsset").Single().Element("Link")!;
+        Assert.AreEqual("$(_NeoAstraAndroidAssetLinkRoot)%(RecursiveDir)%(Filename)%(Extension)", link);
+        var root = (string)add.Descendants("_NeoAstraAndroidAssetLinkRoot").Single();
+        Assert.AreEqual("$(MonoAndroidAssetsPrefix)$(_NeoAstraAndroidAssetSeparator)neoastra$(_NeoAstraAndroidAssetSeparator)", root);
+        Assert.AreEqual("$([System.IO.Path]::DirectorySeparatorChar)", (string)add.Descendants("_NeoAstraAndroidAssetSeparator").Single());
+    }
+
+    [TestMethod]
+    public void CorePackage_DeclaresEveryImportedExportForIOSAndShipsItsMobileTargets()
+    {
+        var root = FindRepositoryRoot();
+        var generated = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Core", "Generated", "Interop", "NativeMethods.Generated.cs"));
+        var imported = System.Text.RegularExpressions.Regex.Matches(generated, "EntryPoint = \"(neoastra_[A-Za-z0-9_]+)\"").Select(static match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        var symbols = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.NativeSymbols.props"));
+        var declared = symbols.Descendants("ReferenceNativeSymbol").Select(static item => (string)item.Attribute("Include")!).ToHashSet(StringComparer.Ordinal);
+        Assert.IsNotEmpty(imported);
+        Assert.IsTrue(imported.SetEquals(declared), "Run NeoAstra.CodeGen: the iOS symbol list does not match the generated imports.");
+
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "NeoAstra.Core.csproj"));
+        var packaged = project.Descendants("None").Select(static item => (string?)item.Attribute("PackagePath")).ToArray();
+        CollectionAssert.Contains(packaged, "buildTransitive/NeoAstra.Core.targets");
+        CollectionAssert.Contains(packaged, "buildTransitive/NeoAstra.Core.NativeSymbols.props");
+        Assert.IsTrue(File.Exists(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraInitializer.java")));
+    }
+
+    [TestMethod]
+    public void AndroidEdgeToEdge_IsAnOptInThatTheTargetsMergeIntoTheManifest()
+    {
+        // NeoAstraAndroidEdgeToEdge=true merges an application meta-data entry, which the window reads to draw under the system
+        // bars; without it the window keeps clear of them, as before.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var overlay = targets.Descendants("AndroidManifestOverlay").Single(static item => ((string)item.Attribute("Include")!).Contains("edgetoedge/AndroidManifest.xml", StringComparison.Ordinal));
+        StringAssert.Contains((string?)overlay.Parent!.Attribute("Condition"), "'$(NeoAstraAndroidEdgeToEdge)' == 'true'");
+
+        const string Key = "com.neoastra.window.edgeToEdge";
+        var manifest = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "edgetoedge", "AndroidManifest.xml"));
+        StringAssert.Contains(manifest, $"android:name=\"{Key}\"");
+        StringAssert.Contains(manifest, "android:value=\"true\"");
+        var window = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, $"\"{Key}\"");
+    }
+
+    [TestMethod]
+    public void AndroidKeyboardOverlay_IsAnOptInThatTheTargetsMergeIntoTheManifest()
+    {
+        // NeoAstraAndroidKeyboardOverlay=true merges an application meta-data entry, which a view reads to keep the window from
+        // panning and to tell the page the height of the keyboard; without it Android pans the window, as before.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var overlay = targets.Descendants("AndroidManifestOverlay").Single(static item => ((string)item.Attribute("Include")!).Contains("keyboardoverlay/AndroidManifest.xml", StringComparison.Ordinal));
+        StringAssert.Contains((string?)overlay.Parent!.Attribute("Condition"), "'$(NeoAstraAndroidKeyboardOverlay)' == 'true'");
+
+        const string Key = "com.neoastra.webview.keyboardOverlay";
+        var manifestPath = Path.Combine(root, "native", "src", "android", "java", "keyboardoverlay", "AndroidManifest.xml");
+        System.Xml.Linq.XDocument.Load(manifestPath); // The manifest merger rejects a file that is not XML, such as "--" in a comment.
+        var manifest = File.ReadAllText(manifestPath);
+        StringAssert.Contains(manifest, $"android:name=\"{Key}\"");
+        StringAssert.Contains(manifest, "android:value=\"true\"");
+        var keyboard = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraKeyboard.java"));
+        StringAssert.Contains(keyboard, $"\"{Key}\"");
+        StringAssert.Contains(keyboard, "SOFT_INPUT_ADJUST_NOTHING");
+        StringAssert.Contains(keyboard, "--neoastra-keyboard-height");
+        StringAssert.Contains(keyboard, "navigator.virtualKeyboard.overlaysContent=true");
+        StringAssert.Contains(File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWebHost.java")), "NeoAstraKeyboard.attach(");
+    }
+
+    [TestMethod]
+    public void AndroidFileInputs_GiveThePageReadableCopiesAndAPhotoOfTheCamera()
+    {
+        // A file input with the capture attribute opens the camera, which needs a content address to write the photo to: the
+        // targets merge a file provider and its paths into every Android application, and the host shares only its camera folder.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var resource = targets.Descendants("AndroidResource").Single(static item => ((string)item.Attribute("Include")!).EndsWith("xml/neoastra_file_paths.xml", StringComparison.Ordinal));
+        Assert.AreEqual("'$(_NeoAstraTargetPlatform)' == 'android'", (string?)resource.Parent!.Attribute("Condition"));
+        Assert.AreEqual("Resources/xml/neoastra_file_paths.xml", (string?)resource.Attribute("Link"));
+
+        var java = Path.Combine(root, "native", "src", "android", "java");
+        var manifest = System.Xml.Linq.XDocument.Load(Path.Combine(java, "AndroidManifest.xml"));
+        System.Xml.Linq.XNamespace android = "http://schemas.android.com/apk/res/android";
+        var provider = manifest.Descendants("provider").Single(item => (string?)item.Attribute(android + "name") == "androidx.core.content.FileProvider");
+        Assert.AreEqual("${applicationId}.neoastra.files", (string?)provider.Attribute(android + "authorities"));
+        Assert.AreEqual("false", (string?)provider.Attribute(android + "exported"));
+        Assert.AreEqual("@xml/neoastra_file_paths", (string?)provider.Element("meta-data")!.Attribute(android + "resource"));
+
+        var paths = System.Xml.Linq.XDocument.Load(Path.Combine(java, "xml", "neoastra_file_paths.xml"));
+        var cache = paths.Root!.Elements().Single();
+        Assert.AreEqual("cache-path", cache.Name.LocalName);
+        Assert.AreEqual("neoastra-camera/", (string?)cache.Attribute("path"));
+
+        var host = File.ReadAllText(Path.Combine(java, "com", "neoastra", "backend", "NeoAstraWebHost.java"));
+        StringAssert.Contains(host, "parameters.isCaptureEnabled()");
+        StringAssert.Contains(host, "MediaStore.ACTION_IMAGE_CAPTURE");
+        StringAssert.Contains(host, "\".neoastra.files\"");
+        StringAssert.Contains(host, "\"neoastra-camera\"");
+        // A chosen document is copied while the result activity still holds its read permission.
+        StringAssert.Contains(host, "copyChosen(context, parseChosen(resultCode, data))");
+        // A multiple choice comes in the ClipData of the result, which parseResult of the platform drops.
+        StringAssert.Contains(host, "data.getClipData()");
+        StringAssert.Contains(host, "\"neoastra-chooser\"");
+    }
+
+    [TestMethod]
+    [DataRow("NeoAstraIOSHideFormAccessoryBar", "hide-form-accessory-bar.plist", "com.neoastra.webview.hideFormAccessoryBar")]
+    [DataRow("NeoAstraIOSKeyboardWithoutUserAction", "keyboard-without-user-action.plist", "com.neoastra.webview.keyboardWithoutUserAction")]
+    [DataRow("NeoAstraIOSKeyboardOverlay", "keyboard-overlay.plist", "com.neoastra.webview.keyboardOverlay")]
+    public void IOSKeyboardSwitch_IsAnOptInThatTheTargetsMergeIntoTheInfoPlist(string property, string file, string key)
+    {
+        // Each switch merges an Info.plist entry, which the iOS backend reads when it creates a view; without it the keyboard of
+        // the WKWebView behaves as before. The package carries the entries beside its build files.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "Build", "Sdk", "NeoAstra.Core.targets"));
+        var manifest = targets.Descendants("PartialAppManifest").Single(item => ((string)item.Attribute("Include")!).EndsWith(file, StringComparison.Ordinal));
+        Assert.AreEqual($"'$({property})' == 'true'", (string?)manifest.Attribute("Condition"));
+        StringAssert.Contains((string?)manifest.Parent!.Attribute("Condition"), "'$(_NeoAstraTargetPlatform)' == 'ios'");
+
+        var plist = File.ReadAllText(Path.Combine(root, "native", "src", "ios", "manifest", file));
+        StringAssert.Contains(plist, $"<key>{key}</key>");
+        StringAssert.Contains(plist, "<true/>");
+        var backend = File.ReadAllText(Path.Combine(root, "native", "src", "ios", "uikit_backend.mm"));
+        StringAssert.Contains(backend, $"@\"{key}\"");
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Core", "NeoAstra.Core.csproj"));
+        Assert.IsTrue(project.Descendants("None").Any(static item => (string?)item.Attribute("PackagePath") == "ios/%(Filename)%(Extension)"));
+    }
+
+    [TestMethod]
+    public void PackagedToolReference_DoesNotTakeTheRuntimeIdentifierOfTheApplication()
+    {
+        // An application built for a runtime identifier without an apphost, such as iossimulator-arm64, passes it as a global
+        // property; the tool runs on the build machine and must be built without it.
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "NeoAstra.csproj"));
+        var reference = project.Descendants("ProjectReference").Single(static item => ((string?)item.Attribute("Include"))?.EndsWith("NeoAstra.Tool.csproj", StringComparison.Ordinal) == true);
+        var removed = ((string?)reference.Attribute("GlobalPropertiesToRemove") ?? string.Empty).Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        CollectionAssert.Contains(removed, "RuntimeIdentifier");
+        CollectionAssert.Contains(removed, "SelfContained");
+    }
+
+    [TestMethod]
+    public void CapabilityCommand_ResolvesMobilePlatformsAndRejectsUnknownOnes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "neoastra-capability-platforms-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var catalog = Path.Combine(root, "catalog.json");
+            var capabilities = Path.Combine(root, "capabilities.json");
+            File.WriteAllText(catalog, """{"version":1,"permissions":[{"id":"documents:open","version":1,"commands":["documents.open"],"risk":"sensitive","scopeFamily":"none","platforms":["ios","android"]}]}""");
+            File.WriteAllText(capabilities, """{"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"platforms":["ios"],"permissions":["documents:open"]}]}""");
+            var error = Console.Error;
+            using var captured = new StringWriter();
+            Console.SetError(captured);
+            try
+            {
+                foreach (var platform in new[] { "ios", "android" })
+                {
+                    var output = Path.Combine(root, platform + ".resolved.json");
+                    Assert.AreEqual(0, global::NeoAstra.Tool.CapabilityCommand.Resolve(capabilities, catalog, platform, "Release", output), captured.ToString());
+                    using var document = JsonDocument.Parse(File.ReadAllText(output));
+                    Assert.AreEqual(platform == "ios" ? 1 : 0, document.RootElement.GetProperty("capabilities").GetArrayLength());
+                }
+
+                Assert.AreEqual(1, global::NeoAstra.Tool.CapabilityCommand.Resolve(capabilities, catalog, "tvos", "Release", Path.Combine(root, "tvos.resolved.json")));
+            }
+            finally { Console.SetError(error); }
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [TestMethod]
@@ -643,6 +856,94 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void MobileDevelopment_SelectsThePlatformFrameworkAndBuildsOnlyItsContract()
+    {
+        Assert.AreEqual(NeoDevelopmentPlatform.Desktop, NeoMobileTarget.ParsePlatform(null));
+        Assert.AreEqual(NeoDevelopmentPlatform.IOS, NeoMobileTarget.ParsePlatform("iOS"));
+        Assert.AreEqual(NeoDevelopmentPlatform.Android, NeoMobileTarget.ParsePlatform("android"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoMobileTarget.ParsePlatform("windows-phone"));
+
+        Assert.AreEqual("net11.0-android", NeoMobileLauncher.SelectFramework("net11.0-ios;net11.0-android", null, "android"));
+        Assert.AreEqual("net11.0-ios26.0", NeoMobileLauncher.SelectFramework(" net11.0-ios26.0 ; net11.0-android ", null, "ios"));
+        Assert.AreEqual("net11.0-android", NeoMobileLauncher.SelectFramework("", "net11.0-android", "android"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoMobileLauncher.SelectFramework("net10.0", null, "ios"));
+
+        CollectionAssert.AreEqual(new[] { "dotnet", "build", "-f", "net11.0-android" }, NeoMobileLauncher.ContractCommand(new(["dotnet", "build", "--no-restore"]), "net11.0-android").Arguments.ToArray());
+        CollectionAssert.AreEqual(new[] { "dotnet", "build", "-f", "net10.0" }, NeoMobileLauncher.ContractCommand(new(["dotnet", "build", "-f", "net10.0"]), "net11.0-android").Arguments.ToArray());
+        CollectionAssert.AreEqual(new[] { "make", "contract" }, NeoMobileLauncher.ContractCommand(new(["make", "contract"]), "net11.0-android").Arguments.ToArray());
+
+        Assert.AreEqual("dev.neoastra.app", NeoMobileLauncher.ParseProperties("dev.neoastra.app\n", ["ApplicationId"])["ApplicationId"]);
+        var properties = NeoMobileLauncher.ParseProperties("""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", ["TargetFramework", "TargetFrameworks"]);
+        Assert.AreEqual("net11.0-ios;net11.0-android", properties["TargetFrameworks"]);
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_RunsAnAndroidApplicationAgainstTheServerAndRemovesItsForwardingAfterwards()
+    {
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(3);
+        Assert.AreEqual(3, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:reverse", "start:address", "start:launch", "start:launch", "start:app", "start:cleanup", "start:cleanup" }, order);
+        var starts = factory.Starts;
+        CollectionAssert.AreEqual(NeoMobileLauncher.ContractCommand(project.ContractCommand, "net11.0-android").Arguments.ToArray(), starts[1].Command.Arguments.ToArray());
+        CollectionAssert.Contains(starts[3].Command.Arguments.ToArray(), "-t:Install");
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "tcp:5173", "tcp:5173" }, starts[5].Command.Arguments.Skip(1).ToArray());
+        StringAssert.Contains(starts[6].Command.Arguments[^1], "run-as dev.neoastra.fixture");
+        StringAssert.Contains(starts[6].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);
+        StringAssert.Contains(starts[10].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[11].Command.Arguments.Skip(1).ToArray());
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_RemovesTheAndroidForwardingWhenTheLaunchFails()
+    {
+        // The forwarding and the address file are in place before the launch: a launch that fails must not leave them, or a
+        // later launch of the debug build would still load the development server instead of its packaged assets.
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
+        factory.ExitCodes["launch"] = 1;
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        try { await new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (NeoToolException) { }
+
+        Assert.IsFalse(factory.AppStarted.Task.IsCompleted);
+        var starts = factory.Starts;
+        var cleanups = starts.Where(static start => start.Label == "cleanup").ToArray();
+        Assert.AreEqual(2, cleanups.Length);
+        StringAssert.Contains(cleanups[0].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, cleanups[1].Command.Arguments.Skip(1).ToArray());
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_LaunchesAnIOSApplicationWithTheServerInItsEnvironment()
+    {
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var output = Path.Combine(fixture.Root, "bin"); Directory.CreateDirectory(Path.Combine(output, "Fixture.app"));
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(4);
+        Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
+        var install = factory.Starts[5].Command.Arguments.ToArray();
+        CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "install", "booted", Path.Combine(output, "Fixture.app") }, install);
+        var app = factory.Starts[6];
+        Assert.AreEqual("http://127.0.0.1:5173/", app.Environment["SIMCTL_CHILD_NEOASTRA_DEV_URL"]);
+        CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", "booted", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_FailsFastWhenFrontendExitsBeforeReadiness()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
@@ -959,6 +1260,24 @@ public sealed class ToolingTests
         internal void Exit(int code) { ExitCode = code; _completion.TrySetResult(code); }
         public Task StopAsync(TimeSpan timeout) { Stopped = true; Exit(ExitCode ?? 0); return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Stopped = true; Exit(ExitCode ?? 0); return ValueTask.CompletedTask; }
+    }
+    // Every step exits at once with success and prints its scripted output; the frontend and the application run until stopped.
+    private sealed class ScriptedFactory(List<string> order) : INeoProcessFactory
+    {
+        internal Dictionary<string, Queue<string>> Output { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, int> ExitCodes { get; } = new(StringComparer.Ordinal);
+        internal List<NeoProcessStart> Starts { get; } = [];
+        internal FakeProcess? App { get; private set; }
+        internal TaskCompletionSource AppStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public INeoChildProcess Start(NeoProcessStart start)
+        {
+            lock (order) { order.Add("start:" + start.Label); Starts.Add(start); }
+            var process = new FakeProcess();
+            if (Output.TryGetValue(start.Label, out var lines) && lines.Count != 0) foreach (var line in lines.Dequeue().Split('\n')) start.Log(line, false);
+            if (start.Label == "app") { App = process; AppStarted.TrySetResult(); }
+            else if (start.Label != "frontend") process.Exit(ExitCodes.TryGetValue(start.Label, out var code) ? code : 0);
+            return process;
+        }
     }
     private sealed class FakeFactory(List<string> order, params FakeProcess[] processes) : INeoProcessFactory
     {

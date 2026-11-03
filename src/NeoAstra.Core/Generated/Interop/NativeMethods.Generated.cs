@@ -85,6 +85,10 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW = unchecked((uint)2),
 
             NEOASTRA_NATIVE_PARENT_GTK_WIDGET = unchecked((uint)3),
+
+            NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW = unchecked((uint)4),
+
+            NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP = unchecked((uint)5),
         }
 
         public enum neoastra_native_handle_kind : uint
@@ -108,6 +112,12 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_NATIVE_HANDLE_WKWEBVIEW = unchecked((uint)8),
 
             NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = unchecked((uint)9),
+
+            NEOASTRA_NATIVE_HANDLE_UIKIT_UIVIEW = unchecked((uint)10),
+
+            NEOASTRA_NATIVE_HANDLE_ANDROID_VIEW_GROUP = unchecked((uint)11),
+
+            NEOASTRA_NATIVE_HANDLE_ANDROID_WEBVIEW = unchecked((uint)12),
         }
 
         public enum neoastra_window_state : uint
@@ -2054,6 +2064,14 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_dispatch")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_app_dispatch(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_dispatch_callback_t arg1, void* arg2);
+
+        /// <summary>
+        /// Calls a platform service that only the native backend can reach, with a JSON request and a JSON response that the caller
+        /// releases. Only the Android backend offers services; the other backends answer NEOASTRA_ERROR_NOT_SUPPORTED.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_platform_call")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_platform_call(NativeMethods.neoastra_string_view_t service, NativeMethods.neoastra_string_view_t request, NativeMethods.neoastra_buffer_t* response, NativeMethods.neoastra_error_t* error);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_set_event_callback")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

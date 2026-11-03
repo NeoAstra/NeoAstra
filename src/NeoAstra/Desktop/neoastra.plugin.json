@@ -128,6 +128,31 @@
       "audited": true
     },
     {
+      "name": "desktop.notifications.schedule",
+      "permission": "notifications:schedule",
+      "risk": "sensitive",
+      "audited": true,
+      "scopeSchema": "schemas/notifications.scope.schema.json"
+    },
+    {
+      "name": "desktop.notifications.unschedule",
+      "permission": "notifications:unschedule",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.request-permission",
+      "permission": "notifications:request",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "desktop.notifications.launch-activation",
+      "permission": "notifications:launch-activation",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
       "name": "desktop.shortcuts.register",
       "permission": "shortcuts:register",
       "risk": "high",
@@ -213,6 +238,12 @@
       "name": "desktop.safe-storage.delete",
       "permission": "safe-storage:delete",
       "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.haptics.play",
+      "permission": "haptics:play",
+      "risk": "low",
       "audited": true
     },
     {
@@ -405,6 +436,12 @@
     },
     {
       "name": "desktop.window.set-titlebar-theme",
+      "permission": "window:polish",
+      "risk": "high",
+      "audited": true
+    },
+    {
+      "name": "desktop.window.set-background-color",
       "permission": "window:polish",
       "risk": "high",
       "audited": true
@@ -658,6 +695,50 @@
       "audited": true
     },
     {
+      "id": "notifications:schedule",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.schedule"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "notifications",
+      "scopeRequired": true,
+      "audited": true
+    },
+    {
+      "id": "notifications:unschedule",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.unschedule"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:request",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.request-permission"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "notifications:launch-activation",
+      "revision": 1,
+      "operations": [
+        "desktop.notifications.launch-activation"
+      ],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
       "id": "system-info:theme",
       "revision": 1,
       "operations": [
@@ -834,6 +915,17 @@
         "desktop.safe-storage.delete"
       ],
       "risk": "high",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "haptics:play",
+      "revision": 1,
+      "operations": [
+        "desktop.haptics.play"
+      ],
+      "risk": "low",
       "scopeFamily": "none",
       "scopeRequired": false,
       "audited": true

@@ -228,6 +228,20 @@ public enum ContractKind { First, Second }
     }
 
     [TestMethod]
+    public void GeneratorEmitsNumberForFloatingPointTypeScriptMembers()
+    {
+        var source = ValidSource.Replace(
+            "public sealed class Request { public string Id { get; set; } = \"\"; }",
+            "public sealed class Request { public float Single { get; set; } public double Double { get; set; } public decimal Decimal { get; set; } public double? Optional { get; set; } }");
+        var result = Run(source, captureArtifacts: true);
+        Assert.AreEqual(0, result.Diagnostics.Count(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error), string.Join(Environment.NewLine, result.Diagnostics));
+        StringAssert.Contains(result.TypeScript, "readonly \"single\": number;");
+        StringAssert.Contains(result.TypeScript, "readonly \"double\": number;");
+        StringAssert.Contains(result.TypeScript, "readonly \"decimal\": number;");
+        StringAssert.Contains(result.TypeScript, "readonly \"optional\": number | null;");
+    }
+
+    [TestMethod]
     public void GeneratorArtifactsMatchInheritedConditionalNullableAndNestedWireShapes()
     {
         var source = ValidSource.Replace(

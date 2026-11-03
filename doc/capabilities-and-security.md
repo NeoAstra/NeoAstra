@@ -26,7 +26,7 @@ Capability files use [`neoastra-capabilities-v1.schema.json`](../schemas/neoastr
   "capabilities": [{
     "id": "main",
     "views": ["main"],
-    "platforms": ["windows", "macos", "linux"],
+    "platforms": ["windows", "macos", "linux", "ios", "android"],
     "permissions": ["documents:open"]
   }]
 }
@@ -45,6 +45,8 @@ dotnet neoastra capabilities resolve \
 ```
 
 Add `--allow-view-patterns` when the capability document uses a reviewed view pattern such as `window-*`; a Debug resolution always accepts them.
+
+`--platform` and the `platforms` selectors accept `windows`, `macos`, `linux`, `ios`, and `android`. A mobile target uses the same rules as the others; `NeoCapabilityPlatform.IOS` and `NeoCapabilityPlatform.Android` identify the host that the native backend of that platform reports. A capability without `platforms` applies to every platform, the mobile ones included. A capability that names platforms resolves to nothing for the others, so a session whose platform no matching capability covers is denied. Name the desktop platforms explicitly in a capability that must not apply to a mobile host.
 
 Resolution strictly rejects unknown fields, versions, schemas, IDs, permission versions, platform combinations, release development grants, unsafe duplicate/union semantics, and malformed scope data. Output is canonical UTF-8 JSON ordered independently of input order, with no timestamps, plus a SHA-256 hash. It intentionally contains canonical exact scope policy (including configured paths) for security review; do not publish it as a diagnostic or place user-specific secrets in capability files. Generate twice and byte-compare in CI. The resolved file is review/audit evidence; runtime authorization uses the corresponding immutable `NeoCapabilityManifest` object, not reparsed renderer data.
 
@@ -129,7 +131,7 @@ Profiles expose resolved navigation, popup, DevTools, asset, bridge, and error p
 
 ## Links that open outside the web view
 
-External navigation in `NeoApp` is blocked unless the application calls `OpenExternalLinksInSystemBrowser` with exact HTTP(S) origins, or says that its content links anywhere with `OpenAnyWebLinkInSystemBrowser()`, which is `OpenExternalLinksInSystemBrowser(NeoUrlScope.AnyWebAddress)`. That scope accepts an absolute HTTP or HTTPS address with a host, without credentials, without a control or white-space character, and of at most 4096 characters; it is the validation an application would otherwise write itself, and it says nothing about where an address leads. The native navigation and new-window handlers compare parsed scheme, host, and port components against the origins, or check the address against that scope, require a user action, cancel the WebView navigation, and then open matching links in the system browser. Renderer JavaScript is not the policy boundary. Credentials, non-HTTP(S) schemes, requests that the engine does not attribute to the user, and subframe navigation are not forwarded to an OS opener.
+File inputs in `NeoApp` are canceled unless the application calls `UseSystemFileChooser()`, which lets the system show its picker (on Android also its camera for an image input with `capture`), or registers its own answer with `OnFileChooser`; the page receives only the files the user chose. External navigation in `NeoApp` is blocked unless the application calls `OpenExternalLinksInSystemBrowser` with exact HTTP(S) origins, or says that its content links anywhere with `OpenAnyWebLinkInSystemBrowser()`, which is `OpenExternalLinksInSystemBrowser(NeoUrlScope.AnyWebAddress)`. That scope accepts an absolute HTTP or HTTPS address with a host, without credentials, without a control or white-space character, and of at most 4096 characters; it is the validation an application would otherwise write itself, and it says nothing about where an address leads. The native navigation and new-window handlers compare parsed scheme, host, and port components against the origins, or check the address against that scope, require a user action, cancel the WebView navigation, and then open matching links in the system browser. Renderer JavaScript is not the policy boundary. Credentials, non-HTTP(S) schemes, requests that the engine does not attribute to the user, and subframe navigation are not forwarded to an OS opener.
 
 A view asks its host about a link in one of two requests: `NavigationRequested` when the link would replace a document of the view, and `NewWindowRequested` when it asks for a new window, as a link with `target="_blank"` or `window.open` does. Either can be answered with `OpenExternal`. Both carry `IsUserInitiated`, which is what "a user action" means above, and `IsLinkActivation`. The browser engines do not tell the same, so the two values are separate:
 
@@ -152,6 +154,8 @@ The macOS column was observed on macOS 26, and the Windows column on Windows 11 
   WebView2 asks its host about the navigations of the top-level document only. A link in an `<iframe>` that replaces the document of that frame is not reported, so no handler and no policy of `NeoApp` sees it: keep frames to content that the application controls, with a `frame-src` directive in its content security policy.
 - **Linux.** `IsUserInitiated` is the user gesture that WebKitGTK reports (`webkit_navigation_action_is_user_gesture`) for a request that is not a redirect, and `IsLinkActivation` is its navigation type.
 - **macOS.** The public interface of WKWebView has no user-gesture flag. `IsUserInitiated` is `true` only when a link was activated with a trusted click or key press, which WKWebView tells by the mouse button of the request: a link that a script clicks comes without one. It is therefore the strictest of the three, and a page that opens its links with `window.open` or `location.href` from a click handler does not pass for user-initiated on macOS; use a link (`<a href>`) for an address that should open outside the view. WKWebView does not tell the redirect of a clicked link from the link either.
+- **iOS.** WKWebView has neither a user-gesture flag nor a mouse button there. `IsUserInitiated` is `true` only for an activated link that comes within a second after the user touched the view, as a tapped link does; `IsLinkActivation` is reported. A link that a script clicks on its own later, one that a hardware keyboard activates, and a navigation that a script starts are not user-initiated, while a script that clicks a link within that second passes for the tap.
+- **Android.** `IsUserInitiated` is the gesture that the WebView reports for the request (`WebResourceRequest.hasGesture`); the WebView does not tell that a request comes from a link, so `IsLinkActivation` is `null`.
 
 An application that decides for itself and wants every activated link, whoever activated it, reads `IsLinkActivation` where it is not `null`. That is a weaker test: a script can click a link.
 

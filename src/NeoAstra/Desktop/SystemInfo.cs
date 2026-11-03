@@ -137,7 +137,7 @@ public sealed class NeoSystemInfoService : IDisposable
         Theme = NeoSystemInfoPlatform.ReadInitialTheme();
         Displays = NeoSystemInfoPlatform.ReadInitialDisplays();
         var locale = CultureInfo.CurrentUICulture.Name;
-        Metadata = new(applicationId, applicationName, applicationVersion, RuntimeInformation.OSDescription, RuntimeInformation.ProcessArchitecture.ToString(), OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "cocoa" : OperatingSystem.IsLinux() ? "gtk" : "unknown", locale, Array.AsReadOnly(new[] { locale }));
+        Metadata = new(applicationId, applicationName, applicationVersion, RuntimeInformation.OSDescription, RuntimeInformation.ProcessArchitecture.ToString(), OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "cocoa" : OperatingSystem.IsLinux() ? "gtk" : OperatingSystem.IsIOS() ? "uikit" : OperatingSystem.IsAndroid() ? "android" : "unknown", locale, Array.AsReadOnly(new[] { locale }));
         ThemeSupport = NeoSystemInfoPlatform.ThemeSupport;
         DisplaySupport = NeoSystemInfoPlatform.DisplaySupport;
         if (_application is not null)

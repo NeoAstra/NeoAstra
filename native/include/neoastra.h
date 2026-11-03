@@ -71,8 +71,8 @@ typedef enum neoastra_result : int32_t {
 
 typedef enum neoastra_support_level : uint32_t { NEOASTRA_SUPPORT_NONE = 0, NEOASTRA_SUPPORT_NATIVE = 1, NEOASTRA_SUPPORT_EMULATED = 2, NEOASTRA_SUPPORT_LIMITED = 3 } neoastra_support_level_t;
 typedef enum neoastra_app_shutdown_mode : uint32_t { NEOASTRA_APP_SHUTDOWN_EXPLICIT = 0, NEOASTRA_APP_SHUTDOWN_ON_LAST_WINDOW_CLOSED = 1, NEOASTRA_APP_SHUTDOWN_ON_MAIN_WINDOW_CLOSED = 2 } neoastra_app_shutdown_mode_t;
-typedef enum neoastra_native_parent_kind : uint32_t { NEOASTRA_NATIVE_PARENT_NONE = 0, NEOASTRA_NATIVE_PARENT_WIN32_HWND = 1, NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW = 2, NEOASTRA_NATIVE_PARENT_GTK_WIDGET = 3 } neoastra_native_parent_kind_t;
-typedef enum neoastra_native_handle_kind : uint32_t { NEOASTRA_NATIVE_HANDLE_NONE = 0, NEOASTRA_NATIVE_HANDLE_WIN32_HWND = 1, NEOASTRA_NATIVE_HANDLE_COCOA_NSWINDOW = 2, NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW = 3, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW = 4, NEOASTRA_NATIVE_HANDLE_GTK_WIDGET = 5, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER = 6, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE = 7, NEOASTRA_NATIVE_HANDLE_WKWEBVIEW = 8, NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = 9 } neoastra_native_handle_kind_t;
+typedef enum neoastra_native_parent_kind : uint32_t { NEOASTRA_NATIVE_PARENT_NONE = 0, NEOASTRA_NATIVE_PARENT_WIN32_HWND = 1, NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW = 2, NEOASTRA_NATIVE_PARENT_GTK_WIDGET = 3, NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW = 4, NEOASTRA_NATIVE_PARENT_ANDROID_VIEW_GROUP = 5 } neoastra_native_parent_kind_t;
+typedef enum neoastra_native_handle_kind : uint32_t { NEOASTRA_NATIVE_HANDLE_NONE = 0, NEOASTRA_NATIVE_HANDLE_WIN32_HWND = 1, NEOASTRA_NATIVE_HANDLE_COCOA_NSWINDOW = 2, NEOASTRA_NATIVE_HANDLE_COCOA_NSVIEW = 3, NEOASTRA_NATIVE_HANDLE_GTK_WINDOW = 4, NEOASTRA_NATIVE_HANDLE_GTK_WIDGET = 5, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CONTROLLER = 6, NEOASTRA_NATIVE_HANDLE_WEBVIEW2_CORE = 7, NEOASTRA_NATIVE_HANDLE_WKWEBVIEW = 8, NEOASTRA_NATIVE_HANDLE_WEBKITGTK_WEBVIEW = 9, NEOASTRA_NATIVE_HANDLE_UIKIT_UIVIEW = 10, NEOASTRA_NATIVE_HANDLE_ANDROID_VIEW_GROUP = 11, NEOASTRA_NATIVE_HANDLE_ANDROID_WEBVIEW = 12 } neoastra_native_handle_kind_t;
 typedef enum neoastra_window_state : uint32_t { NEOASTRA_WINDOW_NORMAL = 0, NEOASTRA_WINDOW_MINIMIZED = 1, NEOASTRA_WINDOW_MAXIMIZED = 2, NEOASTRA_WINDOW_FULLSCREEN = 3 } neoastra_window_state_t;
 /** ALL_VIRTUAL_DESKTOPS shows the window on every virtual desktop (a Space of macOS); NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS tells where a backend has it. A library from before it refuses it as an invalid argument. */
 typedef enum neoastra_window_attribute : uint32_t { NEOASTRA_WINDOW_RESIZABLE = 0, NEOASTRA_WINDOW_DECORATED = 1, NEOASTRA_WINDOW_ALWAYS_ON_TOP = 2, NEOASTRA_WINDOW_SHOW_IN_TASKBAR = 3, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS = 4 } neoastra_window_attribute_t;
@@ -290,6 +290,9 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_detach(neoastra_app_t*
 NEOASTRA_API int32_t NEOASTRA_CALL neoastra_app_run(neoastra_app_t*);
 NEOASTRA_API void NEOASTRA_CALL neoastra_app_quit(neoastra_app_t*, int32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t*, neoastra_dispatch_callback_t, void*);
+/** Calls a platform service that only the native backend can reach, with a JSON request and a JSON response that the caller
+    releases. Only the Android backend offers services; the other backends answer NEOASTRA_ERROR_NOT_SUPPORTED. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_platform_call(neoastra_string_view_t service, neoastra_string_view_t request, neoastra_buffer_t** response, neoastra_error_t** error);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_set_event_callback(neoastra_app_t*, neoastra_event_callback_t, void*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_create_window(neoastra_app_t*, const neoastra_window_options_t*, neoastra_window_t**, neoastra_error_t**);
 NEOASTRA_API uint64_t NEOASTRA_CALL neoastra_app_get_window_count(const neoastra_app_t*);

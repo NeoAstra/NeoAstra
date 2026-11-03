@@ -43,6 +43,11 @@ to a dark theme. It is what the window shows before and behind its content: whil
 while the window resizes, and behind a transparent page. On Windows the window erases with it and
 WebView2 takes it as the default background of its views (opaque, or clear with an alpha of 0); on
 macOS it is the background of the `NSWindow`; with WebKitGTK it is the background of the views.
+On iOS it is the background of the view of the window, and on Android the background of the
+activity, which the system bars show too: their symbols turn dark on a light color and light on a
+dark one. A page granted `window:polish` sets it with `window.setBackgroundColor("#rrggbb")` of
+`createDesktopClient` (`desktop.window.set-background-color`, `#rrggbbaa` with an alpha), for
+example whenever it changes its theme; a color that is missing or malformed is refused.
 
 ## Frontend
 

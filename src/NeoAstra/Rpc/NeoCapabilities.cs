@@ -22,6 +22,10 @@ public enum NeoCapabilityPlatform
     MacOS,
     /// <summary>Linux with WebKitGTK.</summary>
     Linux,
+    /// <summary>Apple iOS with WKWebView.</summary>
+    IOS,
+    /// <summary>Android with the Android System WebView.</summary>
+    Android,
 }
 
 /// <summary>Classifies the security impact of a permission.</summary>
@@ -132,7 +136,7 @@ public sealed class NeoPermissionDeclaration
         if (Documentation.Length > 4096 || Documentation.Any(char.IsControl)) throw new ArgumentException("Permission documentation must be bounded and free of controls.", nameof(Documentation));
         if (!Enum.IsDefined(Redaction)) throw new ArgumentOutOfRangeException(nameof(Redaction));
         ArgumentNullException.ThrowIfNull(Platforms);
-        if (Platforms.Count > 3 || Platforms.Any(static value => !Enum.IsDefined(value)) || Platforms.Distinct().Count() != Platforms.Count)
+        if (Platforms.Count > 5 || Platforms.Any(static value => !Enum.IsDefined(value)) || Platforms.Distinct().Count() != Platforms.Count)
             throw new ArgumentException("Permission platforms must be a unique supported set.", nameof(Platforms));
         return this;
     }
@@ -381,7 +385,7 @@ public sealed class NeoCapabilityManifest
             if (item.Views is null || item.Views.Length is < 1 or > 128) throw new NeoCapabilityValidationException("view_selector", $"Capability '{item.Id}' requires bounded view selectors.");
             var selectors = item.Views.Select(value => ViewSelector.Parse(value, options.AllowReviewedViewPatterns)).OrderBy(static value => value.Text, StringComparer.Ordinal).ToArray();
             if (selectors.Select(static value => value.Text).Distinct(StringComparer.Ordinal).Count() != selectors.Length) throw new NeoCapabilityValidationException("view_selector", $"Capability '{item.Id}' contains duplicate view selectors.");
-            if (item.Platforms is { Length: > 3 }) throw new NeoCapabilityValidationException("platform_selector", $"Capability '{item.Id}' has too many platform selectors.");
+            if (item.Platforms is { Length: > 5 }) throw new NeoCapabilityValidationException("platform_selector", $"Capability '{item.Id}' has too many platform selectors.");
             var platforms = (item.Platforms ?? Array.Empty<string>()).Select(ParsePlatform).ToArray();
             if (platforms.Distinct().Count() != platforms.Length) throw new NeoCapabilityValidationException("platform_selector", $"Capability '{item.Id}' contains duplicate platform selectors.");
             var platformMatch = platforms.Length == 0 || platforms.Contains(options.Platform);
@@ -536,8 +540,8 @@ public sealed class NeoCapabilityManifest
     }
 
     private static void ValidateIdentifier(string? value, string name) { if (!NeoRpcValidation.IsWireName(value, 128)) throw new NeoCapabilityValidationException("invalid_id", $"The {name} is malformed."); }
-    private static NeoCapabilityPlatform ParsePlatform(string? value) => value switch { "windows" => NeoCapabilityPlatform.Windows, "macos" => NeoCapabilityPlatform.MacOS, "linux" => NeoCapabilityPlatform.Linux, _ => throw new NeoCapabilityValidationException("unknown_platform", $"Unknown platform '{value}'.") };
-    internal static string PlatformText(NeoCapabilityPlatform value) => value switch { NeoCapabilityPlatform.Windows => "windows", NeoCapabilityPlatform.MacOS => "macos", NeoCapabilityPlatform.Linux => "linux", _ => throw new ArgumentOutOfRangeException(nameof(value)) };
+    private static NeoCapabilityPlatform ParsePlatform(string? value) => value switch { "windows" => NeoCapabilityPlatform.Windows, "macos" => NeoCapabilityPlatform.MacOS, "linux" => NeoCapabilityPlatform.Linux, "ios" => NeoCapabilityPlatform.IOS, "android" => NeoCapabilityPlatform.Android, _ => throw new NeoCapabilityValidationException("unknown_platform", $"Unknown platform '{value}'.") };
+    internal static string PlatformText(NeoCapabilityPlatform value) => value switch { NeoCapabilityPlatform.Windows => "windows", NeoCapabilityPlatform.MacOS => "macos", NeoCapabilityPlatform.Linux => "linux", NeoCapabilityPlatform.IOS => "ios", NeoCapabilityPlatform.Android => "android", _ => throw new ArgumentOutOfRangeException(nameof(value)) };
     private static string SafeJsonMessage(JsonException value) => $"JSON byte {value.BytePositionInLine?.ToString() ?? "unknown"}.";
     private static void ValidateUniqueProperties(JsonElement element)
     {

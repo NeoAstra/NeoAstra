@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.location",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Location.NeoLocationPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [
+    {
+      "name": "location.authorization",
+      "permission": "location:status",
+      "risk": "low",
+      "audited": true
+    },
+    {
+      "name": "location.request-authorization",
+      "permission": "location:read",
+      "risk": "sensitive",
+      "audited": true
+    },
+    {
+      "name": "location.current-position",
+      "permission": "location:read",
+      "risk": "sensitive",
+      "audited": true
+    }
+  ],
+  "events": [],
+  "permissions": [
+    {
+      "id": "location:status",
+      "revision": 1,
+      "operations": ["location.authorization"],
+      "risk": "low",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    },
+    {
+      "id": "location:read",
+      "revision": 1,
+      "operations": ["location.request-authorization", "location.current-position"],
+      "risk": "sensitive",
+      "scopeFamily": "none",
+      "scopeRequired": false,
+      "audited": true
+    }
+  ]
+}

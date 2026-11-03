@@ -72,6 +72,38 @@ setting enabled, reserve the configured development port, and run only a trusted
 on an origin given bridge authority. Readiness does not authenticate a different process already
 listening on that port.
 
+An iOS or Android application (preview) runs against the same loopback development server:
+
+```sh
+dotnet neoastra dev --platform android            # the connected device or emulator
+dotnet neoastra dev --platform ios                # the booted simulator
+dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android serial, among several
+```
+
+After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
+only that framework too), installs it, and starts it with the address of the server; it follows the log of the application
+until the session ends, and on Android it then removes the port forwarding and the address. Frontend changes reach the running
+application through the development server; a backend change needs a new session. What the tool does by hand: the iOS
+simulator shares the network of
+the Mac, so `127.0.0.1` is the development machine there, and it passes an environment variable to the application when the
+variable carries the `SIMCTL_CHILD_` prefix:
+
+```sh
+SIMCTL_CHILD_NEOASTRA_DEV_URL=http://127.0.0.1:5173/ xcrun simctl launch --terminate-running-process booted <bundle id>
+```
+
+On Android, `adb reverse` forwards the loopback port of the device or emulator to the development machine, and the address
+is a file in the private files of a debuggable build, which only `adb shell run-as` writes: another application can neither
+write it nor give it to a release build. Remove the file to load the packaged assets again. Android blocks plain HTTP, so the
+`NeoAstra.Core` package gives a debug build a network security configuration that allows it to `127.0.0.1` only; an
+application with a configuration of its own sets `NeoAstraAndroidDevelopmentNetwork` to `false` and allows `127.0.0.1` in
+its own.
+
+```sh
+adb reverse tcp:5173 tcp:5173
+adb shell "run-as <application id> sh -c 'mkdir -p files && echo http://127.0.0.1:5173/ > files/neoastra-development-url'"
+```
+
 ## Build, run, publish, and MSBuild properties
 
 Reference only the `NeoAstra` package. The package carries the compiled, framework-neutral `@neoastra/client` runtime under its SDK tools; repository `ProjectReference` builds compile the same runtime as part of the `NeoAstra` project. For package-based `frontend` projects, the transitive targets stage that package under `obj/neoastra/client` before locked npm restore, so `"@neoastra/client": "file:../obj/neoastra/client"` remains offline and version-aligned with the .NET package without compiling NeoAstra's TypeScript source in each application. For static `frontend/index.html` projects, the targets copy the browser runtime modules and an optional generated JavaScript RPC binding directly into the materialized frontend under `obj`; SDK files never appear in the project tree. When frontend work is configured, normal `dotnet build` runs preparation after C# compilation, generates `neoastra-assets.json`, and re-verifies every hash while copying an exact staging directory under `obj`. The same prepared assets are copied to `bin/.../assets`, so ordinary `dotnet run` consumes regular build output. Publish reuses that preparation instead of requiring a publish-only frontend build.
@@ -117,6 +149,12 @@ dotnet run -c Release --no-build
 dotnet publish -c Release -r win-x64 --self-contained
 ```
 
+An iOS or Android application (preview) carries the prepared assets in its package instead of an `assets` folder of its
+output: the build adds them to the app bundle as `assets/` on iOS, where `NeoAppBuilder.AssetsDirectory` finds them next to
+the application, and to the `neoastra` folder of the APK assets on Android, which NeoAstra copies once per installed version
+into the private files of the application, the default `AssetsDirectory` there. The tool runs on the runtime of the SDK that
+builds the application, such as .NET 11.
+
 Prebuilt/offline publish:
 
 ```sh
@@ -135,6 +173,26 @@ dotnet neoastra contract check --typescript obj/neoastra/neoastra.ts --manifest 
 dotnet publish -c Release -r "$RID" --self-contained
 ```
 
+## Pages on iOS and Android
+
+A page on a phone runs in WKWebView or the Android System WebView, which give it less than a mobile browser does, and it does
+the rest itself:
+
+- **Safe area.** With `NeoAstraAndroidEdgeToEdge` the Android window draws under the system bars as an iOS window does, and the
+  page keeps its content clear of them with `env(safe-area-inset-*)` in CSS on both platforms.
+- **Keyboard.** With `NeoAstraIOSKeyboardOverlay` and `NeoAstraAndroidKeyboardOverlay` the keyboard lies over the page;
+  `onKeyboard` of `@neoastra/client` tells its height and the duration of its animation (see [building](building.md)).
+- **Back.** Android reports its back button as a request to close the window; the page steps back out of what it shows with
+  `window.onCloseRequested` and `preventDefault()` (see [building](building.md)).
+- **Theme.** `window.setBackgroundColor` gives the window the color of the page, which the window shows while the page loads and,
+  on Android, under the system bars, whose symbols follow it.
+- **Gestures and lists.** The WebView has no pull to refresh and draws every element of a long list: a page builds its own pull
+  gesture with `overscroll-behavior` and pointer events, and renders a long result in parts that an `IntersectionObserver`
+  asks for as they scroll in.
+- **Scheduled notifications.** Neither Android nor every desktop lists what an application scheduled, so a page that plans
+  reminders keeps the identifiers it scheduled and unschedules those that its next plan no longer holds (see
+  [desktop services](desktop-services.md)).
+
 ## Runtime hosting and security
 
 Load `neoastra-assets.json` with `NeoAssetManifest.Load`, then construct `NeoManifestResourceProvider`. It serves only listed regular files using `GET`/`HEAD`, decodes strict UTF-8 exactly once, ignores query/fragment for lookup, rejects encoded separators/dot traversal/NUL/device forms, linked asset-root ancestors, and escaping links, and applies manifest MIME/cache metadata plus `nosniff`, CSP, and referrer policy. Missing recognized assets remain 404. SPA fallback is limited by Accept, static extensions, optional route prefixes, and excluded `/api` and `/_neoastra` prefixes. Entry HTML and mutable manifests revalidate; content-hashed files may be immutable. There is no permissive CORS default and no development fallback header in production.
@@ -145,6 +203,6 @@ Vite must use `base: "./"` so modules, dynamic imports, worker URLs, fonts, and 
 
 `dotnet neoastra init` requires explicit frontend root, command arguments, URL, output, identity, and package manager. Run `--dry-run` first. The generated configuration is validated relative to its destination before any destination mutation, then created or replaced atomically through that directory. Existing `neoastra.json` is a conflict; no write occurs unless `--force`, which creates a conflict-safe, non-overwriting `.bak` rather than deleting the old file. Initialization prints the client dependency command but does not execute it; after a reviewed lockfile is committed, normal builds may perform the locked incremental npm restore described above. Separate sibling frontend/backend layouts work because paths resolve from the configuration file.
 
-`NeoAstra.Templates` contains vanilla TypeScript (`neoastra`), Vite React (`neoastra-react`), and Vite Vue (`neoastra-vue`) templates. They use ordinary upstream projects, generated typed calls, a mock-transport test, exact loopback Vite defaults, relative production base, accessible language/viewport/focus/reduced-motion foundations, and deny external opening until a reviewed backend command is granted. Shared host/security fragments are checked by `frontend/tools/generate-templates.mjs --check`; generated output remains plain source. Each template includes a reviewed npm lockfile whose local NeoAstra client dependency is materialized from the referenced `NeoAstra` package by the SDK targets, so a generated application can restore and build without a public client registry. Normal NeoAstra builds then restore that locked graph incrementally.
+`NeoAstra.Templates` contains vanilla TypeScript (`neoastra`), Vite React (`neoastra-react`), and Vite Vue (`neoastra-vue`) templates, and `neoastra-mobile` (preview): one project for iOS and Android with the vanilla TypeScript page, an `App.Configure` that `NeoApp.AttachAsync` runs from the scene delegate on iOS and from the activity on Android, and the `Info.plist` and Android manifest it needs (`dotnet new neoastra-mobile -n PocketApp --appIdentifier com.example.pocket --appDisplayName "Pocket App" --neoAstraVersion <VERSION>`); it builds with the .NET 11 SDK and its `ios` and `android` workloads, and `samples/mobile/run.sh` shows how to install and start it. They use ordinary upstream projects, generated typed calls, a mock-transport test, exact loopback Vite defaults, relative production base, accessible language/viewport/focus/reduced-motion foundations, and deny external opening until a reviewed backend command is granted. Shared host/security fragments are checked by `frontend/tools/generate-templates.mjs --check`; generated output remains plain source. Each template includes a reviewed npm lockfile whose local NeoAstra client dependency is materialized from the referenced `NeoAstra` package by the SDK targets, so a generated application can restore and build without a public client registry. Normal NeoAstra builds then restore that locked graph incrementally.
 
 The advanced application-platform sample is `samples/NeoAstra.Sample.Advanced`. It carries React source with generated typed application RPC that needs no permission declarations, plus one explicit capability record restricting the `preview` view's native desktop authority. It also includes a committed npm lockfile and a relative module graph containing the entry module, dynamic chunk, module worker, bundled CSS, project-owned fixture font, and SVG asset. A clean normal `dotnet build` performs the locked npm restore, runs the configured Vite production command, validates/stages exact assets, and writes regular runnable output. Generated `dist` directories are not committed. The temporary-project MSBuild integration tests separately exercise explicit reviewed prebuilt mode without running a frontend command. The sample's NativeAOT validation resolves the restricted preview capability, verifies every asset hash/MIME response, and checks graph references. Actual interactive module/dynamic-import/worker/font and HMR behavior remains platform renderer testing.

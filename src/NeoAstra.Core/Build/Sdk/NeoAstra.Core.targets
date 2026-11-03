@@ -1,0 +1,83 @@
+<Project>
+  <!--
+    Mobile applications. An iOS application links the native library statically and declares the exports that NeoAstra.Core
+    imports; an Android application packages the library for each ABI with the Java side of the backend. Desktop applications
+    are not affected: their library is a runtime asset of the package.
+  -->
+  <PropertyGroup>
+    <_NeoAstraTargetPlatform>$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)'))</_NeoAstraTargetPlatform>
+    <!-- The package keeps the runtimes beside buildTransitive; a project reference finds them in the project of NeoAstra.Core. -->
+    <NeoAstraNativeRuntimesDirectory Condition="'$(NeoAstraNativeRuntimesDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../runtimes/')">$(MSBuildThisFileDirectory)../runtimes/</NeoAstraNativeRuntimesDirectory>
+    <NeoAstraNativeRuntimesDirectory Condition="'$(NeoAstraNativeRuntimesDirectory)' == ''">$(MSBuildThisFileDirectory)../../runtimes/</NeoAstraNativeRuntimesDirectory>
+    <!-- The package keeps the Java side beside its build files; a project reference finds it in the native sources. -->
+    <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraAndroidJavaDirectory>
+    <NeoAstraAndroidJavaDirectory Condition="'$(NeoAstraAndroidJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../../../../native/src/android/java/</NeoAstraAndroidJavaDirectory>
+    <!-- The same for the Info.plist entries of the iOS switches. -->
+    <NeoAstraIOSManifestDirectory Condition="'$(NeoAstraIOSManifestDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../ios/')">$(MSBuildThisFileDirectory)../ios/</NeoAstraIOSManifestDirectory>
+    <NeoAstraIOSManifestDirectory Condition="'$(NeoAstraIOSManifestDirectory)' == ''">$(MSBuildThisFileDirectory)../../../../native/src/ios/manifest/</NeoAstraIOSManifestDirectory>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)NeoAstra.Core.NativeSymbols.props" Condition="'$(_NeoAstraTargetPlatform)' == 'ios'" />
+
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'ios' And '$(RuntimeIdentifier)' != ''">
+    <NativeReference Include="$(NeoAstraNativeRuntimesDirectory)$(RuntimeIdentifier)/native/libneoastra_native.a" Kind="Static" ForceLoad="true" SmartLink="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android'">
+    <AndroidNativeLibrary Include="$(NeoAstraNativeRuntimesDirectory)android-arm64/native/libneoastra_native.so" Abi="arm64-v8a" Condition="Exists('$(NeoAstraNativeRuntimesDirectory)android-arm64/native/libneoastra_native.so')" />
+    <AndroidNativeLibrary Include="$(NeoAstraNativeRuntimesDirectory)android-x64/native/libneoastra_native.so" Abi="x86_64" Condition="Exists('$(NeoAstraNativeRuntimesDirectory)android-x64/native/libneoastra_native.so')" />
+    <AndroidJavaSource Include="$(NeoAstraAndroidJavaDirectory)com/neoastra/backend/*.java" />
+    <ProguardConfiguration Include="$(NeoAstraAndroidJavaDirectory)proguard-rules.pro" />
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)AndroidManifest.xml" />
+    <AndroidResource Include="$(NeoAstraAndroidJavaDirectory)xml/neoastra_file_paths.xml" Link="Resources/xml/neoastra_file_paths.xml" />
+  </ItemGroup>
+
+  <!-- A debug build reaches the development server of `dotnet neoastra dev`, which serves plain HTTP on 127.0.0.1, and Android
+       blocks plain HTTP to it as to any address. An application with a network security configuration of its own turns this
+       off with NeoAstraAndroidDevelopmentNetwork=false and allows 127.0.0.1 in its own. -->
+  <PropertyGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidDevelopmentNetwork)' == ''">
+    <NeoAstraAndroidDevelopmentNetwork Condition="'$(Configuration)' == 'Debug'">true</NeoAstraAndroidDevelopmentNetwork>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidDevelopmentNetwork)' == 'true'">
+    <AndroidResource Include="$(NeoAstraAndroidJavaDirectory)development/xml/neoastra_development_network.xml" Link="Resources/xml/neoastra_development_network.xml" />
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)development/AndroidManifest.xml" />
+  </ItemGroup>
+
+  <!-- A window keeps clear of the system bars. An application whose page lays itself out with env(safe-area-inset-*), as it
+       does on iOS, draws under them with NeoAstraAndroidEdgeToEdge=true. -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidEdgeToEdge)' == 'true'">
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)edgetoedge/AndroidManifest.xml" />
+  </ItemGroup>
+
+  <!-- Android pans an edge-to-edge window to show a focused field, which moves the whole page. With
+       NeoAstraAndroidKeyboardOverlay=true the keyboard lies over the page instead, which learns its height as on iOS; Android
+       reports the keyboard only to an edge-to-edge window (NeoAstraAndroidEdgeToEdge=true). -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '$(NeoAstraAndroidKeyboardOverlay)' == 'true'">
+    <AndroidManifestOverlay Include="$(NeoAstraAndroidJavaDirectory)keyboardoverlay/AndroidManifest.xml" />
+  </ItemGroup>
+
+  <!-- The keyboard of a WKWebView differs from the one of a native application. Each switch merges an Info.plist entry that the
+       view reads when it is created: NeoAstraIOSHideFormAccessoryBar=true drops the bar with the previous, next, and done
+       buttons; NeoAstraIOSKeyboardWithoutUserAction=true lets focus() open the keyboard without a tap; NeoAstraIOSKeyboardOverlay=true
+       keeps WebKit from moving the page and tells the page the height of the keyboard instead. -->
+  <ItemGroup Condition="'$(_NeoAstraTargetPlatform)' == 'ios'">
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)hide-form-accessory-bar.plist" Condition="'$(NeoAstraIOSHideFormAccessoryBar)' == 'true'" />
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)keyboard-without-user-action.plist" Condition="'$(NeoAstraIOSKeyboardWithoutUserAction)' == 'true'" />
+    <PartialAppManifest Include="$(NeoAstraIOSManifestDirectory)keyboard-overlay.plist" Condition="'$(NeoAstraIOSKeyboardOverlay)' == 'true'" />
+  </ItemGroup>
+
+  <!-- A missing library would otherwise surface as an unresolved import when the application runs. -->
+  <Target Name="_NeoAstraCheckMobileNativeLibraries" BeforeTargets="Build" Condition="'$(_NeoAstraTargetPlatform)' == 'ios' Or '$(_NeoAstraTargetPlatform)' == 'android'">
+    <Error Condition="'$(_NeoAstraTargetPlatform)' == 'ios' And '$(RuntimeIdentifier)' != '' And !Exists('$(NeoAstraNativeRuntimesDirectory)$(RuntimeIdentifier)/native/libneoastra_native.a')"
+           Text="The NeoAstra native library for $(RuntimeIdentifier) was not found in $(NeoAstraNativeRuntimesDirectory). Build it with: python eng/build_native.py --rid $(RuntimeIdentifier)" />
+    <Error Condition="'$(_NeoAstraTargetPlatform)' == 'android' And '@(AndroidNativeLibrary->WithMetadataValue('Filename', 'libneoastra_native'))' == ''"
+           Text="No NeoAstra native library for Android was found in $(NeoAstraNativeRuntimesDirectory). Build it with: python eng/build_native.py --rid android-arm64 (or android-x64)" />
+  </Target>
+
+  <!-- A runtime asset or a project reference also brings the library of other platforms; the items above are the ones that belong. -->
+  <Target Name="_NeoAstraRemoveForeignNativeLibraries" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(_NeoAstraTargetPlatform)' == 'ios' Or '$(_NeoAstraTargetPlatform)' == 'android'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Filename)' == 'libneoastra_native' Or '%(Filename)' == 'neoastra_native' Or '%(Filename)%(Extension)' == 'neoastra-native.json'" />
+    </ItemGroup>
+  </Target>
+</Project>

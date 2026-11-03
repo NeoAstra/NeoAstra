@@ -16,7 +16,9 @@
   <Target Name="NeoAstraCollectRpcArtifacts"
           BeforeTargets="_GetCopyToOutputDirectoryItemsFromThisProject"
           DependsOnTargets="Compile">
-    <ItemGroup>
+    <!-- The contract files serve the build of the frontend and the tooling: an iOS or Android application does not ship them, and
+         the iOS SDK warns for each file that has no place in its bundle. -->
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' != 'ios' and '$(TargetPlatformIdentifier)' != 'android'">
       <ContentWithTargetPath Include="$(NeoRpcTypeScriptOutput)" Condition="Exists('$(NeoRpcTypeScriptOutput)')">
         <TargetPath>neoastra/$([System.IO.Path]::GetFileName('$(NeoRpcTypeScriptOutput)'))</TargetPath>
         <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -168,6 +170,29 @@
         <RelativePath>assets/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <!-- A mobile application carries its assets in its package: in the app bundle on iOS, where NeoApp finds them next to the
+       application, and in the neoastra folder of the APK assets on Android, which NeoApp copies to its files once. -->
+  <Target Name="NeoAstraAddAssetsToMobilePackage" BeforeTargets="_CollectBundleResources;_ComputeAndroidAssetsPaths;UpdateAndroidAssets"
+          DependsOnTargets="NeoAstraReadPreparedFrontend"
+          Condition="'$(_NeoAstraPrepareFrontend)' == 'true' and ('$(TargetPlatformIdentifier)' == 'ios' or '$(TargetPlatformIdentifier)' == 'android')">
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'ios'">
+      <BundleResource Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
+        <LogicalName>assets/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+      </BundleResource>
+    </ItemGroup>
+    <!-- The Android build strips the assets prefix only when the platform's directory separator follows it: a link written
+         with '/' keeps an Assets folder in the APK on Windows, where NeoApp does not find the assets. -->
+    <PropertyGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+      <_NeoAstraAndroidAssetSeparator>$([System.IO.Path]::DirectorySeparatorChar)</_NeoAstraAndroidAssetSeparator>
+      <_NeoAstraAndroidAssetLinkRoot>$(MonoAndroidAssetsPrefix)$(_NeoAstraAndroidAssetSeparator)neoastra$(_NeoAstraAndroidAssetSeparator)</_NeoAstraAndroidAssetLinkRoot>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+      <AndroidAsset Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
+        <Link>$(_NeoAstraAndroidAssetLinkRoot)%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </AndroidAsset>
     </ItemGroup>
   </Target>
 

@@ -1026,6 +1026,10 @@ bool neo_drain_dispatch_slice(neoastra_app_t* app, std::chrono::steady_clock::du
 bool neo_dispatch_pending(neoastra_app_t* app) noexcept;
 // True when more than one completion or dispatch waits: work is queued behind the callback that runs next.
 bool neo_dispatch_backlog(neoastra_app_t* app) noexcept;
+#if defined(__ANDROID__)
+// Answers neoastra_platform_call through the Java side of the Android backend.
+neoastra_result_t neo_android_platform_call(const std::string& service, const std::string& request, neoastra_buffer_t** response, neoastra_error_t** error) noexcept;
+#endif
 void neo_complete_ui_shutdown(neoastra_app_t* app) noexcept;
 void neo_complete_app_shutdown(neoastra_app_t* app) noexcept;
 void neo_destroy_app_on_ui(neoastra_app_t* app) noexcept;

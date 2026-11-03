@@ -29,6 +29,52 @@ propagates from `NeoApp.Run`. Bridge, capability, and navigation policies remain
 For custom application options, single-instance acquisition before window creation, multiple views,
 or independently owned backend services, use explicit `NeoApplication` composition instead.
 
+## The simple host on iOS and Android (preview)
+
+iOS and Android own the run loop of their main thread, so a mobile application calls `NeoApp.AttachAsync` instead of
+`NeoApp.Run`: on the main thread once a window scene is connected on iOS, or in `OnCreate` of an activity on Android. The first
+call attaches NeoAstra to the run loop of the platform, runs the configuration, and shows the main window, a window of NeoAstra
+that fills the scene or the activity; the application reports itself ready then. A later call, such as for a new activity after
+back closed the previous window, shows the same application in a new main window and does not run the configuration again,
+while `ConfigureMainWindow` runs for each main window. The application, its RPC host, and its browser environment live as long
+as the process; a closed main window releases only its own view.
+
+```csharp
+await NeoApp.AttachAsync(app =>
+{
+    app.Title = "NeoAstra Hello";
+    app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+});
+```
+
+A `NeoApp` application reaches the desktop services and the plugins through `UsePlugins` and `UseCapabilities`. `UsePlugins`
+adds the plugins on the UI thread with the application, whose dispatcher their services take, before the generated `UseRpc`
+callback registers their renderer handlers, and starts them once the RPC host is built, so that the tap of a notification that
+launched the application reaches handlers that already listen; they stop with the application. `UseCapabilities` takes the
+capability document that grants the page the permissions of the contract and of the plugins, with their scopes, resolved for the
+platform that runs it; it replaces `GrantMainView`, which grants only unscoped permissions of the contract. The RPC host of a `NeoApp` application takes only requests that name the contract hash of its generated bindings, the commands of the plugins included, so a page passes `neoRpcContractHash` of its generated module as the `contractHash` of the call options, for example in an adapter that it gives `createDesktopClient`.
+
+```csharp
+NeoDesktopServices? desktop = null;
+INeoPush? push = null;
+await NeoApp.AttachAsync(app =>
+{
+    app.UsePlugins((application, plugins) =>
+    {
+        desktop = NeoDesktopServices.CreateSystem("com.example.notes", "Notes", "1.0", dataDirectory,
+            ["https://example.com"], [dataDirectory], [dataDirectory], [NeoOpenFileIntent.TextDocument], application.Dispatcher);
+        push = NeoPush.CreateSystem(desktop.Notifications, application.Dispatcher);
+        plugins.AddNeoAstraDesktop(desktop).AddNeoAstraPush(push);
+    });
+    app.UseCapabilities(capabilitiesJson);
+    app.UseRpc(rpc =>
+    {
+        rpc.AddNeoAstraDesktopHandlers(desktop!, new NeoDesktopRendererOptions());
+        rpc.AddNeoAstraPushHandlers(push!);
+    });
+});
+```
+
 ## Managed ordering
 
 `NeoApplication.State` transitions through `Created`, `Starting`, `Ready`, `QuitRequested`, `ClosingWindows`, `Stopping`, and `Stopped`. `Run` enters `Ready` after its startup callback; attached hosts call `NotifyReady`. State changes and launch delivery are serialized by the application dispatcher.

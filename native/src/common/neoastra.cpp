@@ -8,6 +8,10 @@
 #include <new>
 #include <stdexcept>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace {
 
 constexpr uint32_t known_custom_scheme_flags = NEOASTRA_CUSTOM_SCHEME_HAS_AUTHORITY |
@@ -1126,6 +1130,17 @@ int32_t NEOASTRA_CALL neoastra_app_run(neoastra_app_t* app) {
     return result;
 }
 void NEOASTRA_CALL neoastra_app_quit(neoastra_app_t* app, int32_t code) { if(!app)return; app->exit_code.store(code); app->quit_requested.store(true,std::memory_order_release); std::lock_guard lock(app->platform_mutex); if(app->platform&&!app->stopped.load(std::memory_order_acquire)){neo_platform_wake(app);neo_platform_quit(app);} }
+neoastra_result_t NEOASTRA_CALL neoastra_platform_call(neoastra_string_view_t service, neoastra_string_view_t request, neoastra_buffer_t** response, neoastra_error_t** error) {
+    if (error) *error = nullptr;
+    if (!response || !neo_valid_utf8(service) || !neo_valid_utf8(request) || service.length == 0 || service.length > 64) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "invalid platform service call");
+    *response = nullptr;
+#if defined(__ANDROID__)
+    try { return neo_android_platform_call(neo_string(service), neo_string(request), response, error); }
+    catch (...) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "the platform service call failed"); }
+#else
+    return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "this backend offers no platform services");
+#endif
+}
 neoastra_result_t NEOASTRA_CALL neoastra_app_dispatch(neoastra_app_t* app, neoastra_dispatch_callback_t callback, void* context) {
     if(!app||!callback)return NEOASTRA_ERROR_INVALID_ARGUMENT;
     if(!app->retain())return NEOASTRA_ERROR_DISPOSED;
@@ -1317,6 +1332,37 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     static const std::string linux_message_origin="WebKitGTK 6.0 script messages do not expose trustworthy source-origin data";
 #endif
     info->support=NEOASTRA_SUPPORT_NONE;info->capability_version=1;info->flags=0;
+#if defined(__APPLE__) && TARGET_OS_IOS
+    // The iOS backend reports what it implements; the list for the other platforms promises more than it offers so far.
+    switch(capability){
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_END:
+        case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
+        case NEOASTRA_CAPABILITY_PROFILE_EPHEMERAL:
+        case NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT:
+        case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+        case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:
+            info->support=NEOASTRA_SUPPORT_LIMITED;break;
+        default:break;
+    }
+    info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
+    return NEOASTRA_OK;
+#endif
+#if defined(__ANDROID__)
+    // The Android backend reports what it implements. Custom schemes are served as projected HTTPS origins, which is a limit.
+    switch(capability){
+        case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
+        case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
+        case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+        case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:
+            info->support=NEOASTRA_SUPPORT_LIMITED;break;
+        default:break;
+    }
+    info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
+    return NEOASTRA_OK;
+#endif
     switch(capability){
         case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
         case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:

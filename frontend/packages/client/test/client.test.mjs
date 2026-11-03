@@ -122,6 +122,21 @@ test("a synchronous receive-handler registration failure is normalized and termi
   assert.equal(registrations, 1);
 });
 
+test("the host runtime metadata names exactly the supported platform and backend pairs", async () => {
+  const pairs = [["windows", "webview2"], ["macos", "wkwebview"], ["linux", "webkitgtk"], ["ios", "wkwebview"], ["android", "android-webview"]];
+  for (const [platform, backend] of pairs) {
+    const bootstrap = createBootstrap(handler => queueMicrotask(() => handler(runtime(undefined, { runtime: { ...runtime().runtime, platform, backend } }))));
+    const client = await loadClient(bootstrap);
+    await client.connect();
+    assert.deepEqual([client.getRuntimeInfo().platform, client.getRuntimeInfo().backend], [platform, backend]);
+  }
+  for (const [platform, backend] of [["ios", "webview2"], ["android", "wkwebview"], ["macos", "android-webview"], ["tvos", "wkwebview"], ["android", "webkitgtk"]]) {
+    const bootstrap = createBootstrap(handler => queueMicrotask(() => handler(runtime(undefined, { runtime: { ...runtime().runtime, platform, backend } }))));
+    const client = await loadClient(bootstrap);
+    await assert.rejects(client.connect(), error => error.code === "invalid_frame");
+  }
+});
+
 test("protocol mismatch, malformed frame, wrong kind, and timeout are typed", async () => {
   const mismatch = createBootstrap(handler => queueMicrotask(() => handler(runtime([], { protocol: { major: 2, minor: 0 } }))));
   const mismatchClient = await loadClient(mismatch);

@@ -26,7 +26,7 @@ const sourceAliases = [
   { find: /^react\/jsx-dev-runtime$/, replacement: path.join(root, "node_modules/react/jsx-dev-runtime.js") },
   { find: /^vue$/, replacement: path.join(root, "node_modules/vue/dist/vue.esm-bundler.js") },
 ];
-for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [react()]], ["neoastra-vue", [vue()]]]) {
+for (const [name, plugins] of [["neoastra-vanilla", []], ["neoastra-react", [react()]], ["neoastra-vue", [vue()]], ["neoastra-mobile", []]]) {
   const templateRoot = path.join(repositoryRoot, "templates", name, "frontend");
   const generatedRoot = path.join(templateRoot, "src/generated");
   const generatedFile = path.join(generatedRoot, "neoastra.ts");

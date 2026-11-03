@@ -145,6 +145,64 @@ public sealed class CapabilityTests
     }
 
     [TestMethod]
+    public void MobilePlatformsAreSelectableAndEveryOtherTargetFailsClosed()
+    {
+        var catalog = Catalog();
+        const string mobile = """
+        {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"platforms":["ios","android"],"origins":["https://app.example"],"permissions":["documents:open"]}]}
+        """;
+        foreach (var platform in new[] { NeoCapabilityPlatform.IOS, NeoCapabilityPlatform.Android })
+        {
+            var manifest = Resolve(mobile, catalog, platform);
+            Assert.AreEqual(platform, manifest.Platform);
+            Assert.AreEqual(1, JsonDocument.Parse(manifest.Json).RootElement.GetProperty("capabilities").GetArrayLength());
+        }
+
+        foreach (var platform in new[] { NeoCapabilityPlatform.Windows, NeoCapabilityPlatform.MacOS, NeoCapabilityPlatform.Linux })
+            Assert.AreEqual(0, JsonDocument.Parse(Resolve(mobile, catalog, platform).Json).RootElement.GetProperty("capabilities").GetArrayLength());
+
+        var ios = Resolve(mobile.Replace("\"ios\",\"android\"", "\"ios\""), catalog, NeoCapabilityPlatform.IOS);
+        StringAssert.Contains(ios.Json, "\"ios\"");
+        Assert.AreEqual(0, JsonDocument.Parse(Resolve(mobile.Replace("\"ios\",\"android\"", "\"ios\""), catalog, NeoCapabilityPlatform.Android).Json).RootElement.GetProperty("capabilities").GetArrayLength());
+        AssertCode("unknown_platform", mobile.Replace("\"android\"", "\"tvos\""), catalog, NeoCapabilityPlatform.IOS);
+        AssertCode("platform_selector", mobile.Replace("\"ios\",\"android\"", "\"windows\",\"macos\",\"linux\",\"ios\",\"android\",\"android\""), catalog, NeoCapabilityPlatform.IOS);
+
+        var perPlatform = new NeoPermissionDeclaration("documents:open", 1, ["documents.open"], NeoPermissionRisk.Sensitive, NeoScopeFamily.None) { Platforms = [NeoCapabilityPlatform.IOS, NeoCapabilityPlatform.Android] };
+        var declared = new NeoPermissionCatalogBuilder().Add(perPlatform).Build();
+        StringAssert.Contains(Resolve(mobile, declared, NeoCapabilityPlatform.IOS).Json, "\"platforms\":[\"ios\",\"android\"]");
+    }
+
+    [TestMethod]
+    public async Task MobileSessionsUseTheTrustedPlatformAndOriginLikeTheOtherTargets()
+    {
+        var catalog = Catalog();
+        const string json = """
+        {"$schema":"neoastra-capabilities-v1.schema.json","version":1,"capabilities":[{"id":"main","views":["main"],"platforms":["ios"],"origins":["https://app.example"],"permissions":["documents:open"]}]}
+        """;
+        var manifest = Resolve(json, catalog, NeoCapabilityPlatform.IOS);
+        var audit = new AuditSink(); var invoked = 0;
+        var options = new NeoRpcOptions { AuthorizationService = new NeoCapabilityAuthorizationService(manifest, audit), CapabilityManifest = manifest };
+        var builder = new NeoRpcBuilder(options);
+        builder.AddCommand<JsonElement, JsonElement>("documents.open", (request, _, _) => { invoked++; return ValueTask.FromResult(request); }, CapabilityTestJsonContext.Default.JsonElement, CapabilityTestJsonContext.Default.JsonElement, new() { Permission = "documents:open" });
+        await using var host = builder.Build();
+
+        var frames = new ConcurrentQueue<string>();
+        await using var trusted = host.OpenSession(new NeoRpcSessionIdentity("main", "ios-trusted") { Platform = NeoCapabilityPlatform.IOS, IsMainFrame = true }, (frame, _) => { frames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await trusted.ReceiveAsync(Invoke("ok", "documents.open", "{}"), new Uri("https://app.example"), true);
+        await trusted.ReceiveAsync(Invoke("no-origin", "documents.open", "{}"), null, true);
+        await trusted.ReceiveAsync(Invoke("wrong-origin", "documents.open", "{}"), new Uri("https://other.example"), true);
+        Assert.AreEqual(1, invoked);
+        Assert.AreEqual(2, frames.Count(frame => ErrorCode(frame) == "permission_denied"));
+
+        var androidFrames = new ConcurrentQueue<string>();
+        await using var android = host.OpenSession(new NeoRpcSessionIdentity("main", "android-wrong-platform") { Platform = NeoCapabilityPlatform.Android, IsMainFrame = true }, (frame, _) => { androidFrames.Enqueue(frame); return ValueTask.CompletedTask; });
+        await android.ReceiveAsync(Invoke("wrong-platform", "documents.open", "{}"), new Uri("https://app.example"), true);
+        Assert.AreEqual("permission_denied", ErrorCode(androidFrames.Single()));
+        Assert.AreEqual(1, invoked);
+        Assert.IsTrue(audit.Events.Any(value => value.Platform == NeoCapabilityPlatform.IOS && value.OriginAuthenticated));
+    }
+
+    [TestMethod]
     public async Task TrustedApplicationRpcAndExplicitDefaultDenialAreStable()
     {
         var catalog = Catalog();

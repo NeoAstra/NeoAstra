@@ -1,0 +1,15 @@
+<Project>
+  <!-- The push plugin gives an Android application that references Firebase Cloud Messaging (Xamarin.Firebase.Messaging) the Java
+       side of its service: the package keeps it beside its build files, and a project reference finds it in the sources of the
+       plugin. An application without Firebase builds without it, and push answers Unsupported;
+       NeoAstraPushFirebase=false leaves it out. -->
+  <PropertyGroup>
+    <NeoAstraPushJavaDirectory Condition="'$(NeoAstraPushJavaDirectory)' == '' And Exists('$(MSBuildThisFileDirectory)../java/')">$(MSBuildThisFileDirectory)../java/</NeoAstraPushJavaDirectory>
+    <NeoAstraPushJavaDirectory Condition="'$(NeoAstraPushJavaDirectory)' == ''">$(MSBuildThisFileDirectory)../Android/</NeoAstraPushJavaDirectory>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' And '$(NeoAstraPushFirebase)' != 'false' And '@(PackageReference->AnyHaveMetadataValue('Identity', 'Xamarin.Firebase.Messaging'))' == 'true'">
+    <AndroidJavaSource Include="$(NeoAstraPushJavaDirectory)com/neoastra/push/*.java" />
+    <AndroidManifestOverlay Include="$(NeoAstraPushJavaDirectory)AndroidManifest.xml" />
+  </ItemGroup>
+</Project>

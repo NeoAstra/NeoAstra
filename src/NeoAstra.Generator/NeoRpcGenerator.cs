@@ -733,7 +733,8 @@ public sealed class NeoRpcGenerator : IIncrementalGenerator
         else if (type is IArrayTypeSymbol array) result = "ReadonlyArray<" + TypeScriptType(array.ElementType) + ">";
         else if (type.SpecialType == SpecialType.System_String) result = "string";
         else if (type.SpecialType == SpecialType.System_Boolean) result = "boolean";
-        else if (type.SpecialType is >= SpecialType.System_SByte and <= SpecialType.System_Decimal) result = type.SpecialType is SpecialType.System_Int64 or SpecialType.System_UInt64 ? "string" : "number";
+        // Single and Double follow Decimal in SpecialType, so they are named besides the integer-to-decimal range.
+        else if (type.SpecialType is >= SpecialType.System_SByte and <= SpecialType.System_Decimal or SpecialType.System_Single or SpecialType.System_Double) result = type.SpecialType is SpecialType.System_Int64 or SpecialType.System_UInt64 ? "string" : "number";
         else if (type is INamedTypeSymbol named && named.IsGenericType && named.ConstructedFrom.ToDisplayString().Contains("Dictionary", StringComparison.Ordinal)) result = "Readonly<Record<string, " + TypeScriptType(named.TypeArguments[1]) + ">>";
         else if (type is INamedTypeSymbol list && list.IsGenericType) result = "ReadonlyArray<" + TypeScriptType(list.TypeArguments[0]) + ">";
         else if (type.ToDisplayString() is "System.Guid" or "System.DateTime" or "System.DateTimeOffset" or "System.TimeSpan") result = "string";

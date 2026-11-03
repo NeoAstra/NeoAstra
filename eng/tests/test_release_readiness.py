@@ -28,6 +28,12 @@ class ReleaseReadinessTests(unittest.TestCase):
         self.assertIn("neoastra_app_retain", header_exports)
         self.assertIn("neoastra_stream_release", header_exports)
 
+    def test_mobile_rids_name_their_library_kinds(self) -> None:
+        self.assertEqual(release_readiness.SUPPORTED_RIDS["ios-arm64"], "libneoastra_native.a")
+        self.assertEqual(release_readiness.SUPPORTED_RIDS["iossimulator-arm64"], "libneoastra_native.a")
+        self.assertEqual(release_readiness.SUPPORTED_RIDS["android-arm64"], "libneoastra_native.so")
+        self.assertEqual(release_readiness.SUPPORTED_RIDS["android-x64"], "libneoastra_native.so")
+
     def test_version_is_read_from_public_version_header(self) -> None:
         version = release_readiness.parse_version(
             release_readiness.VERSION_HEADER.read_text(encoding="utf-8")

@@ -1,0 +1,6 @@
+<Project>
+  <!-- The samples of the parent folder add the source generator; the mobile samples also get the targets that the NeoAstra.Core
+       package gives a mobile application. -->
+  <Import Project="../Directory.Build.targets" />
+  <Import Project="../../src/NeoAstra.Core/Build/Sdk/NeoAstra.Core.targets" />
+</Project>

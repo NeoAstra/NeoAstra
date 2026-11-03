@@ -23,6 +23,10 @@ SUPPORTED_RIDS = {
     "osx-arm64": "libneoastra_native.dylib",
     "linux-x64": "libneoastra_native.so",
     "linux-arm64": "libneoastra_native.so",
+    "ios-arm64": "libneoastra_native.a",
+    "iossimulator-arm64": "libneoastra_native.a",
+    "android-arm64": "libneoastra_native.so",
+    "android-x64": "libneoastra_native.so",
 }
 HEADER = ROOT / "native" / "include" / "neoastra.h"
 VERSION_HEADER = ROOT / "native" / "include" / "neoastra_version.h"
@@ -110,7 +114,8 @@ def inspect_binary_exports(rid: str, binary: Path) -> tuple[set[str], str]:
             output = run_capture([dumpbin, "/nologo", "/exports", str(binary)])
             exports = set(re.findall(r"\b(neoastra_[a-z0-9_]+)\b", output))
             tool = "dumpbin /exports"
-    elif rid.startswith("osx-"):
+    elif rid.startswith(("osx-", "ios")):
+        # An iOS library is a static archive; nm lists the exports of each of its objects.
         nm = find_tool("nm")
         output = run_capture([nm, "-gU", str(binary)])
         exports = {name.removeprefix("_") for name in re.findall(r"\b_?(neoastra_[a-z0-9_]+)\s*$", output, re.MULTILINE)}
@@ -139,6 +144,12 @@ def create_macos_symbols(binary: Path, symbols_directory: Path) -> None:
         raise RuntimeError(f"dsymutil did not produce debug symbol files in {destination}")
 
 
+def copy_archive_symbols(binary: Path, symbols_directory: Path) -> None:
+    # A static archive keeps the debug information of its objects; the unstripped archive is the symbol file.
+    destination = symbols_directory / f"{binary.name}.debug"
+    shutil.copy2(binary, destination)
+
+
 def create_linux_symbols(binary: Path, symbols_directory: Path) -> Path:
     objcopy = find_tool("llvm-objcopy", "objcopy")
     destination = symbols_directory / f"{binary.name}.debug"
@@ -150,10 +161,10 @@ def create_linux_symbols(binary: Path, symbols_directory: Path) -> Path:
 
 
 def strip_runtime_binary(rid: str, runtime_binary: Path, linux_objcopy: Path | None) -> None:
-    if rid.startswith("osx-"):
+    if rid.startswith(("osx-", "ios")):
         strip = find_tool("strip")
         run([strip, "-S", str(runtime_binary)])
-    elif rid.startswith("linux-"):
+    elif rid.startswith(("linux-", "android-")):
         if linux_objcopy is None:
             raise RuntimeError("Linux debug symbols were not extracted before staging the runtime binary")
         run([str(linux_objcopy), "--strip-debug", str(runtime_binary)])
@@ -204,6 +215,8 @@ def prepare_native(rid: str, binary: Path, runtime_binary: Path, output_director
             copy_windows_symbols(binary, symbols_directory)
         elif rid.startswith("osx-"):
             create_macos_symbols(binary, symbols_directory)
+        elif rid.startswith("ios"):
+            copy_archive_symbols(binary, symbols_directory)
         else:
             linux_objcopy = create_linux_symbols(binary, symbols_directory)
 

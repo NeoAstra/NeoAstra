@@ -23,7 +23,26 @@ RIDS = {
     "osx-arm64": ("macos-arm64-release", "libneoastra_native.dylib"),
     "linux-x64": ("linux-x64-release", "libneoastra_native.so"),
     "linux-arm64": ("linux-arm64-release", "libneoastra_native.so"),
+    "ios-arm64": ("ios-arm64-release", "libneoastra_native.a"),
+    "iossimulator-arm64": ("iossimulator-arm64-release", "libneoastra_native.a"),
+    "android-arm64": ("android-arm64-release", "libneoastra_native.so"),
+    "android-x64": ("android-x64-release", "libneoastra_native.so"),
 }
+# The libraries of these RIDs run only on their devices, so their presets build no tests.
+MOBILE_RIDS = {"ios-arm64", "iossimulator-arm64", "android-arm64", "android-x64"}
+
+
+def initialize_android_toolchain(rid: str) -> None:
+    if not rid.startswith("android-"):
+        return
+    ndk = os.environ.get("ANDROID_NDK_HOME")
+    if not ndk or not Path(ndk).is_dir():
+        raise FileNotFoundError("ANDROID_NDK_HOME must name the Android NDK for an Android RID")
+    # The readiness checks read the ELF library with the LLVM tools of the NDK.
+    prebuilt = next((Path(ndk) / "toolchains" / "llvm" / "prebuilt").glob("*"), None)
+    if prebuilt is None:
+        raise FileNotFoundError(f"The Android NDK at {ndk} has no prebuilt LLVM toolchain")
+    os.environ["PATH"] = str(prebuilt / "bin") + os.pathsep + os.environ.get("PATH", "")
 
 
 def run(*arguments: str) -> None:
@@ -68,6 +87,7 @@ def main() -> int:
 
     preset, library_name = RIDS[args.rid]
     initialize_windows_toolchain(args.rid)
+    initialize_android_toolchain(args.rid)
     build_directory = ROOT / "artifacts" / "native" / args.rid
     runtime_directory = ROOT / "src" / "NeoAstra.Core" / "runtimes" / args.rid / "native"
     if args.clean:
@@ -75,7 +95,7 @@ def main() -> int:
 
     run("cmake", "--preset", preset, "-B", str(build_directory))
     run("cmake", "--build", str(build_directory), "--config", "Release")
-    if not args.skip_tests:
+    if not args.skip_tests and args.rid not in MOBILE_RIDS:
         run("ctest", "--test-dir", str(build_directory), "--build-config", "Release", "--output-on-failure", "--no-tests=error")
 
     source = build_directory / library_name

@@ -122,11 +122,25 @@ if(WIN32)
   target_link_libraries(neoastra_native PRIVATE
     user32 gdi32 ole32 shell32 shcore shlwapi dwmapi
     "${webview2_sdk_SOURCE_DIR}/build/native/${_webview2_arch}/WebView2LoaderStatic.lib")
+elseif(IOS)
+  # CMake also defines APPLE for iOS, so this branch has to come first.
+  enable_language(OBJCXX)
+  target_sources(neoastra_native PRIVATE native/src/ios/uikit_backend.mm)
+  # Modules make every object file of the static library name the frameworks that it uses, so an application that links the
+  # library gets them even when it trims the bindings of its own that would have pulled them in.
+  target_compile_options(neoastra_native PRIVATE -fobjc-arc -fmodules -fcxx-modules)
+  target_link_libraries(neoastra_native PRIVATE "-framework Foundation" "-framework UIKit" "-framework WebKit")
 elseif(APPLE)
   enable_language(OBJCXX)
   target_sources(neoastra_native PRIVATE native/src/macos/cocoa_backend.mm)
   target_compile_options(neoastra_native PRIVATE -fobjc-arc)
   target_link_libraries(neoastra_native PRIVATE "-framework Cocoa" "-framework CoreGraphics" "-framework Security" "-framework WebKit")
+elseif(ANDROID)
+  # CMake also defines UNIX for Android, so this branch has to come first.
+  target_sources(neoastra_native PRIVATE native/src/android/android_backend.cpp)
+  target_link_libraries(neoastra_native PRIVATE android log)
+  # An Android application loads the library by the plain file name of its package.
+  set_target_properties(neoastra_native PROPERTIES VERSION "" SOVERSION "")
 elseif(UNIX)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk4)

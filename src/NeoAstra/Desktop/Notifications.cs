@@ -36,6 +36,17 @@ public sealed record NeoNotificationRequest
     public string? ActivationData { get; init; }
     /// <summary>Gets at most four action buttons.</summary>
     public IReadOnlyList<NeoNotificationAction> Actions { get; init; } = Array.Empty<NeoNotificationAction>();
+    /// <summary>Gets the moment at which the system delivers the notification, or <see langword="null"/> to show it at once.</summary>
+    /// <remarks>
+    /// The system keeps a scheduled notification while the application is not running and delivers it at that moment; showing a
+    /// request with the same <see cref="Id"/> replaces it, and <see cref="INeoNotifications.RemoveAsync"/> cancels it. A moment
+    /// that has passed shows the notification at once. A presenter that cannot schedule answers
+    /// <see cref="NeoDesktopStatus.Unsupported"/> for a moment in the future, so an application can tell it from a failure.
+    /// </remarks>
+    public DateTimeOffset? DeliverAt { get; init; }
+
+    /// <summary>Whether <see cref="DeliverAt"/> lies in the future: the presenter schedules the notification instead of showing it.</summary>
+    internal bool IsScheduled(DateTimeOffset now) => DeliverAt is { } moment && moment > now;
 
     internal void Validate()
     {
@@ -60,6 +71,34 @@ public sealed record NeoNotificationRequest
 /// <param name="Dismissed">Whether this is a dismissal.</param>
 public sealed record NeoNotificationActivation(string NotificationId, string? ActionId, string? ActivationData, bool Dismissed);
 
+/// <summary>Contains a notification that the application did not show through NeoAstra, such as one of a push service.</summary>
+/// <param name="NotificationId">The identifier that the system gave the notification.</param>
+/// <param name="ActionId">The action that the user chose, or <see langword="null"/> for the notification itself or one that arrived.</param>
+/// <param name="Payload">The content of the notification as a JSON object: on iOS the <c>userInfo</c> of the notification, which a push service fills.</param>
+public sealed record NeoExternalNotification(string NotificationId, string? ActionId, string Payload);
+
+/// <summary>Reports the notifications that the application did not show through NeoAstra, which a push plugin observes.</summary>
+/// <remarks>
+/// iOS reports every notification of an application to one delegate, which the notification service of NeoAstra owns: that
+/// service reports the notifications that it did not show through this interface, which the service of the platform implements
+/// where it receives them. A notification that arrives while the application is in the foreground is shown and reported by
+/// <see cref="ExternalReceived"/>; one that the user taps is reported by <see cref="ExternalActivated"/>.
+/// </remarks>
+public interface INeoExternalNotificationSource
+{
+    /// <summary>Occurs on the UI dispatcher when a notification arrives while the application is in the foreground.</summary>
+    event EventHandler<NeoExternalNotification>? ExternalReceived;
+    /// <summary>Occurs on the UI dispatcher when the user taps a notification or one of its actions.</summary>
+    event EventHandler<NeoExternalNotification>? ExternalActivated;
+
+    /// <summary>
+    /// Gets or sets what decides whether a notification that arrives while the application is in the foreground is shown;
+    /// <see langword="null"/> shows it. The function runs on the UI dispatcher, and a notification whose decision takes longer
+    /// than a few seconds, or fails, is shown.
+    /// </summary>
+    Func<NeoExternalNotification, CancellationToken, ValueTask<bool>>? ExternalPresentation { get; set; }
+}
+
 /// <summary>Provides bounded native notifications and early activation routing.</summary>
 public interface INeoNotifications
 {
@@ -69,6 +108,14 @@ public interface INeoNotifications
     event EventHandler<NeoNotificationActivation>? Activated;
     /// <summary>Queries OS authority.</summary>
     ValueTask<NeoNotificationPermissionStatus> GetPermissionStatusAsync(CancellationToken cancellationToken = default);
+    /// <summary>Asks the user to allow notifications when the system has not asked yet, and returns the resulting authority.</summary>
+    /// <remarks>
+    /// <see cref="ShowAsync"/> asks on its first display; an application that schedules notifications for later asks here first,
+    /// from an action of the user, so that a background scheduling pass never shows the system prompt. Once the user decided,
+    /// only the settings of the system change the answer, and this returns it without asking. A presenter that cannot ask returns
+    /// its status.
+    /// </remarks>
+    ValueTask<NeoNotificationPermissionStatus> RequestPermissionAsync(CancellationToken cancellationToken = default) => GetPermissionStatusAsync(cancellationToken);
     /// <summary>Displays or replaces a notification.</summary>
     ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default);
     /// <summary>Removes one notification when supported.</summary>
@@ -133,7 +180,29 @@ public static class NeoNotifications
         if (OperatingSystem.IsWindows()) return new WindowsNotifications(dispatcher);
         if (OperatingSystem.IsMacOS()) return new MacNotifications(applicationId);
         if (OperatingSystem.IsLinux()) return new LinuxNotifications(applicationId, applicationName);
+        if (OperatingSystem.IsIOS()) return IosNotifications.Create(applicationId);
+        if (OperatingSystem.IsAndroid()) return new AndroidNotifications();
         return new UnsupportedNotifications("No supported native notification service is available.");
+    }
+
+    /// <summary>Creates the system adapter bound to a running application, for an application that does not register the desktop services.</summary>
+    /// <remarks>
+    /// The desktop services bind their notification adapter when their plugin starts; an application without them (such as one
+    /// built with <c>NeoApp</c>) binds it here instead. Bound, the adapter uses the UI dispatcher of the application and routes an
+    /// activation through its launch queue, and on iOS and macOS it takes the delegate of the notification center at once.
+    /// </remarks>
+    /// <param name="application">The running application.</param>
+    /// <param name="applicationId">Stable application identifier.</param>
+    /// <param name="applicationName">Localized application display name.</param>
+    /// <returns>The native adapter for the current operating system, bound to <paramref name="application"/>.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="application"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="applicationId"/> or <paramref name="applicationName"/> is empty.</exception>
+    public static INeoNotifications CreateSystem(NeoApplication application, string applicationId, string applicationName)
+    {
+        ArgumentNullException.ThrowIfNull(application);
+        var notifications = CreateSystem(applicationId, applicationName, application.Dispatcher);
+        if (notifications is INeoApplicationBoundDesktopService bound) bound.BindApplication(application);
+        return notifications;
     }
 }
 
@@ -158,7 +227,7 @@ internal sealed class ProcessNotifications(string executable, bool macOS) : INeo
     public async ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request); request.Validate();
-        if (string.IsNullOrEmpty(executable) || request.Actions.Count != 0) return NeoDesktopStatus.Unsupported;
+        if (string.IsNullOrEmpty(executable) || request.Actions.Count != 0 || request.IsScheduled(DateTimeOffset.UtcNow)) return NeoDesktopStatus.Unsupported;
         var arguments = macOS ? new[] { "-e", "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run", "--", request.Title, request.Body } : new[] { "--app-name=NeoAstra", "--expire-time=10000", request.Title, request.Body };
         try { var result = await DesktopProcess.RunAsync(executable, arguments, default, TimeSpan.FromSeconds(15), false, cancellationToken).ConfigureAwait(false); return result.ExitCode == 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed; }
         catch (OperationCanceledException) { throw; }

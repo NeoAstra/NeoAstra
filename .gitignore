@@ -379,3 +379,6 @@ artifacts-dotnet-releaser/
 
 # Verify
 *.received.*
+
+# The Firebase project of a local push test is not part of the repository.
+google-services.json

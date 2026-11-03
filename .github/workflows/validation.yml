@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           dotnet run --project src/NeoAstra.CodeGen/NeoAstra.CodeGen.csproj -c Release --no-restore
-          git diff --exit-code -- src/NeoAstra.Core/Generated/Interop/NativeMethods.Generated.cs
+          git diff --exit-code -- src/NeoAstra.Core/Generated/Interop/NativeMethods.Generated.cs src/NeoAstra.Core/Build/Sdk/NeoAstra.Core.NativeSymbols.props
       - name: Build
         run: dotnet build src/NeoAstra.slnx -c Release --no-restore
       - name: Verify capability schema and deterministic manifests

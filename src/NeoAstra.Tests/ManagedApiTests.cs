@@ -407,6 +407,41 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public void HostFactories_AcceptAUIKitViewOnlyOnIOS()
+    {
+        var handle = new NeoNativeHandle(NeoNativeHandleKind.UIKitUIView, 1);
+        if (OperatingSystem.IsIOS())
+        {
+            Assert.ThrowsExactly<ArgumentException>(() => NeoAstraHost.FromUIKitUIView(0));
+            Assert.IsNotNull(NeoAstraHost.FromUIKitUIView(1));
+            Assert.IsNotNull(NeoAstraHost.FromNativeParent(handle));
+            Assert.AreEqual((nint)1, handle.GetUIKitUIView());
+            return;
+        }
+
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromUIKitUIView(1));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromNativeParent(handle));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => handle.GetUIKitUIView());
+    }
+
+    [TestMethod]
+    public void HostFactories_AcceptAnAndroidViewGroupOnlyOnAndroid()
+    {
+        var handle = new NeoNativeHandle(NeoNativeHandleKind.AndroidViewGroup, 1);
+        if (OperatingSystem.IsAndroid())
+        {
+            Assert.ThrowsExactly<ArgumentException>(() => NeoAstraHost.FromAndroidViewGroup(0));
+            Assert.IsNotNull(NeoAstraHost.FromNativeParent(handle));
+            Assert.AreEqual((nint)1, handle.GetAndroidViewGroup());
+            return;
+        }
+
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromAndroidViewGroup(1));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => NeoAstraHost.FromNativeParent(handle));
+        Assert.ThrowsExactly<PlatformNotSupportedException>(() => handle.GetAndroidViewGroup());
+    }
+
+    [TestMethod]
     public void NativeHandle_NamedConversionChecksKind()
     {
         if (!OperatingSystem.IsWindows())
