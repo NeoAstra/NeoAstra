@@ -232,7 +232,9 @@ public final class NeoAstraServices {
         }
     }
 
-    private static SecretKey secretKey(String space) throws Exception {
+    // Synchronized: two first writes in a new space would otherwise both generate the key of its alias, and the second key
+    // would replace the one that encrypted the first secret, which could then no longer be read.
+    private static synchronized SecretKey secretKey(String space) throws Exception {
         String alias = "neoastra.safe-storage." + space;
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");
         store.load(null);
