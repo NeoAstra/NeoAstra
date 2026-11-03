@@ -402,6 +402,9 @@ public sealed class NeoBrowserFeatures
     /// On macOS, an explicit opt-in makes the view inspectable through Safari's Develop menu on macOS 13.3 and later.
     /// The local Inspect Element context-menu item is best-effort WebKit behavior, and WKWebView has no public
     /// inspector-opening command or Option+Command+I action. This setting does not turn context menus back on.
+    /// On iOS 16.4 and later it makes the view inspectable the same way, and on Android it turns on the debugging of the web
+    /// contents, which <c>chrome://inspect</c> on the development machine attaches to. Android debugs the whole process, so
+    /// that switch is on while any view of the application asks for it. Turn it on in a debug build only.
     /// </remarks>
     public bool? DevTools { get; set; }
 
