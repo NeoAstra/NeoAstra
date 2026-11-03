@@ -92,6 +92,9 @@ public final class NeoAstraWebHost {
     /** Kinds of NEOASTRA_PERMISSION_* that a WebView asks for. */
     private static final int PERMISSION_CAMERA = 2, PERMISSION_MICROPHONE = 3;
 
+    /** Android debugs the web contents of the whole process, so the views of the process share one switch. */
+    private static final NeoAstraDebuggingSwitch DEBUGGING = new NeoAstraDebuggingSwitch(WebView::setWebContentsDebuggingEnabled);
+
     private final WebView webView;
     private final ViewGroup parent;
     private final String projectedSuffix;
@@ -101,6 +104,7 @@ public final class NeoAstraWebHost {
     private int nextScript = 1;
     private volatile boolean engineDialogs = true;
     private boolean keepsHistory = true;
+    private boolean debugging;
     private final NeoAstraKeyboard keyboard;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
@@ -209,6 +213,13 @@ public final class NeoAstraWebHost {
 
     /** Whether the WebView shows its own JavaScript dialogs; while it does not, the host answers them. */
     public void setEngineDialogs(boolean value) { engineDialogs = value; }
+
+    /** Whether DevTools, chrome://inspect on the development machine, may attach to the web contents of the process. */
+    public void setDebugging(boolean value) {
+        if (value == debugging) return;
+        DEBUGGING.change(value);
+        debugging = value;
+    }
 
     /**
      * Whether the WebView keeps the documents it showed. The WebView cannot refuse a walk through its history, so while it does
@@ -387,6 +398,11 @@ public final class NeoAstraWebHost {
     }
 
     public void destroy() {
+        if (debugging) {
+            // The view goes anyway, also when the switch fails.
+            try { DEBUGGING.change(false); } catch (RuntimeException exception) { DEBUGGING.forget(); }
+            debugging = false;
+        }
         view = 0;
         reply = null;
         for (ScriptHandler handler : scripts.values()) handler.remove();

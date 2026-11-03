@@ -182,7 +182,7 @@ jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_navigate{}
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
-jmethodID host_set_engine_dialogs{}, host_set_keeps_history{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
+jmethodID host_set_engine_dialogs{}, host_set_keeps_history{}, host_set_debugging{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
 jclass js_result_class{}, js_prompt_result_class{};
 jmethodID js_result_confirm{}, js_result_cancel{}, js_prompt_result_confirm{};
 jclass window_class{};
@@ -788,6 +788,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     };
     host_set_engine_dialogs = env->GetMethodID(host_class, "setEngineDialogs", "(Z)V");
     host_set_keeps_history = env->GetMethodID(host_class, "setKeepsHistory", "(Z)V");
+    host_set_debugging = env->GetMethodID(host_class, "setDebugging", "(Z)V");
     host_deliver_files = env->GetStaticMethodID(host_class, "deliverFiles", "(Landroid/webkit/ValueCallback;[Ljava/lang/String;)V");
     host_choose_with_system = env->GetMethodID(host_class, "chooseWithSystem", "(Landroid/webkit/ValueCallback;Landroid/webkit/WebChromeClient$FileChooserParams;)V");
     host_answer_permission = env->GetMethodID(host_class, "answerPermission", "(Landroid/webkit/PermissionRequest;Z)V");
@@ -1071,8 +1072,14 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_
         case NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS:
         case NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS:
         case NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS:
-        case NEOASTRA_VIEW_SETTING_DEVTOOLS:
             return enabled ? NEOASTRA_ERROR_NOT_SUPPORTED : NEOASTRA_OK;
+        // DevTools attach from the development machine (chrome://inspect); the WebView has no window of its own for them.
+        case NEOASTRA_VIEW_SETTING_DEVTOOLS: {
+            JNIEnv* env = jni();
+            if (!env) return NEOASTRA_ERROR_NOT_INITIALIZED;
+            env->CallVoidMethod(view_state(view)->host, host_set_debugging, enabled ? JNI_TRUE : JNI_FALSE);
+            return failed(env, view->environment->app, "Could not switch the debugging of the web contents") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+        }
         // Android asks about no walk through the history, so the WebView forgets the documents it showed while it is off.
         case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION: {
             JNIEnv* env = jni();
