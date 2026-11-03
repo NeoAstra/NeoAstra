@@ -105,7 +105,9 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
             await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
             await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
             await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
-            await RunAsync("launch", [adb, .. device, "shell", "monkey", "-p", identifier, "-c", "android.intent.category.LAUNCHER", "1"], project, environment, log, cancellationToken).ConfigureAwait(false);
+            // monkey starts the launcher activity without knowing its name; an emulator has no physical keys, and monkey refuses
+            // to run there with its default share of system keys, so the one event it sends is the launch alone.
+            await RunAsync("launch", [adb, .. device, "shell", "monkey", "--pct-syskeys", "0", "-p", identifier, "-c", "android.intent.category.LAUNCHER", "1"], project, environment, log, cancellationToken).ConfigureAwait(false);
             var logcat = processFactory.Start(new("app", new([adb, .. device, "logcat", "-v", "brief", "-s", "NeoAstra:*", "DOTNET:*", "AndroidRuntime:E", "chromium:*"]), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => log("app", line, error)));
             return new AndroidSession(logcat, CleanupAsync);
         }

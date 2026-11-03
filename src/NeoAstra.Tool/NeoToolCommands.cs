@@ -85,6 +85,7 @@ internal static class NeoToolCommands
             throw new NeoToolException("static_frontend_dev", "Static frontends are rebuilt by dotnet build; use dotnet watch run for development.");
         using var source = new CancellationTokenSource();
         Console.CancelKeyPress += Cancel;
+        using var termination = NeoTerminationSignals.Register(source);
         try
         {
             var processFactory = new NeoProcessFactory();

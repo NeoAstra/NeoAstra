@@ -896,9 +896,94 @@ public sealed class ToolingTests
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "tcp:5173", "tcp:5173" }, starts[5].Command.Arguments.Skip(1).ToArray());
         StringAssert.Contains(starts[6].Command.Arguments[^1], "run-as dev.neoastra.fixture");
         StringAssert.Contains(starts[6].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        // An emulator has no physical keys, and monkey refuses to run with its default share of system keys there.
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "shell", "monkey", "--pct-syskeys", "0", "-p", "dev.neoastra.fixture", "-c", "android.intent.category.LAUNCHER", "1" }, starts[8].Command.Arguments.Skip(1).ToArray());
         Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);
         StringAssert.Contains(starts[10].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[11].Command.Arguments.Skip(1).ToArray());
+    }
+
+    [TestMethod]
+    [DataRow("TERM")]
+    [DataRow("HUP")]
+    public async Task DevCommand_TearsDownItsProcessesWhenTerminated(string signal)
+    {
+        // Agents, IDEs, and job runners stop a development session with SIGTERM, a closing terminal with SIGHUP: the tool must
+        // end through its teardown, which stops the frontend and the backend, instead of leaving them running.
+        if (OperatingSystem.IsWindows()) { Assert.Inconclusive("SIGTERM and SIGHUP are POSIX signals."); return; }
+        // Node.js builds the client of the repository, so it is there wherever these tests run.
+        if (!CanRun("node")) { Assert.Inconclusive("The fixture servers need Node.js."); return; }
+        using var fixture = new ProjectFixture();
+        var port = FreePort();
+        // Each fixture process carries the marker with its own suffix, so that the test waits for the backend and not already
+        // for the frontend, while the marker alone matches both.
+        var marker = "neoastra-termination-" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(fixture.ConfigurationPath, $$"""
+            {
+              "$schema": "neoastra-project-v1.schema.json",
+              "version": 1,
+              "app": { "identifier": "dev.neoastra.fixture", "displayName": "Fixture" },
+              "frontend": {
+                "root": "Client App", "devCommand": ["node", "-e", "require('http').createServer((q, r) => r.end('ok')).listen({{port}}, '127.0.0.1')", "{{marker}}-frontend"],
+                "backendCommand": ["node", "-e", "setTimeout(() => {}, 120000)", "{{marker}}-backend"],
+                "contractCommand": ["node", "--version"], "devUrl": "http://127.0.0.1:{{port}}",
+                "buildCommand": ["node", "--version"], "dist": "Client App/dist", "spaFallback": "index.html",
+                "packageManager": "none"
+              },
+              "assets": {
+                "origin": "app://fixture", "cacheHashedAssets": true,
+                "csp": "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'"
+              },
+              "capabilities": []
+            }
+            """);
+        var tool = Path.Combine(FindRepositoryRoot(), "src", "NeoAstra.Tool", "bin", "Release", "net10.0", "NeoAstra.Tool.dll"); Assert.IsTrue(File.Exists(tool), "NeoAstra.Tool must be built before its CLI integration test.");
+        var start = new ProcessStartInfo { FileName = "dotnet", WorkingDirectory = fixture.Root, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        foreach (var argument in new[] { tool, "dev", "--config", fixture.ConfigurationPath }) start.ArgumentList.Add(argument);
+        using var process = Process.Start(start)!;
+        try
+        {
+            _ = process.StandardOutput.ReadToEndAsync(); _ = process.StandardError.ReadToEndAsync();
+            // The backend starts once the frontend answers: then both run.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!IsRunning(marker + "-backend") && DateTime.UtcNow < deadline && !process.HasExited) await Task.Delay(200);
+            Assert.IsTrue(IsRunning(marker + "-backend"), "The backend of the session did not start.");
+            using (var kill = Process.Start(new ProcessStartInfo("kill", ["-" + signal, process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]))!) await kill.WaitForExitAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            deadline = DateTime.UtcNow.AddSeconds(10);
+            while ((IsRunning(marker) || IsListening(port)) && DateTime.UtcNow < deadline) await Task.Delay(200);
+            Assert.IsFalse(IsRunning(marker), "The frontend or the backend outlived the tool.");
+            Assert.IsFalse(IsListening(port), "The frontend outlived the tool.");
+        }
+        finally
+        {
+            // Both fixture processes carry the marker, so they go also when the tool is gone and left them running.
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            using var cleanup = Process.Start(new ProcessStartInfo("pkill", ["-f", marker]))!;
+            await cleanup.WaitForExitAsync();
+        }
+
+        static bool CanRun(string program)
+        {
+            try { using var probe = Process.Start(new ProcessStartInfo(program, ["--version"]) { RedirectStandardOutput = true, RedirectStandardError = true })!; probe.WaitForExit(10_000); return probe.ExitCode == 0; }
+            catch (System.ComponentModel.Win32Exception) { return false; }
+        }
+        static bool IsRunning(string marker)
+        {
+            using var pgrep = Process.Start(new ProcessStartInfo("pgrep", ["-f", marker]) { RedirectStandardOutput = true })!;
+            pgrep.WaitForExit(10_000);
+            return pgrep.ExitCode == 0;
+        }
+        static bool IsListening(int port)
+        {
+            try { using var client = new TcpClient(); client.Connect(IPAddress.Loopback, port); return true; }
+            catch (SocketException) { return false; }
+        }
+        static int FreePort()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
+            try { return ((IPEndPoint)listener.LocalEndpoint).Port; } finally { listener.Stop(); }
+        }
     }
 
     [TestMethod]

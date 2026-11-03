@@ -6,7 +6,7 @@
 // inside a ViewGroup of the application or of a window, driven through JNI. A window is the content of the current activity,
 // which com.neoastra.backend.NeoAstraWindow replaces with a layout of its own; it fills the activity and ends with it, so it
 // cannot be moved, resized, or minimized. Android has no custom schemes, so a custom-scheme origin is served as a projected
-// HTTPS origin under the reserved .invalid domain. Popups, downloads, dialogs, permissions, cookies, and zoom answer
+// HTTPS origin under the reserved .invalid domain. Popups, downloads, cookies, and zoom answer
 // NEOASTRA_ERROR_NOT_SUPPORTED until their implementation follows.
 #include "../common/native_internal.hpp"
 
@@ -376,6 +376,9 @@ void report_history(neoastra_view_t* view, bool back, bool forward) {
 
 struct evaluation { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; };
 struct capture_request { neoastra_buffer_callback_t callback; void* context; neoastra_operation_t* operation; };
+// NeoAstraWebHost.capture answers 0 for a capture that began, this for a view that is not laid out yet, and 2 (CAPTURE_OUTSIDE)
+// for a rectangle outside the view.
+constexpr jint capture_no_size = 1;
 struct script_added { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; std::string identifier; };
 
 void complete_script_added(void* pointer) {
@@ -794,7 +797,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     host_load_html = env->GetMethodID(host_class, "loadHtml", "(Ljava/lang/String;Ljava/lang/String;)V");
     host_command = env->GetMethodID(host_class, "command", "(I)V");
     host_evaluate = env->GetMethodID(host_class, "evaluate", "(Ljava/lang/String;J)V");
-    host_capture = env->GetMethodID(host_class, "capture", "(IIIIIIJ)Z");
+    host_capture = env->GetMethodID(host_class, "capture", "(IIIIIIJ)I");
     host_add_script = env->GetMethodID(host_class, "addScript", "(Ljava/lang/String;[Ljava/lang/String;)I");
     host_remove_script = env->GetMethodID(host_class, "removeScript", "(I)Z");
     host_post_message = env->GetMethodID(host_class, "postMessage", "(Ljava/lang/String;)Z");
@@ -1149,11 +1152,13 @@ neoastra_result_t neo_platform_view_capture(neoastra_view_t* view, const neoastr
     auto* pending = new (std::nothrow) capture_request{callback, context, operation};
     if (!pending) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Could not allocate the capture", 0, android_domain);
     const auto quality = static_cast<jint>(options.quality ? options.quality : 80u);
-    const jboolean started = env->CallBooleanMethod(state->host, host_capture, static_cast<jint>(options.format), quality,
+    const jint refused = env->CallIntMethod(state->host, host_capture, static_cast<jint>(options.format), quality,
         static_cast<jint>(options.region.x), static_cast<jint>(options.region.y), static_cast<jint>(options.region.width), static_cast<jint>(options.region.height),
         reinterpret_cast<jlong>(pending));
     if (failed(env, view->environment->app, "Android capture failed")) { delete pending; return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Android capture failed", 0, android_domain); }
-    if (!started) { delete pending; return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The capture region is outside the visible viewport", 0, android_domain); }
+    // A view that is not laid out yet has no state to capture; a rectangle outside it is an argument the caller gave.
+    if (refused == capture_no_size) { delete pending; return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The view has no size yet: it shows nothing to capture", 0, android_domain); }
+    if (refused != 0) { delete pending; return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The capture region is outside the visible viewport", 0, android_domain); }
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_get_handle(neoastra_view_t* view, neoastra_native_handle_kind_t kind, neoastra_native_handle_t* handle) noexcept {

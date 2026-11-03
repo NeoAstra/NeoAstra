@@ -240,8 +240,12 @@ iPhone or the simulator and the page of the application. On Android it turns on 
 `chrome://inspect` in Chrome on the development machine lists the pages of an emulator or of a phone that `adb` sees.
 Android switches that for the whole process: it is on while any view of the application asks for it, and NeoAstra switches it
 off when the last of them no longer does. An application that also calls `WebView.setWebContentsDebuggingEnabled` itself
-shares that switch with NeoAstra, since Android tells nobody its current state. An emulator image with Google APIs is a debuggable system, where
-every WebView can be inspected whatever the setting. Turn it on in a debug build only.
+shares that switch with NeoAstra, since Android tells nobody its current state.
+
+Two things keep the web contents inspectable whatever the setting says, so switching it off there changes nothing: from
+Android System WebView 113 on, an application whose manifest says `android:debuggable="true"`, which a debug build and
+every `dotnet neoastra dev` session is, and an emulator image with Google APIs, which is a debuggable system. The setting is
+what a release build needs, and `DevTools = true` belongs in a debug build only.
 
 ### History navigation
 

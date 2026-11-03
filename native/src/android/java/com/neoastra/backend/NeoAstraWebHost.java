@@ -5,22 +5,22 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
-import android.content.ContextWrapper;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Rect;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.PixelCopy;
-import android.view.Window;
-import android.net.Uri;
 import android.os.Message;
 import android.provider.MediaStore;
+import android.view.PixelCopy;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
 import android.webkit.PermissionRequest;
@@ -53,6 +53,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * The Java side of the Android backend of NeoAstra: what the native library cannot do without Java classes.
@@ -102,6 +104,16 @@ public final class NeoAstraWebHost {
     /** Kinds of NEOASTRA_PERMISSION_* that a WebView asks for. */
     private static final int PERMISSION_CAMERA = 2, PERMISSION_MICROPHONE = 3;
 
+    /** Android debugs the web contents of the whole process, so the views of the process share one switch. */
+    private static final NeoAstraDebuggingSwitch DEBUGGING = new NeoAstraDebuggingSwitch(WebView::setWebContentsDebuggingEnabled);
+
+    /** A capture reads the view on the main thread, and encodes the image on one thread of its own. */
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Executor ENCODER = Executors.newSingleThreadExecutor();
+
+    /** Why a capture did not begin: the native side turns each into the result that says so. */
+    private static final int CAPTURE_NO_SIZE = 1, CAPTURE_OUTSIDE = 2;
+
     private final WebView webView;
     private final ViewGroup parent;
     private final String projectedSuffix;
@@ -112,9 +124,9 @@ public final class NeoAstraWebHost {
     private volatile boolean engineDialogs = true;
     private boolean keepsHistory = true;
     private boolean debugging;
-    // The pixels of the view for one CSS pixel: the display density times the zoom of the page, which the WebView reports.
-    private volatile float pageScale;
-    private static final NeoAstraDebuggingSwitch DEBUGGING = new NeoAstraDebuggingSwitch(WebView::setWebContentsDebuggingEnabled);
+    // The zoom of the page alone: the WebView reports it together with the density of the display, which a capture reads again
+    // so that a view which outlives a change of the density counts in the pixels the display has now.
+    private volatile float pageZoom = 1f;
     private final NeoAstraKeyboard keyboard;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
@@ -141,7 +153,6 @@ public final class NeoAstraWebHost {
         this.view = nativeView;
         this.projectedSuffix = suffix;
         webView = new WebView(parent.getContext());
-        pageScale = webView.getResources().getDisplayMetrics().density;
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setAllowFileAccess(false);
@@ -197,18 +208,20 @@ public final class NeoAstraWebHost {
 
     public void evaluate(String script, long token) { webView.evaluateJavascript(script, value -> nativeEvaluated(token, value)); }
 
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final java.util.concurrent.Executor ENCODER = java.util.concurrent.Executors.newSingleThreadExecutor();
-
     /**
      * Captures what the view shows, or the part of it that the rectangle in CSS pixels gives, as PNG or as JPEG (format 1), and
      * hands the bytes or the reason of a failure to nativeCaptured on the main thread. PixelCopy reads the window of the activity
      * from Android 8 on, as the screen shows it; before, or when the view is in another window such as a dialog, the WebView draws
-     * itself into the bitmap. Returns false, and captures nothing, when the view has no size or the rectangle lies outside of it.
+     * itself into the bitmap.
+     *
+     * @return 0 once the capture began, CAPTURE_NO_SIZE when the view is not laid out yet, and CAPTURE_OUTSIDE when the
+     *     rectangle lies outside the view; nothing is captured in the last two, which the native side tells apart.
      */
-    public boolean capture(int format, int quality, int x, int y, int width, int height, long token) {
-        int[] region = NeoAstraCaptureRegion.of(webView.getWidth(), webView.getHeight(), pageScale, x, y, width, height);
-        if (region == null) return false;
+    public int capture(int format, int quality, int x, int y, int width, int height, long token) {
+        if (webView.getWidth() <= 0 || webView.getHeight() <= 0) return CAPTURE_NO_SIZE;
+        float scale = webView.getResources().getDisplayMetrics().density * pageZoom;
+        int[] region = NeoAstraCaptureRegion.of(webView.getWidth(), webView.getHeight(), scale, x, y, width, height);
+        if (region == null) return CAPTURE_OUTSIDE;
         Rect area = new Rect(region[0], region[1], region[2], region[3]);
         Bitmap bitmap = Bitmap.createBitmap(area.width(), area.height(), Bitmap.Config.ARGB_8888);
         Window window = window(webView.getContext());
@@ -223,21 +236,43 @@ public final class NeoAstraWebHost {
                 else { bitmap.recycle(); captured(token, null, "PixelCopy could not read the window (" + result + ")"); }
             }, MAIN);
         } else {
+            // View.draw counts in the pixels of the content of the view, not of what it shows: the framework translates the
+            // canvas by the scroll of the view before it draws, and so does this, after the origin of the region.
             Canvas canvas = new Canvas(bitmap);
             canvas.translate(-area.left, -area.top);
+            canvas.translate(-webView.getScrollX(), -webView.getScrollY());
             webView.draw(canvas);
             encode(bitmap, format, quality, token);
         }
-        return true;
+        return 0;
     }
 
-    // The encoding runs off the main thread; its result comes back to the main thread, where the native side completes it.
+    // The encoding runs off the main thread; its result comes back to the main thread, where the native side completes it. The
+    // encoding of a large image can run out of memory: the native side waits for an answer, so every end of it answers, and the
+    // bitmap goes before the answer is built.
     private static void encode(Bitmap bitmap, int format, int quality, long token) {
-        ENCODER.execute(() -> {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            boolean encoded = bitmap.compress(format == 1 ? Bitmap.CompressFormat.JPEG : Bitmap.CompressFormat.PNG, quality, bytes);
+        try {
+            submit(bitmap, format, quality, token);
+        } catch (Throwable failure) {
+            // The thread of the encoder could not be had: the answer comes from here, since nothing else will send one.
             bitmap.recycle();
-            captured(token, encoded ? bytes.toByteArray() : null, encoded ? null : "The capture could not be encoded");
+            captured(token, null, "The capture could not be encoded");
+        }
+    }
+
+    private static void submit(Bitmap bitmap, int format, int quality, long token) {
+        ENCODER.execute(() -> {
+            byte[] image = null;
+            Throwable error = null;
+            try {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                if (bitmap.compress(format == 1 ? Bitmap.CompressFormat.JPEG : Bitmap.CompressFormat.PNG, quality, bytes)) image = bytes.toByteArray();
+            } catch (Throwable failure) {
+                error = failure;
+            }
+            bitmap.recycle();
+            if (image != null) captured(token, image, null);
+            else captured(token, null, error == null ? "The capture could not be encoded" : "The capture could not be encoded: " + error);
         });
     }
 
@@ -281,10 +316,6 @@ public final class NeoAstraWebHost {
     /** Whether the WebView shows its own JavaScript dialogs; while it does not, the host answers them. */
     public void setEngineDialogs(boolean value) { engineDialogs = value; }
 
-    /**
-     * Whether the WebView keeps the documents it showed. The WebView cannot refuse a walk through its history, so while it does
-     * not keep them it forgets them after each navigation, and history.back() finds nothing to load.
-     */
     /** Whether DevTools, chrome://inspect on the development machine, may attach to the web contents of the process. */
     public void setDebugging(boolean value) {
         if (value == debugging) return;
@@ -292,6 +323,10 @@ public final class NeoAstraWebHost {
         debugging = value;
     }
 
+    /**
+     * Whether the WebView keeps the documents it showed. The WebView cannot refuse a walk through its history, so while it does
+     * not keep them it forgets them after each navigation, and history.back() finds nothing to load.
+     */
     public void setKeepsHistory(boolean value) {
         keepsHistory = value;
         if (!value) webView.clearHistory();
@@ -552,7 +587,8 @@ public final class NeoAstraWebHost {
         }
 
         @Override public void onScaleChanged(WebView source, float oldScale, float newScale) {
-            pageScale = newScale;
+            float density = source.getResources().getDisplayMetrics().density;
+            if (density > 0) pageZoom = newScale / density;
         }
 
         @Override public void onPageFinished(WebView source, String url) {

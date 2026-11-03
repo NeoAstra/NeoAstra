@@ -44,7 +44,7 @@ case $target in
     # A package signed with another key, such as an earlier build of another machine, is replaced.
     adb ${serial[@]+"${serial[@]}"} install -r "$apk" || { adb ${serial[@]+"${serial[@]}"} uninstall "$id"; adb ${serial[@]+"${serial[@]}"} install "$apk"; }
     # A device that has not been unlocked since it started offers no activity to start.
-    adb ${serial[@]+"${serial[@]}"} shell monkey -p "$id" -c android.intent.category.LAUNCHER 1 >/dev/null || echo "Installed $id; unlock the device to start it." >&2
+    adb ${serial[@]+"${serial[@]}"} shell monkey --pct-syskeys 0 -p "$id" -c android.intent.category.LAUNCHER 1 >/dev/null || echo "Installed $id; unlock the device to start it." >&2
     ;;
   *) sed -n '2,10p' "$0" >&2; exit 2 ;;
 esac

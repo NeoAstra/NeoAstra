@@ -598,8 +598,8 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <returns>The encoded image.</returns>
     /// <remarks>
     /// The view has to be drawn to be captured: on Windows a view whose window is hidden fails with
-    /// <see cref="InvalidOperationException"/>, and other backends may not complete for such a view, so pass a
-    /// cancellation token that bounds the wait.
+    /// <see cref="InvalidOperationException"/>, as does a view on Android that is not laid out yet, and other backends may
+    /// not complete for such a view, so pass a cancellation token that bounds the wait.
     /// </remarks>
     /// <exception cref="ArgumentException">The options are inconsistent, or the region is outside the visible viewport.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The format or the quality of the options is out of range.</exception>

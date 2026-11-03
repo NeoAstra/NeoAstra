@@ -65,7 +65,7 @@ scripts, so review dependency and lockfile changes like build code. Then run:
 dotnet neoastra dev
 ```
 
-The tool first runs the configured `contractCommand` (default `dotnet build --no-restore`) so generated bindings are current, then starts the configured frontend command in `frontend.root`, labels/redacts output, probes the exact `devUrl` without following redirects, and starts the configured backend command only after an HTTP 2xx response. HTTP error pages are not readiness; connection failures and individual two-second request timeouts are retried within the overall 60-second deadline. User cancellation remains cancellation, while an exhausted deadline reports `readiness_timeout`. An early frontend exit cancels and observes the outstanding probe, and a known exit takes precedence over simultaneous readiness. Generated defaults use `127.0.0.1`; `localhost` is rejected. `::1` is also accepted. Other IP literals require `allowRemoteDevServer: true` and produce a prominent warning. The exact configured origin alone is trusted. Ctrl+C, readiness timeout, or either unexpected child exit tears down both process trees within a bounded interval and returns nonzero for unexpected failures. Frontend HMR remains Vite's responsibility; C# restart remains `dotnet watch`'s responsibility.
+The tool first runs the configured `contractCommand` (default `dotnet build --no-restore`) so generated bindings are current, then starts the configured frontend command in `frontend.root`, labels/redacts output, probes the exact `devUrl` without following redirects, and starts the configured backend command only after an HTTP 2xx response. HTTP error pages are not readiness; connection failures and individual two-second request timeouts are retried within the overall 60-second deadline. User cancellation remains cancellation, while an exhausted deadline reports `readiness_timeout`. An early frontend exit cancels and observes the outstanding probe, and a known exit takes precedence over simultaneous readiness. Generated defaults use `127.0.0.1`; `localhost` is rejected. `::1` is also accepted. Other IP literals require `allowRemoteDevServer: true` and produce a prominent warning. The exact configured origin alone is trusted. Ctrl+C, on macOS and Linux also SIGTERM or SIGHUP (as an agent, an IDE, a job runner, or a closing terminal stops the tool), readiness timeout, or either unexpected child exit tears down both process trees within a bounded interval and returns nonzero for unexpected failures. Frontend HMR remains Vite's responsibility; C# restart remains `dotnet watch`'s responsibility.
 
 A successful loopback response proves reachability, not process identity. Keep Vite's strict-port
 setting enabled, reserve the configured development port, and run only a trusted development server
@@ -82,8 +82,9 @@ dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android s
 
 After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
 only that framework too), installs it, and starts it with the address of the server; it follows the log of the application
-until the session ends, and on Android it then removes the port forwarding and the address. Frontend changes reach the running
-application through the development server; a backend change needs a new session. What the tool does by hand: the iOS
+until the session ends, which on macOS and Linux SIGTERM and SIGHUP also do, and on Android it then removes the port
+forwarding and the address. Frontend changes reach the running application through the development server; a backend change
+needs a new session. What the tool does by hand: the iOS
 simulator shares the network of
 the Mac, so `127.0.0.1` is the development machine there, and it passes an environment variable to the application when the
 variable carries the `SIMCTL_CHILD_` prefix:
