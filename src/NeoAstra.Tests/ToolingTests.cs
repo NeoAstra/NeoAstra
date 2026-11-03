@@ -232,6 +232,20 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void AndroidAssets_AreLinkedWithTheSeparatorThatTheAndroidBuildStrips()
+    {
+        // The Android build removes the Assets prefix of a link only when the separator of the platform follows it: a link
+        // written as Assets/neoastra/ kept an Assets folder in an APK built on Windows, and NeoApp did not find the assets.
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra", "Build", "Sdk", "NeoAstra.Build.targets"));
+        var add = targets.Descendants("Target").Single(static target => (string?)target.Attribute("Name") == "NeoAstraAddAssetsToMobilePackage");
+        var link = (string)add.Descendants("AndroidAsset").Single().Element("Link")!;
+        Assert.AreEqual("$(_NeoAstraAndroidAssetLinkRoot)%(RecursiveDir)%(Filename)%(Extension)", link);
+        var root = (string)add.Descendants("_NeoAstraAndroidAssetLinkRoot").Single();
+        Assert.AreEqual("$(MonoAndroidAssetsPrefix)$(_NeoAstraAndroidAssetSeparator)neoastra$(_NeoAstraAndroidAssetSeparator)", root);
+        Assert.AreEqual("$([System.IO.Path]::DirectorySeparatorChar)", (string)add.Descendants("_NeoAstraAndroidAssetSeparator").Single());
+    }
+
+    [TestMethod]
     public void CorePackage_DeclaresEveryImportedExportForIOSAndShipsItsMobileTargets()
     {
         var root = FindRepositoryRoot();

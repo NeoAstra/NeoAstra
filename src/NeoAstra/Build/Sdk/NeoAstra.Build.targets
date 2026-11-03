@@ -183,9 +183,15 @@
         <LogicalName>assets/%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
       </BundleResource>
     </ItemGroup>
+    <!-- The Android build strips the assets prefix only when the platform's directory separator follows it: a link written
+         with '/' keeps an Assets folder in the APK on Windows, where NeoApp does not find the assets. -->
+    <PropertyGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
+      <_NeoAstraAndroidAssetSeparator>$([System.IO.Path]::DirectorySeparatorChar)</_NeoAstraAndroidAssetSeparator>
+      <_NeoAstraAndroidAssetLinkRoot>$(MonoAndroidAssetsPrefix)$(_NeoAstraAndroidAssetSeparator)neoastra$(_NeoAstraAndroidAssetSeparator)</_NeoAstraAndroidAssetLinkRoot>
+    </PropertyGroup>
     <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'android'">
       <AndroidAsset Include="@(_NeoAstraAssetFile);@(_NeoAstraAssetManifestFile)">
-        <Link>Assets/neoastra/%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <Link>$(_NeoAstraAndroidAssetLinkRoot)%(RecursiveDir)%(Filename)%(Extension)</Link>
       </AndroidAsset>
     </ItemGroup>
   </Target>

@@ -15,6 +15,7 @@
     <NeoAstraAndroidKeyboardOverlay>true</NeoAstraAndroidKeyboardOverlay>
     <NeoAstraAndroidEdgeToEdge>true</NeoAstraAndroidEdgeToEdge>
     <TrimMode>full</TrimMode>
+    <SampleWebAssets>Assets$([System.IO.Path]::DirectorySeparatorChar)web$([System.IO.Path]::DirectorySeparatorChar)</SampleWebAssets>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
@@ -32,8 +33,10 @@
     <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json') And '$(NeoAstraSampleFirebase)' != 'false'" />
     <Compile Include="../Shared/*.cs" />
     <EmbeddedResource Include="../Shared/capabilities/main.json" LogicalName="capabilities.json" />
-    <AndroidAsset Include="../Shared/frontend/**/*" Link="Assets/web/%(RecursiveDir)%(Filename)%(Extension)" />
-    <AndroidAsset Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" Link="Assets/web/client/%(Filename)%(Extension)" />
+    <!-- The links use the separator of the platform: the build strips the Assets prefix only when it is followed by that
+         separator, and a link written with '/' keeps an Assets folder in the APK on Windows. -->
+    <AndroidAsset Include="../Shared/frontend/**/*" Link="$(SampleWebAssets)%(RecursiveDir)%(Filename)%(Extension)" />
+    <AndroidAsset Include="../../../frontend/packages/client/dist/*.js" Exclude="../../../frontend/packages/client/dist/testing.js" Link="$(SampleWebAssets)client$([System.IO.Path]::DirectorySeparatorChar)%(Filename)%(Extension)" />
   </ItemGroup>
   <!-- Project references to the plugins take the targets that their packages give an Android application. -->
   <Import Project="../../../src/NeoAstra.Location/Build/NeoAstra.Location.targets" />
