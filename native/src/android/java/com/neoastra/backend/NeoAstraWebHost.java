@@ -3,9 +3,11 @@ package com.neoastra.backend;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ClipData;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Message;
@@ -261,7 +263,7 @@ public final class NeoAstraWebHost {
         List<Uri> copies = new ArrayList<>();
         for (int index = 0; index < chosen.length; index++) {
             Uri source = chosen[index];
-            if (source == null) continue;
+            if (source == null || !chosenByAnotherApplication(context, source)) continue;
             File target = new File(directory, index + "-" + displayName(context, source));
             try (InputStream input = context.getContentResolver().openInputStream(source); java.io.OutputStream output = new java.io.FileOutputStream(target)) {
                 if (input == null) continue;
@@ -273,6 +275,19 @@ public final class NeoAstraWebHost {
             }
         }
         return copies.isEmpty() ? null : copies.toArray(new Uri[0]);
+    }
+
+    // The application opens what the picker answers with its own rights, so a picker must not name what only the application
+    // reads: a file path, such as one of its private files, or a document of a provider of the application. A document of
+    // another application's provider is read with the permission that the picker granted for it.
+    static boolean chosenByAnotherApplication(Context context, Uri uri) {
+        if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) return false;
+        String authority = uri.getAuthority();
+        if (authority == null || authority.isEmpty()) return false;
+        ProviderInfo provider;
+        try { provider = context.getPackageManager().resolveContentProvider(authority, 0); }
+        catch (RuntimeException exception) { return false; }
+        return provider == null || !context.getPackageName().equals(provider.packageName);
     }
 
     private static String displayName(Context context, Uri uri) {
@@ -381,6 +396,15 @@ public final class NeoAstraWebHost {
         webView.destroy();
     }
 
+    // The origin of the document that the main frame committed last, which the WebView reads on threads of its own.
+    private volatile String documentOrigin;
+
+    static String originOf(Uri uri) {
+        String scheme = uri.getScheme(), host = uri.getHost();
+        if (scheme == null || host == null) return "";
+        return scheme.toLowerCase(java.util.Locale.ROOT) + "://" + host.toLowerCase(java.util.Locale.ROOT) + (uri.getPort() == -1 ? "" : ":" + uri.getPort());
+    }
+
     private boolean projected(Uri uri) {
         String host = uri.getHost();
         return "https".equals(uri.getScheme()) && host != null && host.endsWith(projectedSuffix);
@@ -397,7 +421,14 @@ public final class NeoAstraWebHost {
 
         @Override public WebResourceResponse shouldInterceptRequest(WebView source, WebResourceRequest request) {
             Uri uri = request.getUrl();
-            if (!projected(uri)) return null;
+            if (!projected(uri)) {
+                // Android does not ask shouldOverrideUrlLoading before a main-frame POST, the submission of a form, so the navigation
+                // policy never hears of it, and its body could not be sent again after a later decision. A form that posts to the
+                // origin of its own document goes on; one that posts to another origin is refused.
+                if (request.isForMainFrame() && !"GET".equalsIgnoreCase(request.getMethod()) && !originOf(uri).equals(documentOrigin))
+                    return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", new HashMap<>(), new ByteArrayInputStream(new byte[0]));
+                return null;
+            }
             long current = view;
             StringBuilder headers = new StringBuilder();
             for (Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) headers.append(header.getKey()).append(": ").append(header.getValue()).append("\r\n");
@@ -431,6 +462,7 @@ public final class NeoAstraWebHost {
 
         @Override public void onPageStarted(WebView source, String url, Bitmap favicon) {
             reply = null;
+            documentOrigin = url == null ? null : originOf(Uri.parse(url));
             if (!keepsHistory) source.clearHistory();
             long current = view;
             if (current != 0) nativeEvent(current, EVENT_STARTED, url, null, 0);
