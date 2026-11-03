@@ -8,3 +8,5 @@
 *.json text eol=lf
 *.svg text eol=lf
 *.ts text eol=lf
+# The StoreKit bridge is a CI build that ships byte for byte.
+src/NeoAstra.Purchases/xcframework/** -text
