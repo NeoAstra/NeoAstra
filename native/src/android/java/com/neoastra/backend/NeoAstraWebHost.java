@@ -8,7 +8,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
+import android.content.ContextWrapper;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Rect;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.PixelCopy;
+import android.view.Window;
 import android.net.Uri;
 import android.os.Message;
 import android.provider.MediaStore;
@@ -34,6 +42,7 @@ import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -81,6 +90,7 @@ public final class NeoAstraWebHost {
     public static native Response nativeResource(long view, String url, String method, String headers, boolean isMainFrame);
     public static native void nativeEvent(long view, int kind, String url, String text, int value);
     public static native void nativeEvaluated(long token, String json);
+    public static native void nativeCaptured(long token, byte[] image, String failure);
     /** Asks the host about a navigation and answers whether the WebView must not load it now. */
     public static native boolean nativeNavigation(long view, String url, boolean isMainFrame, boolean hasGesture);
     public static native void nativeNewWindow(long view, String url, boolean hasGesture);
@@ -102,6 +112,8 @@ public final class NeoAstraWebHost {
     private volatile boolean engineDialogs = true;
     private boolean keepsHistory = true;
     private boolean debugging;
+    // The pixels of the view for one CSS pixel: the display density times the zoom of the page, which the WebView reports.
+    private volatile float pageScale;
     private static final NeoAstraDebuggingSwitch DEBUGGING = new NeoAstraDebuggingSwitch(WebView::setWebContentsDebuggingEnabled);
     private final NeoAstraKeyboard keyboard;
 
@@ -129,6 +141,7 @@ public final class NeoAstraWebHost {
         this.view = nativeView;
         this.projectedSuffix = suffix;
         webView = new WebView(parent.getContext());
+        pageScale = webView.getResources().getDisplayMetrics().density;
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setAllowFileAccess(false);
@@ -183,6 +196,62 @@ public final class NeoAstraWebHost {
     public boolean canGoForward() { return webView.canGoForward(); }
 
     public void evaluate(String script, long token) { webView.evaluateJavascript(script, value -> nativeEvaluated(token, value)); }
+
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final java.util.concurrent.Executor ENCODER = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    /**
+     * Captures what the view shows, or the part of it that the rectangle in CSS pixels gives, as PNG or as JPEG (format 1), and
+     * hands the bytes or the reason of a failure to nativeCaptured on the main thread. PixelCopy reads the window of the activity
+     * from Android 8 on, as the screen shows it; before, or when the view is in another window such as a dialog, the WebView draws
+     * itself into the bitmap. Returns false, and captures nothing, when the view has no size or the rectangle lies outside of it.
+     */
+    public boolean capture(int format, int quality, int x, int y, int width, int height, long token) {
+        int[] region = NeoAstraCaptureRegion.of(webView.getWidth(), webView.getHeight(), pageScale, x, y, width, height);
+        if (region == null) return false;
+        Rect area = new Rect(region[0], region[1], region[2], region[3]);
+        Bitmap bitmap = Bitmap.createBitmap(area.width(), area.height(), Bitmap.Config.ARGB_8888);
+        Window window = window(webView.getContext());
+        if (window != null && window.peekDecorView() != webView.getRootView()) window = null;
+        if (Build.VERSION.SDK_INT >= 26 && window != null && webView.isAttachedToWindow()) {
+            int[] location = new int[2];
+            webView.getLocationInWindow(location);
+            Rect source = new Rect(area);
+            source.offset(location[0], location[1]);
+            PixelCopy.request(window, source, bitmap, result -> {
+                if (result == PixelCopy.SUCCESS) encode(bitmap, format, quality, token);
+                else { bitmap.recycle(); captured(token, null, "PixelCopy could not read the window (" + result + ")"); }
+            }, MAIN);
+        } else {
+            Canvas canvas = new Canvas(bitmap);
+            canvas.translate(-area.left, -area.top);
+            webView.draw(canvas);
+            encode(bitmap, format, quality, token);
+        }
+        return true;
+    }
+
+    // The encoding runs off the main thread; its result comes back to the main thread, where the native side completes it.
+    private static void encode(Bitmap bitmap, int format, int quality, long token) {
+        ENCODER.execute(() -> {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            boolean encoded = bitmap.compress(format == 1 ? Bitmap.CompressFormat.JPEG : Bitmap.CompressFormat.PNG, quality, bytes);
+            bitmap.recycle();
+            captured(token, encoded ? bytes.toByteArray() : null, encoded ? null : "The capture could not be encoded");
+        });
+    }
+
+    private static void captured(long token, byte[] image, String failure) {
+        MAIN.post(() -> nativeCaptured(token, image, failure));
+    }
+
+    private static Window window(Context context) {
+        while (context instanceof ContextWrapper) {
+            if (context instanceof Activity) return ((Activity) context).getWindow();
+            context = ((ContextWrapper) context).getBaseContext();
+        }
+        return null;
+    }
 
     /** Adds a script that runs at document start in the frames whose origin matches a rule, and returns its identifier. */
     public int addScript(String script, String[] rules) {
@@ -480,6 +549,10 @@ public final class NeoAstraWebHost {
             if (!keepsHistory) source.clearHistory();
             long current = view;
             if (current != 0) nativeEvent(current, EVENT_STARTED, url, null, 0);
+        }
+
+        @Override public void onScaleChanged(WebView source, float oldScale, float newScale) {
+            pageScale = newScale;
         }
 
         @Override public void onPageFinished(WebView source, String url) {

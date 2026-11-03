@@ -1354,6 +1354,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     switch(capability){
         case NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START:
         case NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES:
+        case NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT:
         case NEOASTRA_CAPABILITY_MESSAGE_ORIGIN:
             info->support=NEOASTRA_SUPPORT_NATIVE;break;
         case NEOASTRA_CAPABILITY_CUSTOM_SCHEME:

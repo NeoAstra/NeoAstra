@@ -16,6 +16,13 @@ public sealed class AndroidJavaTests
         StringAssert.Contains(output, "NeoAstraDebuggingSwitch: ok");
     }
 
+    [TestMethod]
+    public async Task CaptureRegion_ConvertsCssPixelsWithTheScaleOfThePageAndCutsToTheView()
+    {
+        var output = await RunJavaCheckAsync("NeoAstraCaptureRegion.java", "NeoAstraCaptureRegionCheck");
+        StringAssert.Contains(output, "NeoAstraCaptureRegion: ok");
+    }
+
     // Compiles a class of the backend with its check from src/NeoAstra.Tests/Java and runs the check, whose failure exits with 1.
     private static async Task<string> RunJavaCheckAsync(string source, string check)
     {
