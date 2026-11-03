@@ -896,6 +896,8 @@ public sealed class ToolingTests
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "tcp:5173", "tcp:5173" }, starts[5].Command.Arguments.Skip(1).ToArray());
         StringAssert.Contains(starts[6].Command.Arguments[^1], "run-as dev.neoastra.fixture");
         StringAssert.Contains(starts[6].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        // An emulator has no physical keys, and monkey refuses to run with its default share of system keys there.
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "shell", "monkey", "--pct-syskeys", "0", "-p", "dev.neoastra.fixture", "-c", "android.intent.category.LAUNCHER", "1" }, starts[8].Command.Arguments.Skip(1).ToArray());
         Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);
         StringAssert.Contains(starts[10].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[11].Command.Arguments.Skip(1).ToArray());
