@@ -377,11 +377,23 @@ void stop_webkit_keyboard_avoidance(WKWebView* webview) {
 }  // namespace
 
 @implementation NeoURLSchemeHandler
+// The handler holds a reference to its environment, and a task holds another while the provider runs: a provider that disposes
+// the view and its environment, and then fails, still finds the environment to log through.
+@synthesize nativeEnvironment = _nativeEnvironment;
+- (void)setNativeEnvironment:(neoastra_environment_t*)environment {
+    if (environment == _nativeEnvironment) return;
+    if (environment && !environment->retain()) environment = nullptr;
+    auto* previous = _nativeEnvironment;
+    _nativeEnvironment = environment;
+    if (previous) previous->release();
+}
+- (void)dealloc { if (_nativeEnvironment) _nativeEnvironment->release(); }
 - (void)webView:(WKWebView*)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
     (void)webView;
     auto* environment = self.nativeEnvironment;
+    neo_retain_guard environment_owner(environment);
     const auto* scheme = self.registration;
-    if (!environment || !scheme || !scheme->provider) { fail_scheme_task(task, NEOASTRA_ERROR_DISPOSED, @"The custom-scheme provider is unavailable."); return; }
+    if (!environment_owner || !scheme || !scheme->provider) { fail_scheme_task(task, NEOASTRA_ERROR_DISPOSED, @"The custom-scheme provider is unavailable."); return; }
     neoastra_resource_response_t response{};
     response.size = sizeof(response);
     response.version = 1;
