@@ -56,10 +56,12 @@ public final class NeoAstraLocation implements NeoAstraServices.Service {
     }
 
     // Asks for the location permissions that the application declares: both let the user choose a precise or an approximate
-    // location from Android 12, and only the coarse one asks for an approximate location.
+    // location from Android 12, and only the coarse one asks for an approximate location. It asks whenever neither is granted:
+    // a grant "only this time" ends with the session, and the user may be asked again then; Android itself answers at once,
+    // without a question, once the user refused for good.
     private static void authorize(Context context, LocationManager manager, JSONObject output) throws Exception {
         boolean fine = declared(context, FINE), coarse = declared(context, COARSE);
-        if ((fine || coarse) && !granted(context, FINE) && !granted(context, COARSE) && !context.getSharedPreferences(NAME, Context.MODE_PRIVATE).getBoolean("requested", false)) {
+        if ((fine || coarse) && !granted(context, FINE) && !granted(context, COARSE)) {
             context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit().putBoolean("requested", true).commit();
             List<String> permissions = new ArrayList<>();
             if (fine) permissions.add(FINE);
