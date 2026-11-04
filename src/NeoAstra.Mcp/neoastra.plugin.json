@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "neoastra.mcp",
+  "version": "1.0.0",
+  "minimumNeoAstraVersion": "0.1.0",
+  "adapterAbi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "entryPoint": "NeoAstra.Mcp.NeoMcpPlugin",
+  "discovery": "explicit-static-factory",
+  "rendererAuthority": "none-by-default",
+  "commands": [],
+  "events": [],
+  "permissions": []
+}
