@@ -32,6 +32,10 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     private readonly Task _accepting;
     private readonly Task _acceptingNetwork;
     private int _nextApplication;
+    // The connections of applications that did not prove the token yet: a few at a time, so that a machine on the local network
+    // that opens many cannot tie up the relay.
+    private int _handshaking;
+    internal const int MaximumHandshakes = 16;
     private int _nextCall;
     private int _disposed;
 
@@ -188,12 +192,14 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         if (!isApplication && (applicationsOnly || path != NeoMcpWire.AgentPath)) { Reject(context, 404); return; }
         if (!context.Request.IsWebSocketRequest) { Reject(context, 400); return; }
         if (!isApplication && !IsAuthorized(context.Request.Headers["Authorization"])) { Reject(context, 401); return; }
+        var handshake = isApplication ? new Handshake(this) : null;
+        if (handshake is { Admitted: false }) { Reject(context, 503); return; }
         WebSocket socket;
         try { socket = (await context.AcceptWebSocketAsync(null).ConfigureAwait(false)).WebSocket; }
-        catch (Exception exception) when (exception is WebSocketException or HttpListenerException or ObjectDisposedException) { return; }
+        catch (Exception exception) when (exception is WebSocketException or HttpListenerException or ObjectDisposedException) { handshake?.End(); return; }
         try
         {
-            if (isApplication) await ServeApplicationAsync(socket).ConfigureAwait(false);
+            if (handshake is not null) await ServeApplicationAsync(socket, handshake).ConfigureAwait(false);
             else await ServeAgentAsync(socket).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is WebSocketException or FormatException or OperationCanceledException or ObjectDisposedException)
@@ -202,8 +208,30 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         }
         finally
         {
+            handshake?.End();
             await CloseAsync(socket).ConfigureAwait(false);
             socket.Dispose();
+        }
+    }
+
+    // One place among the handshakes that run, given back once, when the application proved the token or went away.
+    private sealed class Handshake
+    {
+        private readonly NeoMcpRelay _relay;
+        private int _ended;
+
+        internal Handshake(NeoMcpRelay relay)
+        {
+            _relay = relay;
+            Admitted = Interlocked.Increment(ref relay._handshaking) <= MaximumHandshakes;
+            if (!Admitted) End();
+        }
+
+        internal bool Admitted { get; }
+
+        internal void End()
+        {
+            if (Interlocked.Exchange(ref _ended, 1) == 0) Interlocked.Decrement(ref _relay._handshaking);
         }
     }
 
@@ -222,27 +250,44 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         catch (Exception exception) when (exception is HttpListenerException or ObjectDisposedException or InvalidOperationException) { /* the client is gone */ }
     }
 
-    private async Task ServeApplicationAsync(WebSocket socket)
+    private async Task ServeApplicationAsync(WebSocket socket, Handshake handshake)
     {
-        NeoMcpMessage hello;
         var challenge = NeoMcpWire.NewNonce();
+        NeoMcpChannel channel;
+        NeoMcpMessage description;
         using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
         {
+            // Until the application proved the token, it gets little time and room: a hello is small.
             waiting.CancelAfter(HelloTimeout);
             await socket.SendAsync(NeoMcpWire.Challenge(challenge), WebSocketMessageType.Text, true, waiting.Token).ConfigureAwait(false);
-            var first = await ReceiveAsync(socket, waiting.Token).ConfigureAwait(false);
+            var first = await ReceiveAsync(socket, waiting.Token, WebSocketMessageType.Text, NeoMcpWire.MaximumHandshakeMessageSize).ConfigureAwait(false);
             if (first is null) return;
-            hello = NeoMcpWire.Parse(first.Value);
+            var hello = NeoMcpWire.Parse(first.Value);
+            if (hello.Kind != NeoMcpMessageKind.Hello) throw new FormatException("An application says hello first.");
+            if (hello.ProtocolVersion != NeoMcpWire.ProtocolVersion) throw new FormatException($"The application speaks protocol {hello.ProtocolVersion}; this tool speaks {NeoMcpWire.ProtocolVersion}.");
+            // An application that does not prove the token of the session is not listed, and the relay proves nothing to it.
+            if (!NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, challenge, hello.Proof)) throw new FormatException("The application did not prove the token of the session.");
+            await socket.SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(Token, NeoMcpWire.RelayRole, hello.Nonce!)), WebSocketMessageType.Text, true, waiting.Token).ConfigureAwait(false);
+            // Everything after the welcome is sealed with the keys of the session, in both directions; the first sealed message of
+            // the application says who it is and which tools it offers.
+            channel = NeoMcpChannel.Create(Token, challenge, hello.Nonce!, isRelay: true);
+            try
+            {
+                var second = await ReceiveAsync(socket, waiting.Token, WebSocketMessageType.Binary).ConfigureAwait(false);
+                if (second is null) { channel.Dispose(); return; }
+                description = NeoMcpWire.Parse(channel.Open(second.Value.Span));
+                if (description.Kind != NeoMcpMessageKind.Describe) throw new FormatException("An application describes itself after the welcome.");
+            }
+            catch
+            {
+                channel.Dispose();
+                throw;
+            }
         }
-        if (hello.Kind != NeoMcpMessageKind.Hello) throw new FormatException("An application says hello first.");
-        if (hello.ProtocolVersion != NeoMcpWire.ProtocolVersion) throw new FormatException($"The application speaks protocol {hello.ProtocolVersion}; this tool speaks {NeoMcpWire.ProtocolVersion}.");
-        // An application that does not prove the token of the session is not listed, and the relay proves nothing to it.
-        if (!NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, challenge, hello.Proof)) throw new FormatException("The application did not prove the token of the session.");
-        await socket.SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(Token, NeoMcpWire.RelayRole, hello.Nonce!)), WebSocketMessageType.Text, true, _stop.Token).ConfigureAwait(false);
 
+        handshake.End();
         var id = Interlocked.Increment(ref _nextApplication).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        // Everything after the welcome is sealed with the keys of the session, in both directions.
-        var connection = new ApplicationConnection(socket, new(id, hello.Application!, hello.Tools!), NeoMcpChannel.Create(Token, challenge, hello.Nonce!, isRelay: true));
+        var connection = new ApplicationConnection(socket, new(id, description.Application!, description.Tools!), channel);
         _applications[id] = connection;
         await BroadcastApplicationsAsync().ConfigureAwait(false);
         try
@@ -267,7 +312,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
                         if (connection.Streams.TryRemove(parsed.Stream!, out var closed)) closed.Dispose();
                         break;
                     default:
-                        throw new FormatException("An application sends only results and the streams of its tunnel after its hello.");
+                        throw new FormatException("An application sends only results and the streams of its tunnel after it described itself.");
                 }
             }
         }
@@ -469,7 +514,11 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         => ReceiveAsync(socket, cancellationToken, WebSocketMessageType.Text);
 
     // A whole message of the given type, or null when the other side closed the connection.
-    internal static async Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken, WebSocketMessageType type)
+    internal static Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken, WebSocketMessageType type)
+        => ReceiveAsync(socket, cancellationToken, type, NeoMcpWire.MaximumMessageSize);
+
+    // A whole message of the given type and at most the given size, or null when the other side closed the connection.
+    internal static async Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken, WebSocketMessageType type, int maximumSize)
     {
         var buffer = new ArrayBufferWriter<byte>(4096);
         while (true)
@@ -477,7 +526,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
             var result = await socket.ReceiveAsync(buffer.GetMemory(16384), cancellationToken).ConfigureAwait(false);
             if (result.MessageType == WebSocketMessageType.Close) return null;
             buffer.Advance(result.Count);
-            if (buffer.WrittenCount > NeoMcpWire.MaximumMessageSize) throw new FormatException("The message is larger than the relay accepts.");
+            if (buffer.WrittenCount > maximumSize) throw new FormatException("The message is larger than the relay accepts.");
             if (result.EndOfMessage)
             {
                 if (result.MessageType != type) throw new FormatException($"The messages here are {type} messages.");

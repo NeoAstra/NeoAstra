@@ -36,7 +36,7 @@ public sealed class McpRelayTests
             var challenge = App.NeoMcpWire.Parse((await NeoMcpRelay.ReceiveAsync(application, CancellationToken.None))!.Value);
             Assert.AreEqual(App.NeoMcpMessageKind.Challenge, challenge.Kind);
             var proof = App.NeoMcpWire.Proof("wrong-token-0123456789", App.NeoMcpWire.ApplicationRole, challenge.Nonce!);
-            await application.SendAsync(App.NeoMcpWire.Hello(new("Intruder", "ios", "device", 1), [], proof, App.NeoMcpWire.NewNonce()), WebSocketMessageType.Text, true, CancellationToken.None);
+            await application.SendAsync(App.NeoMcpWire.Hello(proof, App.NeoMcpWire.NewNonce()), WebSocketMessageType.Text, true, CancellationToken.None);
             Assert.IsNull(await NeoMcpRelay.ReceiveAsync(application, CancellationToken.None));
             Assert.AreEqual(0, relay.Applications.Count);
         }
@@ -45,6 +45,44 @@ public sealed class McpRelayTests
         agent.Options.SetRequestHeader("Authorization", "Bearer " + relay.Token);
         await agent.ConnectAsync(new Uri(relay.Url, "/neoastra/mcp/agent"), CancellationToken.None);
         Assert.AreEqual(WebSocketState.Open, agent.State);
+    }
+
+    [TestMethod]
+    public async Task Relay_GivesApplicationsThatDidNotProveTheTokenLittleRoom()
+    {
+        await using var relay = NeoMcpRelay.Start();
+        var applicationUrl = new Uri(relay.Url, "/neoastra/mcp");
+
+        // A hello larger than any hello ends the connection before the relay reads it all.
+        using (var large = new ClientWebSocket())
+        {
+            await large.ConnectAsync(applicationUrl, CancellationToken.None);
+            Assert.IsNotNull(await NeoMcpRelay.ReceiveAsync(large, CancellationToken.None));
+            await large.SendAsync(new byte[App.NeoMcpWire.MaximumHandshakeMessageSize + 1], WebSocketMessageType.Text, true, CancellationToken.None);
+            Assert.IsNull(await NeoMcpRelay.ReceiveAsync(large, CancellationToken.None));
+        }
+
+        // Only a few connections may wait in the handshake at once; the next one is refused until one of them ends.
+        var waiting = new List<ClientWebSocket>();
+        try
+        {
+            for (var index = 0; index < NeoMcpRelay.MaximumHandshakes; index++)
+            {
+                var socket = new ClientWebSocket();
+                waiting.Add(socket);
+                await socket.ConnectAsync(applicationUrl, CancellationToken.None);
+                Assert.IsNotNull(await NeoMcpRelay.ReceiveAsync(socket, CancellationToken.None));
+            }
+            await AssertRefusedAsync(applicationUrl, null);
+
+            waiting[0].Abort();
+            await using var phone = Connect(relay, new FakeTools(), new("Sample", "ios", "iPhone 17e", 7));
+            await WaitUntilAsync(() => relay.Applications.Count == 1);
+        }
+        finally
+        {
+            foreach (var socket in waiting) socket.Dispose();
+        }
     }
 
     [TestMethod]

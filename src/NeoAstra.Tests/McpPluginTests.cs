@@ -118,7 +118,10 @@ public sealed class McpPluginTests
     public void Wire_ReadsWhatItWritesAndRefusesOtherMessages()
     {
         using var schema = JsonDocument.Parse("""{"type":"object","properties":{"uid":{"type":"string"}}}""");
-        var hello = NeoMcpWire.Parse(NeoMcpWire.Hello(Application, [new("click", "Clicks", schema.RootElement, false), new("take_snapshot", "Snapshot", schema.RootElement, true)], "proof-of-the-app", "nonce-of-the-app"));
+        var hello = NeoMcpWire.Parse(NeoMcpWire.Hello("proof-of-the-app", "nonce-of-the-app"));
+        var description = NeoMcpWire.Parse(NeoMcpWire.Describe(Application, [new("click", "Clicks", schema.RootElement, false), new("take_snapshot", "Snapshot", schema.RootElement, true)]));
+        Assert.AreEqual(NeoMcpMessageKind.Describe, description.Kind);
+        Assert.IsNull(hello.Application);
         Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
         Assert.AreEqual("proof-of-the-app", hello.Proof);
         Assert.AreEqual("nonce-of-the-app", hello.Nonce);
@@ -136,12 +139,12 @@ public sealed class McpPluginTests
         Assert.IsFalse(NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, nonce, null));
         Assert.IsFalse(proof.Contains(Token, StringComparison.Ordinal));
         Assert.AreEqual(NeoMcpWire.ProtocolVersion, hello.ProtocolVersion);
-        Assert.AreEqual(Application, hello.Application);
-        Assert.AreEqual(2, hello.Tools!.Count);
-        Assert.AreEqual("click", hello.Tools[0].Name);
-        Assert.IsFalse(hello.Tools[0].IsReadOnly);
-        Assert.IsTrue(hello.Tools[1].IsReadOnly);
-        Assert.AreEqual("string", hello.Tools[0].InputSchema.GetProperty("properties").GetProperty("uid").GetProperty("type").GetString());
+        Assert.AreEqual(Application, description.Application);
+        Assert.AreEqual(2, description.Tools!.Count);
+        Assert.AreEqual("click", description.Tools[0].Name);
+        Assert.IsFalse(description.Tools[0].IsReadOnly);
+        Assert.IsTrue(description.Tools[1].IsReadOnly);
+        Assert.AreEqual("string", description.Tools[0].InputSchema.GetProperty("properties").GetProperty("uid").GetProperty("type").GetString());
 
         using var arguments = JsonDocument.Parse("""{"uid":"1_2"}""");
         var call = NeoMcpWire.Parse(NeoMcpWire.Call("7", "click", arguments.RootElement));
@@ -192,7 +195,7 @@ public sealed class McpPluginTests
         Assert.IsNull(connection.Authorization);
         Assert.AreEqual(NeoMcpWire.Path, connection.Path);
         var hello = await connection.HandshakeAsync(Token);
-        Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
+        Assert.AreEqual(NeoMcpMessageKind.Describe, hello.Kind);
         Assert.AreEqual(Application, hello.Application);
         CollectionAssert.AreEqual(new[] { "take_screenshot", "wait_for", "fail" }, hello.Tools!.Select(static tool => tool.Name).ToArray());
 
@@ -254,7 +257,7 @@ public sealed class McpPluginTests
 
         // The development session restarted its relay: the application says hello again by itself.
         var second = await relay.AcceptAsync();
-        Assert.AreEqual(NeoMcpMessageKind.Hello, (await second.HandshakeAsync(Token)).Kind);
+        Assert.AreEqual(NeoMcpMessageKind.Describe, (await second.HandshakeAsync(Token)).Kind);
 
         await connector.DisposeAsync();
         Assert.IsTrue(await second.WaitClosedAsync());
@@ -271,7 +274,7 @@ public sealed class McpPluginTests
         await Task.Delay(400);
         await using var relay = TestRelay.Start(port);
         var connection = await relay.AcceptAsync();
-        Assert.AreEqual(NeoMcpMessageKind.Hello, (await connection.HandshakeAsync(Token)).Kind);
+        Assert.AreEqual(NeoMcpMessageKind.Describe, (await connection.HandshakeAsync(Token)).Kind);
     }
 
     [TestMethod]
@@ -531,7 +534,9 @@ public sealed class McpPluginTests
 
         internal NeoMcpChannel Channel => _channel ?? throw new InvalidOperationException("The handshake is not done.");
 
-        // The handshake of a relay that knows the token: the application must prove it for the challenge before it is welcomed.
+        // The handshake of a relay that knows the token: the application must prove it for the challenge before it is welcomed,
+        // and then describes itself in its first sealed message, which this returns. A relay that does not know the token
+        // cannot open that message: the application is not described to it.
         internal async Task<NeoMcpMessage> HandshakeAsync(string token, string? relayToken = null)
         {
             var challenge = NeoMcpWire.NewNonce();
@@ -541,7 +546,11 @@ public sealed class McpPluginTests
             Assert.IsTrue(NeoMcpWire.IsValidProof(token, NeoMcpWire.ApplicationRole, challenge, hello.Proof), "The application did not prove the token.");
             await SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(relayToken ?? token, NeoMcpWire.RelayRole, hello.Nonce!)));
             _channel = NeoMcpChannel.Create(relayToken ?? token, challenge, hello.Nonce!, isRelay: true);
-            return hello;
+            Assert.IsNull(hello.Application, "The hello says nothing about the application before the relay proved the token.");
+            if (relayToken is not null && relayToken != token) return hello;
+            var description = await ReceiveAsync();
+            Assert.AreEqual(NeoMcpMessageKind.Describe, description.Kind);
+            return description;
         }
 
         internal async Task<NeoMcpMessage> ReceiveAsync()

@@ -115,11 +115,13 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             if (challenge is not { Kind: NeoMcpMessageKind.Challenge, Nonce: { } relayNonce }) throw new FormatException("The relay did not send its challenge.");
             var nonce = NeoMcpWire.NewNonce();
             var proof = NeoMcpWire.Proof(_endpoint.Token, NeoMcpWire.ApplicationRole, relayNonce);
-            await link.SendAsync(NeoMcpWire.Hello(_application, _host.Tools, proof, nonce), connection.Token).ConfigureAwait(false);
+            await link.SendAsync(NeoMcpWire.Hello(proof, nonce), connection.Token).ConfigureAwait(false);
             var welcome = await link.ReceiveAsync(connection.Token).ConfigureAwait(false) is { } second ? NeoMcpWire.Parse(second) : null;
             if (welcome is not { Kind: NeoMcpMessageKind.Welcome } || !NeoMcpWire.IsValidProof(_endpoint.Token, NeoMcpWire.RelayRole, nonce, welcome.Proof))
                 throw new FormatException("The relay did not prove the token of the session.");
             link.Seal(NeoMcpChannel.Create(_endpoint.Token, relayNonce, nonce, isRelay: false));
+            // Who the application is and what it offers goes sealed, so that nobody on the way changes what the agent sees.
+            await link.SendAsync(NeoMcpWire.Describe(_application, _host.Tools), connection.Token).ConfigureAwait(false);
             _tunnel?.Attach(link.SendAsync);
             while (true)
             {

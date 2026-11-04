@@ -36,11 +36,14 @@ internal enum NeoMcpMessageKind
     /// <summary>The first message of the relay to an application: a nonce that the application proves the token of the session with.</summary>
     Challenge,
 
-    /// <summary>The first message of an application: who it is, the tools it offers, its proof, and a nonce of its own.</summary>
+    /// <summary>The first message of an application: its protocol, its proof, and a nonce of its own.</summary>
     Hello,
 
     /// <summary>The answer of the relay to a hello: its proof of the token for the nonce of the application.</summary>
     Welcome,
+
+    /// <summary>The first sealed message of an application: who it is and the tools it offers.</summary>
+    Describe,
 
     /// <summary>The relay asks the application to run a tool.</summary>
     Call,
@@ -109,8 +112,10 @@ internal sealed class NeoMcpMessage
 /// application connects to <see cref="Path"/>; the relay sends a <c>challenge</c>, the application answers with its
 /// <c>hello</c>, which proves the token of the development session for the nonce of the relay and carries a nonce of its own,
 /// and the relay proves the token in turn in its <c>welcome</c>. The token itself never goes over the connection, which on a
-/// phone crosses the local network. The application then answers each <c>call</c> with a <c>result</c> of the same identifier;
-/// a <c>cancel</c> tells it that the relay no longer waits. Calls may overlap.
+/// phone crosses the local network. From then on every message is sealed: the application first says who it is and which
+/// tools it offers in its <c>describe</c>, so that nobody on the way can change what the agent sees, then answers each
+/// <c>call</c> with a <c>result</c> of the same identifier; a <c>cancel</c> tells it that the relay no longer waits. Calls may
+/// overlap.
 /// </summary>
 /// <remarks>
 /// The MCP server of an agent connects to <see cref="AgentPath"/> with the same token. The relay tells it the connected
@@ -120,7 +125,7 @@ internal sealed class NeoMcpMessage
 internal static class NeoMcpWire
 {
     /// <summary>The version of these messages, which an application announces in its <c>hello</c>.</summary>
-    internal const int ProtocolVersion = 1;
+    internal const int ProtocolVersion = 2;
 
     /// <summary>The path of the relay that applications connect to.</summary>
     internal const string Path = "/neoastra/mcp";
@@ -130,6 +135,9 @@ internal static class NeoMcpWire
 
     /// <summary>The largest message accepted from the other side, which a screenshot of a large display stays far below.</summary>
     internal const int MaximumMessageSize = 64 * 1024 * 1024;
+
+    /// <summary>The largest message before the other side proved the token: a challenge, a hello, or a welcome is far smaller.</summary>
+    internal const int MaximumHandshakeMessageSize = 4 * 1024;
 
     /// <summary>The role of the application in a proof.</summary>
     internal const string ApplicationRole = "application";
@@ -182,10 +190,8 @@ internal static class NeoMcpWire
         });
     }
 
-    internal static byte[] Hello(NeoMcpApplicationInfo application, IReadOnlyList<NeoMcpToolInfo> tools, string proof, string nonce)
+    internal static byte[] Hello(string proof, string nonce)
     {
-        ArgumentNullException.ThrowIfNull(application);
-        ArgumentNullException.ThrowIfNull(tools);
         ArgumentException.ThrowIfNullOrEmpty(proof);
         ArgumentException.ThrowIfNullOrEmpty(nonce);
         return Write(writer =>
@@ -194,6 +200,16 @@ internal static class NeoMcpWire
             writer.WriteNumber("protocol", ProtocolVersion);
             writer.WriteString("proof", proof);
             writer.WriteString("nonce", nonce);
+        });
+    }
+
+    internal static byte[] Describe(NeoMcpApplicationInfo application, IReadOnlyList<NeoMcpToolInfo> tools)
+    {
+        ArgumentNullException.ThrowIfNull(application);
+        ArgumentNullException.ThrowIfNull(tools);
+        return Write(writer =>
+        {
+            writer.WriteString("type", "describe");
             writer.WriteString("application", application.Application);
             writer.WriteString("platform", application.Platform);
             writer.WriteString("device", application.Device);
@@ -359,6 +375,10 @@ internal static class NeoMcpWire
                     Proof = RequiredString(root, "proof"),
                     Nonce = RequiredString(root, "nonce"),
                     ProtocolVersion = root.TryGetProperty("protocol", out var protocol) && protocol.TryGetInt32(out var version) ? version : throw new FormatException("A hello names its protocol."),
+                },
+                "describe" => new NeoMcpMessage
+                {
+                    Kind = NeoMcpMessageKind.Describe,
                     Application = new(RequiredString(root, "application"), RequiredString(root, "platform"), RequiredString(root, "device"),
                         root.TryGetProperty("processId", out var process) && process.TryGetInt32(out var processId) ? processId : 0),
                     Tools = Tools(root),
@@ -411,7 +431,7 @@ internal static class NeoMcpWire
 
     private static List<NeoMcpToolInfo> Tools(JsonElement root)
     {
-        if (!root.TryGetProperty("tools", out var tools) || tools.ValueKind != JsonValueKind.Array) throw new FormatException("A hello lists its tools.");
+        if (!root.TryGetProperty("tools", out var tools) || tools.ValueKind != JsonValueKind.Array) throw new FormatException("An application lists its tools.");
         var result = new List<NeoMcpToolInfo>(tools.GetArrayLength());
         foreach (var tool in tools.EnumerateArray())
         {
