@@ -16,8 +16,14 @@ internal enum NeoDevelopmentPlatform
 /// <summary>An iOS simulator or iPhone, or an Android device or emulator, with its identifier when there is more than one.</summary>
 internal sealed record NeoMobileTarget(NeoDevelopmentPlatform Platform, string? Device)
 {
-    /// <summary>Gets whether the target is an iPhone or iPad rather than a simulator: a simulator has a UUID, a device a UDID of its own form.</summary>
-    internal bool IsPhysicalIOSDevice => Platform == NeoDevelopmentPlatform.IOS && Device is not null && !Guid.TryParse(Device, out _);
+    /// <summary>Gets whether the target is an iPhone or iPad rather than a simulator, as the launcher found it.</summary>
+    internal bool IsPhysical { get; init; }
+
+    /// <summary>Gets whether the target is an iPhone or iPad rather than a simulator.</summary>
+    internal bool IsPhysicalIOSDevice => Platform == NeoDevelopmentPlatform.IOS && Device is not null && IsPhysical;
+
+    /// <summary>Whether an identifier has the form of a device rather than of a simulator, which has a UUID.</summary>
+    internal static bool LooksLikeDevice(string device) => !Guid.TryParse(device, out _);
 
     internal static NeoDevelopmentPlatform ParsePlatform(string? value) => value?.ToLowerInvariant() switch
     {
@@ -140,6 +146,42 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
             if (exit != 0) throw new NeoToolException("mobile_properties", $"MSBuild could not evaluate the project (exit code {exit}).");
         }
         return ReferencesMcp(string.Join('\n', output));
+    }
+
+    /// <summary>Finds whether the device of an iOS target is an iPhone or iPad: one that the simulators do not know, by its identifier or its name.</summary>
+    /// <remarks>Without the list of the simulators, an identifier that is not a UUID is taken as a device.</remarks>
+    internal async Task<NeoMobileTarget> ResolveIOSDeviceAsync(NeoResolvedProject project, NeoMobileTarget target, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
+    {
+        if (target.Platform != NeoDevelopmentPlatform.IOS || target.Device is not { } device) return target;
+        var output = new List<string>();
+        int exit;
+        await using (var process = processFactory.Start(new("simulators", new(["xcrun", "simctl", "list", "devices", "-j"]), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => { if (!error) lock (output) output.Add(line); })))
+        {
+            exit = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        var simulator = exit == 0 ? IsSimulator(string.Join('\n', output), device) : null;
+        return target with { IsPhysical = !(simulator ?? !NeoMobileTarget.LooksLikeDevice(device)) };
+    }
+
+    // Whether the list of the simulators has the device, by its identifier or its name; null when the list cannot be read.
+    internal static bool? IsSimulator(string output, string device)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            if (!document.RootElement.TryGetProperty("devices", out var runtimes)) return null;
+            foreach (var runtime in runtimes.EnumerateObject())
+                foreach (var simulator in runtime.Value.EnumerateArray())
+                    if (Matches(simulator, "udid") || Matches(simulator, "name")) return true;
+            return false;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        bool Matches(JsonElement simulator, string property)
+            => simulator.TryGetProperty(property, out var value) && string.Equals(value.GetString(), device, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool ReferencesMcp(string output)

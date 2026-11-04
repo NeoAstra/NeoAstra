@@ -105,10 +105,15 @@ UDID of a connected iPhone (as `xcrun devicectl list devices` shows it) works di
   of the server. An application without the plugin loads the assets of its build instead, and a change of the frontend needs a
   new session.
 - The relay listens on the private IPv4 address of the machine in the local network too, where it accepts applications only;
-  the iPhone and the machine are on the same network. iOS asks the user once whether the application may find devices on the
-  local network: the package adds the `NSLocalNetworkUsageDescription` that the question shows to the `Info.plist` of an iOS
-  application (`NeoAstraMcpLocalNetworkUsage=false` leaves it out), and the application connects a moment after the user
+  the iPhone and the machine are on the same network. The tool takes the address of the network with a gateway;
+  `--mcp-address <IPv4>` gives another one, such as when a VPN is up. Windows lets only an administrator listen on such an
+  address: the relay then listens on the loopback interface alone, and the session says that the device cannot reach it.
+- iOS asks the user once whether the application may find devices on the local network: the package adds the
+  `NSLocalNetworkUsageDescription` that the question shows to the `Info.plist` of an iOS application built for a device, not
+  for the simulator (`NeoAstraMcpLocalNetworkUsage=false` leaves it out), and the application connects a moment after the user
   allowed it.
+- `--device` takes the UDID of an iPhone, or the identifier or the name of a simulator: the tool asks `xcrun simctl` which of
+  the two it is.
 
 ## Security
 

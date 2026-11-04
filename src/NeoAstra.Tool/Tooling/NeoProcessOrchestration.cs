@@ -354,6 +354,16 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
     internal const string McpTokenVariable = "NEOASTRA_MCP_TOKEN";
     internal const string McpTunnelPortVariable = "NEOASTRA_MCP_TUNNEL_PORT";
 
+    /// <summary>Gets the address of this machine where an iPhone reaches the relay, or <see langword="null"/> to find it.</summary>
+    internal System.Net.IPAddress? McpNetworkAddress { get; init; }
+
+    /// <summary>Reads the address that <c>--mcp-address</c> gives.</summary>
+    /// <exception cref="NeoToolException">The value is not a private IPv4 address.</exception>
+    internal static System.Net.IPAddress ParseMcpAddress(string value)
+        => System.Net.IPAddress.TryParse(value.Trim(), out var address) && NeoMcpRelay.IsPrivateIPv4(address)
+            ? address
+            : throw new NeoToolException("mcp_address", "The address of the relay must be a private IPv4 address of this machine (10.x, 172.16-31.x, or 192.168.x).");
+
     /// <summary>Gets the folder of the discovery file through which <c>dotnet neoastra mcp</c> finds the relay of the session.</summary>
     internal string McpDiscoveryDirectory { get; init; } = NeoMcpRelayDiscovery.DefaultDirectory;
 
@@ -372,6 +382,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         };
         var launcher = mobile is null ? null : new NeoMobileLauncher(processFactory);
         var framework = launcher is null ? null : await launcher.ResolveFrameworkAsync(project, mobile!, contractEnvironment, Log, cancellationToken).ConfigureAwait(false);
+        // A device of iOS is a simulator or an iPhone, which reaches neither the server nor the relay on the loopback interface.
+        if (launcher is not null) mobile = await launcher.ResolveIOSDeviceAsync(project, mobile!, contractEnvironment, Log, cancellationToken).ConfigureAwait(false);
         var contractCommand = framework is null ? project.ContractCommand : NeoMobileLauncher.ContractCommand(project.ContractCommand, framework);
         await using (var contract = processFactory.Start(new("contract", contractCommand, project.ProjectDirectory, contractEnvironment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
         {
@@ -436,7 +448,7 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         System.Net.IPAddress? address = null;
         if (onNetwork)
         {
-            address = NeoMcpRelay.FindNetworkAddress();
+            address = McpNetworkAddress ?? NeoMcpRelay.FindNetworkAddress();
             if (address is null) log("mcp", "This machine has no private IPv4 address on a local network: the device cannot reach the relay for agents.", true);
         }
         NeoMcpRelay relay;

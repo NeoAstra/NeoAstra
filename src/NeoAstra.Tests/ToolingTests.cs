@@ -1057,20 +1057,18 @@ public sealed class ToolingTests
             : """{ "Items": { "PackageReference": [ { "Identity": "NeoAstra" } ] } }"""]);
         var readiness = new FakeReadiness(order); readiness.Release.SetResult();
         const string Device = "00008101-000A1B2C3D4E5F60";
-        Assert.IsTrue(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device).IsPhysicalIOSDevice);
-        Assert.IsFalse(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, "466D6112-4DA1-4624-A96A-38825BC7C7C4").IsPhysicalIOSDevice);
-        Assert.IsFalse(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null).IsPhysicalIOSDevice);
+        factory.Output["simulators"] = new Queue<string>(["""{ "devices": { "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [ { "udid": "466D6112-4DA1-4624-A96A-38825BC7C7C4", "name": "iPhone 17e" } ] } }"""]);
         var run = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device), CancellationToken.None);
         await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         factory.App!.Exit(4);
         Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
 
-        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:references", "start:properties", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
-        var build = factory.Starts[5];
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:simulators", "start:contract", "start:frontend", "readiness", "start:references", "start:properties", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
+        var build = factory.Starts[6];
         CollectionAssert.IsSubsetOf(new[] { "-r", "ios-arm64", "-p:CodesignKey=Apple Development" }, build.Command.Arguments.ToArray());
         Assert.AreEqual(withPlugin ? "false" : "true", build.Environment["NeoAstraBuildFrontend"]);
-        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "install", "app", "--device", Device, Path.Combine(output, "Fixture.app") }, factory.Starts[7].Command.Arguments.ToArray());
-        var app = factory.Starts[8];
+        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "install", "app", "--device", Device, Path.Combine(output, "Fixture.app") }, factory.Starts[8].Command.Arguments.ToArray());
+        var app = factory.Starts[9];
         CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "process", "launch", "--device", Device, "--terminate-existing", "--console", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
         Assert.AreEqual(app.Environment["NEOASTRA_MCP_TOKEN"], app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_TOKEN"]);
         // The address of the machine in the local network, or the loopback interface where the system lets the relay listen there
@@ -1087,6 +1085,47 @@ public sealed class ToolingTests
             Assert.IsFalse(app.Environment.ContainsKey("DEVICECTL_CHILD_NEOASTRA_DEV_URL"));
             Assert.IsFalse(app.Environment.ContainsKey("DEVICECTL_CHILD_NEOASTRA_MCP_TUNNEL_PORT"));
         }
+    }
+
+    [TestMethod]
+    public async Task DevelopmentOrchestrator_TakesTheAddressOfTheRelayThatTheUserGives()
+    {
+        // --mcp-address takes a private IPv4 address only; one that is not of this machine leaves the relay on the loopback
+        // interface, where the address that the tool would have found otherwise is not used.
+        Assert.AreEqual(System.Net.IPAddress.Parse("192.168.1.20"), NeoDevelopmentOrchestrator.ParseMcpAddress(" 192.168.1.20 "));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoDevelopmentOrchestrator.ParseMcpAddress("8.8.8.8"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoDevelopmentOrchestrator.ParseMcpAddress("fe80::1"));
+        Assert.ThrowsExactly<NeoToolException>(() => NeoDevelopmentOrchestrator.ParseMcpAddress("my-mac.local"));
+        if (NeoMcpRelay.FindNetworkAddress() is null) { Assert.Inconclusive("This machine has no private IPv4 address to compare with."); return; }
+
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var output = Path.Combine(fixture.Root, "bin"); Directory.CreateDirectory(Path.Combine(output, "Fixture.app"));
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>([
+            """{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""",
+            "",
+            $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
+        factory.Output["references"] = new Queue<string>(["""{ "Items": { "PackageReference": [ { "Identity": "NeoAstra.Mcp" } ] } }"""]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        var orchestrator = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery"), McpNetworkAddress = System.Net.IPAddress.Parse("192.168.254.254") };
+        var run = orchestrator.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, "00008101-000A1B2C3D4E5F60"), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(4);
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsTrue(new Uri(factory.Starts[^1].Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]).IsLoopback);
+    }
+
+    [TestMethod]
+    public void MobileDevelopment_TellsASimulatorFromAnIPhoneByTheListOfTheSimulators()
+    {
+        const string List = """{ "devices": { "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [ { "udid": "466D6112-4DA1-4624-A96A-38825BC7C7C4", "name": "iPhone 17e" } ] } }""";
+        Assert.IsTrue(NeoMobileLauncher.IsSimulator(List, "466d6112-4da1-4624-a96a-38825bc7c7c4"));
+        // A simulator given by its name is no iPhone, although a name has not the form of a simulator identifier.
+        Assert.IsTrue(NeoMobileLauncher.IsSimulator(List, "iPhone 17e"));
+        Assert.IsFalse(NeoMobileLauncher.IsSimulator(List, "00008101-000A1B2C3D4E5F60"));
+        Assert.IsNull(NeoMobileLauncher.IsSimulator("not json", "iPhone 17e"));
+        Assert.IsTrue(NeoMobileTarget.LooksLikeDevice("00008101-000A1B2C3D4E5F60"));
+        Assert.IsFalse(NeoMobileTarget.LooksLikeDevice("466D6112-4DA1-4624-A96A-38825BC7C7C4"));
     }
 
     [TestMethod]

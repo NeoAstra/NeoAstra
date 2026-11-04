@@ -78,7 +78,8 @@ An iOS or Android application (preview) runs against the same loopback developme
 dotnet neoastra dev --platform android            # the connected device or emulator
 dotnet neoastra dev --platform ios                # the booted simulator
 dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android serial, among several
-dotnet neoastra dev --platform ios --device <udid> # a connected iPhone, with the assets of its build
+dotnet neoastra dev --platform ios --device <udid> # a connected iPhone
+dotnet neoastra dev --platform ios --device <udid> --mcp-address 192.168.1.20  # the address where the iPhone reaches the relay
 ```
 
 After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
