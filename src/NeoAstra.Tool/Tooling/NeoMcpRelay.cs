@@ -310,7 +310,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
                         running.Add(ForwardAsync(agent, calls, parsed, call));
                         break;
                     case NeoMcpMessageKind.Cancel:
-                        if (calls.TryRemove(parsed.Id!, out var canceled)) await canceled.CancelAsync().ConfigureAwait(false);
+                        if (calls.TryRemove(parsed.Id!, out var canceled)) await NeoMcpWire.CancelQuietlyAsync(canceled).ConfigureAwait(false);
                         break;
                     default:
                         throw new FormatException("An agent sends only calls and cancellations.");

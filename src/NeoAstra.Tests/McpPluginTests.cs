@@ -298,6 +298,19 @@ public sealed class McpPluginTests
     }
 
     [TestMethod]
+    public async Task Cancellation_OfACallThatEndedMeanwhileDoesNothing()
+    {
+        // A cancellation of the relay can come in the moment the call ends and releases its source; it must not end the connection.
+        var ended = new CancellationTokenSource();
+        ended.Dispose();
+        Assert.ThrowsExactly<ObjectDisposedException>(() => ended.Cancel());
+        await NeoMcpWire.CancelQuietlyAsync(ended);
+        using var running = new CancellationTokenSource();
+        await NeoMcpWire.CancelQuietlyAsync(running);
+        Assert.IsTrue(running.IsCancellationRequested);
+    }
+
+    [TestMethod]
     public void Channel_OpensOnlyTheNextMessageThatTheOtherSideSealed()
     {
         var relayNonce = NeoMcpWire.NewNonce();

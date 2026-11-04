@@ -80,10 +80,12 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             try { await ServeAsync(cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
-            catch (Exception exception) when (exception is WebSocketException or IOException or FormatException or HttpRequestException or OperationCanceledException)
+            catch (Exception)
             {
-                // The relay is not there yet, went away, or said something this version does not read: try again later.
+                // The relay is not there yet, went away, said something this version does not read, or a connection ended in a
+                // way nobody foresaw: the application tries again later instead of staying unreachable for the session. While it
+                // stops, the socket that it aborts ends the connection with whatever exception, which ends the run.
+                if (cancellationToken.IsCancellationRequested) return;
             }
 
             try { await Task.Delay(_reconnectDelay, cancellationToken).ConfigureAwait(false); }
@@ -131,7 +133,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
                         running.Add(RunCallAsync(link, calls, parsed.Id!, parsed.Name!, parsed.Arguments, connection.Token));
                         break;
                     case NeoMcpMessageKind.Cancel:
-                        if (calls.TryRemove(parsed.Id!, out var call)) await call.CancelAsync().ConfigureAwait(false);
+                        if (calls.TryRemove(parsed.Id!, out var call)) await NeoMcpWire.CancelQuietlyAsync(call).ConfigureAwait(false);
                         break;
                     case NeoMcpMessageKind.StreamData when _tunnel is not null:
                         await _tunnel.WriteAsync(parsed.Stream!, parsed.Data!, connection.Token).ConfigureAwait(false);

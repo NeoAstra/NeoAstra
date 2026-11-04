@@ -137,6 +137,13 @@ internal static class NeoMcpWire
     /// <summary>The role of the relay in a proof.</summary>
     internal const string RelayRole = "relay";
 
+    /// <summary>Cancels a call that may have ended and released its source meanwhile: a cancellation that comes too late does nothing.</summary>
+    internal static async Task CancelQuietlyAsync(CancellationTokenSource call)
+    {
+        try { await call.CancelAsync().ConfigureAwait(false); }
+        catch (ObjectDisposedException) { /* the call ended and released its source before the cancellation came */ }
+    }
+
     /// <summary>A new random nonce.</summary>
     internal static string NewNonce() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
