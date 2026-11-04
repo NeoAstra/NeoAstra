@@ -237,6 +237,39 @@ internal static class NeoToolCommands
         return 0;
     }
 
+    /// <summary>
+    /// Serves an agent over standard input and output: the tools of the applications that are connected to the development session of
+    /// the project, which the server finds through the discovery file of the session. Standard output carries MCP alone.
+    /// </summary>
+    internal static async Task<int> McpAsync(string? configurationPath)
+    {
+        var project = Load(configurationPath);
+        var projectDirectory = project.ProjectDirectory;
+        using var source = new CancellationTokenSource();
+        Console.CancelKeyPress += Cancel;
+        using var termination = NeoTerminationSignals.Register(source);
+        try
+        {
+            await using var server = new NeoMcpAgentServer(() => NeoMcpRelayDiscovery.TryRead(NeoMcpRelayDiscovery.DefaultDirectory, projectDirectory));
+            await server.RunAsync(new ModelContextProtocol.Server.StdioServerTransport("neoastra"), source.Token).ConfigureAwait(false);
+            return 0;
+        }
+        catch (OperationCanceledException) when (source.IsCancellationRequested)
+        {
+            return 0;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= Cancel;
+        }
+
+        void Cancel(object? sender, ConsoleCancelEventArgs args)
+        {
+            args.Cancel = true;
+            source.Cancel();
+        }
+    }
+
     private static NeoResolvedProject Load(string? configurationPath, string? devUrl = null)
     {
         var overrides = new Dictionary<string, string>(StringComparer.Ordinal);

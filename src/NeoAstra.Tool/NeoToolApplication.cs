@@ -49,6 +49,7 @@ internal static class NeoToolApplication
             CreateDoctorCommand(),
             CreateInitCommand(),
             CreateDevCommand(),
+            CreateMcpCommand(),
             CreateAssetsCommand(),
             CreateFrontendCommand(),
             CreateContractCommand(),
@@ -126,6 +127,22 @@ internal static class NeoToolApplication
             },
             new HelpOption(),
             (_, _) => new ValueTask<int>(NeoToolCommands.DevAsync(config, devUrl, platform, device)),
+        };
+    }
+
+    private static Command CreateMcpCommand()
+    {
+        string? config = null;
+        return new Command("mcp", "Serve an agent the browser automation tools of the applications of the development session over MCP (stdio).")
+        {
+            new CommandUsage(),
+            {
+                "config=",
+                "Path to {FILE} (default: neoastra.json).",
+                value => config = value
+            },
+            new HelpOption(),
+            (_, _) => new ValueTask<int>(NeoToolCommands.McpAsync(config)),
         };
     }
 
