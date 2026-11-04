@@ -117,8 +117,8 @@ On a connected iPhone, which does not reach the loopback interface of the machin
 `ios-arm64`, signed with the `Apple Development` identity unless the project sets `CodesignKey`, installs and starts it with
 `devicectl`, and gives it the relay on the private address of the machine in the local network. An application with the
 `NeoAstra.Mcp` plugin tunnels the development server through the relay and loads the page from its own `127.0.0.1`, with the
-updates of the server; one without it gets its frontend assets in its build, and a change of the frontend needs a new session
-there. See [Agents and MCP](mcp.md#an-iphone).
+updates of the server; one without it, or one whose relay listens on the loopback interface alone, gets its frontend assets in
+its build, and a change of the frontend needs a new session there. See [Agents and MCP](mcp.md#an-iphone).
 
 ## Build, run, publish, and MSBuild properties
 

@@ -3,7 +3,8 @@
 During development, an agent such as Claude Code, Codex, or CodeAlta can look at and drive the pages of an application the
 way Chrome DevTools MCP drives Chrome: on the desktop, in the iOS simulator, and on an Android emulator or phone. The tools are
 those of [browser automation](browser-automation.md); `dotnet neoastra dev` and `dotnet neoastra mcp` bring them to the
-agent over the Model Context Protocol, and the application never listens on a port.
+agent over the Model Context Protocol, and the application connects out to the session instead of listening on a port of the
+network.
 
 ```mermaid
 flowchart LR
@@ -78,18 +79,21 @@ that waits for a text of the page with `wait_for` before it acts sees the page a
   development server: in the environment of a desktop backend (`NEOASTRA_MCP_URL`, `NEOASTRA_MCP_TOKEN`), with the
   `SIMCTL_CHILD_` prefix in the iOS simulator, with the `DEVICECTL_CHILD_` prefix on an iPhone, and on Android through
   `adb reverse` of the port of the relay and the file `files/neoastra-development-mcp` beside
-  `files/neoastra-development-url`, which only `adb shell run-as` writes. The session removes the forwarding and the file when
-  it ends.
+  `files/neoastra-development-url`, which only `adb shell run-as` writes, with the token on the standard input of `adb` rather
+  than in the arguments of a process. The session removes the forwarding and the file when it ends.
 - **The application.** The `NeoAstra.Mcp` plugin connects out to the relay and offers the tools of `NeoAutomation`. The
   relay and the application prove the token to each other without sending it: the relay sends a nonce, the application
   answers with an HMAC-SHA256 of it keyed with the token and with a nonce of its own, and the relay answers that one in turn
   before the application runs anything. From then on, every message is sealed with AES-GCM under a key of its direction,
-  derived with HKDF-SHA256 from the token and both nonces, and a counter of its direction. It connects again when the relay
-  goes away, so the session may restart. Without an address and a token it does nothing, not even create the automation of
-  the views. `NeoMcpOptions` sets the options of the automation, such as `AllowScriptEvaluation` and `AllowedDirectories`,
+  derived with HKDF-SHA256 from the token and both nonces, and a counter of its direction; the first sealed message of the
+  application says who it is and which tools it offers. It connects again when the connection to the relay drops. A new
+  session has a new token, and starts the application again with it. Without an address and a token it does nothing, not even
+  create the automation of the views. `NeoMcpOptions` sets the options of the automation, such as `AllowScriptEvaluation` and `AllowedDirectories`,
   and may give a relay of its own.
 - **The server.** `dotnet neoastra mcp` finds the relay of the session of the project in a discovery file in a folder of the
-  user, never in the project, which on macOS and Linux only the user can read. Standard output carries MCP alone.
+  user, never in the project, which on macOS and Linux only the user can read. Each session writes a file of its own and
+  removes it when it ends; with two sessions of the project, the server follows the newer one. Standard output carries MCP
+  alone.
 
 ## An iPhone
 
@@ -99,11 +103,12 @@ UDID of a connected iPhone (as `xcrun devicectl list devices` shows it) works di
 - The tool builds the debug build for `ios-arm64`, signed with the `Apple Development` identity and the profile of the team that
   Xcode manages unless the project sets `CodesignKey`, installs it with `devicectl`, and starts it with its console.
 - A development server is trusted on the loopback interface only, which the iPhone does not reach. With the `NeoAstra.Mcp`
-  plugin, the application listens on the port of the development server on its own loopback interface, which nothing outside
-  the iPhone reaches, and tunnels each connection of its view through its encrypted connection to the relay, which connects
-  it to the development server on the machine. The view loads the page from `127.0.0.1` as in the simulator, with the updates
-  of the server. An application without the plugin loads the assets of its build instead, and a change of the frontend needs a
-  new session.
+  plugin, the application listens on the port of the development server on its own loopback interface (`127.0.0.1` and
+  `::1`), which nothing outside the iPhone reaches, and tunnels each connection of its view through its encrypted connection to
+  the relay, which connects it to the development server on the machine. The view loads the page from `127.0.0.1` as in the
+  simulator, with the updates of the server. A connection whose other end stops reading ends on its own, without holding up the
+  others or the tools. An application without the plugin, or one whose relay could listen on the loopback interface only,
+  loads the assets of its build instead, and a change of the frontend needs a new session.
 - The relay listens on the private IPv4 address of the machine in the local network too, where it accepts applications only;
   the iPhone and the machine are on the same network. The tool takes the address of the network with a gateway;
   `--mcp-address <IPv4>` gives another one, such as when a VPN is up. Windows lets only an administrator listen on such an
@@ -122,8 +127,10 @@ with every session and never enters the project. Applications prove the token wi
 the local network to an iPhone, and neither another machine that pretends to be the relay nor one that pretends to be an
 application gets in. After the handshake the connection is encrypted and authenticated: another machine on the local network
 can neither read what the tools answer, such as snapshots and screenshots, nor change, replay, reorder, or add a message, which
-ends the connection instead. On the local network the relay accepts applications only, and the plugin follows a relay on the
-loopback interface or on a private IPv4 address only. Register the plugin in development builds only: a
+ends the connection instead; what an application says about itself and its tools goes sealed too. Before an application
+proved the token, the relay gives it a few seconds and a few kilobytes, and lets only a few such connections wait at once. On
+the local network the relay accepts applications only, and the plugin follows a relay on the loopback interface or on a
+private IPv4 address only. Register the plugin in development builds only: a
 release build of the template does not reference the package at all. The tools can do what the page can do, run scripts in
 it, and, within `AllowedDirectories`, read and write files; narrow them with `NeoMcpOptions.Automation` where that matters.
 
