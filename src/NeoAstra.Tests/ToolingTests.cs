@@ -1073,9 +1073,10 @@ public sealed class ToolingTests
         var app = factory.Starts[8];
         CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "process", "launch", "--device", Device, "--terminate-existing", "--console", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
         Assert.AreEqual(app.Environment["NEOASTRA_MCP_TOKEN"], app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_TOKEN"]);
+        // The address of the machine in the local network, or the loopback interface where the system lets the relay listen there
+        // only, as Windows does for a user without administrator rights.
         var relay = new Uri(app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]);
-        if (NeoMcpRelay.FindNetworkAddress() is { } address) Assert.AreEqual(address.ToString(), relay.Host);
-        else Assert.IsTrue(relay.IsLoopback);
+        Assert.IsTrue(relay.IsLoopback || NeoMcpRelay.FindNetworkAddress()?.ToString() == relay.Host, relay.Host);
         if (withPlugin)
         {
             Assert.AreEqual("http://127.0.0.1:5173/", app.Environment["DEVICECTL_CHILD_NEOASTRA_DEV_URL"]);

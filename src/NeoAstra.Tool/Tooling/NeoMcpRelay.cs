@@ -50,7 +50,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         _acceptingNetwork = networkListener is null ? Task.CompletedTask : AcceptLoopAsync(networkListener, applicationsOnly: true);
     }
 
-    /// <summary>Gets the address of the relay on the local network, which applications on a phone connect to, or <see langword="null"/>.</summary>
+    /// <summary>Gets the address of the relay on the local network, which applications on a phone connect to, or <see langword="null"/> when it has none or the system did not let it listen there.</summary>
     internal Uri? NetworkUrl { get; }
 
     /// <summary>Gets the port of the relay on the loopback interface.</summary>
@@ -87,23 +87,35 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
             var port = FreePort();
             var listener = new HttpListener();
             listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-            HttpListener? network = null;
             try
             {
                 listener.Start();
-                if (networkAddress is not null)
-                {
-                    network = new HttpListener();
-                    network.Prefixes.Add($"http://{networkAddress}:{port}/");
-                    network.Start();
-                }
-                return new NeoMcpRelay(listener, network, networkAddress, port, NewToken(), tunnelTarget);
             }
             catch (HttpListenerException) when (attempt < 4)
             {
                 listener.Close();
-                network?.Close();
+                continue;
             }
+            // Windows lets a user without administrator rights listen on the loopback interface only: the relay goes on without
+            // the address of the network then, and NetworkUrl says so.
+            var network = networkAddress is null ? null : TryListen($"http://{networkAddress}:{port}/");
+            return new NeoMcpRelay(listener, network, network is null ? null : networkAddress, port, NewToken(), tunnelTarget);
+        }
+    }
+
+    private static HttpListener? TryListen(string prefix)
+    {
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        try
+        {
+            listener.Start();
+            return listener;
+        }
+        catch (HttpListenerException)
+        {
+            listener.Close();
+            return null;
         }
     }
 

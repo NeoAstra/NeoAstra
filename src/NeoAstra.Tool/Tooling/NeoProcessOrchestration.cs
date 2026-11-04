@@ -456,6 +456,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         {
             log("mcp", $"The discovery file of the relay could not be written ({exception.GetType().Name}); `dotnet neoastra mcp` will not find this session.", true);
         }
+        if (address is not null && relay.NetworkUrl is null)
+            log("mcp", $"The relay could not listen on {address} of the local network (on Windows that needs administrator rights): the device cannot reach it.", true);
         log("mcp", $"Agents reach the applications of this session with `dotnet neoastra mcp` (relay on port {relay.Port}{(relay.NetworkUrl is { } network ? $", for the device at {network.Host}" : "")}).", false);
         return new RelaySession(relay, McpDiscoveryDirectory, project.ProjectDirectory);
     }

@@ -59,6 +59,8 @@ public sealed class McpRelayTests
         Assert.IsFalse(NeoMcpRelay.IsPrivateIPv4(System.Net.IPAddress.Loopback));
         if (NeoMcpRelay.FindNetworkAddress() is not { } address) { Assert.Inconclusive("This machine has no private IPv4 address."); return; }
         await using var relay = NeoMcpRelay.Start(address);
+        // Windows lets only an administrator listen on the address of the network; the relay goes on with the loopback interface.
+        if (relay.NetworkUrl is null) { Assert.IsTrue(relay.Url.IsLoopback); Assert.Inconclusive($"This user may not listen on {address}."); return; }
         Assert.AreEqual(new Uri($"ws://{address}:{relay.Port}/"), relay.NetworkUrl);
         await AssertRefusedAsync(new Uri(relay.NetworkUrl!, "/neoastra/mcp/agent"), "Bearer " + relay.Token);
 
