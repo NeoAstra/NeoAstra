@@ -208,7 +208,8 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         var identifier = Required(await PropertiesAsync(project, environment, log, cancellationToken, [$"-p:TargetFramework={framework}", "-p:Configuration=Debug"], "ApplicationId").ConfigureAwait(false), "ApplicationId");
         var port = $"tcp:{project.DevUrl.Port}";
         // The relay of the session reaches the device the same way, through a forwarding of its port, and its address and token
-        // go in a file beside the address of the server, which only adb run-as writes.
+        // go in a file beside the address of the server, which only adb run-as writes. The token goes through the standard input
+        // of adb, never in the arguments of a process that others on the machine or on the device may list.
         var relay = environment.TryGetValue(NeoDevelopmentOrchestrator.McpUrlVariable, out var relayUrl) && environment.TryGetValue(NeoDevelopmentOrchestrator.McpTokenVariable, out var relayToken)
             && Uri.TryCreate(relayUrl, UriKind.Absolute, out var relayAddress) && IsShellSafe(relayToken)
             ? (Port: $"tcp:{relayAddress.Port}", Line: $"{relayAddress.AbsoluteUri} {relayToken}")
@@ -225,8 +226,8 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         {
             await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
             if (relay is { } forwarding) await RunAsync("reverse", [adb, .. device, "reverse", forwarding.Port, forwarding.Port], project, environment, log, cancellationToken).ConfigureAwait(false);
-            var relayFile = relay is { } written ? $" && echo {written.Line} > {AndroidRelayFile}" : $" && rm -f {AndroidRelayFile}";
-            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}{relayFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
+            var relayFile = relay is not null ? $" && cat > {AndroidRelayFile}" : $" && rm -f {AndroidRelayFile}";
+            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}{relayFile}'"], project, environment, log, cancellationToken, relay is { } line ? line.Line + "\n" : null).ConfigureAwait(false);
             await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
             // monkey starts the launcher activity without knowing its name; an emulator has no physical keys, and monkey refuses
             // to run there with its default share of system keys, so the one event it sends is the launch alone.
@@ -241,13 +242,16 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         }
     }
 
-    // The token of the relay goes through a shell of the device: it has letters, digits, hyphens, and underscores only.
+    // The token of the relay is one word of the file that the application reads: letters, digits, hyphens, and underscores only.
     private static bool IsShellSafe(string value)
         => value.Length != 0 && value.All(static character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
-    private async Task RunAsync(string label, IReadOnlyList<string> arguments, NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
+    private Task RunAsync(string label, IReadOnlyList<string> arguments, NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
+        => RunAsync(label, arguments, project, environment, log, cancellationToken, null);
+
+    private async Task RunAsync(string label, IReadOnlyList<string> arguments, NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken, string? standardInput)
     {
-        await using var process = processFactory.Start(new(label, new(arguments), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => log(label, line, error)));
+        await using var process = processFactory.Start(new(label, new(arguments), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => log(label, line, error)) { StandardInput = standardInput });
         var exit = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (exit != 0) throw new NeoToolException("mobile_" + label, $"The {label} step of the mobile application failed with exit code {exit}.");
     }

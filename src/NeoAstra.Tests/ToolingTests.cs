@@ -918,7 +918,10 @@ public sealed class ToolingTests
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", relayPort, relayPort }, starts[6].Command.Arguments.Skip(1).ToArray());
         StringAssert.Contains(starts[7].Command.Arguments[^1], "run-as dev.neoastra.fixture");
         StringAssert.Contains(starts[7].Command.Arguments[^1], "http://127.0.0.1:5173/");
-        StringAssert.Contains(starts[7].Command.Arguments[^1], $"echo {relay.AbsoluteUri} {token} > {NeoMobileLauncher.AndroidRelayFile}");
+        // The token goes through the standard input of adb, never in the arguments of a process.
+        StringAssert.Contains(starts[7].Command.Arguments[^1], $"cat > {NeoMobileLauncher.AndroidRelayFile}");
+        Assert.IsFalse(starts.Any(start => start.Command.Arguments.Any(argument => argument.Contains(token, StringComparison.Ordinal))), "The token is in the arguments of a process.");
+        Assert.AreEqual($"{relay.AbsoluteUri} {token}\n", starts[7].StandardInput);
         // An emulator has no physical keys, and monkey refuses to run with its default share of system keys there.
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "shell", "monkey", "--pct-syskeys", "0", "-p", "dev.neoastra.fixture", "-c", "android.intent.category.LAUNCHER", "1" }, starts[9].Command.Arguments.Skip(1).ToArray());
         Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);

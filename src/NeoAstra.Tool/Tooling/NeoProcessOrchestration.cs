@@ -37,7 +37,11 @@ internal interface INeoProcessFactory
     INeoChildProcess Start(NeoProcessStart start);
 }
 
-internal sealed record NeoProcessStart(string Label, NeoCommand Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, IReadOnlySet<string> SecretEnvironment, Action<string, bool> Log);
+internal sealed record NeoProcessStart(string Label, NeoCommand Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, IReadOnlySet<string> SecretEnvironment, Action<string, bool> Log)
+{
+    // Text that the process reads on its standard input, such as a secret that must not appear in its arguments.
+    internal string? StandardInput { get; init; }
+}
 internal sealed class NeoProcessFactory : INeoProcessFactory
 {
     public INeoChildProcess Start(NeoProcessStart start) => new NeoChildProcess(start);
@@ -62,6 +66,7 @@ internal sealed class NeoChildProcess : INeoChildProcess
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = start.StandardInput is not null,
             CreateNoWindow = true,
         };
         foreach (var argument in executable.PrefixArguments)
@@ -86,6 +91,16 @@ internal sealed class NeoChildProcess : INeoChildProcess
             throw new NeoToolException("process_start", $"Unable to start {start.Label}; verify the configured executable.");
         }
 
+        if (start.StandardInput is { } input)
+        {
+            // A few bytes, which fit in the pipe whether or not the process reads them yet.
+            try
+            {
+                _process.StandardInput.Write(input);
+                _process.StandardInput.Close();
+            }
+            catch (IOException) { /* the process ended before it read its input; its exit code says so */ }
+        }
         _stdout = PumpAsync(_process.StandardOutput, false, start);
         _stderr = PumpAsync(_process.StandardError, true, start);
         _completion = CompleteAsync();
