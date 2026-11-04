@@ -227,7 +227,7 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
             await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
             if (relay is { } forwarding) await RunAsync("reverse", [adb, .. device, "reverse", forwarding.Port, forwarding.Port], project, environment, log, cancellationToken).ConfigureAwait(false);
             var relayFile = relay is not null ? $" && cat > {AndroidRelayFile}" : $" && rm -f {AndroidRelayFile}";
-            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}{relayFile}'"], project, environment, log, cancellationToken, relay is { } line ? line.Line + "\n" : null).ConfigureAwait(false);
+            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'umask 077 && mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}{relayFile}'"], project, environment, log, cancellationToken, relay is { } line ? line.Line + "\n" : null).ConfigureAwait(false);
             await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
             // monkey starts the launcher activity without knowing its name; an emulator has no physical keys, and monkey refuses
             // to run there with its default share of system keys, so the one event it sends is the launch alone.

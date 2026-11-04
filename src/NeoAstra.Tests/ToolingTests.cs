@@ -920,6 +920,8 @@ public sealed class ToolingTests
         StringAssert.Contains(starts[7].Command.Arguments[^1], "http://127.0.0.1:5173/");
         // The token goes through the standard input of adb, never in the arguments of a process.
         StringAssert.Contains(starts[7].Command.Arguments[^1], $"cat > {NeoMobileLauncher.AndroidRelayFile}");
+        // Only the application reads the files that run-as writes for it.
+        StringAssert.Contains(starts[7].Command.Arguments[^1], "sh -c 'umask 077 && ");
         Assert.IsFalse(starts.Any(start => start.Command.Arguments.Any(argument => argument.Contains(token, StringComparison.Ordinal))), "The token is in the arguments of a process.");
         Assert.AreEqual($"{relay.AbsoluteUri} {token}\n", starts[7].StandardInput);
         // An emulator has no physical keys, and monkey refuses to run with its default share of system keys there.
