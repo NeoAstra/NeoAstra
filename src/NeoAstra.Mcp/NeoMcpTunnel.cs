@@ -21,13 +21,14 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
 
     private readonly TcpListener _listener;
     private TcpListener? _listenerV6;
-    private readonly ConcurrentDictionary<string, TcpClient> _streams = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (TcpClient Client, NeoMcpStreamWriter Writer)> _streams = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
     private readonly object _gate = new();
     private Func<byte[], CancellationToken, Task>? _send;
     private TaskCompletionSource _attached = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task _accepting = Task.CompletedTask;
     private int _next;
+    private int _disposed;
 
     internal NeoMcpTunnel(int port)
     {
@@ -79,22 +80,37 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
         foreach (var id in _streams.Keys) Close(id);
     }
 
-    /// <summary>Writes bytes of the relay to the connection of the view.</summary>
-    internal async Task WriteAsync(string stream, byte[] data, CancellationToken cancellationToken)
+    /// <summary>Queues bytes of the relay for the connection of the view, which a writer of its own writes.</summary>
+    internal void Write(string stream, byte[] data)
     {
-        if (!_streams.TryGetValue(stream, out var client)) return;
-        try { await client.GetStream().WriteAsync(data, cancellationToken).ConfigureAwait(false); }
-        catch (Exception exception) when (exception is IOException or ObjectDisposedException or InvalidOperationException) { Close(stream); }
+        if (_streams.TryGetValue(stream, out var entry) && !entry.Writer.TryWrite(data)) _ = EndAsync(stream);
     }
 
     /// <summary>Ends the connection of the view when the development server ended its side.</summary>
     internal void Close(string stream)
     {
-        if (_streams.TryRemove(stream, out var client)) client.Dispose();
+        if (_streams.TryRemove(stream, out var entry))
+        {
+            entry.Writer.Complete();
+            entry.Client.Dispose();
+        }
+    }
+
+    // Ends a stream that the view does not read or that cannot be written, and tells the relay.
+    private async Task EndAsync(string stream)
+    {
+        if (!_streams.ContainsKey(stream)) return;
+        Close(stream);
+        Func<byte[], CancellationToken, Task>? send;
+        lock (_gate) send = _send;
+        if (send is null) return;
+        try { await send(NeoMcpWire.StreamClose(stream), CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is ObjectDisposedException or OperationCanceledException or InvalidOperationException or System.Net.WebSockets.WebSocketException) { /* the relay is gone */ }
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _stop.CancelAsync().ConfigureAwait(false);
         _listener.Stop();
         _listenerV6?.Stop();
@@ -127,7 +143,7 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
         Func<byte[], CancellationToken, Task>? send;
         lock (_gate) send = _send;
         if (send is null) { client.Dispose(); return; }
-        _streams[id] = client;
+        _streams[id] = (client, new NeoMcpStreamWriter(() => Task.FromResult<Stream>(client.GetStream()), () => _ = EndAsync(id), _stop.Token));
         var buffer = new byte[ChunkSize];
         try
         {

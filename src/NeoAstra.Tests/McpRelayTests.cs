@@ -164,6 +164,69 @@ public sealed class McpRelayTests
     }
 
     [TestMethod]
+    public async Task Tunnel_AStreamThatNobodyReadsHoldsUpNeitherTheCallsNorTheOtherStreams()
+    {
+        // The development server: a connection that starts with F floods the view, which does not read it; one that starts with
+        // S is never read by the server, while the view floods it.
+        using var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        server.Start();
+        using var stop = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var client = await server.AcceptTcpClientAsync(stop.Token);
+                _ = Task.Run(async () =>
+                {
+                    using (client)
+                    {
+                        var stream = client.GetStream();
+                        var first = new byte[1];
+                        if (await stream.ReadAsync(first, stop.Token) == 0) return;
+                        var chunk = new byte[64 * 1024];
+                        try
+                        {
+                            if (first[0] == (byte)'F') while (true) await stream.WriteAsync(chunk, stop.Token);
+                            await Task.Delay(Timeout.Infinite, stop.Token);
+                        }
+                        catch (Exception exception) when (exception is IOException or OperationCanceledException) { /* the stream ended */ }
+                    }
+                });
+            }
+        });
+        await using var relay = NeoMcpRelay.Start(null, (System.Net.IPEndPoint)server.LocalEndpoint);
+        var tunnel = new App.NeoMcpTunnel(FreePort());
+        tunnel.Start();
+        await using var phone = new App.NeoMcpConnector(new FakeTools().Named("Sample"), new(relay.Url, relay.Token), new("Sample", "ios", "iPhone12,8", 1), TimeSpan.FromMilliseconds(100), tunnel);
+        phone.Start();
+        await WaitUntilAsync(() => relay.Applications.Count == 1);
+        await using var agent = await AgentClient.StartAsync(() => new(relay.Url, relay.Token, Environment.ProcessId));
+
+        using var flooded = new System.Net.Sockets.TcpClient();
+        await flooded.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        await flooded.GetStream().WriteAsync("F"u8.ToArray());
+        using var sink = new System.Net.Sockets.TcpClient();
+        await sink.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        var flooding = Task.Run(async () =>
+        {
+            var chunk = new byte[64 * 1024];
+            chunk[0] = (byte)'S';
+            try { while (true) await sink.GetStream().WriteAsync(chunk, stop.Token); }
+            catch (Exception exception) when (exception is IOException or OperationCanceledException or ObjectDisposedException) { /* the tunnel ended the stream */ }
+        });
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        var call = agent.Client.CallToolAsync("take_screenshot", new Dictionary<string, object?>()).AsTask();
+        Assert.AreEqual("Took a screenshot of Sample.", Text(await call.WaitAsync(TimeSpan.FromSeconds(10))));
+        using var other = new System.Net.Sockets.TcpClient();
+        await other.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        await other.GetStream().WriteAsync("x"u8.ToArray());
+        await stop.CancelAsync();
+        server.Stop();
+        await flooding.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [TestMethod]
     public async Task Tunnel_ListensOnBothLoopbackAddressesThatADevelopmentUrlMayName()
     {
         // A development URL names 127.0.0.1 or ::1: the view of the phone connects to either at the port of the tunnel.

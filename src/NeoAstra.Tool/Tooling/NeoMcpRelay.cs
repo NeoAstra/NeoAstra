@@ -306,7 +306,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
                         OpenStream(connection, parsed.Stream!);
                         break;
                     case NeoMcpMessageKind.StreamData:
-                        await WriteStreamAsync(connection, parsed.Stream!, parsed.Data!).ConfigureAwait(false);
+                        WriteStream(connection, parsed.Stream!, parsed.Data!);
                         break;
                     case NeoMcpMessageKind.StreamClose:
                         if (connection.Streams.TryRemove(parsed.Stream!, out var closed)) closed.Dispose();
@@ -430,6 +430,9 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
             return;
         }
         stream.Connected = ConnectAsync(stream, _tunnelTarget);
+        // The bytes of the application go to the server on their own, so that a server that does not read them holds up only
+        // this stream; a stream that cannot be written ends.
+        stream.Writer = new NeoMcpStreamWriter(async () => await stream.Connected.ConfigureAwait(false), () => _ = EndStreamAsync(connection, id, stream), _stop.Token);
         _ = Task.Run(async () =>
         {
             var buffer = new byte[32 * 1024];
@@ -461,19 +464,16 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         return stream.Client.GetStream();
     }
 
-    private static async Task WriteStreamAsync(ApplicationConnection connection, string id, byte[] data)
+    private static void WriteStream(ApplicationConnection connection, string id, byte[] data)
     {
-        if (!connection.Streams.TryGetValue(id, out var stream)) return;
-        try
-        {
-            var server = await stream.Connected!.ConfigureAwait(false);
-            await server.WriteAsync(data).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
-        {
-            if (connection.Streams.TryRemove(new KeyValuePair<string, TunnelStream>(id, stream))) stream.Dispose();
-            await SendQuietlyAsync(connection, NeoMcpWire.StreamClose(id)).ConfigureAwait(false);
-        }
+        if (connection.Streams.TryGetValue(id, out var stream) && !stream.Writer!.TryWrite(data)) _ = EndStreamAsync(connection, id, stream);
+    }
+
+    private static async Task EndStreamAsync(ApplicationConnection connection, string id, TunnelStream stream)
+    {
+        if (!connection.Streams.TryRemove(new KeyValuePair<string, TunnelStream>(id, stream))) return;
+        stream.Dispose();
+        await SendQuietlyAsync(connection, NeoMcpWire.StreamClose(id)).ConfigureAwait(false);
     }
 
     private static async Task SendQuietlyAsync(Connection connection, byte[] message)
@@ -488,7 +488,13 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
 
         internal Task<NetworkStream>? Connected { get; set; }
 
-        public void Dispose() => Client.Dispose();
+        internal NeoMcpStreamWriter? Writer { get; set; }
+
+        public void Dispose()
+        {
+            Writer?.Complete();
+            Client.Dispose();
+        }
     }
 
     private async Task BroadcastApplicationsAsync()

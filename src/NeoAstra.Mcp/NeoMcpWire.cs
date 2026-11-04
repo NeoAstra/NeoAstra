@@ -554,3 +554,45 @@ internal sealed class NeoMcpChannel : IDisposable
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(nonce[4..], counter);
     }
 }
+
+/// <summary>
+/// The writer of one stream of the tunnel: the loop that receives the messages of the connection only queues the bytes, and the
+/// writer writes them to the socket of the stream on its own. A stream whose other end does not read fills its queue and ends,
+/// instead of holding up the calls and the other streams of the connection.
+/// </summary>
+internal sealed class NeoMcpStreamWriter
+{
+    /// <summary>The chunks a stream may queue, about 8 MiB in chunks of 32 KiB.</summary>
+    internal const int Capacity = 256;
+
+    private readonly System.Threading.Channels.Channel<byte[]> _queue = System.Threading.Channels.Channel.CreateBounded<byte[]>(
+        new System.Threading.Channels.BoundedChannelOptions(Capacity) { SingleReader = true, SingleWriter = true, FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait });
+
+    /// <summary>Starts to write the queued bytes to the stream that <paramref name="target"/> gives, and calls <paramref name="failed"/> once when a write fails.</summary>
+    internal NeoMcpStreamWriter(Func<Task<Stream>> target, Action failed, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(failed);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var stream = await target().ConfigureAwait(false);
+                await foreach (var data in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+                    await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The socket of the stream ended, or the connection stops: the stream ends with it.
+                _queue.Writer.TryComplete();
+                failed();
+            }
+        }, CancellationToken.None);
+    }
+
+    /// <summary>Queues bytes for the stream; <see langword="false"/> when the other end does not keep up or the stream ended.</summary>
+    internal bool TryWrite(byte[] data) => _queue.Writer.TryWrite(data);
+
+    /// <summary>Ends the stream: nothing more is queued.</summary>
+    internal void Complete() => _queue.Writer.TryComplete();
+}

@@ -138,7 +138,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
                         if (calls.TryRemove(parsed.Id!, out var call)) await NeoMcpWire.CancelQuietlyAsync(call).ConfigureAwait(false);
                         break;
                     case NeoMcpMessageKind.StreamData when _tunnel is not null:
-                        await _tunnel.WriteAsync(parsed.Stream!, parsed.Data!, connection.Token).ConfigureAwait(false);
+                        _tunnel.Write(parsed.Stream!, parsed.Data!);
                         break;
                     case NeoMcpMessageKind.StreamClose when _tunnel is not null:
                         _tunnel.Close(parsed.Stream!);
