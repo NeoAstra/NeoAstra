@@ -18,7 +18,7 @@ public sealed class NeoMcpOptions
     public NeoAutomationOptions Automation { get; } = new();
 
     /// <summary>Gets or sets the WebSocket address of the relay, or <see langword="null"/> for the one of <c>NEOASTRA_MCP_URL</c>.</summary>
-    /// <remarks>The address is a <c>ws</c> or <c>wss</c> address of the loopback interface.</remarks>
+    /// <remarks>The address is a <c>ws</c> or <c>wss</c> address of the loopback interface or a private IPv4 address of the local network.</remarks>
     public Uri? RelayUrl { get; set; }
 
     /// <summary>Gets or sets the token of the development session, or <see langword="null"/> for the one of <c>NEOASTRA_MCP_TOKEN</c>.</summary>

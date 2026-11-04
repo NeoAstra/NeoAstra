@@ -28,7 +28,7 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
     /// <summary>Initializes the plugin.</summary>
     /// <param name="options">The options of the plugin.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">The relay address of <paramref name="options"/> is not a WebSocket address of the loopback interface, or its token is not valid.</exception>
+    /// <exception cref="ArgumentException">The relay address of <paramref name="options"/> is not a WebSocket address of the loopback interface or of a private IPv4 address, or its token is not valid.</exception>
     public NeoMcpPlugin(NeoMcpOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -57,8 +57,21 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
     internal static NeoMcpApplicationInfo DescribeApplication() => new(
         Assembly.GetEntryAssembly()?.GetName().Name ?? AppDomain.CurrentDomain.FriendlyName,
         Platform(),
-        Environment.MachineName,
+        Device(),
         Environment.ProcessId);
+
+    // An iPhone or iPad names itself localhost; its model, such as iPhone12,8, tells it apart. A simulator has the name of the Mac.
+    private static string Device()
+    {
+        var name = Environment.MachineName;
+        if (!OperatingSystem.IsIOS() || !string.Equals(name, "localhost", StringComparison.OrdinalIgnoreCase)) return name;
+        nuint size = 0;
+        if (NativeMethods.sysctlbyname("hw.machine", null, ref size, IntPtr.Zero, 0) != 0 || size is 0 or > 256) return name;
+        var buffer = new byte[(int)size];
+        if (NativeMethods.sysctlbyname("hw.machine", buffer, ref size, IntPtr.Zero, 0) != 0) return name;
+        var model = System.Text.Encoding.ASCII.GetString(buffer).TrimEnd('\0');
+        return model.Length == 0 ? name : model;
+    }
 
     private static string Platform()
     {
@@ -208,7 +221,7 @@ public static class NeoMcpPluginExtensions
     /// <param name="options">The options of the plugin.</param>
     /// <returns>The builder.</returns>
     /// <exception cref="ArgumentNullException">An argument is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">The relay address of <paramref name="options"/> is not a WebSocket address of the loopback interface, or its token is not valid.</exception>
+    /// <exception cref="ArgumentException">The relay address of <paramref name="options"/> is not a WebSocket address of the loopback interface or of a private IPv4 address, or its token is not valid.</exception>
     public static NeoPluginBuilder AddNeoAstraMcp(this NeoPluginBuilder builder, NeoMcpOptions options)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -216,4 +229,10 @@ public static class NeoMcpPluginExtensions
         NeoMcpEndpoint.Validate(options);
         return builder.AddNeoAstraPlugin(() => new NeoMcpPlugin(options));
     }
+}
+
+internal static partial class NativeMethods
+{
+    [System.Runtime.InteropServices.LibraryImport("libc", StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf8)]
+    internal static partial int sysctlbyname(string name, byte[]? value, ref nuint size, IntPtr newValue, nuint newSize);
 }

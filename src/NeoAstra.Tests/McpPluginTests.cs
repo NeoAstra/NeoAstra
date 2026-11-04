@@ -43,6 +43,31 @@ public sealed class McpPluginTests
     }
 
     [TestMethod]
+    public void Package_AsksAnIOSApplicationForTheLocalNetworkUnlessTheApplicationDeclinesIt()
+    {
+        // An iPhone reaches the relay over the local network, which iOS allows only with a usage description in the Info.plist.
+        var root = FindRepositoryRoot();
+        var targets = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Mcp", "Build", "NeoAstra.Mcp.targets"));
+        var manifest = targets.Descendants("PartialAppManifest").Single();
+        Assert.AreEqual("$(MSBuildThisFileDirectory)local-network.plist", (string?)manifest.Attribute("Include"));
+        var condition = (string?)manifest.Parent!.Attribute("Condition");
+        StringAssert.Contains(condition, "== 'ios'");
+        StringAssert.Contains(condition, "'$(NeoAstraMcpLocalNetworkUsage)' != 'false'");
+        StringAssert.Contains(File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Mcp", "Build", "local-network.plist")), "<key>NSLocalNetworkUsageDescription</key>");
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Mcp", "NeoAstra.Mcp.csproj"));
+        var packed = project.Descendants("None").Select(static item => (string?)item.Attribute("PackagePath")).ToArray();
+        CollectionAssert.Contains(packed, "buildTransitive/NeoAstra.Mcp.targets");
+        CollectionAssert.Contains(packed, "buildTransitive/local-network.plist");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra.slnx"))) return directory.FullName;
+        throw new InvalidOperationException("The repository root was not found.");
+    }
+
+    [TestMethod]
     public void Endpoint_ComesFromTheOptionsOrTheSessionAndOnlyForTheLoopbackInterface()
     {
         static Func<string, string?> Environment(string? url, string? token) => name => name switch
@@ -64,8 +89,13 @@ public sealed class McpPluginTests
         Assert.IsNotNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://[::1]:5000", Token)));
         Assert.IsNotNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("wss://localhost:5000", Token)));
 
-        // A session that names another machine, another scheme, or a weak token is not followed.
-        Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://192.168.1.20:5000", Token)));
+        // A phone reaches the relay on the private address of the development machine.
+        Assert.IsNotNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://192.168.1.20:5000", Token)));
+        Assert.IsNotNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://10.0.0.2:5000", Token)));
+
+        // A session that names a public address, a host name, another scheme, or a weak token is not followed.
+        Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://8.8.8.8:5000", Token)));
+        Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://172.32.0.1:5000", Token)));
         Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://example.com:5000", Token)));
         Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("http://127.0.0.1:5000", Token)));
         Assert.IsNull(NeoMcpEndpoint.Resolve(new NeoMcpOptions(), Environment("ws://user@127.0.0.1:5000", Token)));
@@ -77,7 +107,7 @@ public sealed class McpPluginTests
         var own = NeoMcpEndpoint.Resolve(options, Environment("ws://127.0.0.1:5000", Token));
         Assert.AreEqual(6000, own!.Url.Port);
         Assert.AreEqual("options-token-0123456789", own.Token);
-        Assert.ThrowsExactly<ArgumentException>(() => new NeoMcpPlugin(new NeoMcpOptions { RelayUrl = new Uri("ws://10.0.0.2:5000") }));
+        Assert.ThrowsExactly<ArgumentException>(() => new NeoMcpPlugin(new NeoMcpOptions { RelayUrl = new Uri("ws://203.0.113.7:5000") }));
         Assert.ThrowsExactly<ArgumentException>(() => new NeoPluginBuilder().AddNeoAstraMcp(new NeoMcpOptions { RelayToken = "weak" }));
         Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new NeoMcpOptions { ReconnectDelay = TimeSpan.Zero });
     }
@@ -86,8 +116,23 @@ public sealed class McpPluginTests
     public void Wire_ReadsWhatItWritesAndRefusesOtherMessages()
     {
         using var schema = JsonDocument.Parse("""{"type":"object","properties":{"uid":{"type":"string"}}}""");
-        var hello = NeoMcpWire.Parse(NeoMcpWire.Hello(Application, [new("click", "Clicks", schema.RootElement, false), new("take_snapshot", "Snapshot", schema.RootElement, true)]));
+        var hello = NeoMcpWire.Parse(NeoMcpWire.Hello(Application, [new("click", "Clicks", schema.RootElement, false), new("take_snapshot", "Snapshot", schema.RootElement, true)], "proof-of-the-app", "nonce-of-the-app"));
         Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
+        Assert.AreEqual("proof-of-the-app", hello.Proof);
+        Assert.AreEqual("nonce-of-the-app", hello.Nonce);
+        Assert.AreEqual("abc", NeoMcpWire.Parse(NeoMcpWire.Challenge("abc")).Nonce);
+        Assert.AreEqual(NeoMcpMessageKind.Welcome, NeoMcpWire.Parse(NeoMcpWire.Welcome("xyz")).Kind);
+
+        // A proof binds the token, the role, and the nonce: none of them can be swapped, and the token is not in it.
+        var nonce = NeoMcpWire.NewNonce();
+        Assert.AreNotEqual(nonce, NeoMcpWire.NewNonce());
+        var proof = NeoMcpWire.Proof(Token, NeoMcpWire.ApplicationRole, nonce);
+        Assert.IsTrue(NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, nonce, proof));
+        Assert.IsFalse(NeoMcpWire.IsValidProof(Token, NeoMcpWire.RelayRole, nonce, proof));
+        Assert.IsFalse(NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, NeoMcpWire.NewNonce(), proof));
+        Assert.IsFalse(NeoMcpWire.IsValidProof("another-token-0123456789", NeoMcpWire.ApplicationRole, nonce, proof));
+        Assert.IsFalse(NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, nonce, null));
+        Assert.IsFalse(proof.Contains(Token, StringComparison.Ordinal));
         Assert.AreEqual(NeoMcpWire.ProtocolVersion, hello.ProtocolVersion);
         Assert.AreEqual(Application, hello.Application);
         Assert.AreEqual(2, hello.Tools!.Count);
@@ -127,9 +172,10 @@ public sealed class McpPluginTests
         connector.Start();
 
         var connection = await relay.AcceptAsync();
-        Assert.AreEqual("Bearer " + Token, connection.Authorization);
+        // The token of the session never goes over the connection: the application proves it instead.
+        Assert.IsNull(connection.Authorization);
         Assert.AreEqual(NeoMcpWire.Path, connection.Path);
-        var hello = await connection.ReceiveAsync();
+        var hello = await connection.HandshakeAsync(Token);
         Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
         Assert.AreEqual(Application, hello.Application);
         CollectionAssert.AreEqual(new[] { "take_screenshot", "wait_for", "fail" }, hello.Tools!.Select(static tool => tool.Name).ToArray());
@@ -164,7 +210,7 @@ public sealed class McpPluginTests
         await using var connector = new NeoMcpConnector(host, new(relay.Url, Token), Application, TimeSpan.FromMilliseconds(100));
         connector.Start();
         var connection = await relay.AcceptAsync();
-        await connection.ReceiveAsync();
+        await connection.HandshakeAsync(Token);
 
         using var wait = JsonDocument.Parse("""{"text":["never"]}""");
         await connection.SendAsync(NeoMcpWire.Call("1", "wait_for", wait.RootElement));
@@ -185,14 +231,14 @@ public sealed class McpPluginTests
         Assert.ThrowsExactly<InvalidOperationException>(connector.Start);
 
         var first = await relay.AcceptAsync();
-        await first.ReceiveAsync();
+        await first.HandshakeAsync(Token);
         await first.CloseAsync();
         // The application answers the close of the relay instead of dropping the connection.
         Assert.IsTrue(await first.WaitClosedAsync());
 
         // The development session restarted its relay: the application says hello again by itself.
         var second = await relay.AcceptAsync();
-        Assert.AreEqual(NeoMcpMessageKind.Hello, (await second.ReceiveAsync()).Kind);
+        Assert.AreEqual(NeoMcpMessageKind.Hello, (await second.HandshakeAsync(Token)).Kind);
 
         await connector.DisposeAsync();
         Assert.IsTrue(await second.WaitClosedAsync());
@@ -209,7 +255,30 @@ public sealed class McpPluginTests
         await Task.Delay(400);
         await using var relay = TestRelay.Start(port);
         var connection = await relay.AcceptAsync();
-        Assert.AreEqual(NeoMcpMessageKind.Hello, (await connection.ReceiveAsync()).Kind);
+        Assert.AreEqual(NeoMcpMessageKind.Hello, (await connection.HandshakeAsync(Token)).Kind);
+    }
+
+    [TestMethod]
+    public async Task Connector_RunsNothingForARelayThatCannotProveTheToken()
+    {
+        // Another process that listens where the relay was, or a machine on the local network that pretends to be the relay, does
+        // not know the token: the application leaves before it runs a call.
+        await using var relay = TestRelay.Start();
+        var host = new FakeToolHost();
+        await using var connector = new NeoMcpConnector(host, new(relay.Url, Token), Application, TimeSpan.FromMilliseconds(100));
+        connector.Start();
+        var impostor = await relay.AcceptAsync();
+        await impostor.HandshakeAsync(Token, relayToken: "impostor-token-0123456789");
+        await impostor.SendAsync(NeoMcpWire.Call("1", "take_screenshot", null));
+        Assert.IsTrue(await impostor.WaitClosedAsync());
+        Assert.IsFalse(host.Called);
+
+        // The application keeps trying, and a relay with the token is welcome.
+        var genuine = await relay.AcceptAsync();
+        await genuine.HandshakeAsync(Token);
+        await genuine.SendAsync(NeoMcpWire.Call("2", "take_screenshot", null));
+        Assert.AreEqual("2", (await genuine.ReceiveAsync()).Id);
+        Assert.IsTrue(host.Called);
     }
 
     [TestMethod]
@@ -262,6 +331,8 @@ public sealed class McpPluginTests
         internal TaskCompletionSource ReleaseWait { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> WaitCanceled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal bool Called { get; private set; }
+
         public IReadOnlyList<NeoMcpToolInfo> Tools { get; } = [new("take_screenshot", "Takes a screenshot", Schema, false), new("wait_for", "Waits for a text", Schema, true), new("fail", "Throws", Schema, false)];
 
         public async ValueTask<NeoMcpToolOutcome> CallToolAsync(string name, JsonElement? arguments, CancellationToken cancellationToken)
@@ -269,6 +340,7 @@ public sealed class McpPluginTests
             switch (name)
             {
                 case "take_screenshot":
+                    Called = true;
                     return new("Took a screenshot of the current page's viewport.", [new("image/png", new byte[] { 1, 2, 3 })], false);
                 case "wait_for":
                     WaitStarted.TrySetResult(arguments!.Value.Clone());
@@ -346,6 +418,18 @@ public sealed class McpPluginTests
         internal string Path { get; } = path;
 
         internal Task SendAsync(byte[] message) => socket.SendAsync(message, WebSocketMessageType.Text, true, CancellationToken.None);
+
+        // The handshake of a relay that knows the token: the application must prove it for the challenge before it is welcomed.
+        internal async Task<NeoMcpMessage> HandshakeAsync(string token, string? relayToken = null)
+        {
+            var challenge = NeoMcpWire.NewNonce();
+            await SendAsync(NeoMcpWire.Challenge(challenge));
+            var hello = await ReceiveAsync();
+            Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
+            Assert.IsTrue(NeoMcpWire.IsValidProof(token, NeoMcpWire.ApplicationRole, challenge, hello.Proof), "The application did not prove the token.");
+            await SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(relayToken ?? token, NeoMcpWire.RelayRole, hello.Nonce!)));
+            return hello;
+        }
 
         internal async Task<NeoMcpMessage> ReceiveAsync()
         {

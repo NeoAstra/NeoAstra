@@ -1,0 +1,8 @@
+<Project>
+  <!-- An application on an iPhone reaches the relay of a development session over the local network, which iOS allows only after
+       the user agreed to a usage description. Applications reference this package in their development builds only, so the entry
+       is in those builds alone; NeoAstraMcpLocalNetworkUsage=false leaves it out for an application that declares its own. -->
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios' And '$(NeoAstraMcpLocalNetworkUsage)' != 'false'">
+    <PartialAppManifest Include="$(MSBuildThisFileDirectory)local-network.plist" />
+  </ItemGroup>
+</Project>

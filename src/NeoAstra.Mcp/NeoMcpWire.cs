@@ -2,6 +2,8 @@
 // Licensed under the BSD-Clause 2 license.
 
 using System.Buffers;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 #if NEOASTRA_TOOL
@@ -31,8 +33,14 @@ internal sealed record NeoMcpConnectedApplication(string Id, NeoMcpApplicationIn
 /// <summary>The kinds of messages between an application and the relay.</summary>
 internal enum NeoMcpMessageKind
 {
-    /// <summary>The first message of an application: who it is and the tools it offers.</summary>
+    /// <summary>The first message of the relay to an application: a nonce that the application proves the token of the session with.</summary>
+    Challenge,
+
+    /// <summary>The first message of an application: who it is, the tools it offers, its proof, and a nonce of its own.</summary>
     Hello,
+
+    /// <summary>The answer of the relay to a hello: its proof of the token for the nonce of the application.</summary>
+    Welcome,
 
     /// <summary>The relay asks the application to run a tool.</summary>
     Call,
@@ -73,13 +81,21 @@ internal sealed class NeoMcpMessage
     internal string? Target { get; init; }
 
     internal IReadOnlyList<NeoMcpConnectedApplication>? Applications { get; init; }
+
+    /// <summary>Gets the nonce of a challenge or of a hello.</summary>
+    internal string? Nonce { get; init; }
+
+    /// <summary>Gets the proof of the token of a hello or of a welcome.</summary>
+    internal string? Proof { get; init; }
 }
 
 /// <summary>
 /// The messages between an application and the relay of the NeoAstra tool: one JSON object per text message of a WebSocket. The
-/// application connects to <see cref="Path"/> with the token of the development session as a bearer token, says
-/// <c>hello</c> once, and then answers each <c>call</c> with a <c>result</c> of the same identifier; a <c>cancel</c> tells it
-/// that the relay no longer waits. Calls may overlap.
+/// application connects to <see cref="Path"/>; the relay sends a <c>challenge</c>, the application answers with its
+/// <c>hello</c>, which proves the token of the development session for the nonce of the relay and carries a nonce of its own,
+/// and the relay proves the token in turn in its <c>welcome</c>. The token itself never goes over the connection, which on a
+/// phone crosses the local network. The application then answers each <c>call</c> with a <c>result</c> of the same identifier;
+/// a <c>cancel</c> tells it that the relay no longer waits. Calls may overlap.
 /// </summary>
 /// <remarks>
 /// The MCP server of an agent connects to <see cref="AgentPath"/> with the same token. The relay tells it the connected
@@ -100,14 +116,62 @@ internal static class NeoMcpWire
     /// <summary>The largest message accepted from the other side, which a screenshot of a large display stays far below.</summary>
     internal const int MaximumMessageSize = 64 * 1024 * 1024;
 
-    internal static byte[] Hello(NeoMcpApplicationInfo application, IReadOnlyList<NeoMcpToolInfo> tools)
+    /// <summary>The role of the application in a proof.</summary>
+    internal const string ApplicationRole = "application";
+
+    /// <summary>The role of the relay in a proof.</summary>
+    internal const string RelayRole = "relay";
+
+    /// <summary>A new random nonce.</summary>
+    internal static string NewNonce() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
+    /// <summary>Proves the token for a nonce: an HMAC-SHA256 of the role and the nonce, keyed with the token.</summary>
+    internal static string Proof(string token, string role, string nonce)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(token);
+        return Convert.ToBase64String(HMACSHA256.HashData(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes(role + ":" + nonce)));
+    }
+
+    /// <summary>Checks a proof in constant time.</summary>
+    internal static bool IsValidProof(string token, string role, string nonce, string? proof)
+    {
+        if (proof is null) return false;
+        var expected = Encoding.ASCII.GetBytes(Proof(token, role, nonce));
+        return CryptographicOperations.FixedTimeEquals(expected, Encoding.ASCII.GetBytes(proof));
+    }
+
+    internal static byte[] Challenge(string nonce)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(nonce);
+        return Write(writer =>
+        {
+            writer.WriteString("type", "challenge");
+            writer.WriteString("nonce", nonce);
+        });
+    }
+
+    internal static byte[] Welcome(string proof)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(proof);
+        return Write(writer =>
+        {
+            writer.WriteString("type", "welcome");
+            writer.WriteString("proof", proof);
+        });
+    }
+
+    internal static byte[] Hello(NeoMcpApplicationInfo application, IReadOnlyList<NeoMcpToolInfo> tools, string proof, string nonce)
     {
         ArgumentNullException.ThrowIfNull(application);
         ArgumentNullException.ThrowIfNull(tools);
+        ArgumentException.ThrowIfNullOrEmpty(proof);
+        ArgumentException.ThrowIfNullOrEmpty(nonce);
         return Write(writer =>
         {
             writer.WriteString("type", "hello");
             writer.WriteNumber("protocol", ProtocolVersion);
+            writer.WriteString("proof", proof);
+            writer.WriteString("nonce", nonce);
             writer.WriteString("application", application.Application);
             writer.WriteString("platform", application.Platform);
             writer.WriteString("device", application.Device);
@@ -221,9 +285,13 @@ internal static class NeoMcpWire
             if (root.ValueKind != JsonValueKind.Object) throw new FormatException("A message is a JSON object.");
             return RequiredString(root, "type") switch
             {
+                "challenge" => new NeoMcpMessage { Kind = NeoMcpMessageKind.Challenge, Nonce = RequiredString(root, "nonce") },
+                "welcome" => new NeoMcpMessage { Kind = NeoMcpMessageKind.Welcome, Proof = RequiredString(root, "proof") },
                 "hello" => new NeoMcpMessage
                 {
                     Kind = NeoMcpMessageKind.Hello,
+                    Proof = RequiredString(root, "proof"),
+                    Nonce = RequiredString(root, "nonce"),
                     ProtocolVersion = root.TryGetProperty("protocol", out var protocol) && protocol.TryGetInt32(out var version) ? version : throw new FormatException("A hello names its protocol."),
                     Application = new(RequiredString(root, "application"), RequiredString(root, "platform"), RequiredString(root, "device"),
                         root.TryGetProperty("processId", out var process) && process.TryGetInt32(out var processId) ? processId : 0),

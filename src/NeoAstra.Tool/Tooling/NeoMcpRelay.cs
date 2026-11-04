@@ -13,9 +13,11 @@ namespace NeoAstra.Tooling;
 
 /// <summary>
 /// The relay of a development session: a WebSocket listener on the loopback interface that the applications of the session
-/// connect out to, and that the MCP server of an agent reaches them through. Both present the token of the session. The relay
-/// lists the connected applications for the agent, forwards its calls to the application it names, and answers a call whose
-/// application goes away with an error instead of leaving it waiting.
+/// connect out to, and that the MCP server of an agent reaches them through. The agent presents the token of the session; an
+/// application and the relay prove it to each other without sending it. The relay lists the connected applications for the
+/// agent, forwards its calls to the application it names, and answers a call whose application goes away with an error instead
+/// of leaving it waiting. For a phone that is not connected through a forwarding of the loopback interface, the relay also
+/// listens on an address of the local network, where it accepts applications only.
 /// </summary>
 internal sealed class NeoMcpRelay : IAsyncDisposable
 {
@@ -23,22 +25,30 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     private static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(10);
 
     private readonly HttpListener _listener;
+    private readonly HttpListener? _networkListener;
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentDictionary<string, ApplicationConnection> _applications = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<AgentConnection, byte> _agents = new();
     private readonly Task _accepting;
+    private readonly Task _acceptingNetwork;
     private int _nextApplication;
     private int _nextCall;
     private int _disposed;
 
-    private NeoMcpRelay(HttpListener listener, int port, string token)
+    private NeoMcpRelay(HttpListener listener, HttpListener? networkListener, IPAddress? networkAddress, int port, string token)
     {
         _listener = listener;
+        _networkListener = networkListener;
         Port = port;
         Token = token;
         Url = new Uri($"ws://127.0.0.1:{port}/");
-        _accepting = AcceptLoopAsync();
+        NetworkUrl = networkAddress is null ? null : new UriBuilder("ws", networkAddress.ToString(), port, "/").Uri;
+        _accepting = AcceptLoopAsync(listener, applicationsOnly: false);
+        _acceptingNetwork = networkListener is null ? Task.CompletedTask : AcceptLoopAsync(networkListener, applicationsOnly: true);
     }
+
+    /// <summary>Gets the address of the relay on the local network, which applications on a phone connect to, or <see langword="null"/>.</summary>
+    internal Uri? NetworkUrl { get; }
 
     /// <summary>Gets the port of the relay on the loopback interface.</summary>
     internal int Port { get; }
@@ -46,7 +56,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     /// <summary>Gets the address that applications and agents connect to.</summary>
     internal Uri Url { get; }
 
-    /// <summary>Gets the token of the session, which every connection presents as a bearer token.</summary>
+    /// <summary>Gets the token of the session, which an agent presents as a bearer token and an application proves without sending it.</summary>
     internal string Token { get; }
 
     /// <summary>Gets the applications connected now.</summary>
@@ -54,24 +64,63 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         => _applications.Values.Select(static connection => connection.Description).OrderBy(static application => int.Parse(application.Id, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
 
     /// <summary>Starts a relay on a free port of the loopback interface, with a new random token.</summary>
-    internal static NeoMcpRelay Start()
+    internal static NeoMcpRelay Start() => Start(null);
+
+    /// <summary>Starts a relay that also accepts applications on an address of the local network, for a phone that reaches the machine there.</summary>
+    /// <exception cref="ArgumentException">The address is not a private IPv4 address.</exception>
+    internal static NeoMcpRelay Start(IPAddress? networkAddress)
     {
+        if (networkAddress is not null && !IsPrivateIPv4(networkAddress))
+            throw new ArgumentException("The relay listens on a private IPv4 address of the local network only.", nameof(networkAddress));
         // A port that the system just handed out can be taken again before the listener binds it; try a few.
         for (var attempt = 0; ; attempt++)
         {
             var port = FreePort();
             var listener = new HttpListener();
             listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            HttpListener? network = null;
             try
             {
                 listener.Start();
-                return new NeoMcpRelay(listener, port, NewToken());
+                if (networkAddress is not null)
+                {
+                    network = new HttpListener();
+                    network.Prefixes.Add($"http://{networkAddress}:{port}/");
+                    network.Start();
+                }
+                return new NeoMcpRelay(listener, network, networkAddress, port, NewToken());
             }
             catch (HttpListenerException) when (attempt < 4)
             {
                 listener.Close();
+                network?.Close();
             }
         }
+    }
+
+    /// <summary>Finds the private IPv4 address of this machine on the local network, preferring an interface with a gateway.</summary>
+    /// <returns>The address, or <see langword="null"/> when the machine has none.</returns>
+    internal static IPAddress? FindNetworkAddress()
+    {
+        var candidates = new List<(IPAddress Address, bool HasGateway)>();
+        foreach (var networkInterface in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (networkInterface.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+            if (networkInterface.NetworkInterfaceType is System.Net.NetworkInformation.NetworkInterfaceType.Loopback or System.Net.NetworkInformation.NetworkInterfaceType.Tunnel) continue;
+            var properties = networkInterface.GetIPProperties();
+            var hasGateway = properties.GatewayAddresses.Any(static gateway => gateway.Address.AddressFamily == AddressFamily.InterNetwork && !gateway.Address.Equals(IPAddress.Any));
+            foreach (var unicast in properties.UnicastAddresses)
+                if (IsPrivateIPv4(unicast.Address)) candidates.Add((unicast.Address, hasGateway));
+        }
+        return candidates.OrderByDescending(static candidate => candidate.HasGateway).Select(static candidate => candidate.Address).FirstOrDefault();
+    }
+
+    // 10.0.0.0/8, 172.16.0.0/12, and 192.168.0.0/16: the addresses of a local network, never of the internet.
+    internal static bool IsPrivateIPv4(IPAddress address)
+    {
+        if (address.AddressFamily != AddressFamily.InterNetwork) return false;
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168);
     }
 
     internal static string NewToken()
@@ -82,8 +131,9 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _stop.CancelAsync().ConfigureAwait(false);
         _listener.Close();
-        try { await _accepting.ConfigureAwait(false); }
-        catch (Exception) { /* the listener is closed */ }
+        _networkListener?.Close();
+        try { await Task.WhenAll(_accepting, _acceptingNetwork).ConfigureAwait(false); }
+        catch (Exception) { /* the listeners are closed */ }
         foreach (var application in _applications.Values) application.Socket.Abort();
         foreach (var agent in _agents.Keys) agent.Socket.Abort();
         _stop.Dispose();
@@ -96,26 +146,27 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
 
-    private async Task AcceptLoopAsync()
+    private async Task AcceptLoopAsync(HttpListener listener, bool applicationsOnly)
     {
         while (!_stop.IsCancellationRequested)
         {
             HttpListenerContext context;
-            try { context = await _listener.GetContextAsync().ConfigureAwait(false); }
+            try { context = await listener.GetContextAsync().ConfigureAwait(false); }
             catch (Exception) when (_stop.IsCancellationRequested) { return; }
             catch (HttpListenerException) { return; }
             catch (ObjectDisposedException) { return; }
-            _ = Task.Run(() => HandleAsync(context));
+            _ = Task.Run(() => HandleAsync(context, applicationsOnly));
         }
     }
 
-    private async Task HandleAsync(HttpListenerContext context)
+    private async Task HandleAsync(HttpListenerContext context, bool applicationsOnly)
     {
         var path = context.Request.Url?.AbsolutePath ?? "";
         var isApplication = path == NeoMcpWire.Path;
-        if (!isApplication && path != NeoMcpWire.AgentPath) { Reject(context, 404); return; }
+        // Agents reach the relay on the loopback interface only, never on the local network.
+        if (!isApplication && (applicationsOnly || path != NeoMcpWire.AgentPath)) { Reject(context, 404); return; }
         if (!context.Request.IsWebSocketRequest) { Reject(context, 400); return; }
-        if (!IsAuthorized(context.Request.Headers["Authorization"])) { Reject(context, 401); return; }
+        if (!isApplication && !IsAuthorized(context.Request.Headers["Authorization"])) { Reject(context, 401); return; }
         WebSocket socket;
         try { socket = (await context.AcceptWebSocketAsync(null).ConfigureAwait(false)).WebSocket; }
         catch (Exception exception) when (exception is WebSocketException or HttpListenerException or ObjectDisposedException) { return; }
@@ -153,15 +204,20 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     private async Task ServeApplicationAsync(WebSocket socket)
     {
         NeoMcpMessage hello;
+        var challenge = NeoMcpWire.NewNonce();
         using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
         {
             waiting.CancelAfter(HelloTimeout);
+            await socket.SendAsync(NeoMcpWire.Challenge(challenge), WebSocketMessageType.Text, true, waiting.Token).ConfigureAwait(false);
             var first = await ReceiveAsync(socket, waiting.Token).ConfigureAwait(false);
             if (first is null) return;
             hello = NeoMcpWire.Parse(first.Value);
         }
         if (hello.Kind != NeoMcpMessageKind.Hello) throw new FormatException("An application says hello first.");
         if (hello.ProtocolVersion != NeoMcpWire.ProtocolVersion) throw new FormatException($"The application speaks protocol {hello.ProtocolVersion}; this tool speaks {NeoMcpWire.ProtocolVersion}.");
+        // An application that does not prove the token of the session is not listed, and the relay proves nothing to it.
+        if (!NeoMcpWire.IsValidProof(Token, NeoMcpWire.ApplicationRole, challenge, hello.Proof)) throw new FormatException("The application did not prove the token of the session.");
+        await socket.SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(Token, NeoMcpWire.RelayRole, hello.Nonce!)), WebSocketMessageType.Text, true, _stop.Token).ConfigureAwait(false);
 
         var id = Interlocked.Increment(ref _nextApplication).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var connection = new ApplicationConnection(socket, new(id, hello.Application!, hello.Tools!));

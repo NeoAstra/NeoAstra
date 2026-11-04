@@ -78,6 +78,7 @@ An iOS or Android application (preview) runs against the same loopback developme
 dotnet neoastra dev --platform android            # the connected device or emulator
 dotnet neoastra dev --platform ios                # the booted simulator
 dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android serial, among several
+dotnet neoastra dev --platform ios --device <udid> # a connected iPhone, with the assets of its build
 ```
 
 After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
@@ -110,6 +111,11 @@ application with `dotnet neoastra mcp`; the application connects out to it with 
 the application the address and the token of the relay the same way as the address of the server, in `NEOASTRA_MCP_URL` and
 `NEOASTRA_MCP_TOKEN` and on Android in `files/neoastra-development-mcp`, and removes them when it ends. See
 [Agents and MCP](mcp.md).
+
+On a connected iPhone, which does not reach the loopback interface of the machine, the tool builds the debug build for
+`ios-arm64` with its frontend assets, signed with the `Apple Development` identity unless the project sets `CodesignKey`,
+installs and starts it with `devicectl`, and gives it the relay on the private address of the machine in the local network. A
+change of the frontend needs a new session there; see [Agents and MCP](mcp.md#an-iphone).
 
 ## Build, run, publish, and MSBuild properties
 

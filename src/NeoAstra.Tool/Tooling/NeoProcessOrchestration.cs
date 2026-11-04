@@ -403,10 +403,11 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
             };
             // The relay of the session: an application with the NeoAstra.Mcp plugin connects out to it, and an agent reaches the
             // application through `dotnet neoastra mcp`, which finds the relay in the discovery file of the project.
-            await using var relay = StartRelay(project, Log);
+            // An iPhone reaches the machine on the local network only, so the relay listens on its address there too.
+            await using var relay = StartRelay(project, Log, mobile?.IsPhysicalIOSDevice == true);
             if (relay is not null)
             {
-                backendEnvironment[McpUrlVariable] = relay.Url.AbsoluteUri;
+                backendEnvironment[McpUrlVariable] = (relay.NetworkUrl ?? relay.Url).AbsoluteUri;
                 backendEnvironment[McpTokenVariable] = relay.Token;
             }
             await using var backend = mobile is null
@@ -428,10 +429,16 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         }
     }
 
-    private RelaySession? StartRelay(NeoResolvedProject project, Action<string, string, bool> log)
+    private RelaySession? StartRelay(NeoResolvedProject project, Action<string, string, bool> log, bool onNetwork)
     {
+        System.Net.IPAddress? address = null;
+        if (onNetwork)
+        {
+            address = NeoMcpRelay.FindNetworkAddress();
+            if (address is null) log("mcp", "This machine has no private IPv4 address on a local network: the device cannot reach the relay for agents.", true);
+        }
         NeoMcpRelay relay;
-        try { relay = NeoMcpRelay.Start(); }
+        try { relay = NeoMcpRelay.Start(address); }
         catch (Exception exception) when (exception is System.Net.HttpListenerException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
         {
             // The session runs without the relay: only agents lose their way to the application.
@@ -446,13 +453,15 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         {
             log("mcp", $"The discovery file of the relay could not be written ({exception.GetType().Name}); `dotnet neoastra mcp` will not find this session.", true);
         }
-        log("mcp", $"Agents reach the applications of this session with `dotnet neoastra mcp` (relay on port {relay.Port}).", false);
+        log("mcp", $"Agents reach the applications of this session with `dotnet neoastra mcp` (relay on port {relay.Port}{(relay.NetworkUrl is { } network ? $", for the device at {network.Host}" : "")}).", false);
         return new RelaySession(relay, McpDiscoveryDirectory, project.ProjectDirectory);
     }
 
     private sealed class RelaySession(NeoMcpRelay relay, string directory, string projectDirectory) : IAsyncDisposable
     {
         internal Uri Url => relay.Url;
+
+        internal Uri? NetworkUrl => relay.NetworkUrl;
 
         internal string Token => relay.Token;
 

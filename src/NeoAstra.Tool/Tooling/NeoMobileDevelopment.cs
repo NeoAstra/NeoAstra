@@ -13,9 +13,12 @@ internal enum NeoDevelopmentPlatform
     Android,
 }
 
-/// <summary>An iOS simulator or an Android device or emulator, with its identifier when there is more than one.</summary>
+/// <summary>An iOS simulator or iPhone, or an Android device or emulator, with its identifier when there is more than one.</summary>
 internal sealed record NeoMobileTarget(NeoDevelopmentPlatform Platform, string? Device)
 {
+    /// <summary>Gets whether the target is an iPhone or iPad rather than a simulator: a simulator has a UUID, a device a UDID of its own form.</summary>
+    internal bool IsPhysicalIOSDevice => Platform == NeoDevelopmentPlatform.IOS && Device is not null && !Guid.TryParse(Device, out _);
+
     internal static NeoDevelopmentPlatform ParsePlatform(string? value) => value?.ToLowerInvariant() switch
     {
         null or "" or "desktop" => NeoDevelopmentPlatform.Desktop,
@@ -71,6 +74,7 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
 
     private async Task<INeoChildProcess> StartIOSAsync(NeoResolvedProject project, NeoMobileTarget target, string framework, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
     {
+        if (target.IsPhysicalIOSDevice) return await StartIOSDeviceAsync(project, target.Device!, framework, environment, log, cancellationToken).ConfigureAwait(false);
         string[] scope = ["-f", framework, "-c", "Debug", "-r", "iossimulator-arm64"];
         await RunAsync("build", ["dotnet", "build", .. scope], project, environment, log, cancellationToken).ConfigureAwait(false);
         var properties = await PropertiesAsync(project, environment, log, cancellationToken, [$"-p:TargetFramework={framework}", "-p:Configuration=Debug", "-p:RuntimeIdentifier=iossimulator-arm64"], "TargetDir", "ApplicationId").ConfigureAwait(false);
@@ -87,6 +91,32 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         foreach (var name in new[] { NeoDevelopmentOrchestrator.McpUrlVariable, NeoDevelopmentOrchestrator.McpTokenVariable })
             if (environment.TryGetValue(name, out var value)) launch["SIMCTL_CHILD_" + name] = value;
         return processFactory.Start(new("app", new(["xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", device, identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
+    }
+
+    // An iPhone does not reach the loopback interface of the machine, which is the only place a development server may be: it loads
+    // the assets packaged in its build, and reaches the relay on the address of the machine in the local network.
+    private async Task<INeoChildProcess> StartIOSDeviceAsync(NeoResolvedProject project, string device, string framework, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
+    {
+        var build = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase) { ["NeoAstraBuildFrontend"] = "true" };
+        string[] scope = ["-f", framework, "-c", "Debug", "-r", "ios-arm64"];
+        string[] properties = [$"-p:TargetFramework={framework}", "-p:Configuration=Debug", "-p:RuntimeIdentifier=ios-arm64"];
+        // A project without a signing identity of its own is signed with the Apple Development identity and the profile of its team
+        // that Xcode manages.
+        var identity = (await PropertiesAsync(project, build, log, cancellationToken, properties, "CodesignKey").ConfigureAwait(false)).GetValueOrDefault("CodesignKey");
+        string[] signing = string.IsNullOrWhiteSpace(identity) ? ["-p:CodesignKey=Apple Development"] : [];
+        await RunAsync("build", ["dotnet", "build", .. scope, .. signing], project, build, log, cancellationToken).ConfigureAwait(false);
+        var output = await PropertiesAsync(project, build, log, cancellationToken, properties, "TargetDir", "ApplicationId").ConfigureAwait(false);
+        var directory = Path.GetFullPath(Required(output, "TargetDir"), project.ProjectDirectory);
+        var bundle = Directory.Exists(directory) ? Directory.GetDirectories(directory, "*.app").SingleOrDefault() : null;
+        if (bundle is null) throw new NeoToolException("mobile_build", "The build produced no single app bundle for the device.");
+        var identifier = Required(output, "ApplicationId");
+        await RunAsync("install", ["xcrun", "devicectl", "device", "install", "app", "--device", device, bundle], project, environment, log, cancellationToken).ConfigureAwait(false);
+        log("app", "The device loads the assets of its build: a change of the frontend needs a new session.", false);
+        // devicectl passes the variables with this prefix to the application, without the prefix.
+        var launch = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in new[] { NeoDevelopmentOrchestrator.McpUrlVariable, NeoDevelopmentOrchestrator.McpTokenVariable })
+            if (environment.TryGetValue(name, out var value)) launch["DEVICECTL_CHILD_" + name] = value;
+        return processFactory.Start(new("app", new(["xcrun", "devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", "--console", identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
     }
 
     private async Task<INeoChildProcess> StartAndroidAsync(NeoResolvedProject project, NeoMobileTarget target, string framework, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)

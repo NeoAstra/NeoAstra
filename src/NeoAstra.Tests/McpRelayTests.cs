@@ -25,15 +25,46 @@ public sealed class McpRelayTests
         Assert.IsTrue(relay.Token.Length >= 40);
         Assert.AreNotEqual(relay.Token, NeoMcpRelay.NewToken());
 
-        await AssertRefusedAsync(new Uri(relay.Url, "/neoastra/mcp"), null);
-        await AssertRefusedAsync(new Uri(relay.Url, "/neoastra/mcp"), "Bearer wrong-token-0123456789");
+        await AssertRefusedAsync(new Uri(relay.Url, "/neoastra/mcp/agent"), null);
         await AssertRefusedAsync(new Uri(relay.Url, "/neoastra/mcp/agent"), "Bearer " + relay.Token[..^1]);
         await AssertRefusedAsync(new Uri(relay.Url, "/other"), "Bearer " + relay.Token);
+
+        // An application proves the token for the challenge of the relay; one that cannot is closed and never listed.
+        using (var application = new ClientWebSocket())
+        {
+            await application.ConnectAsync(new Uri(relay.Url, "/neoastra/mcp"), CancellationToken.None);
+            var challenge = App.NeoMcpWire.Parse((await NeoMcpRelay.ReceiveAsync(application, CancellationToken.None))!.Value);
+            Assert.AreEqual(App.NeoMcpMessageKind.Challenge, challenge.Kind);
+            var proof = App.NeoMcpWire.Proof("wrong-token-0123456789", App.NeoMcpWire.ApplicationRole, challenge.Nonce!);
+            await application.SendAsync(App.NeoMcpWire.Hello(new("Intruder", "ios", "device", 1), [], proof, App.NeoMcpWire.NewNonce()), WebSocketMessageType.Text, true, CancellationToken.None);
+            Assert.IsNull(await NeoMcpRelay.ReceiveAsync(application, CancellationToken.None));
+            Assert.AreEqual(0, relay.Applications.Count);
+        }
 
         using var agent = new ClientWebSocket();
         agent.Options.SetRequestHeader("Authorization", "Bearer " + relay.Token);
         await agent.ConnectAsync(new Uri(relay.Url, "/neoastra/mcp/agent"), CancellationToken.None);
         Assert.AreEqual(WebSocketState.Open, agent.State);
+    }
+
+    [TestMethod]
+    public async Task Relay_AcceptsApplicationsButNoAgentOnTheAddressOfTheNetwork()
+    {
+        // For a phone on the local network, the relay listens on the private address of the machine there too.
+        Assert.ThrowsExactly<ArgumentException>(() => NeoMcpRelay.Start(System.Net.IPAddress.Parse("8.8.8.8")));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoMcpRelay.Start(System.Net.IPAddress.IPv6Loopback));
+        Assert.IsTrue(NeoMcpRelay.IsPrivateIPv4(System.Net.IPAddress.Parse("192.168.1.20")));
+        Assert.IsTrue(NeoMcpRelay.IsPrivateIPv4(System.Net.IPAddress.Parse("172.20.0.5")));
+        Assert.IsFalse(NeoMcpRelay.IsPrivateIPv4(System.Net.IPAddress.Parse("172.32.0.5")));
+        Assert.IsFalse(NeoMcpRelay.IsPrivateIPv4(System.Net.IPAddress.Loopback));
+        if (NeoMcpRelay.FindNetworkAddress() is not { } address) { Assert.Inconclusive("This machine has no private IPv4 address."); return; }
+        await using var relay = NeoMcpRelay.Start(address);
+        Assert.AreEqual(new Uri($"ws://{address}:{relay.Port}/"), relay.NetworkUrl);
+        await AssertRefusedAsync(new Uri(relay.NetworkUrl!, "/neoastra/mcp/agent"), "Bearer " + relay.Token);
+
+        await using var phone = Connect(relay.NetworkUrl!, relay.Token, new FakeTools(), new("Sample", "ios", "iPhone SE", 7));
+        await WaitUntilAsync(() => relay.Applications.Count == 1);
+        Assert.AreEqual("iPhone SE", relay.Applications[0].Info.Device);
     }
 
     [TestMethod]
@@ -193,9 +224,11 @@ public sealed class McpRelayTests
         }
     }
 
-    private static App.NeoMcpConnector Connect(NeoMcpRelay relay, FakeTools host, App.NeoMcpApplicationInfo info)
+    private static App.NeoMcpConnector Connect(NeoMcpRelay relay, FakeTools host, App.NeoMcpApplicationInfo info) => Connect(relay.Url, relay.Token, host, info);
+
+    private static App.NeoMcpConnector Connect(Uri url, string token, FakeTools host, App.NeoMcpApplicationInfo info)
     {
-        var connector = new App.NeoMcpConnector(host.Named(info.Application), new(relay.Url, relay.Token), info, TimeSpan.FromMilliseconds(100));
+        var connector = new App.NeoMcpConnector(host.Named(info.Application), new(url, token), info, TimeSpan.FromMilliseconds(100));
         connector.Start();
         return connector;
     }

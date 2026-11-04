@@ -27,7 +27,8 @@ flowchart LR
    ```
 
    An application that builds its plugins itself calls `AddNeoAstraMcp()` on its `NeoPluginBuilder`.
-2. Start the development session as usual, for example `dotnet neoastra dev --platform ios`.
+2. Start the development session as usual, for example `dotnet neoastra dev --platform ios`, or with
+   `--device <UDID>` of a connected iPhone (see [an iPhone](#an-iphone)).
 3. Give the agent the MCP server of the project. It is a command that the agent starts in the project folder:
 
    ```json
@@ -75,27 +76,48 @@ that waits for a text of the page with `wait_for` before it acts sees the page a
 - **The relay.** Every `dotnet neoastra dev` session runs a relay: a WebSocket listener on `127.0.0.1` with a free port and a
   random token of its own. The session gives the address and the token to the application, the same way as the address of the
   development server: in the environment of a desktop backend (`NEOASTRA_MCP_URL`, `NEOASTRA_MCP_TOKEN`), with the
-  `SIMCTL_CHILD_` prefix in the iOS simulator, and on Android through `adb reverse` of the port of the relay and the file
-  `files/neoastra-development-mcp` beside `files/neoastra-development-url`, which only `adb shell run-as` writes. The session
-  removes the forwarding and the file when it ends.
-- **The application.** The `NeoAstra.Mcp` plugin connects out to the relay with the token and offers the tools of
-  `NeoAutomation`. It connects again when the relay goes away, so the session may restart. Without an address and a token it
-  does nothing, not even create the automation of the views. `NeoMcpOptions` sets the options of the automation, such as
-  `AllowScriptEvaluation` and `AllowedDirectories`, and may give a relay of its own.
+  `SIMCTL_CHILD_` prefix in the iOS simulator, with the `DEVICECTL_CHILD_` prefix on an iPhone, and on Android through
+  `adb reverse` of the port of the relay and the file `files/neoastra-development-mcp` beside
+  `files/neoastra-development-url`, which only `adb shell run-as` writes. The session removes the forwarding and the file when
+  it ends.
+- **The application.** The `NeoAstra.Mcp` plugin connects out to the relay and offers the tools of `NeoAutomation`. The
+  relay and the application prove the token to each other without sending it: the relay sends a nonce, the application
+  answers with an HMAC-SHA256 of it keyed with the token and with a nonce of its own, and the relay answers that one in turn
+  before the application runs anything. It connects again when the relay goes away, so the session may restart. Without an
+  address and a token it does nothing, not even create the automation of the views. `NeoMcpOptions` sets the options of the
+  automation, such as `AllowScriptEvaluation` and `AllowedDirectories`, and may give a relay of its own.
 - **The server.** `dotnet neoastra mcp` finds the relay of the session of the project in a discovery file in a folder of the
   user, never in the project, which on macOS and Linux only the user can read. Standard output carries MCP alone.
 
+## An iPhone
+
+An iPhone reaches the machine on the local network only, so `dotnet neoastra dev --platform ios --device <UDID>` with the
+UDID of a connected iPhone (as `xcrun devicectl list devices` shows it) works differently from the simulator:
+
+- The tool builds the debug build for `ios-arm64`, signed with the `Apple Development` identity and the profile of the team that
+  Xcode manages unless the project sets `CodesignKey`, installs it with `devicectl`, and starts it with its console.
+- The application loads the assets of its build: a development server is trusted on the loopback interface only, which the
+  iPhone does not reach. A change of the frontend needs a new session.
+- The relay listens on the private IPv4 address of the machine in the local network too, where it accepts applications only;
+  the iPhone and the machine are on the same network. iOS asks the user once whether the application may find devices on the
+  local network: the package adds the `NSLocalNetworkUsageDescription` that the question shows to the `Info.plist` of an iOS
+  application (`NeoAstraMcpLocalNetworkUsage=false` leaves it out), and the application connects a moment after the user
+  allowed it.
+
 ## Security
 
-The relay listens on the loopback interface only and accepts only connections that present the token of its session; the
-token changes with every session and never enters the project. The plugin follows only a relay on the loopback interface.
-Register the plugin in development builds only: a release build of the template does not reference the package at all. The
-tools can do what the page can do, run scripts in it, and, within `AllowedDirectories`, read and write files; narrow them with
-`NeoMcpOptions.Automation` where that matters.
+The relay accepts agents on the loopback interface only, with the token of its session as a bearer token; the token changes
+with every session and never enters the project. Applications prove the token without sending it, so the token does not cross
+the local network to an iPhone, and neither another machine that pretends to be the relay nor one that pretends to be an
+application gets in. On the local network the relay accepts applications only, and the plugin follows a relay on the loopback
+interface or on a private IPv4 address only. The connection itself is not encrypted: on the local network, what the tools
+answer, such as snapshots and screenshots, can be read by the network. Register the plugin in development builds only: a
+release build of the template does not reference the package at all. The tools can do what the page can do, run scripts in
+it, and, within `AllowedDirectories`, read and write files; narrow them with `NeoMcpOptions.Automation` where that matters.
 
 ## Limitations
 
-- The differences of [browser automation](browser-automation.md#how-it-differs-from-chrome-devtools-mcp) from Chrome DevTools MCP apply; on a phone `resize_page` is not supported
-  and on Android `new_page` is not either.
-- A physical iPhone reaches the relay only over the local network, which the tool does not offer yet.
+- The differences of [browser automation](browser-automation.md#how-it-differs-from-chrome-devtools-mcp) from Chrome
+  DevTools MCP apply; on a phone `resize_page` is not supported and on Android `new_page` is not either.
+- On an iPhone, the session has no development server: a change of the frontend needs a new session.
 - The embedded server speaks MCP over standard input and output only; an application started by the agent serves one agent.

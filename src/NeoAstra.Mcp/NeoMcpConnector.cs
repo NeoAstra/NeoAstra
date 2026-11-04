@@ -83,7 +83,6 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
     private async Task ServeAsync(CancellationToken cancellationToken)
     {
         using var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader("Authorization", "Bearer " + _endpoint.Token);
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         await socket.ConnectAsync(RelayAddress(_endpoint.Url), cancellationToken).ConfigureAwait(false);
 
@@ -97,7 +96,16 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
         using var stop = cancellationToken.Register(() => stopping = StopAsync(socket, send));
         try
         {
-            await SendAsync(socket, send, NeoMcpWire.Hello(_application, _host.Tools), connection.Token).ConfigureAwait(false);
+            // Both sides prove the token of the session without sending it: the relay first, for the nonce of the application,
+            // before the application runs anything that it is sent.
+            var challenge = await ReceiveAsync(socket, connection.Token).ConfigureAwait(false) is { } first ? NeoMcpWire.Parse(first) : null;
+            if (challenge is not { Kind: NeoMcpMessageKind.Challenge, Nonce: { } relayNonce }) throw new FormatException("The relay did not send its challenge.");
+            var nonce = NeoMcpWire.NewNonce();
+            var proof = NeoMcpWire.Proof(_endpoint.Token, NeoMcpWire.ApplicationRole, relayNonce);
+            await SendAsync(socket, send, NeoMcpWire.Hello(_application, _host.Tools, proof, nonce), connection.Token).ConfigureAwait(false);
+            var welcome = await ReceiveAsync(socket, connection.Token).ConfigureAwait(false) is { } second ? NeoMcpWire.Parse(second) : null;
+            if (welcome is not { Kind: NeoMcpMessageKind.Welcome } || !NeoMcpWire.IsValidProof(_endpoint.Token, NeoMcpWire.RelayRole, nonce, welcome.Proof))
+                throw new FormatException("The relay did not prove the token of the session.");
             while (true)
             {
                 var message = await ReceiveAsync(socket, CancellationToken.None).ConfigureAwait(false);
@@ -124,8 +132,9 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             try { await Task.WhenAll(running).ConfigureAwait(false); }
             catch (Exception) { /* each call reports its own outcome; the connection is gone */ }
             foreach (var call in calls.Values) call.Dispose();
-            // The application answers the close of a relay that ended the connection, with the handshake.
-            if (stopping is null && socket.State == WebSocketState.CloseReceived) await StopAsync(socket, send).ConfigureAwait(false);
+            // The application ends the connection with the handshake: when it answers the close of the relay, and when it leaves a
+            // relay that broke the protocol or could not prove the token.
+            if (stopping is null && socket.State is WebSocketState.Open or WebSocketState.CloseReceived) await StopAsync(socket, send).ConfigureAwait(false);
             if (stopping is { } pending) await pending.ConfigureAwait(false);
             send.Dispose();
         }

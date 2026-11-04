@@ -29,22 +29,31 @@ internal sealed record NeoMcpEndpoint(Uri Url, string Token)
     }
 
     /// <summary>Checks the address and the token that an application gave itself.</summary>
-    /// <exception cref="ArgumentException">The address is not a WebSocket address of the loopback interface, or the token is not valid.</exception>
+    /// <exception cref="ArgumentException">The address is not a WebSocket address of the loopback interface or of a private IPv4 address, or the token is not valid.</exception>
     internal static void Validate(NeoMcpOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.RelayUrl is { } url && !IsValidUrl(url))
-            throw new ArgumentException("The relay address must be an absolute ws or wss address of the loopback interface, without user information.", nameof(options));
+            throw new ArgumentException("The relay address must be an absolute ws or wss address of the loopback interface or a private IPv4 address, without user information.", nameof(options));
         if (options.RelayToken is { } token && !IsValidToken(token))
             throw new ArgumentException("The relay token has 16 to 256 ASCII letters, digits, hyphens, and underscores.", nameof(options));
     }
 
     internal static bool IsValidUrl(Uri url)
-        => url.IsAbsoluteUri && (url.Scheme == "ws" || url.Scheme == "wss") && url.UserInfo.Length == 0 && IsLoopback(url);
+        => url.IsAbsoluteUri && (url.Scheme == "ws" || url.Scheme == "wss") && url.UserInfo.Length == 0 && (IsLoopback(url) || IsPrivateNetwork(url));
 
     internal static bool IsValidToken(string token)
         => token.Length is >= 16 and <= 256 && token.All(static value => value is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '-' or '_');
 
     private static bool IsLoopback(Uri url)
         => url.IsLoopback || (IPAddress.TryParse(url.IdnHost, out var address) && IPAddress.IsLoopback(address));
+
+    // A phone reaches the relay on the private IPv4 address of the development machine in the local network; the application and
+    // the relay prove the token of the session to each other there, so neither can be impersonated by another machine.
+    private static bool IsPrivateNetwork(Uri url)
+    {
+        if (!IPAddress.TryParse(url.IdnHost, out var address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168);
+    }
 }

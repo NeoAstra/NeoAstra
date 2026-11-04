@@ -1038,6 +1038,42 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public async Task DevelopmentOrchestrator_LaunchesOnAnIPhoneWithItsAssetsAndTheRelayOnTheLocalNetwork()
+    {
+        // An iPhone does not reach the loopback interface of the machine: it loads the assets of its build, and reaches the relay
+        // on the address of the machine in the local network.
+        using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
+        var output = Path.Combine(fixture.Root, "bin"); Directory.CreateDirectory(Path.Combine(output, "Fixture.app"));
+        var factory = new ScriptedFactory(order);
+        factory.Output["properties"] = new Queue<string>([
+            """{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""",
+            "",
+            $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
+        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
+        const string Device = "00008101-000A1B2C3D4E5F60";
+        Assert.IsTrue(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device).IsPhysicalIOSDevice);
+        Assert.IsFalse(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, "466D6112-4DA1-4624-A96A-38825BC7C7C4").IsPhysicalIOSDevice);
+        Assert.IsFalse(new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null).IsPhysicalIOSDevice);
+        var run = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device), CancellationToken.None);
+        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        factory.App!.Exit(4);
+        Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:properties", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
+        var build = factory.Starts[4];
+        CollectionAssert.IsSubsetOf(new[] { "-r", "ios-arm64", "-p:CodesignKey=Apple Development" }, build.Command.Arguments.ToArray());
+        Assert.AreEqual("true", build.Environment["NeoAstraBuildFrontend"]);
+        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "install", "app", "--device", Device, Path.Combine(output, "Fixture.app") }, factory.Starts[6].Command.Arguments.ToArray());
+        var app = factory.Starts[7];
+        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "process", "launch", "--device", Device, "--terminate-existing", "--console", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
+        Assert.IsFalse(app.Environment.ContainsKey("DEVICECTL_CHILD_NEOASTRA_DEV_URL"));
+        Assert.AreEqual(app.Environment["NEOASTRA_MCP_TOKEN"], app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_TOKEN"]);
+        var relay = new Uri(app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]);
+        if (NeoMcpRelay.FindNetworkAddress() is { } address) Assert.AreEqual(address.ToString(), relay.Host);
+        else Assert.IsTrue(relay.IsLoopback);
+    }
+
+    [TestMethod]
     public async Task DevelopmentOrchestrator_LaunchesAnIOSApplicationWithTheServerInItsEnvironment()
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
