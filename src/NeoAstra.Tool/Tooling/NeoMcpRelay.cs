@@ -220,16 +220,17 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         await socket.SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(Token, NeoMcpWire.RelayRole, hello.Nonce!)), WebSocketMessageType.Text, true, _stop.Token).ConfigureAwait(false);
 
         var id = Interlocked.Increment(ref _nextApplication).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var connection = new ApplicationConnection(socket, new(id, hello.Application!, hello.Tools!));
+        // Everything after the welcome is sealed with the keys of the session, in both directions.
+        var connection = new ApplicationConnection(socket, new(id, hello.Application!, hello.Tools!), NeoMcpChannel.Create(Token, challenge, hello.Nonce!, isRelay: true));
         _applications[id] = connection;
         await BroadcastApplicationsAsync().ConfigureAwait(false);
         try
         {
             while (true)
             {
-                var message = await ReceiveAsync(socket, _stop.Token).ConfigureAwait(false);
+                var message = await ReceiveAsync(socket, _stop.Token, WebSocketMessageType.Binary).ConfigureAwait(false);
                 if (message is null) break;
-                var parsed = NeoMcpWire.Parse(message.Value);
+                var parsed = NeoMcpWire.Parse(connection.Open(message.Value.Span));
                 if (parsed.Kind != NeoMcpMessageKind.Result) throw new FormatException("An application sends only results after its hello.");
                 if (connection.Pending.TryRemove(parsed.Id!, out var pending)) pending.TrySetResult(parsed.Outcome!);
             }
@@ -353,7 +354,11 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     }
 
     // A whole text message, or null when the other side closed the connection.
-    internal static async Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken)
+    internal static Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken)
+        => ReceiveAsync(socket, cancellationToken, WebSocketMessageType.Text);
+
+    // A whole message of the given type, or null when the other side closed the connection.
+    internal static async Task<ReadOnlyMemory<byte>?> ReceiveAsync(WebSocket socket, CancellationToken cancellationToken, WebSocketMessageType type)
     {
         var buffer = new ArrayBufferWriter<byte>(4096);
         while (true)
@@ -364,7 +369,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
             if (buffer.WrittenCount > NeoMcpWire.MaximumMessageSize) throw new FormatException("The message is larger than the relay accepts.");
             if (result.EndOfMessage)
             {
-                if (result.MessageType != WebSocketMessageType.Text) throw new FormatException("The messages are text messages.");
+                if (result.MessageType != type) throw new FormatException($"The messages here are {type} messages.");
                 return buffer.WrittenMemory;
             }
         }
@@ -376,18 +381,35 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
 
         internal WebSocket Socket { get; } = socket;
 
+        // Seals in the order of sending: the channel counts the messages it seals.
         internal async Task SendAsync(byte[] message, CancellationToken cancellationToken)
         {
             await _send.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try { await Socket.SendAsync(message, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false); }
+            try
+            {
+                if (Channel is { } channel) await Socket.SendAsync(channel.Seal(message), WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false);
+                else await Socket.SendAsync(message, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
+            }
             finally { _send.Release(); }
         }
 
-        public void Dispose() => _send.Dispose();
+        protected virtual NeoMcpChannel? Channel => null;
+
+        public virtual void Dispose() => _send.Dispose();
     }
 
-    private sealed class ApplicationConnection(WebSocket socket, NeoMcpConnectedApplication description) : Connection(socket)
+    private sealed class ApplicationConnection(WebSocket socket, NeoMcpConnectedApplication description, NeoMcpChannel channel) : Connection(socket)
     {
+        protected override NeoMcpChannel? Channel => channel;
+
+        internal ReadOnlyMemory<byte> Open(ReadOnlySpan<byte> message) => channel.Open(message);
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            channel.Dispose();
+        }
+
         internal NeoMcpConnectedApplication Description { get; } = description;
 
         internal ConcurrentDictionary<string, TaskCompletionSource<NeoMcpToolOutcome>> Pending { get; } = new(StringComparer.Ordinal);

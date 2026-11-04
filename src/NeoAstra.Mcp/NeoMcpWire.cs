@@ -385,3 +385,84 @@ internal static class NeoMcpWire
         return buffer.WrittenSpan.ToArray();
     }
 }
+
+/// <summary>
+/// The encrypted channel between an application and the relay after their handshake, which on an iPhone crosses the local
+/// network. Each direction has a key of its own, derived with HKDF-SHA256 from the token of the session and the nonces of both
+/// sides, and each message is sealed with AES-GCM under a counter of its direction as the nonce: a message that another machine
+/// changed, replays, reorders, or writes cannot be opened, and the content of the messages, such as screenshots, cannot be read.
+/// </summary>
+internal sealed class NeoMcpChannel : IDisposable
+{
+    private const int TagSize = 16;
+    private readonly AesGcm _sending;
+    private readonly AesGcm _receiving;
+    private readonly byte[] _sendingLabel;
+    private readonly byte[] _receivingLabel;
+    private ulong _sent;
+    private ulong _received;
+
+    private NeoMcpChannel(byte[] sendingKey, byte[] receivingKey, string sendingRole, string receivingRole)
+    {
+        _sending = new AesGcm(sendingKey, TagSize);
+        _receiving = new AesGcm(receivingKey, TagSize);
+        _sendingLabel = Encoding.ASCII.GetBytes(sendingRole);
+        _receivingLabel = Encoding.ASCII.GetBytes(receivingRole);
+        CryptographicOperations.ZeroMemory(sendingKey);
+        CryptographicOperations.ZeroMemory(receivingKey);
+    }
+
+    /// <summary>Creates the channel of one side once the handshake proved the token both ways.</summary>
+    /// <param name="token">The token of the session.</param>
+    /// <param name="relayNonce">The nonce of the challenge of the relay.</param>
+    /// <param name="applicationNonce">The nonce of the hello of the application.</param>
+    /// <param name="isRelay">Whether the channel is the one of the relay.</param>
+    internal static NeoMcpChannel Create(string token, string relayNonce, string applicationNonce, bool isRelay)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(token);
+        var secret = Encoding.UTF8.GetBytes(token);
+        var salt = Encoding.ASCII.GetBytes(relayNonce + "." + applicationNonce);
+        var toApplication = HKDF.DeriveKey(HashAlgorithmName.SHA256, secret, 32, salt, Encoding.ASCII.GetBytes("neoastra-mcp-1 " + NeoMcpWire.RelayRole));
+        var toRelay = HKDF.DeriveKey(HashAlgorithmName.SHA256, secret, 32, salt, Encoding.ASCII.GetBytes("neoastra-mcp-1 " + NeoMcpWire.ApplicationRole));
+        CryptographicOperations.ZeroMemory(secret);
+        return isRelay
+            ? new(toApplication, toRelay, NeoMcpWire.RelayRole, NeoMcpWire.ApplicationRole)
+            : new(toRelay, toApplication, NeoMcpWire.ApplicationRole, NeoMcpWire.RelayRole);
+    }
+
+    /// <summary>Seals the next message of this side; the caller sends the sealed messages in the order it sealed them.</summary>
+    internal byte[] Seal(ReadOnlySpan<byte> message)
+    {
+        var sealedMessage = new byte[message.Length + TagSize];
+        Span<byte> nonce = stackalloc byte[12];
+        WriteCounter(nonce, checked(_sent++));
+        _sending.Encrypt(nonce, message, sealedMessage.AsSpan(0, message.Length), sealedMessage.AsSpan(message.Length), _sendingLabel);
+        return sealedMessage;
+    }
+
+    /// <summary>Opens the next message of the other side.</summary>
+    /// <exception cref="FormatException">The message is not the next one that the other side sealed.</exception>
+    internal byte[] Open(ReadOnlySpan<byte> sealedMessage)
+    {
+        if (sealedMessage.Length < TagSize) throw new FormatException("A sealed message is shorter than its tag.");
+        var message = new byte[sealedMessage.Length - TagSize];
+        Span<byte> nonce = stackalloc byte[12];
+        WriteCounter(nonce, _received);
+        try { _receiving.Decrypt(nonce, sealedMessage[..^TagSize], sealedMessage[^TagSize..], message, _receivingLabel); }
+        catch (AuthenticationTagMismatchException exception) { throw new FormatException("A message of the connection was changed, replayed, or not sealed by the other side.", exception); }
+        _received = checked(_received + 1);
+        return message;
+    }
+
+    public void Dispose()
+    {
+        _sending.Dispose();
+        _receiving.Dispose();
+    }
+
+    private static void WriteCounter(Span<byte> nonce, ulong counter)
+    {
+        nonce.Clear();
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(nonce[4..], counter);
+    }
+}

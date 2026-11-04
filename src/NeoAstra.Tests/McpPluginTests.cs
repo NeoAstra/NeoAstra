@@ -188,7 +188,7 @@ public sealed class McpPluginTests
         Assert.AreEqual("2", screenshot.Id);
         Assert.AreEqual("Took a screenshot of the current page's viewport.", screenshot.Outcome!.Text);
         CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, screenshot.Outcome.Images.Single().Data.ToArray());
-        Assert.AreEqual("ready", (await host.WaitStarted.Task).GetProperty("text")[0].GetString());
+        Assert.AreEqual("ready", (await host.WaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(10))).GetProperty("text")[0].GetString());
         host.ReleaseWait.SetResult();
         var waited = await connection.ReceiveAsync();
         Assert.AreEqual("1", waited.Id);
@@ -214,7 +214,7 @@ public sealed class McpPluginTests
 
         using var wait = JsonDocument.Parse("""{"text":["never"]}""");
         await connection.SendAsync(NeoMcpWire.Call("1", "wait_for", wait.RootElement));
-        await host.WaitStarted.Task;
+        await host.WaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await connection.SendAsync(NeoMcpWire.Cancel("1"));
         Assert.IsTrue(await host.WaitCanceled.Task.WaitAsync(TimeSpan.FromSeconds(10)));
         var canceled = await connection.ReceiveAsync();
@@ -279,6 +279,65 @@ public sealed class McpPluginTests
         await genuine.SendAsync(NeoMcpWire.Call("2", "take_screenshot", null));
         Assert.AreEqual("2", (await genuine.ReceiveAsync()).Id);
         Assert.IsTrue(host.Called);
+    }
+
+    [TestMethod]
+    public void Channel_OpensOnlyTheNextMessageThatTheOtherSideSealed()
+    {
+        var relayNonce = NeoMcpWire.NewNonce();
+        var applicationNonce = NeoMcpWire.NewNonce();
+        using var relay = NeoMcpChannel.Create(Token, relayNonce, applicationNonce, isRelay: true);
+        using var application = NeoMcpChannel.Create(Token, relayNonce, applicationNonce, isRelay: false);
+        var first = relay.Seal("first"u8);
+        var second = relay.Seal("second"u8);
+        // The content does not appear on the network.
+        Assert.AreEqual(-1, first.AsSpan().IndexOf("first"u8));
+        Assert.AreEqual("first", System.Text.Encoding.UTF8.GetString(application.Open(first)));
+        // A replay, or a message of the side itself, is not the next one of the other side.
+        Assert.ThrowsExactly<FormatException>(() => application.Open(first));
+        using (var echo = NeoMcpChannel.Create(Token, relayNonce, applicationNonce, isRelay: true))
+            Assert.ThrowsExactly<FormatException>(() => echo.Open(echo.Seal("mine"u8)));
+        // A changed byte breaks the tag; the message that was sealed next still opens in its place.
+        var changed = (byte[])second.Clone();
+        changed[0] ^= 1;
+        Assert.ThrowsExactly<FormatException>(() => application.Open(changed));
+        Assert.AreEqual("second", System.Text.Encoding.UTF8.GetString(application.Open(second)));
+        Assert.ThrowsExactly<FormatException>(() => application.Open(new byte[3]));
+
+        // The keys depend on the token and on both nonces: a channel of another session opens nothing.
+        using var otherToken = NeoMcpChannel.Create("another-token-0123456789", relayNonce, applicationNonce, isRelay: false);
+        using var otherNonce = NeoMcpChannel.Create(Token, relayNonce, NeoMcpWire.NewNonce(), isRelay: false);
+        var third = relay.Seal("third"u8);
+        Assert.ThrowsExactly<FormatException>(() => otherToken.Open(third));
+        Assert.ThrowsExactly<FormatException>(() => otherNonce.Open(third));
+        Assert.AreEqual("third", System.Text.Encoding.UTF8.GetString(application.Open(third)));
+
+        // The other direction has its own key and counter.
+        Assert.AreEqual("answer", System.Text.Encoding.UTF8.GetString(relay.Open(application.Seal("answer"u8))));
+    }
+
+    [TestMethod]
+    public async Task Connector_RunsNothingThatAnotherMachineChangedOnTheWay()
+    {
+        await using var relay = TestRelay.Start();
+        var host = new FakeToolHost();
+        await using var connector = new NeoMcpConnector(host, new(relay.Url, Token), Application, TimeSpan.FromMilliseconds(100));
+        connector.Start();
+        var connection = await relay.AcceptAsync();
+        await connection.HandshakeAsync(Token);
+
+        // A call written in plain text by another machine, or a sealed call with a changed byte, ends the connection unopened.
+        await connection.SendRawAsync(NeoMcpWire.Call("1", "take_screenshot", null), WebSocketMessageType.Text);
+        Assert.IsTrue(await connection.WaitClosedAsync());
+        Assert.IsFalse(host.Called);
+
+        var again = await relay.AcceptAsync();
+        await again.HandshakeAsync(Token);
+        var sealedCall = again.Channel.Seal(NeoMcpWire.Call("2", "take_screenshot", null));
+        sealedCall[^1] ^= 1;
+        await again.SendRawAsync(sealedCall, WebSocketMessageType.Binary);
+        Assert.IsTrue(await again.WaitClosedAsync());
+        Assert.IsFalse(host.Called);
     }
 
     [TestMethod]
@@ -417,7 +476,18 @@ public sealed class McpPluginTests
 
         internal string Path { get; } = path;
 
-        internal Task SendAsync(byte[] message) => socket.SendAsync(message, WebSocketMessageType.Text, true, CancellationToken.None);
+        private NeoMcpChannel? _channel;
+
+        // Text during the handshake, then sealed with the keys of the session, as the relay of the tool does.
+        internal Task SendAsync(byte[] message)
+            => _channel is { } channel
+                ? socket.SendAsync(channel.Seal(message), WebSocketMessageType.Binary, true, CancellationToken.None)
+                : socket.SendAsync(message, WebSocketMessageType.Text, true, CancellationToken.None);
+
+        // Sends bytes as they are, such as a sealed message that the test changed.
+        internal Task SendRawAsync(byte[] message, WebSocketMessageType type) => socket.SendAsync(message, type, true, CancellationToken.None);
+
+        internal NeoMcpChannel Channel => _channel ?? throw new InvalidOperationException("The handshake is not done.");
 
         // The handshake of a relay that knows the token: the application must prove it for the challenge before it is welcomed.
         internal async Task<NeoMcpMessage> HandshakeAsync(string token, string? relayToken = null)
@@ -428,6 +498,7 @@ public sealed class McpPluginTests
             Assert.AreEqual(NeoMcpMessageKind.Hello, hello.Kind);
             Assert.IsTrue(NeoMcpWire.IsValidProof(token, NeoMcpWire.ApplicationRole, challenge, hello.Proof), "The application did not prove the token.");
             await SendAsync(NeoMcpWire.Welcome(NeoMcpWire.Proof(relayToken ?? token, NeoMcpWire.RelayRole, hello.Nonce!)));
+            _channel = NeoMcpChannel.Create(relayToken ?? token, challenge, hello.Nonce!, isRelay: true);
             return hello;
         }
 
@@ -440,7 +511,13 @@ public sealed class McpPluginTests
                 var result = await socket.ReceiveAsync(buffer.GetMemory(4096), timeout.Token);
                 if (result.MessageType == WebSocketMessageType.Close) throw new InvalidOperationException("The application closed the connection.");
                 buffer.Advance(result.Count);
-                if (result.EndOfMessage) return NeoMcpWire.Parse(buffer.WrittenMemory);
+                if (!result.EndOfMessage) continue;
+                if (_channel is { } channel)
+                {
+                    Assert.AreEqual(WebSocketMessageType.Binary, result.MessageType, "The application sent a message after the handshake that is not sealed.");
+                    return NeoMcpWire.Parse(channel.Open(buffer.WrittenSpan));
+                }
+                return NeoMcpWire.Parse(buffer.WrittenMemory);
             }
         }
 

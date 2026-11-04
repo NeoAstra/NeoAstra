@@ -83,9 +83,11 @@ that waits for a text of the page with `wait_for` before it acts sees the page a
 - **The application.** The `NeoAstra.Mcp` plugin connects out to the relay and offers the tools of `NeoAutomation`. The
   relay and the application prove the token to each other without sending it: the relay sends a nonce, the application
   answers with an HMAC-SHA256 of it keyed with the token and with a nonce of its own, and the relay answers that one in turn
-  before the application runs anything. It connects again when the relay goes away, so the session may restart. Without an
-  address and a token it does nothing, not even create the automation of the views. `NeoMcpOptions` sets the options of the
-  automation, such as `AllowScriptEvaluation` and `AllowedDirectories`, and may give a relay of its own.
+  before the application runs anything. From then on, every message is sealed with AES-GCM under a key of its direction,
+  derived with HKDF-SHA256 from the token and both nonces, and a counter of its direction. It connects again when the relay
+  goes away, so the session may restart. Without an address and a token it does nothing, not even create the automation of
+  the views. `NeoMcpOptions` sets the options of the automation, such as `AllowScriptEvaluation` and `AllowedDirectories`,
+  and may give a relay of its own.
 - **The server.** `dotnet neoastra mcp` finds the relay of the session of the project in a discovery file in a folder of the
   user, never in the project, which on macOS and Linux only the user can read. Standard output carries MCP alone.
 
@@ -109,9 +111,10 @@ UDID of a connected iPhone (as `xcrun devicectl list devices` shows it) works di
 The relay accepts agents on the loopback interface only, with the token of its session as a bearer token; the token changes
 with every session and never enters the project. Applications prove the token without sending it, so the token does not cross
 the local network to an iPhone, and neither another machine that pretends to be the relay nor one that pretends to be an
-application gets in. On the local network the relay accepts applications only, and the plugin follows a relay on the loopback
-interface or on a private IPv4 address only. The connection itself is not encrypted: on the local network, what the tools
-answer, such as snapshots and screenshots, can be read by the network. Register the plugin in development builds only: a
+application gets in. After the handshake the connection is encrypted and authenticated: another machine on the local network
+can neither read what the tools answer, such as snapshots and screenshots, nor change, replay, reorder, or add a message, which
+ends the connection instead. On the local network the relay accepts applications only, and the plugin follows a relay on the
+loopback interface or on a private IPv4 address only. Register the plugin in development builds only: a
 release build of the template does not reference the package at all. The tools can do what the page can do, run scripts in
 it, and, within `AllowedDirectories`, read and write files; narrow them with `NeoMcpOptions.Automation` where that matters.
 
