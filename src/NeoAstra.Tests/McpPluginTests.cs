@@ -567,12 +567,15 @@ public sealed class McpPluginTests
                     var result = await _socket.ReceiveAsync(buffer.GetMemory(4096), CancellationToken.None);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
+                        // The close of the application is the handshake it owes; the answer is a courtesy that the application
+                        // may no longer wait for.
+                        _closed.TrySetResult(true);
                         if (_socket.State == WebSocketState.CloseReceived)
                         {
                             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                            await _socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token);
+                            try { await _socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token); }
+                            catch (Exception exception) when (exception is WebSocketException or OperationCanceledException or ObjectDisposedException) { /* the application is gone already */ }
                         }
-                        _closed.TrySetResult(true);
                         return;
                     }
                     buffer.Advance(result.Count);
