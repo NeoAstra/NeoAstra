@@ -57,7 +57,7 @@ internal enum NeoMcpMessageKind
     /// <summary>The application opens a stream of its tunnel to the development server, for a connection that its view made.</summary>
     StreamOpen,
 
-    /// <summary>Bytes of a stream of the tunnel, in either direction.</summary>
+    /// <summary>Bytes of a stream of the tunnel, in either direction, in a binary message rather than JSON.</summary>
     StreamData,
 
     /// <summary>The end of a stream of the tunnel, from either side.</summary>
@@ -293,19 +293,23 @@ internal static class NeoMcpWire
 
     internal static byte[] StreamClose(string stream) => StreamMessage("close", stream);
 
+    /// <summary>The first byte of a binary message of stream data, which no JSON message starts with.</summary>
+    internal const byte StreamDataMarker = 0x01;
+
+    /// <summary>The size of the header of a binary message of stream data: its marker and the number of the stream.</summary>
+    internal const int StreamDataHeaderSize = 5;
+
+    /// <summary>Writes bytes of a stream of the tunnel as they are, after a marker and the number of the stream, instead of base64 in JSON.</summary>
+    /// <exception cref="ArgumentException">The stream is not the number of a stream.</exception>
     internal static byte[] StreamData(string stream, ReadOnlySpan<byte> data)
     {
-        ArgumentException.ThrowIfNullOrEmpty(stream);
-        var buffer = new ArrayBufferWriter<byte>(data.Length * 4 / 3 + 64);
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("type", "data");
-            writer.WriteString("stream", stream);
-            writer.WriteBase64String("data", data);
-            writer.WriteEndObject();
-        }
-        return buffer.WrittenSpan.ToArray();
+        if (!uint.TryParse(stream, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number))
+            throw new ArgumentException("A stream of the tunnel is a number.", nameof(stream));
+        var message = new byte[StreamDataHeaderSize + data.Length];
+        message[0] = StreamDataMarker;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(message.AsSpan(1, 4), number);
+        data.CopyTo(message.AsSpan(StreamDataHeaderSize));
+        return message;
     }
 
     private static byte[] StreamMessage(string type, string stream)
@@ -322,6 +326,17 @@ internal static class NeoMcpWire
     /// <exception cref="FormatException">The message is not one of these messages.</exception>
     internal static NeoMcpMessage Parse(ReadOnlyMemory<byte> utf8Json)
     {
+        if (!utf8Json.IsEmpty && utf8Json.Span[0] == StreamDataMarker)
+        {
+            if (utf8Json.Length < StreamDataHeaderSize) throw new FormatException("A message of stream data is shorter than its header.");
+            var number = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(utf8Json.Span.Slice(1, 4));
+            return new NeoMcpMessage
+            {
+                Kind = NeoMcpMessageKind.StreamData,
+                Stream = number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Data = utf8Json.Span[StreamDataHeaderSize..].ToArray(),
+            };
+        }
         try
         {
             using var document = JsonDocument.Parse(utf8Json);
@@ -359,12 +374,6 @@ internal static class NeoMcpWire
                 "applications" => new NeoMcpMessage { Kind = NeoMcpMessageKind.Applications, Applications = Applications(root) },
                 "open" => new NeoMcpMessage { Kind = NeoMcpMessageKind.StreamOpen, Stream = RequiredString(root, "stream") },
                 "close" => new NeoMcpMessage { Kind = NeoMcpMessageKind.StreamClose, Stream = RequiredString(root, "stream") },
-                "data" => new NeoMcpMessage
-                {
-                    Kind = NeoMcpMessageKind.StreamData,
-                    Stream = RequiredString(root, "stream"),
-                    Data = root.TryGetProperty("data", out var data) && data.TryGetBytesFromBase64(out var bytes) ? bytes : throw new FormatException("The data of a stream is base64."),
-                },
                 var other => throw new FormatException($"The message type '{other}' is not known."),
             };
         }

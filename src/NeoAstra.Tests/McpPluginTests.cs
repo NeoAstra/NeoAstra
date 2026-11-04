@@ -161,6 +161,20 @@ public sealed class McpPluginTests
 
         Assert.AreEqual(NeoMcpMessageKind.Cancel, NeoMcpWire.Parse(NeoMcpWire.Cancel("7")).Kind);
 
+        // The bytes of a stream go as they are after a header of five bytes, not as base64 in JSON.
+        var bytes = new byte[100_000];
+        Random.Shared.NextBytes(bytes);
+        var binary = NeoMcpWire.StreamData("42", bytes);
+        Assert.AreEqual(bytes.Length + 5, binary.Length);
+        var data = NeoMcpWire.Parse(binary);
+        Assert.AreEqual(NeoMcpMessageKind.StreamData, data.Kind);
+        Assert.AreEqual("42", data.Stream);
+        CollectionAssert.AreEqual(bytes, data.Data);
+        Assert.AreEqual(0, NeoMcpWire.Parse(NeoMcpWire.StreamData("7", [])).Data!.Length);
+        Assert.ThrowsExactly<ArgumentException>(() => NeoMcpWire.StreamData("not-a-number", bytes));
+        Assert.ThrowsExactly<FormatException>(() => NeoMcpWire.Parse(new byte[] { NeoMcpWire.StreamDataMarker, 0, 0 }));
+        Assert.AreEqual(NeoMcpMessageKind.StreamOpen, NeoMcpWire.Parse(NeoMcpWire.StreamOpen("42")).Kind);
+
         foreach (var invalid in new[] { "[]", "not json", """{"type":"reboot"}""", """{"type":"call","id":"1"}""", """{"type":"call","id":1,"name":"click"}""", """{"type":"result","id":"1","text":"x","images":[{"contentType":"image/png","data":"%%"}]}""", """{"type":"hello","protocol":1,"application":"a","platform":"ios","device":"d"}""" })
             Assert.ThrowsExactly<FormatException>(() => NeoMcpWire.Parse(System.Text.Encoding.UTF8.GetBytes(invalid)), invalid);
     }
