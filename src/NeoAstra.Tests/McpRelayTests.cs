@@ -164,6 +164,21 @@ public sealed class McpRelayTests
     }
 
     [TestMethod]
+    public async Task Tunnel_ListensOnBothLoopbackAddressesThatADevelopmentUrlMayName()
+    {
+        // A development URL names 127.0.0.1 or ::1: the view of the phone connects to either at the port of the tunnel.
+        if (!System.Net.Sockets.Socket.OSSupportsIPv6) { Assert.Inconclusive("This machine has no IPv6."); return; }
+        await using var tunnel = new App.NeoMcpTunnel(FreePort());
+        tunnel.Start();
+        foreach (var address in new[] { System.Net.IPAddress.Loopback, System.Net.IPAddress.IPv6Loopback })
+        {
+            using var view = new System.Net.Sockets.TcpClient(address.AddressFamily);
+            await view.ConnectAsync(address, tunnel.Port);
+            Assert.IsTrue(view.Connected, $"The tunnel does not listen on {address}.");
+        }
+    }
+
+    [TestMethod]
     public async Task Tunnel_EndsAStreamWhenTheSessionHasNoDevelopmentServer()
     {
         await using var relay = NeoMcpRelay.Start();

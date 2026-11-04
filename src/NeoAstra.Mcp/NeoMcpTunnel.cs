@@ -10,7 +10,7 @@ namespace NeoAstra.Mcp;
 
 /// <summary>
 /// The tunnel of a phone to the development server of its session: a listener on the loopback interface of the phone, at the
-/// port of the development server, whose connections go as streams through the sealed connection to the relay, which connects
+/// port of the development server and on both <c>127.0.0.1</c> and <c>::1</c>, either of which the development URL names, whose connections go as streams through the sealed connection to the relay, which connects
 /// each of them to the development server on the machine. The view loads the page from <c>127.0.0.1</c> as in a simulator,
 /// with the updates of the server, and nothing outside the phone reaches the listener.
 /// </summary>
@@ -20,6 +20,7 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
     private static readonly TimeSpan AttachTimeout = TimeSpan.FromSeconds(15);
 
     private readonly TcpListener _listener;
+    private TcpListener? _listenerV6;
     private readonly ConcurrentDictionary<string, TcpClient> _streams = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
     private readonly object _gate = new();
@@ -43,7 +44,18 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
     internal void Start()
     {
         _listener.Start();
-        _accepting = AcceptLoopAsync();
+        // A phone without IPv6 on its loopback interface keeps the IPv4 listener, which the development URL names by default.
+        var listenerV6 = new TcpListener(IPAddress.IPv6Loopback, Port);
+        try
+        {
+            listenerV6.Start();
+            _listenerV6 = listenerV6;
+        }
+        catch (SocketException)
+        {
+            listenerV6.Dispose();
+        }
+        _accepting = _listenerV6 is { } v6 ? Task.WhenAll(AcceptLoopAsync(_listener), AcceptLoopAsync(v6)) : AcceptLoopAsync(_listener);
     }
 
     /// <summary>Sends the streams through a new connection to the relay.</summary>
@@ -85,18 +97,19 @@ internal sealed class NeoMcpTunnel : IAsyncDisposable
     {
         await _stop.CancelAsync().ConfigureAwait(false);
         _listener.Stop();
+        _listenerV6?.Stop();
         try { await _accepting.ConfigureAwait(false); }
         catch (Exception) { /* the listener is stopped */ }
         Detach();
         _stop.Dispose();
     }
 
-    private async Task AcceptLoopAsync()
+    private async Task AcceptLoopAsync(TcpListener listener)
     {
         while (!_stop.IsCancellationRequested)
         {
             TcpClient client;
-            try { client = await _listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false); }
+            try { client = await listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false); }
             catch (Exception exception) when (exception is OperationCanceledException or SocketException or ObjectDisposedException) { return; }
             _ = Task.Run(() => PumpAsync(client));
         }

@@ -452,7 +452,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
             if (address is null) log("mcp", "This machine has no private IPv4 address on a local network: the device cannot reach the relay for agents.", true);
         }
         NeoMcpRelay relay;
-        var tunnel = onNetwork ? new System.Net.IPEndPoint(System.Net.IPAddress.Parse(project.DevUrl.IdnHost), project.DevUrl.Port) : null;
+        // The development URL names 127.0.0.1 or [::1]; the relay connects the streams of the tunnel to that address.
+        var tunnel = onNetwork ? new System.Net.IPEndPoint(System.Net.IPAddress.Parse(project.DevUrl.Host.Trim('[', ']')), project.DevUrl.Port) : null;
         try { relay = NeoMcpRelay.Start(address, tunnel); }
         catch (Exception exception) when (exception is System.Net.HttpListenerException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
         {
