@@ -1112,7 +1112,13 @@ public sealed class ToolingTests
         await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         factory.App!.Exit(4);
         await run.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.IsTrue(new Uri(factory.Starts[^1].Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]).IsLoopback);
+        var app = factory.Starts[^1];
+        Assert.IsTrue(new Uri(app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]).IsLoopback);
+        // The iPhone cannot reach a relay on the loopback interface, so nothing tunnels the development server: the application
+        // loads the assets of its build, although it has the plugin.
+        Assert.IsFalse(app.Environment.ContainsKey("DEVICECTL_CHILD_NEOASTRA_MCP_TUNNEL_PORT"));
+        Assert.IsFalse(app.Environment.ContainsKey("DEVICECTL_CHILD_NEOASTRA_DEV_URL"));
+        Assert.AreEqual("true", factory.Starts.Single(static start => start.Label == "build").Environment["NeoAstraBuildFrontend"]);
     }
 
     [TestMethod]

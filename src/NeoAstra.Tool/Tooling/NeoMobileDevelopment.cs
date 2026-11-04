@@ -106,7 +106,9 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
     {
         string[] scope = ["-f", framework, "-c", "Debug", "-r", "ios-arm64"];
         string[] properties = [$"-p:TargetFramework={framework}", "-p:Configuration=Debug", "-p:RuntimeIdentifier=ios-arm64"];
-        var tunnel = environment.ContainsKey(NeoDevelopmentOrchestrator.McpUrlVariable) && await ReferencesMcpAsync(project, environment, log, cancellationToken, properties).ConfigureAwait(false);
+        // The iPhone reaches the relay only on the address of the machine in the local network, not on its loopback interface.
+        var reachable = environment.TryGetValue(NeoDevelopmentOrchestrator.McpUrlVariable, out var relayUrl) && Uri.TryCreate(relayUrl, UriKind.Absolute, out var relay) && !relay.IsLoopback;
+        var tunnel = reachable && await ReferencesMcpAsync(project, environment, log, cancellationToken, properties).ConfigureAwait(false);
         var build = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase) { ["NeoAstraBuildFrontend"] = tunnel ? "false" : "true" };
         // A project without a signing identity of its own is signed with the Apple Development identity and the profile of its team
         // that Xcode manages.
@@ -130,7 +132,9 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         }
         else
         {
-            log("app", "The application has no NeoAstra.Mcp plugin to tunnel the development server: it loads the assets of its build, and a change of the frontend needs a new session.", false);
+            log("app", reachable
+                ? "The application has no NeoAstra.Mcp plugin to tunnel the development server: it loads the assets of its build, and a change of the frontend needs a new session."
+                : "The device cannot reach the relay to tunnel the development server: the application loads the assets of its build, and a change of the frontend needs a new session.", false);
         }
         return processFactory.Start(new("app", new(["xcrun", "devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", "--console", identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
     }
