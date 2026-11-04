@@ -35,8 +35,11 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
     private int _nextCall;
     private int _disposed;
 
-    private NeoMcpRelay(HttpListener listener, HttpListener? networkListener, IPAddress? networkAddress, int port, string token)
+    private readonly IPEndPoint? _tunnelTarget;
+
+    private NeoMcpRelay(HttpListener listener, HttpListener? networkListener, IPAddress? networkAddress, int port, string token, IPEndPoint? tunnelTarget)
     {
+        _tunnelTarget = tunnelTarget;
         _listener = listener;
         _networkListener = networkListener;
         Port = port;
@@ -68,8 +71,14 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
 
     /// <summary>Starts a relay that also accepts applications on an address of the local network, for a phone that reaches the machine there.</summary>
     /// <exception cref="ArgumentException">The address is not a private IPv4 address.</exception>
-    internal static NeoMcpRelay Start(IPAddress? networkAddress)
+    internal static NeoMcpRelay Start(IPAddress? networkAddress) => Start(networkAddress, null);
+
+    /// <summary>Starts a relay that also tunnels the streams of applications to the development server at a loopback address.</summary>
+    /// <exception cref="ArgumentException">The address is not a private IPv4 address, or the development server is not on the loopback interface.</exception>
+    internal static NeoMcpRelay Start(IPAddress? networkAddress, IPEndPoint? tunnelTarget)
     {
+        if (tunnelTarget is not null && !IPAddress.IsLoopback(tunnelTarget.Address))
+            throw new ArgumentException("The relay tunnels to a development server on the loopback interface only.", nameof(tunnelTarget));
         if (networkAddress is not null && !IsPrivateIPv4(networkAddress))
             throw new ArgumentException("The relay listens on a private IPv4 address of the local network only.", nameof(networkAddress));
         // A port that the system just handed out can be taken again before the listener binds it; try a few.
@@ -88,7 +97,7 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
                     network.Prefixes.Add($"http://{networkAddress}:{port}/");
                     network.Start();
                 }
-                return new NeoMcpRelay(listener, network, networkAddress, port, NewToken());
+                return new NeoMcpRelay(listener, network, networkAddress, port, NewToken(), tunnelTarget);
             }
             catch (HttpListenerException) when (attempt < 4)
             {
@@ -231,14 +240,31 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
                 var message = await ReceiveAsync(socket, _stop.Token, WebSocketMessageType.Binary).ConfigureAwait(false);
                 if (message is null) break;
                 var parsed = NeoMcpWire.Parse(connection.Open(message.Value.Span));
-                if (parsed.Kind != NeoMcpMessageKind.Result) throw new FormatException("An application sends only results after its hello.");
-                if (connection.Pending.TryRemove(parsed.Id!, out var pending)) pending.TrySetResult(parsed.Outcome!);
+                switch (parsed.Kind)
+                {
+                    case NeoMcpMessageKind.Result:
+                        if (connection.Pending.TryRemove(parsed.Id!, out var pending)) pending.TrySetResult(parsed.Outcome!);
+                        break;
+                    case NeoMcpMessageKind.StreamOpen:
+                        OpenStream(connection, parsed.Stream!);
+                        break;
+                    case NeoMcpMessageKind.StreamData:
+                        await WriteStreamAsync(connection, parsed.Stream!, parsed.Data!).ConfigureAwait(false);
+                        break;
+                    case NeoMcpMessageKind.StreamClose:
+                        if (connection.Streams.TryRemove(parsed.Stream!, out var closed)) closed.Dispose();
+                        break;
+                    default:
+                        throw new FormatException("An application sends only results and the streams of its tunnel after its hello.");
+                }
             }
         }
         finally
         {
             _applications.TryRemove(id, out _);
             foreach (var pending in connection.Pending.Values) pending.TrySetResult(NeoMcpToolOutcome.Error($"The application {connection.Description.Info.Application} disconnected before it answered."));
+            foreach (var stream in connection.Streams.Values) stream.Dispose();
+            connection.Streams.Clear();
             await BroadcastApplicationsAsync().ConfigureAwait(false);
             connection.Dispose();
         }
@@ -335,6 +361,79 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         }
     }
 
+    // A stream of the tunnel of an application: a connection to the development server, whose bytes go back to the application
+    // until either side ends it. A relay without a development server, or a server that refuses, ends the stream at once.
+    private void OpenStream(ApplicationConnection connection, string id)
+    {
+        var stream = new TunnelStream(_tunnelTarget?.AddressFamily ?? AddressFamily.InterNetwork);
+        if (_tunnelTarget is null || !connection.Streams.TryAdd(id, stream))
+        {
+            stream.Dispose();
+            _ = SendQuietlyAsync(connection, NeoMcpWire.StreamClose(id));
+            return;
+        }
+        stream.Connected = ConnectAsync(stream, _tunnelTarget);
+        _ = Task.Run(async () =>
+        {
+            var buffer = new byte[32 * 1024];
+            try
+            {
+                var server = await stream.Connected.ConfigureAwait(false);
+                while (true)
+                {
+                    var read = await server.ReadAsync(buffer, _stop.Token).ConfigureAwait(false);
+                    if (read == 0) break;
+                    await connection.SendAsync(NeoMcpWire.StreamData(id, buffer.AsSpan(0, read)), _stop.Token).ConfigureAwait(false);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException or OperationCanceledException or WebSocketException or InvalidOperationException)
+            {
+                // The development server, the application, or the relay ended the stream.
+            }
+            if (connection.Streams.TryRemove(new KeyValuePair<string, TunnelStream>(id, stream)))
+            {
+                stream.Dispose();
+                await SendQuietlyAsync(connection, NeoMcpWire.StreamClose(id)).ConfigureAwait(false);
+            }
+        });
+    }
+
+    private async Task<NetworkStream> ConnectAsync(TunnelStream stream, IPEndPoint target)
+    {
+        await stream.Client.ConnectAsync(target, _stop.Token).ConfigureAwait(false);
+        return stream.Client.GetStream();
+    }
+
+    private static async Task WriteStreamAsync(ApplicationConnection connection, string id, byte[] data)
+    {
+        if (!connection.Streams.TryGetValue(id, out var stream)) return;
+        try
+        {
+            var server = await stream.Connected!.ConfigureAwait(false);
+            await server.WriteAsync(data).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException)
+        {
+            if (connection.Streams.TryRemove(new KeyValuePair<string, TunnelStream>(id, stream))) stream.Dispose();
+            await SendQuietlyAsync(connection, NeoMcpWire.StreamClose(id)).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task SendQuietlyAsync(Connection connection, byte[] message)
+    {
+        try { await connection.SendAsync(message, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is WebSocketException or ObjectDisposedException or OperationCanceledException or InvalidOperationException) { /* the application is gone */ }
+    }
+
+    private sealed class TunnelStream(AddressFamily family) : IDisposable
+    {
+        internal TcpClient Client { get; } = new(family) { NoDelay = true };
+
+        internal Task<NetworkStream>? Connected { get; set; }
+
+        public void Dispose() => Client.Dispose();
+    }
+
     private async Task BroadcastApplicationsAsync()
     {
         var message = NeoMcpWire.ApplicationList(Applications);
@@ -413,6 +512,8 @@ internal sealed class NeoMcpRelay : IAsyncDisposable
         internal NeoMcpConnectedApplication Description { get; } = description;
 
         internal ConcurrentDictionary<string, TaskCompletionSource<NeoMcpToolOutcome>> Pending { get; } = new(StringComparer.Ordinal);
+
+        internal ConcurrentDictionary<string, TunnelStream> Streams { get; } = new(StringComparer.Ordinal);
     }
 
     private sealed class AgentConnection(WebSocket socket) : Connection(socket);

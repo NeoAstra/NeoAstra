@@ -53,6 +53,15 @@ internal enum NeoMcpMessageKind
 
     /// <summary>The relay tells the MCP server of an agent which applications are connected.</summary>
     Applications,
+
+    /// <summary>The application opens a stream of its tunnel to the development server, for a connection that its view made.</summary>
+    StreamOpen,
+
+    /// <summary>Bytes of a stream of the tunnel, in either direction.</summary>
+    StreamData,
+
+    /// <summary>The end of a stream of the tunnel, from either side.</summary>
+    StreamClose,
 }
 
 /// <summary>A message between an application and the relay, as read from the connection.</summary>
@@ -87,6 +96,12 @@ internal sealed class NeoMcpMessage
 
     /// <summary>Gets the proof of the token of a hello or of a welcome.</summary>
     internal string? Proof { get; init; }
+
+    /// <summary>Gets the identifier of a stream of the tunnel.</summary>
+    internal string? Stream { get; init; }
+
+    /// <summary>Gets the bytes of a stream of the tunnel.</summary>
+    internal byte[]? Data { get; init; }
 }
 
 /// <summary>
@@ -274,6 +289,35 @@ internal static class NeoMcpWire
         });
     }
 
+    internal static byte[] StreamOpen(string stream) => StreamMessage("open", stream);
+
+    internal static byte[] StreamClose(string stream) => StreamMessage("close", stream);
+
+    internal static byte[] StreamData(string stream, ReadOnlySpan<byte> data)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(stream);
+        var buffer = new ArrayBufferWriter<byte>(data.Length * 4 / 3 + 64);
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("type", "data");
+            writer.WriteString("stream", stream);
+            writer.WriteBase64String("data", data);
+            writer.WriteEndObject();
+        }
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    private static byte[] StreamMessage(string type, string stream)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(stream);
+        return Write(writer =>
+        {
+            writer.WriteString("type", type);
+            writer.WriteString("stream", stream);
+        });
+    }
+
     /// <summary>Reads a message.</summary>
     /// <exception cref="FormatException">The message is not one of these messages.</exception>
     internal static NeoMcpMessage Parse(ReadOnlyMemory<byte> utf8Json)
@@ -313,6 +357,14 @@ internal static class NeoMcpWire
                 },
                 "cancel" => new NeoMcpMessage { Kind = NeoMcpMessageKind.Cancel, Id = RequiredString(root, "id"), Target = OptionalString(root, "target") },
                 "applications" => new NeoMcpMessage { Kind = NeoMcpMessageKind.Applications, Applications = Applications(root) },
+                "open" => new NeoMcpMessage { Kind = NeoMcpMessageKind.StreamOpen, Stream = RequiredString(root, "stream") },
+                "close" => new NeoMcpMessage { Kind = NeoMcpMessageKind.StreamClose, Stream = RequiredString(root, "stream") },
+                "data" => new NeoMcpMessage
+                {
+                    Kind = NeoMcpMessageKind.StreamData,
+                    Stream = RequiredString(root, "stream"),
+                    Data = root.TryGetProperty("data", out var data) && data.TryGetBytesFromBase64(out var bytes) ? bytes : throw new FormatException("The data of a stream is base64."),
+                },
                 var other => throw new FormatException($"The message type '{other}' is not known."),
             };
         }

@@ -99,7 +99,8 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
             ArgumentNullException.ThrowIfNull(application);
             cancellationToken.ThrowIfCancellationRequested();
             var android = OperatingSystem.IsAndroid() ? AndroidDevelopment() : null;
-            var endpoint = NeoMcpEndpoint.Resolve(options, android?.Environment ?? Environment.GetEnvironmentVariable);
+            var environment = android?.Environment ?? Environment.GetEnvironmentVariable;
+            var endpoint = NeoMcpEndpoint.Resolve(options, environment);
             if (endpoint is null && !options.ServeStandardIo) return ValueTask.CompletedTask;
             // An Android application has no entry assembly and no host name of its own: the package and the model name it instead.
             var description = DescribeApplication();
@@ -109,11 +110,29 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
             var host = new NeoAutomationToolHost(_automation);
             if (endpoint is not null)
             {
-                _connector = new NeoMcpConnector(host, endpoint, description, options.ReconnectDelay);
+                _connector = new NeoMcpConnector(host, endpoint, description, options.ReconnectDelay, StartTunnel(NeoMcpEndpoint.TunnelPort(environment)));
                 _connector.Start();
             }
             if (options.ServeStandardIo) _standardIo = ServeStandardIoAsync(application, host, description.Application, _stop.Token);
             return ValueTask.CompletedTask;
+        }
+
+        // On a phone that does not reach the loopback interface of the machine, the session tunnels its development server: the
+        // tunnel listens before the view navigates to it. A port that is taken on the phone leaves the view without the server.
+        private static NeoMcpTunnel? StartTunnel(int? port)
+        {
+            if (port is not { } value) return null;
+            var tunnel = new NeoMcpTunnel(value);
+            try
+            {
+                tunnel.Start();
+                return tunnel;
+            }
+            catch (System.Net.Sockets.SocketException)
+            {
+                tunnel.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                return null;
+            }
         }
 
         // Standard output carries MCP alone while the application runs; the agent that started it ends it by closing its input.

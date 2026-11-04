@@ -93,13 +93,15 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         return processFactory.Start(new("app", new(["xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", device, identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
     }
 
-    // An iPhone does not reach the loopback interface of the machine, which is the only place a development server may be: it loads
-    // the assets packaged in its build, and reaches the relay on the address of the machine in the local network.
+    // An iPhone does not reach the loopback interface of the machine, which is the only place a development server may be. With
+    // the MCP plugin, the application tunnels the server through the relay on the address of the machine in the local network,
+    // so its view loads the page from 127.0.0.1 as in a simulator; without it, the application loads the assets of its build.
     private async Task<INeoChildProcess> StartIOSDeviceAsync(NeoResolvedProject project, string device, string framework, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
     {
-        var build = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase) { ["NeoAstraBuildFrontend"] = "true" };
         string[] scope = ["-f", framework, "-c", "Debug", "-r", "ios-arm64"];
         string[] properties = [$"-p:TargetFramework={framework}", "-p:Configuration=Debug", "-p:RuntimeIdentifier=ios-arm64"];
+        var tunnel = environment.ContainsKey(NeoDevelopmentOrchestrator.McpUrlVariable) && await ReferencesMcpAsync(project, environment, log, cancellationToken, properties).ConfigureAwait(false);
+        var build = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase) { ["NeoAstraBuildFrontend"] = tunnel ? "false" : "true" };
         // A project without a signing identity of its own is signed with the Apple Development identity and the profile of its team
         // that Xcode manages.
         var identity = (await PropertiesAsync(project, build, log, cancellationToken, properties, "CodesignKey").ConfigureAwait(false)).GetValueOrDefault("CodesignKey");
@@ -111,12 +113,42 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         if (bundle is null) throw new NeoToolException("mobile_build", "The build produced no single app bundle for the device.");
         var identifier = Required(output, "ApplicationId");
         await RunAsync("install", ["xcrun", "devicectl", "device", "install", "app", "--device", device, bundle], project, environment, log, cancellationToken).ConfigureAwait(false);
-        log("app", "The device loads the assets of its build: a change of the frontend needs a new session.", false);
         // devicectl passes the variables with this prefix to the application, without the prefix.
         var launch = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase);
         foreach (var name in new[] { NeoDevelopmentOrchestrator.McpUrlVariable, NeoDevelopmentOrchestrator.McpTokenVariable })
             if (environment.TryGetValue(name, out var value)) launch["DEVICECTL_CHILD_" + name] = value;
+        if (tunnel)
+        {
+            launch["DEVICECTL_CHILD_NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri;
+            launch["DEVICECTL_CHILD_" + NeoDevelopmentOrchestrator.McpTunnelPortVariable] = project.DevUrl.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            log("app", "The application has no NeoAstra.Mcp plugin to tunnel the development server: it loads the assets of its build, and a change of the frontend needs a new session.", false);
+        }
         return processFactory.Start(new("app", new(["xcrun", "devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", "--console", identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
+    }
+
+    // Whether the application references the MCP plugin, as a package or as a project, in the build for the device.
+    private async Task<bool> ReferencesMcpAsync(NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken, string[] scope)
+    {
+        var output = new List<string>();
+        string[] arguments = ["dotnet", "msbuild", .. scope, "-getItem:PackageReference", "-getItem:ProjectReference"];
+        await using (var process = processFactory.Start(new("references", new(arguments), project.ProjectDirectory, environment, project.SecretEnvironment, (line, error) => { if (error) log("references", line, true); else lock (output) output.Add(line); })))
+        {
+            var exit = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (exit != 0) throw new NeoToolException("mobile_properties", $"MSBuild could not evaluate the project (exit code {exit}).");
+        }
+        return ReferencesMcp(string.Join('\n', output));
+    }
+
+    internal static bool ReferencesMcp(string output)
+    {
+        using var document = JsonDocument.Parse(output);
+        if (!document.RootElement.TryGetProperty("Items", out var items)) return false;
+        static bool Has(JsonElement items, string kind, string property)
+            => items.TryGetProperty(kind, out var list) && list.EnumerateArray().Any(item => item.TryGetProperty(property, out var value) && string.Equals(value.GetString(), "NeoAstra.Mcp", StringComparison.OrdinalIgnoreCase));
+        return Has(items, "PackageReference", "Identity") || Has(items, "ProjectReference", "Filename");
     }
 
     private async Task<INeoChildProcess> StartAndroidAsync(NeoResolvedProject project, NeoMobileTarget target, string framework, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)

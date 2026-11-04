@@ -98,8 +98,12 @@ UDID of a connected iPhone (as `xcrun devicectl list devices` shows it) works di
 
 - The tool builds the debug build for `ios-arm64`, signed with the `Apple Development` identity and the profile of the team that
   Xcode manages unless the project sets `CodesignKey`, installs it with `devicectl`, and starts it with its console.
-- The application loads the assets of its build: a development server is trusted on the loopback interface only, which the
-  iPhone does not reach. A change of the frontend needs a new session.
+- A development server is trusted on the loopback interface only, which the iPhone does not reach. With the `NeoAstra.Mcp`
+  plugin, the application listens on the port of the development server on its own loopback interface, which nothing outside
+  the iPhone reaches, and tunnels each connection of its view through its encrypted connection to the relay, which connects
+  it to the development server on the machine. The view loads the page from `127.0.0.1` as in the simulator, with the updates
+  of the server. An application without the plugin loads the assets of its build instead, and a change of the frontend needs a
+  new session.
 - The relay listens on the private IPv4 address of the machine in the local network too, where it accepts applications only;
   the iPhone and the machine are on the same network. iOS asks the user once whether the application may find devices on the
   local network: the package adds the `NSLocalNetworkUsageDescription` that the question shows to the `Info.plist` of an iOS
@@ -122,5 +126,6 @@ it, and, within `AllowedDirectories`, read and write files; narrow them with `Ne
 
 - The differences of [browser automation](browser-automation.md#how-it-differs-from-chrome-devtools-mcp) from Chrome
   DevTools MCP apply; on a phone `resize_page` is not supported and on Android `new_page` is not either.
-- On an iPhone, the session has no development server: a change of the frontend needs a new session.
+- On an iPhone, an application without the `NeoAstra.Mcp` plugin has no development server: a change of the frontend needs
+  a new session.
 - The embedded server speaks MCP over standard input and output only; an application started by the agent serves one agent.

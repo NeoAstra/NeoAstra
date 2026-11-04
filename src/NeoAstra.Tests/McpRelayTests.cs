@@ -68,6 +68,102 @@ public sealed class McpRelayTests
     }
 
     [TestMethod]
+    public async Task Tunnel_CarriesTheConnectionsOfTheViewToTheDevelopmentServerAndBack()
+    {
+        // The development server: an echo on the loopback interface of the machine, which upper-cases what it reads.
+        using var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        server.Start();
+        var serving = Task.Run(async () =>
+        {
+            while (true)
+            {
+                var client = await server.AcceptTcpClientAsync();
+                _ = Task.Run(async () =>
+                {
+                    using (client)
+                    {
+                        var stream = client.GetStream();
+                        var buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = await stream.ReadAsync(buffer)) > 0)
+                            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(System.Text.Encoding.ASCII.GetString(buffer, 0, read).ToUpperInvariant()));
+                    }
+                });
+            }
+        });
+        await using var relay = NeoMcpRelay.Start(null, (System.Net.IPEndPoint)server.LocalEndpoint);
+
+        // The phone: the tunnel listens on its loopback interface, at a port of its own here.
+        var tunnel = new App.NeoMcpTunnel(FreePort());
+        tunnel.Start();
+        await using var phone = new App.NeoMcpConnector(new FakeTools().Named("Sample"), new(relay.Url, relay.Token), new("Sample", "ios", "iPhone12,8", 1), TimeSpan.FromMilliseconds(100), tunnel);
+        phone.Start();
+        await WaitUntilAsync(() => relay.Applications.Count == 1);
+
+        // Two connections of the view at once, each with its own stream, both ways; a large message comes back whole.
+        using var first = new System.Net.Sockets.TcpClient();
+        using var second = new System.Net.Sockets.TcpClient();
+        await first.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        await second.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        Assert.AreEqual("GET / HTTP/1.1", await RoundTripAsync(first, "get / http/1.1"));
+        Assert.AreEqual("HELLO", await RoundTripAsync(second, "hello"));
+        var large = new string('a', 200_000);
+        Assert.AreEqual(large.ToUpperInvariant(), await RoundTripAsync(first, large));
+
+        // The view ends a connection: the server sees the end of its stream, and the other connection goes on.
+        first.Close();
+        Assert.AreEqual("STILL", await RoundTripAsync(second, "still"));
+
+        // The relay goes away: the connections of the view end instead of waiting.
+        await relay.DisposeAsync();
+        var buffer = new byte[16];
+        var ended = await second.GetStream().ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.AreEqual(0, ended);
+        server.Stop();
+        _ = serving;
+    }
+
+    [TestMethod]
+    public async Task Tunnel_EndsAStreamWhenTheSessionHasNoDevelopmentServer()
+    {
+        await using var relay = NeoMcpRelay.Start();
+        var tunnel = new App.NeoMcpTunnel(FreePort());
+        tunnel.Start();
+        await using var phone = new App.NeoMcpConnector(new FakeTools().Named("Sample"), new(relay.Url, relay.Token), new("Sample", "ios", "iPhone12,8", 1), TimeSpan.FromMilliseconds(100), tunnel);
+        phone.Start();
+        await WaitUntilAsync(() => relay.Applications.Count == 1);
+        using var view = new System.Net.Sockets.TcpClient();
+        await view.ConnectAsync(System.Net.IPAddress.Loopback, tunnel.Port);
+        await view.GetStream().WriteAsync("GET / HTTP/1.1\r\n\r\n"u8.ToArray());
+        Assert.AreEqual(0, await view.GetStream().ReadAsync(new byte[16]).AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.ThrowsExactly<ArgumentException>(() => NeoMcpRelay.Start(null, new System.Net.IPEndPoint(System.Net.IPAddress.Parse("192.168.1.2"), 5173)));
+    }
+
+    private static async Task<string> RoundTripAsync(System.Net.Sockets.TcpClient client, string text)
+    {
+        var stream = client.GetStream();
+        var bytes = System.Text.Encoding.ASCII.GetBytes(text);
+        await stream.WriteAsync(bytes);
+        var answer = new byte[bytes.Length];
+        var total = 0;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        while (total < answer.Length)
+        {
+            var read = await stream.ReadAsync(answer.AsMemory(total), timeout.Token);
+            if (read == 0) throw new IOException("The tunnel ended the connection.");
+            total += read;
+        }
+        return System.Text.Encoding.ASCII.GetString(answer);
+    }
+
+    private static int FreePort()
+    {
+        using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        probe.Start();
+        return ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+    }
+
+    [TestMethod]
     public async Task Agent_ReachesTheToolsOfTheConnectedApplicationThroughTheRelay()
     {
         await using var relay = NeoMcpRelay.Start();

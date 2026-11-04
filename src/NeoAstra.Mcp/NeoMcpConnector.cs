@@ -34,8 +34,18 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
     private Task? _run;
     private int _disposed;
 
+    private readonly NeoMcpTunnel? _tunnel;
+
     internal NeoMcpConnector(INeoMcpToolHost host, NeoMcpEndpoint endpoint, NeoMcpApplicationInfo application, TimeSpan reconnectDelay)
+        : this(host, endpoint, application, reconnectDelay, null)
     {
+    }
+
+    /// <summary>Creates a connector that also tunnels the connections of the view to the development server through the relay.</summary>
+    /// <remarks>The tunnel is started already, so that it listens before the view navigates; the connector disposes it.</remarks>
+    internal NeoMcpConnector(INeoMcpToolHost host, NeoMcpEndpoint endpoint, NeoMcpApplicationInfo application, TimeSpan reconnectDelay, NeoMcpTunnel? tunnel)
+    {
+        _tunnel = tunnel;
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _application = application ?? throw new ArgumentNullException(nameof(application));
@@ -61,6 +71,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             try { await run.ConfigureAwait(false); }
             catch (OperationCanceledException) { /* the run ends with the stop */ }
         }
+        if (_tunnel is { } tunnel) await tunnel.DisposeAsync().ConfigureAwait(false);
         _stop.Dispose();
     }
 
@@ -107,6 +118,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             if (welcome is not { Kind: NeoMcpMessageKind.Welcome } || !NeoMcpWire.IsValidProof(_endpoint.Token, NeoMcpWire.RelayRole, nonce, welcome.Proof))
                 throw new FormatException("The relay did not prove the token of the session.");
             link.Seal(NeoMcpChannel.Create(_endpoint.Token, relayNonce, nonce, isRelay: false));
+            _tunnel?.Attach(link.SendAsync);
             while (true)
             {
                 var message = await link.ReceiveAsync(CancellationToken.None).ConfigureAwait(false);
@@ -121,13 +133,20 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
                     case NeoMcpMessageKind.Cancel:
                         if (calls.TryRemove(parsed.Id!, out var call)) await call.CancelAsync().ConfigureAwait(false);
                         break;
+                    case NeoMcpMessageKind.StreamData when _tunnel is not null:
+                        await _tunnel.WriteAsync(parsed.Stream!, parsed.Data!, connection.Token).ConfigureAwait(false);
+                        break;
+                    case NeoMcpMessageKind.StreamClose when _tunnel is not null:
+                        _tunnel.Close(parsed.Stream!);
+                        break;
                     default:
-                        throw new FormatException("The relay sends only calls and cancellations.");
+                        throw new FormatException("The relay sends only calls, cancellations, and the streams of the tunnel.");
                 }
             }
         }
         finally
         {
+            _tunnel?.Detach();
             await stop.DisposeAsync().ConfigureAwait(false);
             await connection.CancelAsync().ConfigureAwait(false);
             try { await Task.WhenAll(running).ConfigureAwait(false); }

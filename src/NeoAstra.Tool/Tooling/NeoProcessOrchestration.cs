@@ -352,6 +352,7 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
 {
     internal const string McpUrlVariable = "NEOASTRA_MCP_URL";
     internal const string McpTokenVariable = "NEOASTRA_MCP_TOKEN";
+    internal const string McpTunnelPortVariable = "NEOASTRA_MCP_TUNNEL_PORT";
 
     /// <summary>Gets the folder of the discovery file through which <c>dotnet neoastra mcp</c> finds the relay of the session.</summary>
     internal string McpDiscoveryDirectory { get; init; } = NeoMcpRelayDiscovery.DefaultDirectory;
@@ -404,6 +405,7 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
             // The relay of the session: an application with the NeoAstra.Mcp plugin connects out to it, and an agent reaches the
             // application through `dotnet neoastra mcp`, which finds the relay in the discovery file of the project.
             // An iPhone reaches the machine on the local network only, so the relay listens on its address there too.
+            // It also tunnels the development server for the application there, which reaches it from its own loopback interface.
             await using var relay = StartRelay(project, Log, mobile?.IsPhysicalIOSDevice == true);
             if (relay is not null)
             {
@@ -438,7 +440,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
             if (address is null) log("mcp", "This machine has no private IPv4 address on a local network: the device cannot reach the relay for agents.", true);
         }
         NeoMcpRelay relay;
-        try { relay = NeoMcpRelay.Start(address); }
+        var tunnel = onNetwork ? new System.Net.IPEndPoint(System.Net.IPAddress.Parse(project.DevUrl.IdnHost), project.DevUrl.Port) : null;
+        try { relay = NeoMcpRelay.Start(address, tunnel); }
         catch (Exception exception) when (exception is System.Net.HttpListenerException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
         {
             // The session runs without the relay: only agents lose their way to the application.

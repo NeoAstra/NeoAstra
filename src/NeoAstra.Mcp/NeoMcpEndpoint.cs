@@ -11,6 +11,13 @@ internal sealed record NeoMcpEndpoint(Uri Url, string Token)
     internal const string UrlVariable = "NEOASTRA_MCP_URL";
     internal const string TokenVariable = "NEOASTRA_MCP_TOKEN";
 
+    /// <summary>The port of the development server that a phone tunnels through the relay, from its loopback interface.</summary>
+    internal const string TunnelPortVariable = "NEOASTRA_MCP_TUNNEL_PORT";
+
+    /// <summary>Reads the port of the tunnel of the session, or <see langword="null"/> when the session tunnels nothing.</summary>
+    internal static int? TunnelPort(Func<string, string?> environment)
+        => int.TryParse(environment(TunnelPortVariable), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535 ? port : null;
+
     /// <summary>Finds the relay in the options, else in the environment that a development session gives the application.</summary>
     /// <returns>The relay, or <see langword="null"/> when the application has no complete and valid one.</returns>
     /// <remarks>
