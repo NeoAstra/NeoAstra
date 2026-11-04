@@ -104,7 +104,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
         // Canceling a receive would abort the socket without a close; a stop sends the close instead, and the receive ends with
         // the answer of the relay, or with the abort of a relay that does not answer.
         Task? stopping = null;
-        using var stop = cancellationToken.Register(() => stopping = link.StopAsync());
+        using var stop = cancellationToken.Register(() => stopping = link.StopAsync(receiving: true));
         try
         {
             // Both sides prove the token of the session without sending it: the relay first, for the nonce of the application,
@@ -154,7 +154,7 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             foreach (var call in calls.Values) call.Dispose();
             // The application ends the connection with the handshake: when it answers the close of the relay, and when it leaves a
             // relay that broke the protocol or could not prove the token.
-            if (stopping is null && socket.State is WebSocketState.Open or WebSocketState.CloseReceived) await link.StopAsync().ConfigureAwait(false);
+            if (stopping is null && socket.State is WebSocketState.Open or WebSocketState.CloseReceived) await link.StopAsync(receiving: false).ConfigureAwait(false);
             if (stopping is { } pending) await pending.ConfigureAwait(false);
         }
     }
@@ -242,8 +242,9 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
             }
         }
 
-        // Sends the close, then gives the relay a moment to answer it before the socket is aborted.
-        internal async Task StopAsync()
+        // Sends the close, then gives the relay a moment to answer it before the socket is aborted. While the loop still receives,
+        // it reads the answer; once it ended, the close reads the answer itself.
+        internal async Task StopAsync(bool receiving)
         {
             try
             {
@@ -252,7 +253,10 @@ internal sealed class NeoMcpConnector : IAsyncDisposable
                 try
                 {
                     if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, closing.Token).ConfigureAwait(false);
+                    {
+                        if (receiving || socket.State == WebSocketState.CloseReceived) await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, closing.Token).ConfigureAwait(false);
+                        else await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, closing.Token).ConfigureAwait(false);
+                    }
                 }
                 finally { _send.Release(); }
                 while (socket.State is not (WebSocketState.Closed or WebSocketState.Aborted) && !closing.IsCancellationRequested)

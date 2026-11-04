@@ -53,6 +53,8 @@ public sealed class McpPluginTests
         var condition = (string?)manifest.Parent!.Attribute("Condition");
         StringAssert.Contains(condition, "== 'ios'");
         StringAssert.Contains(condition, "'$(NeoAstraMcpLocalNetworkUsage)' != 'false'");
+        // A simulator reaches the relay on the loopback interface of the machine and needs no question about the local network.
+        StringAssert.Contains(condition, "!$(RuntimeIdentifier.StartsWith('iossimulator'))");
         StringAssert.Contains(File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Mcp", "Build", "local-network.plist")), "<key>NSLocalNetworkUsageDescription</key>");
         var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src", "NeoAstra.Mcp", "NeoAstra.Mcp.csproj"));
         var packed = project.Descendants("None").Select(static item => (string?)item.Attribute("PackagePath")).ToArray();
@@ -470,22 +472,35 @@ public sealed class McpPluginTests
         }
     }
 
-    private sealed class RelayConnection(WebSocket socket, string? authorization, string path)
+    // A connection of the relay of the test. It reads the application all the time, as the relay of the tool does, so that it
+    // answers the close of the application at once; the test takes the messages from a queue.
+    private sealed class RelayConnection
     {
-        internal string? Authorization { get; } = authorization;
-
-        internal string Path { get; } = path;
-
+        private readonly WebSocket _socket;
+        private readonly System.Threading.Channels.Channel<(byte[] Data, WebSocketMessageType Type)> _messages = System.Threading.Channels.Channel.CreateUnbounded<(byte[], WebSocketMessageType)>();
+        private readonly TaskCompletionSource<bool> _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private NeoMcpChannel? _channel;
+
+        internal RelayConnection(WebSocket socket, string? authorization, string path)
+        {
+            _socket = socket;
+            Authorization = authorization;
+            Path = path;
+            _ = Task.Run(PumpAsync);
+        }
+
+        internal string? Authorization { get; }
+
+        internal string Path { get; }
 
         // Text during the handshake, then sealed with the keys of the session, as the relay of the tool does.
         internal Task SendAsync(byte[] message)
             => _channel is { } channel
-                ? socket.SendAsync(channel.Seal(message), WebSocketMessageType.Binary, true, CancellationToken.None)
-                : socket.SendAsync(message, WebSocketMessageType.Text, true, CancellationToken.None);
+                ? _socket.SendAsync(channel.Seal(message), WebSocketMessageType.Binary, true, CancellationToken.None)
+                : _socket.SendAsync(message, WebSocketMessageType.Text, true, CancellationToken.None);
 
         // Sends bytes as they are, such as a sealed message that the test changed.
-        internal Task SendRawAsync(byte[] message, WebSocketMessageType type) => socket.SendAsync(message, type, true, CancellationToken.None);
+        internal Task SendRawAsync(byte[] message, WebSocketMessageType type) => _socket.SendAsync(message, type, true, CancellationToken.None);
 
         internal NeoMcpChannel Channel => _channel ?? throw new InvalidOperationException("The handshake is not done.");
 
@@ -504,44 +519,62 @@ public sealed class McpPluginTests
 
         internal async Task<NeoMcpMessage> ReceiveAsync()
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            var buffer = new ArrayBufferWriter<byte>();
-            while (true)
+            (byte[] Data, WebSocketMessageType Type) message;
+            try { message = await _messages.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch (ChannelClosedException) { throw new InvalidOperationException("The application closed the connection."); }
+            if (_channel is { } channel)
             {
-                var result = await socket.ReceiveAsync(buffer.GetMemory(4096), timeout.Token);
-                if (result.MessageType == WebSocketMessageType.Close) throw new InvalidOperationException("The application closed the connection.");
-                buffer.Advance(result.Count);
-                if (!result.EndOfMessage) continue;
-                if (_channel is { } channel)
-                {
-                    Assert.AreEqual(WebSocketMessageType.Binary, result.MessageType, "The application sent a message after the handshake that is not sealed.");
-                    return NeoMcpWire.Parse(channel.Open(buffer.WrittenSpan));
-                }
-                return NeoMcpWire.Parse(buffer.WrittenMemory);
+                Assert.AreEqual(WebSocketMessageType.Binary, message.Type, "The application sent a message after the handshake that is not sealed.");
+                return NeoMcpWire.Parse(channel.Open(message.Data));
             }
+            return NeoMcpWire.Parse(message.Data);
         }
 
         internal async Task CloseAsync()
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await socket.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, "relay restarts", timeout.Token);
+            await _socket.CloseOutputAsync(WebSocketCloseStatus.EndpointUnavailable, "relay restarts", timeout.Token);
         }
 
         // Whether the application closed the connection with the close handshake, rather than dropping it.
         internal async Task<bool> WaitClosedAsync()
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var buffer = new byte[4096];
+            try { return await _closed.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (TimeoutException) { return false; }
+        }
+
+        private async Task PumpAsync()
+        {
+            var buffer = new ArrayBufferWriter<byte>();
             try
             {
                 while (true)
                 {
-                    var result = await socket.ReceiveAsync(buffer, timeout.Token);
-                    if (result.MessageType == WebSocketMessageType.Close) return true;
+                    var result = await _socket.ReceiveAsync(buffer.GetMemory(4096), CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        if (_socket.State == WebSocketState.CloseReceived)
+                        {
+                            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                            await _socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, timeout.Token);
+                        }
+                        _closed.TrySetResult(true);
+                        return;
+                    }
+                    buffer.Advance(result.Count);
+                    if (!result.EndOfMessage) continue;
+                    await _messages.Writer.WriteAsync((buffer.WrittenSpan.ToArray(), result.MessageType));
+                    buffer.ResetWrittenCount();
                 }
             }
-            catch (WebSocketException) { return false; }
-            catch (OperationCanceledException) { return false; }
+            catch (Exception exception) when (exception is WebSocketException or OperationCanceledException or ObjectDisposedException)
+            {
+                _closed.TrySetResult(false);
+            }
+            finally
+            {
+                _messages.Writer.TryComplete();
+            }
         }
     }
 }
