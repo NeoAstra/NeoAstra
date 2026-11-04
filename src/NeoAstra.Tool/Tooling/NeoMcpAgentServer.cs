@@ -30,11 +30,8 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
     private readonly Func<NeoMcpRelaySession?> _findSession;
     private readonly SemaphoreSlim _connecting = new(1, 1);
     private readonly SemaphoreSlim _send = new(1, 1);
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<NeoMcpToolOutcome>> _pending = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _stop = new();
-    private ClientWebSocket? _socket;
-    private Task? _receiving;
-    private TaskCompletionSource _firstList = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Link? _link;
     private IReadOnlyList<NeoMcpConnectedApplication> _applications = [];
     private string? _selected;
     private int _nextCall;
@@ -157,13 +154,13 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         await _stop.CancelAsync().ConfigureAwait(false);
-        _socket?.Abort();
-        if (_receiving is { } receiving)
+        if (_link is { } link)
         {
-            try { await receiving.ConfigureAwait(false); }
+            link.Socket.Abort();
+            try { await link.Receiving.ConfigureAwait(false); }
             catch (Exception) { /* the connection is aborted */ }
+            link.Socket.Dispose();
         }
-        _socket?.Dispose();
         _stop.Dispose();
     }
 
@@ -197,17 +194,20 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
 
     private async Task<NeoMcpToolOutcome> ForwardAsync(string target, string name, JsonElement? arguments, CancellationToken cancellationToken)
     {
+        // The call belongs to the connection it went out on: a connection that ends answers only its own calls.
+        if (_link is not { } link) return NeoMcpToolOutcome.Error("The development session ended before the application answered.");
         var id = Interlocked.Increment(ref _nextCall).ToString(CultureInfo.InvariantCulture);
         var pending = new TaskCompletionSource<NeoMcpToolOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pending[id] = pending;
+        link.Pending[id] = pending;
+        if (link.Ended) pending.TrySetResult(NeoMcpToolOutcome.Error("The development session ended before the application answered."));
         try
         {
-            await SendAsync(NeoMcpWire.Call(id, name, arguments, target), cancellationToken).ConfigureAwait(false);
+            await SendAsync(link, NeoMcpWire.Call(id, name, arguments, target), cancellationToken).ConfigureAwait(false);
             return await pending.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            try { await SendAsync(NeoMcpWire.Cancel(id, target), CancellationToken.None).ConfigureAwait(false); }
+            try { await SendAsync(link, NeoMcpWire.Cancel(id, target), CancellationToken.None).ConfigureAwait(false); }
             catch (Exception exception) when (exception is WebSocketException or ObjectDisposedException or InvalidOperationException) { /* the session is gone */ }
             throw;
         }
@@ -217,29 +217,28 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
         }
         finally
         {
-            _pending.TryRemove(id, out _);
+            link.Pending.TryRemove(id, out _);
         }
     }
 
-    private async Task SendAsync(byte[] message, CancellationToken cancellationToken)
+    private async Task SendAsync(Link link, byte[] message, CancellationToken cancellationToken)
     {
-        var socket = _socket ?? throw new InvalidOperationException("No session is connected.");
         await _send.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { await socket.SendAsync(message, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false); }
+        try { await link.Socket.SendAsync(message, WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false); }
         finally { _send.Release(); }
     }
 
     // Connects to the relay of the session of the project when there is one and the server is not connected yet.
     private async Task<bool> TryConnectAsync(CancellationToken cancellationToken)
     {
-        if (_socket is { State: WebSocketState.Open }) return true;
+        if (_link is { Socket.State: WebSocketState.Open }) return true;
         await _connecting.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_socket is { State: WebSocketState.Open }) return true;
+            if (_link is { Socket.State: WebSocketState.Open }) return true;
             var session = _findSession();
             if (session is null) return false;
-            _socket?.Dispose();
+            _link?.Socket.Dispose();
             var socket = new ClientWebSocket();
             socket.Options.SetRequestHeader("Authorization", "Bearer " + session.Token);
             socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
@@ -254,12 +253,16 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
                 socket.Dispose();
                 return false;
             }
-            _firstList = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            _socket = socket;
-            _receiving = Task.Run(() => ReceiveLoopAsync(socket));
+            // The applications of an earlier connection are gone with it, whenever its receive loop notices.
+            var had = _applications.Count != 0;
+            _applications = [];
+            var link = new Link(socket);
+            _link = link;
+            link.Receiving = Task.Run(() => ReceiveLoopAsync(link));
             // The relay lists the applications first; the tools of the agent come from that list.
-            try { await _firstList.Task.WaitAsync(timeout.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return socket.State == WebSocketState.Open; }
+            try { await link.FirstList.Task.WaitAsync(timeout.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { /* the list comes later */ }
+            if (had && _applications.Count == 0) await NotifyToolsChangedAsync().ConfigureAwait(false);
             return socket.State == WebSocketState.Open;
         }
         finally
@@ -268,26 +271,28 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
         }
     }
 
-    private async Task ReceiveLoopAsync(ClientWebSocket socket)
+    private async Task ReceiveLoopAsync(Link link)
     {
         try
         {
             while (true)
             {
-                var message = await NeoMcpRelay.ReceiveAsync(socket, _stop.Token).ConfigureAwait(false);
+                var message = await NeoMcpRelay.ReceiveAsync(link.Socket, _stop.Token).ConfigureAwait(false);
                 if (message is null) break;
                 var parsed = NeoMcpWire.Parse(message.Value);
                 switch (parsed.Kind)
                 {
                     case NeoMcpMessageKind.Applications:
+                        // A connection that another one replaced meanwhile no longer speaks for the session.
+                        if (!ReferenceEquals(_link, link)) return;
                         var before = Current()?.Id;
                         var changed = !SameApplications(_applications, parsed.Applications!);
                         _applications = parsed.Applications!;
-                        _firstList.TrySetResult();
+                        link.FirstList.TrySetResult();
                         if (changed || before != Current()?.Id) await NotifyToolsChangedAsync().ConfigureAwait(false);
                         break;
                     case NeoMcpMessageKind.Result:
-                        if (_pending.TryRemove(parsed.Id!, out var pending)) pending.TrySetResult(parsed.Outcome!);
+                        if (link.Pending.TryRemove(parsed.Id!, out var pending)) pending.TrySetResult(parsed.Outcome!);
                         break;
                     default:
                         throw new FormatException("The relay sends only the applications and results.");
@@ -300,11 +305,16 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
         }
         finally
         {
-            _firstList.TrySetResult();
-            foreach (var pending in _pending.Values) pending.TrySetResult(NeoMcpToolOutcome.Error("The development session ended before the application answered."));
-            var had = _applications.Count != 0;
-            _applications = [];
-            if (had && !_stop.IsCancellationRequested) await NotifyToolsChangedAsync().ConfigureAwait(false);
+            link.Ended = true;
+            link.FirstList.TrySetResult();
+            foreach (var pending in link.Pending.Values) pending.TrySetResult(NeoMcpToolOutcome.Error("The development session ended before the application answered."));
+            // Only the current connection clears the applications: one that another replaced leaves the new one alone.
+            if (ReferenceEquals(_link, link))
+            {
+                var had = _applications.Count != 0;
+                _applications = [];
+                if (had && !_stop.IsCancellationRequested) await NotifyToolsChangedAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -323,6 +333,16 @@ internal sealed class NeoMcpAgentServer : IAsyncDisposable
         InputSchema = JsonDocument.Parse(schema).RootElement.Clone(),
         Annotations = new ToolAnnotations { ReadOnlyHint = name == ListApplicationsTool },
     };
+
+    // One connection to the relay: its socket, the calls that went out on it, and whether it listed the applications yet.
+    private sealed class Link(ClientWebSocket socket)
+    {
+        public ClientWebSocket Socket { get; } = socket;
+        public TaskCompletionSource FirstList { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ConcurrentDictionary<string, TaskCompletionSource<NeoMcpToolOutcome>> Pending { get; } = new(StringComparer.Ordinal);
+        public Task Receiving { get; set; } = Task.CompletedTask;
+        public volatile bool Ended;
+    }
 
     private static CallToolResult Text(string text, bool isError) => new() { IsError = isError, Content = [new TextContentBlock { Text = text }] };
 

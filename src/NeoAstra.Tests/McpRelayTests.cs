@@ -296,6 +296,29 @@ public sealed class McpRelayTests
     }
 
     [TestMethod]
+    public async Task Agent_FollowsASessionThatRestartsWithTheApplicationsOfTheNewOne()
+    {
+        NeoMcpRelaySession? session = null;
+        await using var agent = await AgentClient.StartAsync(() => session);
+        for (var round = 1; round <= 3; round++)
+        {
+            await using var relay = NeoMcpRelay.Start();
+            await using var phone = Connect(relay, new FakeTools(), new("Sample" + round, "ios", "iPhone 17e", 100 + round));
+            await WaitUntilAsync(() => relay.Applications.Count == 1);
+            session = new(relay.Url, relay.Token, Environment.ProcessId);
+            // The connection to the session before ends while the server already connects to this one: what it leaves behind
+            // must not hide the application of this session.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+            while (Text(await agent.Client.CallToolAsync("take_screenshot", new Dictionary<string, object?>())) != $"Took a screenshot of Sample{round}.")
+            {
+                if (DateTime.UtcNow > deadline) Assert.Fail($"The server did not follow the session of round {round}.");
+                await Task.Delay(50);
+            }
+            StringAssert.Contains(Text(await agent.Client.CallToolAsync("list_apps", new Dictionary<string, object?>())), "Sample" + round);
+        }
+    }
+
+    [TestMethod]
     public void Discovery_IsPerProjectPrivateToTheUserAndIgnoresAnEndedSession()
     {
         var directory = Path.Combine(Path.GetTempPath(), "neoastra-mcp-discovery-" + Guid.NewGuid().ToString("N"));
