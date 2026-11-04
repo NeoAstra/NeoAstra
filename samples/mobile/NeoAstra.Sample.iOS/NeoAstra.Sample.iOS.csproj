@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Mcp/NeoAstra.Mcp.csproj" Condition="'$(Configuration)' == 'Debug'" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Purchases/NeoAstra.Purchases.csproj" />
