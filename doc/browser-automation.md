@@ -10,6 +10,9 @@ WebView2, WKWebView, and WebKitGTK.
 NeoAstra does not open a Model Context Protocol (MCP) server. It provides the operations, and the host
 decides whether to expose them: through an MCP server, to a test, or to anything else.
 
+In a development session, the `NeoAstra.Mcp` plugin and `dotnet neoastra mcp` bring the operations to an agent without a
+server in the application, on the desktop and on a phone: see [Agents and MCP](mcp.md).
+
 ## Turning it on
 
 ```csharp

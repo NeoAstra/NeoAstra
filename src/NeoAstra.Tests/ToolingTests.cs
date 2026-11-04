@@ -843,10 +843,26 @@ public sealed class ToolingTests
     {
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
         var contract = new FakeProcess(); contract.Exit(0); var frontend = new FakeProcess(); var backend = new FakeProcess(); var factory = new FakeFactory(order, contract, frontend, backend); var readiness = new FakeReadiness(order);
-        var task = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, CancellationToken.None);
+        var discovery = Path.Combine(fixture.Root, "discovery");
+        var task = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = discovery }.RunAsync(project, CancellationToken.None);
         await readiness.Started.Task.WaitAsync(TimeSpan.FromSeconds(1)); readiness.Release.SetResult();
-        await factory.BackendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1)); backend.Exit(7);
-        Assert.AreEqual(7, await task.WaitAsync(TimeSpan.FromSeconds(1)));
+        await factory.BackendStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        // The backend gets the relay of the session, which `dotnet neoastra mcp` finds in the discovery file of the project.
+        var relayUrl = new Uri(factory.Starts[2].Environment["NEOASTRA_MCP_URL"]);
+        var relayToken = factory.Starts[2].Environment["NEOASTRA_MCP_TOKEN"];
+        Assert.IsTrue(relayUrl.IsLoopback);
+        Assert.AreEqual(new NeoMcpRelaySession(relayUrl, relayToken, Environment.ProcessId), NeoMcpRelayDiscovery.TryRead(discovery, project.ProjectDirectory));
+        using (var agent = new System.Net.WebSockets.ClientWebSocket())
+        {
+            agent.Options.SetRequestHeader("Authorization", "Bearer " + relayToken);
+            await agent.ConnectAsync(new Uri(relayUrl, "/neoastra/mcp/agent"), CancellationToken.None);
+        }
+        backend.Exit(7);
+        Assert.AreEqual(7, await task.WaitAsync(TimeSpan.FromSeconds(5)));
+        // The relay goes with the session.
+        Assert.IsNull(NeoMcpRelayDiscovery.TryRead(discovery, project.ProjectDirectory));
+        using (var late = new System.Net.WebSockets.ClientWebSocket())
+            await Assert.ThrowsAsync<System.Net.WebSockets.WebSocketException>(() => late.ConnectAsync(new Uri(relayUrl, "/neoastra/mcp/agent"), CancellationToken.None));
         CollectionAssert.AreEqual(new[] { "start:contract", "start:frontend", "readiness", "start:backend" }, order);
         Assert.IsTrue(frontend.Stopped); Assert.IsTrue(backend.Stopped);
         CollectionAssert.AreEqual(project.ContractCommand.Arguments.ToArray(), factory.Starts[0].Command.Arguments.ToArray());
@@ -884,23 +900,31 @@ public sealed class ToolingTests
         var factory = new ScriptedFactory(order);
         factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
         var readiness = new FakeReadiness(order); readiness.Release.SetResult();
-        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None);
+        var run = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None);
         await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         factory.App!.Exit(3);
         Assert.AreEqual(3, await run.WaitAsync(TimeSpan.FromSeconds(5)));
 
-        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:reverse", "start:address", "start:launch", "start:launch", "start:app", "start:cleanup", "start:cleanup" }, order);
+        CollectionAssert.AreEqual(new[] { "start:properties", "start:contract", "start:frontend", "readiness", "start:build", "start:properties", "start:reverse", "start:reverse", "start:address", "start:launch", "start:launch", "start:app", "start:cleanup", "start:cleanup", "start:cleanup" }, order);
         var starts = factory.Starts;
         CollectionAssert.AreEqual(NeoMobileLauncher.ContractCommand(project.ContractCommand, "net11.0-android").Arguments.ToArray(), starts[1].Command.Arguments.ToArray());
         CollectionAssert.Contains(starts[3].Command.Arguments.ToArray(), "-t:Install");
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "tcp:5173", "tcp:5173" }, starts[5].Command.Arguments.Skip(1).ToArray());
-        StringAssert.Contains(starts[6].Command.Arguments[^1], "run-as dev.neoastra.fixture");
-        StringAssert.Contains(starts[6].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        // The relay of the session reaches the device through a forwarding of its own port, and its address and token go in a
+        // file beside the address of the server.
+        var relay = new Uri(starts[3].Environment["NEOASTRA_MCP_URL"]);
+        var token = starts[3].Environment["NEOASTRA_MCP_TOKEN"];
+        var relayPort = $"tcp:{relay.Port}";
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", relayPort, relayPort }, starts[6].Command.Arguments.Skip(1).ToArray());
+        StringAssert.Contains(starts[7].Command.Arguments[^1], "run-as dev.neoastra.fixture");
+        StringAssert.Contains(starts[7].Command.Arguments[^1], "http://127.0.0.1:5173/");
+        StringAssert.Contains(starts[7].Command.Arguments[^1], $"echo {relay.AbsoluteUri} {token} > {NeoMobileLauncher.AndroidRelayFile}");
         // An emulator has no physical keys, and monkey refuses to run with its default share of system keys there.
-        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "shell", "monkey", "--pct-syskeys", "0", "-p", "dev.neoastra.fixture", "-c", "android.intent.category.LAUNCHER", "1" }, starts[8].Command.Arguments.Skip(1).ToArray());
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "shell", "monkey", "--pct-syskeys", "0", "-p", "dev.neoastra.fixture", "-c", "android.intent.category.LAUNCHER", "1" }, starts[9].Command.Arguments.Skip(1).ToArray());
         Assert.AreEqual("false", starts[3].Environment["NeoAstraBuildFrontend"]);
-        StringAssert.Contains(starts[10].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
-        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[11].Command.Arguments.Skip(1).ToArray());
+        StringAssert.Contains(starts[11].Command.Arguments[^1], $"rm -f {NeoMobileLauncher.AndroidAddressFile} {NeoMobileLauncher.AndroidRelayFile}");
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, starts[12].Command.Arguments.Skip(1).ToArray());
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", relayPort }, starts[13].Command.Arguments.Skip(1).ToArray());
     }
 
     [TestMethod]
@@ -948,12 +972,17 @@ public sealed class ToolingTests
             var deadline = DateTime.UtcNow.AddSeconds(30);
             while (!IsRunning(marker + "-backend") && DateTime.UtcNow < deadline && !process.HasExited) await Task.Delay(200);
             Assert.IsTrue(IsRunning(marker + "-backend"), "The backend of the session did not start.");
+            // The session announces its relay to `dotnet neoastra mcp`, and takes the announcement back when it ends.
+            var projectDirectory = NeoProjectConfiguration.Load(fixture.ConfigurationPath).ProjectDirectory;
+            var discovery = NeoMcpRelayDiscovery.PathFor(NeoMcpRelayDiscovery.DefaultDirectory, projectDirectory);
+            Assert.IsTrue(File.Exists(discovery), "The session did not write the discovery file of its relay.");
             using (var kill = Process.Start(new ProcessStartInfo("kill", ["-" + signal, process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]))!) await kill.WaitForExitAsync();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             deadline = DateTime.UtcNow.AddSeconds(10);
             while ((IsRunning(marker) || IsListening(port)) && DateTime.UtcNow < deadline) await Task.Delay(200);
             Assert.IsFalse(IsRunning(marker), "The frontend or the backend outlived the tool.");
             Assert.IsFalse(IsListening(port), "The frontend outlived the tool.");
+            Assert.IsFalse(File.Exists(discovery), "The discovery file of the relay outlived the session.");
         }
         finally
         {
@@ -996,15 +1025,16 @@ public sealed class ToolingTests
         factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", "dev.neoastra.fixture"]);
         factory.ExitCodes["launch"] = 1;
         var readiness = new FakeReadiness(order); readiness.Release.SetResult();
-        try { await new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+        try { await new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.Android, "emulator-5554"), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
         catch (NeoToolException) { }
 
         Assert.IsFalse(factory.AppStarted.Task.IsCompleted);
         var starts = factory.Starts;
         var cleanups = starts.Where(static start => start.Label == "cleanup").ToArray();
-        Assert.AreEqual(2, cleanups.Length);
-        StringAssert.Contains(cleanups[0].Command.Arguments[^1], "rm -f " + NeoMobileLauncher.AndroidAddressFile);
+        Assert.AreEqual(3, cleanups.Length);
+        StringAssert.Contains(cleanups[0].Command.Arguments[^1], $"rm -f {NeoMobileLauncher.AndroidAddressFile} {NeoMobileLauncher.AndroidRelayFile}");
         CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", "tcp:5173" }, cleanups[1].Command.Arguments.Skip(1).ToArray());
+        CollectionAssert.AreEqual(new[] { "-s", "emulator-5554", "reverse", "--remove", $"tcp:{new Uri(starts[3].Environment["NEOASTRA_MCP_URL"]).Port}" }, cleanups[2].Command.Arguments.Skip(1).ToArray());
     }
 
     [TestMethod]
@@ -1015,7 +1045,7 @@ public sealed class ToolingTests
         var factory = new ScriptedFactory(order);
         factory.Output["properties"] = new Queue<string>(["""{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""", $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
         var readiness = new FakeReadiness(order); readiness.Release.SetResult();
-        var run = new NeoDevelopmentOrchestrator(factory, readiness).RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null), CancellationToken.None);
+        var run = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, null), CancellationToken.None);
         await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         factory.App!.Exit(4);
         Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -1025,6 +1055,10 @@ public sealed class ToolingTests
         CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "install", "booted", Path.Combine(output, "Fixture.app") }, install);
         var app = factory.Starts[6];
         Assert.AreEqual("http://127.0.0.1:5173/", app.Environment["SIMCTL_CHILD_NEOASTRA_DEV_URL"]);
+        // The simulator shares the loopback interface: the application gets the relay of the session as it is.
+        Assert.AreEqual(app.Environment["NEOASTRA_MCP_URL"], app.Environment["SIMCTL_CHILD_NEOASTRA_MCP_URL"]);
+        Assert.AreEqual(app.Environment["NEOASTRA_MCP_TOKEN"], app.Environment["SIMCTL_CHILD_NEOASTRA_MCP_TOKEN"]);
+        Assert.IsTrue(new Uri(app.Environment["SIMCTL_CHILD_NEOASTRA_MCP_URL"]).IsLoopback);
         CollectionAssert.AreEqual(new[] { "xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", "booted", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
     }
 

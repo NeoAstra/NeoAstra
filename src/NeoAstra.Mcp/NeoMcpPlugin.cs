@@ -81,14 +81,49 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
         {
             ArgumentNullException.ThrowIfNull(application);
             cancellationToken.ThrowIfCancellationRequested();
-            var endpoint = NeoMcpEndpoint.Resolve(options, Environment.GetEnvironmentVariable);
+            var android = OperatingSystem.IsAndroid() ? AndroidDevelopment() : null;
+            var endpoint = NeoMcpEndpoint.Resolve(options, android?.Environment ?? Environment.GetEnvironmentVariable);
             if (endpoint is null) return ValueTask.CompletedTask;
+            // An Android application has no entry assembly and no host name of its own: the package and the model name it instead.
+            var description = DescribeApplication();
+            if (android is not null) description = description with { Application = android.Application ?? description.Application, Device = android.Device ?? description.Device };
             // Created before the first view navigates, so that every page has the agent of automation from its first document.
             _automation = new NeoAutomation(application, options.Automation);
-            _connector = new NeoMcpConnector(new NeoAutomationToolHost(_automation), endpoint, DescribeApplication(), options.ReconnectDelay);
+            _connector = new NeoMcpConnector(new NeoAutomationToolHost(_automation), endpoint, description, options.ReconnectDelay);
             _connector.Start();
             return ValueTask.CompletedTask;
         }
+
+        // An Android application has no environment of the session: adb wrote the relay of the session in a file of the private files
+        // of the debug build, which the development service of NeoAstra reads.
+        private static AndroidSession AndroidDevelopment()
+        {
+            string? url = null, token = null, name = null, device = null;
+            try
+            {
+                using var response = JsonDocument.Parse(NeoPlatformServices.Call("development", "{}"));
+                var root = response.RootElement;
+                url = Text(root, "mcpUrl");
+                token = Text(root, "mcpToken");
+                name = Text(root, "mcpApplication");
+                device = Text(root, "mcpDevice");
+            }
+            catch (Exception exception) when (exception is NeoAstraException or NotSupportedException or JsonException)
+            {
+                // No development service: the application connects only with options of its own.
+            }
+            return new(variable => Environment.GetEnvironmentVariable(variable) ?? variable switch
+            {
+                NeoMcpEndpoint.UrlVariable => url,
+                NeoMcpEndpoint.TokenVariable => token,
+                _ => null,
+            }, name, device);
+
+            static string? Text(JsonElement root, string property)
+                => root.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        }
+
+        private sealed record AndroidSession(Func<string, string?> Environment, string? Application, string? Device);
 
         public async ValueTask DisposeAsync()
         {

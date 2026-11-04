@@ -449,6 +449,13 @@ public final class NeoAstraServices {
         if (!file.isFile() || file.length() > 2048) { output.put("status", "NotFound"); return; }
         String url = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8).trim();
         output.put("status", url.isEmpty() ? "NotFound" : "Success").put("url", url);
+        // The relay of the session for the MCP plugin: its address and token, on one line beside the address of the server.
+        File relay = new File(current.getFilesDir(), "neoastra-development-mcp");
+        if (relay.isFile() && relay.length() <= 2048) {
+            String[] parts = new String(Files.readAllBytes(relay.toPath()), StandardCharsets.UTF_8).trim().split(" ");
+            if (parts.length == 2) output.put("mcpUrl", parts[0]).put("mcpToken", parts[1])
+                .put("mcpApplication", current.getPackageName()).put("mcpDevice", Build.MANUFACTURER + " " + Build.MODEL);
+        }
     }
 
     // The predefined effects of the vibrator, which the device tunes to its motor, and short patterns for the outcomes of a

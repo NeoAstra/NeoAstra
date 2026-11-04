@@ -36,6 +36,9 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
 {
     internal const string AndroidAddressFile = "files/neoastra-development-url";
 
+    /// <summary>The file of the private files of the debug build with the address of the relay and the token of the session.</summary>
+    internal const string AndroidRelayFile = "files/neoastra-development-mcp";
+
     /// <summary>Finds the target framework of the platform, such as net11.0-android in a project for iOS and Android.</summary>
     internal async Task<string> ResolveFrameworkAsync(NeoResolvedProject project, NeoMobileTarget target, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
     {
@@ -80,6 +83,9 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         await RunAsync("install", ["xcrun", "simctl", "install", device, bundle], project, environment, log, cancellationToken).ConfigureAwait(false);
         // The simulator passes the variables with this prefix to the application, without the prefix.
         var launch = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase) { ["SIMCTL_CHILD_NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri };
+        // The simulator shares the loopback interface of the machine, so the application reaches the relay at its own address.
+        foreach (var name in new[] { NeoDevelopmentOrchestrator.McpUrlVariable, NeoDevelopmentOrchestrator.McpTokenVariable })
+            if (environment.TryGetValue(name, out var value)) launch["SIMCTL_CHILD_" + name] = value;
         return processFactory.Start(new("app", new(["xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", device, identifier]), project.ProjectDirectory, launch, project.SecretEnvironment, (line, error) => log("app", line, error)));
     }
 
@@ -93,17 +99,26 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
         await RunAsync("build", install, project, environment, log, cancellationToken).ConfigureAwait(false);
         var identifier = Required(await PropertiesAsync(project, environment, log, cancellationToken, [$"-p:TargetFramework={framework}", "-p:Configuration=Debug"], "ApplicationId").ConfigureAwait(false), "ApplicationId");
         var port = $"tcp:{project.DevUrl.Port}";
+        // The relay of the session reaches the device the same way, through a forwarding of its port, and its address and token
+        // go in a file beside the address of the server, which only adb run-as writes.
+        var relay = environment.TryGetValue(NeoDevelopmentOrchestrator.McpUrlVariable, out var relayUrl) && environment.TryGetValue(NeoDevelopmentOrchestrator.McpTokenVariable, out var relayToken)
+            && Uri.TryCreate(relayUrl, UriKind.Absolute, out var relayAddress) && IsShellSafe(relayToken)
+            ? (Port: $"tcp:{relayAddress.Port}", Line: $"{relayAddress.AbsoluteUri} {relayToken}")
+            : ((string Port, string Line)?)null;
         // The address goes with the session: a later launch of the debug build loads its packaged assets again. A launch that
         // fails or is canceled once the forwarding is in place removes it too.
         async Task CleanupAsync()
         {
-            await RunQuietlyAsync([adb, .. device, "shell", $"run-as {identifier} rm -f {AndroidAddressFile}"], project, environment).ConfigureAwait(false);
+            await RunQuietlyAsync([adb, .. device, "shell", $"run-as {identifier} rm -f {AndroidAddressFile} {AndroidRelayFile}"], project, environment).ConfigureAwait(false);
             await RunQuietlyAsync([adb, .. device, "reverse", "--remove", port], project, environment).ConfigureAwait(false);
+            if (relay is { } forwarded) await RunQuietlyAsync([adb, .. device, "reverse", "--remove", forwarded.Port], project, environment).ConfigureAwait(false);
         }
         try
         {
             await RunAsync("reverse", [adb, .. device, "reverse", port, port], project, environment, log, cancellationToken).ConfigureAwait(false);
-            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
+            if (relay is { } forwarding) await RunAsync("reverse", [adb, .. device, "reverse", forwarding.Port, forwarding.Port], project, environment, log, cancellationToken).ConfigureAwait(false);
+            var relayFile = relay is { } written ? $" && echo {written.Line} > {AndroidRelayFile}" : $" && rm -f {AndroidRelayFile}";
+            await RunAsync("address", [adb, .. device, "shell", $"run-as {identifier} sh -c 'mkdir -p files && echo {project.DevUrl.AbsoluteUri} > {AndroidAddressFile}{relayFile}'"], project, environment, log, cancellationToken).ConfigureAwait(false);
             await RunAsync("launch", [adb, .. device, "shell", "am", "force-stop", identifier], project, environment, log, cancellationToken).ConfigureAwait(false);
             // monkey starts the launcher activity without knowing its name; an emulator has no physical keys, and monkey refuses
             // to run there with its default share of system keys, so the one event it sends is the launch alone.
@@ -117,6 +132,10 @@ internal sealed class NeoMobileLauncher(INeoProcessFactory processFactory)
             throw;
         }
     }
+
+    // The token of the relay goes through a shell of the device: it has letters, digits, hyphens, and underscores only.
+    private static bool IsShellSafe(string value)
+        => value.Length != 0 && value.All(static character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     private async Task RunAsync(string label, IReadOnlyList<string> arguments, NeoResolvedProject project, IReadOnlyDictionary<string, string> environment, Action<string, string, bool> log, CancellationToken cancellationToken)
     {

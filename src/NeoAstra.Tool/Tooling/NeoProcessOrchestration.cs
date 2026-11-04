@@ -350,6 +350,12 @@ internal sealed class NeoReadinessProbe : INeoReadinessProbe
 
 internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFactory, INeoReadinessProbe readiness)
 {
+    internal const string McpUrlVariable = "NEOASTRA_MCP_URL";
+    internal const string McpTokenVariable = "NEOASTRA_MCP_TOKEN";
+
+    /// <summary>Gets the folder of the discovery file through which <c>dotnet neoastra mcp</c> finds the relay of the session.</summary>
+    internal string McpDiscoveryDirectory { get; init; } = NeoMcpRelayDiscovery.DefaultDirectory;
+
     internal Task<int> RunAsync(NeoResolvedProject project, CancellationToken cancellationToken)
         => RunAsync(project, null, cancellationToken);
 
@@ -395,6 +401,14 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
                 ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri,
                 ["NeoAstraBuildFrontend"] = "false",
             };
+            // The relay of the session: an application with the NeoAstra.Mcp plugin connects out to it, and an agent reaches the
+            // application through `dotnet neoastra mcp`, which finds the relay in the discovery file of the project.
+            await using var relay = StartRelay(project, Log);
+            if (relay is not null)
+            {
+                backendEnvironment[McpUrlVariable] = relay.Url.AbsoluteUri;
+                backendEnvironment[McpTokenVariable] = relay.Token;
+            }
             await using var backend = mobile is null
                 ? processFactory.Start(new("backend", project.BackendCommand, project.ProjectDirectory, backendEnvironment, project.SecretEnvironment, (line, error) => Log("backend", line, error)))
                 : await launcher!.StartAsync(project, mobile, framework!, backendEnvironment, Log, cancellationToken).ConfigureAwait(false);
@@ -411,6 +425,41 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         finally
         {
             await frontend.StopAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+    }
+
+    private RelaySession? StartRelay(NeoResolvedProject project, Action<string, string, bool> log)
+    {
+        NeoMcpRelay relay;
+        try { relay = NeoMcpRelay.Start(); }
+        catch (Exception exception) when (exception is System.Net.HttpListenerException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
+        {
+            // The session runs without the relay: only agents lose their way to the application.
+            log("mcp", $"The relay for agents could not start ({exception.GetType().Name}); the session runs without it.", true);
+            return null;
+        }
+        try
+        {
+            NeoMcpRelayDiscovery.Write(McpDiscoveryDirectory, project.ProjectDirectory, new(relay.Url, relay.Token, Environment.ProcessId));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            log("mcp", $"The discovery file of the relay could not be written ({exception.GetType().Name}); `dotnet neoastra mcp` will not find this session.", true);
+        }
+        log("mcp", $"Agents reach the applications of this session with `dotnet neoastra mcp` (relay on port {relay.Port}).", false);
+        return new RelaySession(relay, McpDiscoveryDirectory, project.ProjectDirectory);
+    }
+
+    private sealed class RelaySession(NeoMcpRelay relay, string directory, string projectDirectory) : IAsyncDisposable
+    {
+        internal Uri Url => relay.Url;
+
+        internal string Token => relay.Token;
+
+        public async ValueTask DisposeAsync()
+        {
+            NeoMcpRelayDiscovery.Delete(directory, projectDirectory, relay.Token);
+            await relay.DisposeAsync().ConfigureAwait(false);
         }
     }
 }
