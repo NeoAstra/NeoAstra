@@ -977,8 +977,9 @@ public sealed class ToolingTests
             Assert.IsTrue(IsRunning(marker + "-backend"), "The backend of the session did not start.");
             // The session announces its relay to `dotnet neoastra mcp`, and takes the announcement back when it ends.
             var projectDirectory = NeoProjectConfiguration.Load(fixture.ConfigurationPath).ProjectDirectory;
-            var discovery = NeoMcpRelayDiscovery.PathFor(NeoMcpRelayDiscovery.DefaultDirectory, projectDirectory);
-            Assert.IsTrue(File.Exists(discovery), "The session did not write the discovery file of its relay.");
+            var session = NeoMcpRelayDiscovery.TryRead(NeoMcpRelayDiscovery.DefaultDirectory, projectDirectory);
+            Assert.IsNotNull(session, "The session did not write the discovery file of its relay.");
+            var discovery = NeoMcpRelayDiscovery.PathFor(NeoMcpRelayDiscovery.DefaultDirectory, projectDirectory, session.Token);
             using (var kill = Process.Start(new ProcessStartInfo("kill", ["-" + signal, process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)]))!) await kill.WaitForExitAsync();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             deadline = DateTime.UtcNow.AddSeconds(10);

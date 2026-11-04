@@ -446,7 +446,7 @@ public sealed class McpRelayTests
             NeoMcpRelayDiscovery.Write(directory, project, session);
             Assert.AreEqual(session, NeoMcpRelayDiscovery.TryRead(directory, project + Path.DirectorySeparatorChar));
             Assert.IsNull(NeoMcpRelayDiscovery.TryRead(directory, project + "-other"));
-            var path = NeoMcpRelayDiscovery.PathFor(directory, project);
+            var path = NeoMcpRelayDiscovery.PathFor(directory, project, session.Token);
             if (!OperatingSystem.IsWindows()) Assert.AreEqual(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
 
             // Another session's token does not remove the file; its own does.
@@ -454,6 +454,27 @@ public sealed class McpRelayTests
             Assert.IsTrue(File.Exists(path));
             NeoMcpRelayDiscovery.Delete(directory, project, session.Token);
             Assert.IsFalse(File.Exists(path));
+
+            // A second session of the project starts before the first one ended: the server follows the newer one, and the end of
+            // the older one leaves the newer one found.
+            NeoMcpRelayDiscovery.Write(directory, project, session);
+            File.SetLastWriteTimeUtc(NeoMcpRelayDiscovery.PathFor(directory, project, session.Token), DateTime.UtcNow.AddMinutes(-1));
+            var newer = session with { Url = new Uri("ws://127.0.0.1:4712/"), Token = "newer-token-0123456789abcdef" };
+            NeoMcpRelayDiscovery.Write(directory, project, newer);
+            Assert.AreEqual(newer, NeoMcpRelayDiscovery.TryRead(directory, project));
+            NeoMcpRelayDiscovery.Delete(directory, project, session.Token);
+            Assert.AreEqual(newer, NeoMcpRelayDiscovery.TryRead(directory, project));
+            NeoMcpRelayDiscovery.Delete(directory, project, newer.Token);
+            Assert.IsNull(NeoMcpRelayDiscovery.TryRead(directory, project));
+
+            // A session that ended without removing its file is not followed, and the next session that starts removes the file.
+            var ended = session with { Token = "ended-token-0123456789abcdef", ProcessId = int.MaxValue };
+            NeoMcpRelayDiscovery.Write(directory, project, ended);
+            Assert.IsNull(NeoMcpRelayDiscovery.TryRead(directory, project));
+            NeoMcpRelayDiscovery.Write(directory, project, session);
+            Assert.IsFalse(File.Exists(NeoMcpRelayDiscovery.PathFor(directory, project, ended.Token)));
+            Assert.AreEqual(session, NeoMcpRelayDiscovery.TryRead(directory, project));
+            NeoMcpRelayDiscovery.Delete(directory, project, session.Token);
 
             // A session whose process ended, or that names another machine, is not followed.
             NeoMcpRelayDiscovery.Write(directory, project, session with { ProcessId = int.MaxValue });
