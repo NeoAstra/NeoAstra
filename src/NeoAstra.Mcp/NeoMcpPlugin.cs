@@ -3,6 +3,7 @@
 
 using System.Reflection;
 using System.Text.Json;
+using ModelContextProtocol.Server;
 using NeoAstra.Desktop;
 
 namespace NeoAstra.Mcp;
@@ -71,8 +72,11 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
     // The automation exists only while the application is connected or tries to be: it injects its agent into every view.
     private sealed class McpAdapter(NeoMcpOptions options) : INeoPluginAdapter
     {
+        private readonly CancellationTokenSource _stop = new();
         private NeoAutomation? _automation;
         private NeoMcpConnector? _connector;
+        private Task? _standardIo;
+        private int _disposed;
 
         public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0,
             "Serves the browser automation tools of the views to the relay of a NeoAstra development session, which an agent reaches over MCP.");
@@ -83,15 +87,44 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
             cancellationToken.ThrowIfCancellationRequested();
             var android = OperatingSystem.IsAndroid() ? AndroidDevelopment() : null;
             var endpoint = NeoMcpEndpoint.Resolve(options, android?.Environment ?? Environment.GetEnvironmentVariable);
-            if (endpoint is null) return ValueTask.CompletedTask;
+            if (endpoint is null && !options.ServeStandardIo) return ValueTask.CompletedTask;
             // An Android application has no entry assembly and no host name of its own: the package and the model name it instead.
             var description = DescribeApplication();
             if (android is not null) description = description with { Application = android.Application ?? description.Application, Device = android.Device ?? description.Device };
             // Created before the first view navigates, so that every page has the agent of automation from its first document.
             _automation = new NeoAutomation(application, options.Automation);
-            _connector = new NeoMcpConnector(new NeoAutomationToolHost(_automation), endpoint, description, options.ReconnectDelay);
-            _connector.Start();
+            var host = new NeoAutomationToolHost(_automation);
+            if (endpoint is not null)
+            {
+                _connector = new NeoMcpConnector(host, endpoint, description, options.ReconnectDelay);
+                _connector.Start();
+            }
+            if (options.ServeStandardIo) _standardIo = ServeStandardIoAsync(application, host, description.Application, _stop.Token);
             return ValueTask.CompletedTask;
+        }
+
+        // Standard output carries MCP alone while the application runs; the agent that started it ends it by closing its input.
+        private static async Task ServeStandardIoAsync(NeoApplication application, INeoMcpToolHost host, string name, CancellationToken cancellationToken)
+        {
+            var input = Console.OpenStandardInput();
+            var output = Console.OpenStandardOutput();
+            Console.SetOut(Console.Error);
+            await Task.Yield();
+            try
+            {
+                await NeoMcpEmbeddedServer.RunAsync(host, name, new StreamServerTransport(input, output, name), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+            {
+                // The agent went away without closing the stream.
+            }
+            if (cancellationToken.IsCancellationRequested) return;
+            try { await application.RequestQuitAsync(NeoQuitReason.Programmatic).ConfigureAwait(false); }
+            catch (ObjectDisposedException) { /* the application ends already */ }
         }
 
         // An Android application has no environment of the session: adb wrote the relay of the session in a file of the private files
@@ -127,10 +160,18 @@ public sealed class NeoMcpPlugin : INeoAstraPlugin
 
         public async ValueTask DisposeAsync()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            await _stop.CancelAsync().ConfigureAwait(false);
+            if (_standardIo is { } standardIo)
+            {
+                try { await standardIo.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
+                catch (TimeoutException) { /* the server waits on standard input, which the process closes when it exits */ }
+            }
             if (_connector is { } connector) await connector.DisposeAsync().ConfigureAwait(false);
             if (_automation is { } automation) await automation.DisposeAsync().ConfigureAwait(false);
             _connector = null;
             _automation = null;
+            _stop.Dispose();
         }
     }
 }

@@ -52,6 +52,24 @@ Without a choice, the tools act on the application that connected last. Without 
 says so and what to do instead of waiting. A request that the agent cancels is canceled in the application too, and a call
 whose application goes away is answered with an error.
 
+## Embedding the server in a desktop application
+
+A desktop application can also serve MCP itself, without a development session or a relay: the agent starts the application as
+the command of its MCP server, and the application serves the tools over its standard input and output.
+
+```csharp
+app.UsePlugins((_, plugins) => plugins.AddNeoAstraMcp(new NeoMcpOptions { ServeStandardIo = args.Contains("--mcp") }));
+```
+
+```json
+{ "mcpServers": { "my-app": { "command": "/path/to/MyApp", "args": ["--mcp"] } } }
+```
+
+Start the built executable rather than `dotnet run`, which writes its own output to standard output. While the application
+serves, standard output carries MCP alone and what the application writes to the console goes to standard error. The
+application quits when the agent closes its standard input. The page may still be loading when the first call arrives: an agent
+that waits for a text of the page with `wait_for` before it acts sees the page as the user does.
+
 ## How it works
 
 - **The relay.** Every `dotnet neoastra dev` session runs a relay: a WebSocket listener on `127.0.0.1` with a free port and a
@@ -80,3 +98,4 @@ tools can do what the page can do, run scripts in it, and, within `AllowedDirect
 - The differences of [browser automation](browser-automation.md#how-it-differs-from-chrome-devtools-mcp) from Chrome DevTools MCP apply; on a phone `resize_page` is not supported
   and on Android `new_page` is not either.
 - A physical iPhone reaches the relay only over the local network, which the tool does not offer yet.
+- The embedded server speaks MCP over standard input and output only; an application started by the agent serves one agent.

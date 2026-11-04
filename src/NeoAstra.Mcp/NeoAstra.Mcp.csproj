@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
+    <PackageReference Include="ModelContextProtocol.Core" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="neoastra.plugin.json" />

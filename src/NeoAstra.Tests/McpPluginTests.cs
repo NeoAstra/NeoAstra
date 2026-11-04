@@ -212,6 +212,48 @@ public sealed class McpPluginTests
         Assert.AreEqual(NeoMcpMessageKind.Hello, (await connection.ReceiveAsync()).Kind);
     }
 
+    [TestMethod]
+    public async Task Embedded_ServesTheToolsOfTheApplicationToAnAgentOverItsOwnStreams()
+    {
+        // A desktop application started by an agent serves MCP itself, over standard input and output; pipes stand for them here.
+        var host = new FakeToolHost();
+        var toServer = new System.IO.Pipelines.Pipe();
+        var toClient = new System.IO.Pipelines.Pipe();
+        using var stop = new CancellationTokenSource();
+        var serving = Task.Run(() => NeoMcpEmbeddedServer.RunAsync(host, "Sample", new ModelContextProtocol.Server.StreamServerTransport(toServer.Reader.AsStream(), toClient.Writer.AsStream(), "Sample"), stop.Token));
+        var client = await ModelContextProtocol.Client.McpClient.CreateAsync(new ModelContextProtocol.Protocol.StreamClientTransport(toServer.Writer.AsStream(), toClient.Reader.AsStream()));
+        try
+        {
+            Assert.AreEqual("Sample", client.ServerInfo!.Name);
+            var tools = (await client.ListToolsAsync()).ToDictionary(static tool => tool.Name);
+            CollectionAssert.AreEquivalent(new[] { "take_screenshot", "wait_for", "fail" }, tools.Keys.ToArray());
+            Assert.IsTrue(tools["wait_for"].ProtocolTool.Annotations!.ReadOnlyHint);
+
+            var screenshot = await client.CallToolAsync("take_screenshot", new Dictionary<string, object?>());
+            Assert.IsFalse(screenshot.IsError);
+            var image = screenshot.Content.OfType<ModelContextProtocol.Protocol.ImageContentBlock>().Single();
+            Assert.AreEqual("image/png", image.MimeType);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, image.DecodedData.ToArray());
+
+            // The arguments reach the tool as the agent sent them.
+            var waiting = client.CallToolAsync("wait_for", new Dictionary<string, object?> { ["text"] = new[] { "ready" } }).AsTask();
+            Assert.AreEqual("ready", (await host.WaitStarted.Task.WaitAsync(TimeSpan.FromSeconds(10))).GetProperty("text")[0].GetString());
+            host.ReleaseWait.SetResult();
+            Assert.IsFalse((await waiting.WaitAsync(TimeSpan.FromSeconds(10))).IsError);
+
+            Assert.IsTrue((await client.CallToolAsync("fail", new Dictionary<string, object?>())).IsError);
+            Assert.IsTrue((await client.CallToolAsync("no_such_tool", new Dictionary<string, object?>())).IsError);
+        }
+        finally
+        {
+            await client.DisposeAsync();
+        }
+
+        // The agent closed its side: the server ends, which is when the application quits.
+        await toServer.Writer.CompleteAsync();
+        await serving.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     private sealed class FakeToolHost : INeoMcpToolHost
     {
         private static readonly JsonElement Schema = JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone();
