@@ -207,8 +207,14 @@ public sealed class McpRelayTests
         Assert.IsTrue((await agent.Client.CallToolAsync("no_such_tool", new Dictionary<string, object?>())).IsError);
 
         // The chosen application goes away: the tools act on the one that is left.
+        // select_app announced a change of the tools too, so the test waits for the list itself rather than for a notification.
         await phone.DisposeAsync();
-        await agent.WaitToolsChangedAsync();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (Text(await agent.Client.CallToolAsync("list_apps", new Dictionary<string, object?>())).Contains("1: Sample", StringComparison.Ordinal))
+        {
+            if (DateTime.UtcNow > deadline) Assert.Fail("The server did not notice that the application went away.");
+            await Task.Delay(20);
+        }
         Assert.AreEqual("Took a screenshot of Desktop.", Text(await agent.Client.CallToolAsync("take_screenshot", new Dictionary<string, object?>())));
     }
 
