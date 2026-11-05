@@ -13,7 +13,8 @@ checks that have not been run. Remove an entry when it is done. What an applicat
 - **Linux: the badge, progress, and urgency of the launcher entry were not run.** `LinuxLauncherEntry` in
   `src/NeoAstra/Desktop/WindowBadge.cs` was written on macOS on 2026-11-05, and the text of its signal
   was parsed by GLib 2.86 there, but no signal reached a dock. To check on KDE Plasma and on Ubuntu Dock,
-  with a desktop file named after the application ID: the count shows and hides, the progress shows,
+  with a desktop file named after the GLib program name (or the application ID when none is set), and
+  with the `desktop-entry` hint of a notification: the count shows and hides, the progress shows,
   and the urgency ends when the window is activated (`NeoWindow.Activated` raised by the GTK backend).
 - **Windows ARM64 has not been run.** The `win-arm64` library is cross-built and packaged, and its
   native tests are skipped. No browser view was created on ARM64 hardware.

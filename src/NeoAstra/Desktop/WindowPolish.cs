@@ -39,21 +39,21 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     private readonly Dictionary<NeoWindow, WindowIconEntry> _windowsIcons = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<NeoWindow, EventHandler> _linuxAttention = new(ReferenceEqualityComparer.Instance);
     private readonly object _sync = new();
-    private readonly string? _desktopEntryId;
+    private readonly string? _linuxApplicationId;
     private LinuxLauncherEntry? _launcher;
     private bool _disposed;
 
-    internal string? LinuxDesktopEntryId => _desktopEntryId;
+    internal string? LinuxApplicationId => _linuxApplicationId;
 
-    /// <summary>Initializes the service. On Linux, the badge, progress, and attention go to the launcher entry of the desktop file named after the executable.</summary>
+    /// <summary>Initializes the service. On Linux, the badge, progress, and attention go to the launcher entry of the desktop file named after the GLib program name, or else after the executable.</summary>
     public NeoWindowPolishService() : this(null) { }
 
-    // On Linux the launcher entry is the one of the desktop file named after the application ID, as the desktop-entry of its
-    // notifications: org.example.App gives org.example.App.desktop.
+    // On Linux the launcher entry is the one of the desktop file named after the GLib program name that the application set, or
+    // else after the application ID, as the desktop-entry of its notifications (see LinuxDesktopEntry).
     internal NeoWindowPolishService(string? applicationId)
     {
-        _desktopEntryId = LinuxLauncherEntry.DesktopEntryId(applicationId) ?? LinuxLauncherEntry.DesktopEntryId(Path.GetFileNameWithoutExtension(Environment.ProcessPath));
-        var docks = $"shown by the docks that read com.canonical.Unity.LauncherEntry (KDE Plasma, Ubuntu Dock and Dash to Dock, Plank, Latte; not stock GNOME) on the icon of the application, only when its desktop file {_desktopEntryId ?? "<application ID>.desktop"} is installed and matches its windows";
+        _linuxApplicationId = LinuxDesktopEntry.Name(null, applicationId) ?? LinuxDesktopEntry.Name(null, Path.GetFileNameWithoutExtension(Environment.ProcessPath));
+        var docks = $"shown by the docks that read com.canonical.Unity.LauncherEntry (KDE Plasma, Ubuntu Dock and Dash to Dock, Plank, Latte; not stock GNOME) on the icon of the application, only when its desktop file is installed and matches its windows: the one named after the GLib program name that the application sets with g_set_prgname before GTK opens a window, else {_linuxApplicationId ?? "<application ID>"}.desktop";
         AttentionSupport = OperatingSystem.IsLinux()
             ? new(NeoSupportLevel.Limited, 1, 0, $"Application-scoped Unity launcher-entry urgency, {docks}. It lasts until the window that asked is activated or closed; nothing is asked for a focused window, and critical requests are not distinct. GTK4 removed per-window urgency hints.")
             : OperatingSystem.IsMacOS()
@@ -284,7 +284,13 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
 
     private LinuxLauncherEntry? Launcher()
     {
-        lock (_sync) return _disposed || _desktopEntryId is null ? null : _launcher ??= new LinuxLauncherEntry(_desktopEntryId);
+        lock (_sync)
+        {
+            if (_disposed) return null;
+            // The program name is read at the first use, after the application named itself.
+            if (_launcher is null && LinuxDesktopEntry.Resolve(_linuxApplicationId) is { } entry) _launcher = new LinuxLauncherEntry(entry);
+            return _launcher;
+        }
     }
 
     private static NeoDesktopStatus SetEnabled(NeoWindow window, bool enabled)

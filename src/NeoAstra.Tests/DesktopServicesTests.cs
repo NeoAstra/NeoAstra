@@ -219,22 +219,31 @@ public sealed class DesktopServicesTests
     [TestMethod]
     public async Task WindowBadgeOnLinuxGoesToTheLauncherEntryOfTheDesktopFile()
     {
-        Assert.AreEqual("org.codealta.desktop.desktop", LinuxLauncherEntry.DesktopEntryId("org.codealta.desktop"));
-        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId(null));
-        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId("a/b"));
-        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId("a b"));
-        // The services name the desktop file after the application ID; a service created alone, after the executable.
-        await using (var named = new NeoWindowPolishService("org.example.App")) Assert.AreEqual("org.example.App.desktop", named.LinuxDesktopEntryId);
-        await using (var unnamed = new NeoWindowPolishService()) Assert.AreEqual(Path.GetFileNameWithoutExtension(Environment.ProcessPath) + ".desktop", unnamed.LinuxDesktopEntryId);
+        // GTK names the windows after the GLib program name, which docks match with a desktop file: an application that sets one
+        // (CodeAlta calls g_set_prgname("codealta") and installs codealta.desktop) has that desktop entry, else its application ID.
+        Assert.AreEqual("codealta", LinuxDesktopEntry.Name("codealta", "org.codealta.desktop"));
+        Assert.AreEqual("org.codealta.desktop", LinuxDesktopEntry.Name(null, "org.codealta.desktop"));
+        Assert.AreEqual("org.codealta.desktop", LinuxDesktopEntry.Name(" ", "org.codealta.desktop"));
+        Assert.AreEqual("org.codealta.desktop", LinuxDesktopEntry.Name("a/b", "org.codealta.desktop"));
+        Assert.IsNull(LinuxDesktopEntry.Name(null, null));
+        Assert.IsNull(LinuxDesktopEntry.Name(null, "a/b"));
+        Assert.IsNull(LinuxDesktopEntry.Name(null, "a b"));
+        if (!OperatingSystem.IsLinux()) Assert.AreEqual("org.example.App", LinuxDesktopEntry.Resolve("org.example.App"));
+        // Without a program name the services use the application ID; a service created alone, the executable.
+        await using (var named = new NeoWindowPolishService("org.example.App")) Assert.AreEqual("org.example.App", named.LinuxApplicationId);
+        await using (var unnamed = new NeoWindowPolishService()) Assert.AreEqual(Path.GetFileNameWithoutExtension(Environment.ProcessPath), unnamed.LinuxApplicationId);
         var root = AppContext.BaseDirectory;
         while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra", "Desktop"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
         StringAssert.Contains(File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "DesktopEssentialsPlugin.cs")), "new NeoWindowPolishService(systemInfo.Metadata.ApplicationId)");
+        // A notification names the same desktop entry as the launcher entry.
+        StringAssert.Contains(File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "LinuxNotifications.cs")), "VariantString(LinuxDesktopEntry.Resolve(_applicationId) ?? _applicationId)");
+        Assert.AreEqual("application://codealta.desktop", new LinuxLauncherEntry("codealta").ApplicationUri);
 
         // The parameters of the Update signal, in the GVariant text format that GLib parses (checked with GLib 2.86).
-        using var entry = new LinuxLauncherEntry("org.example.App.desktop");
+        using var entry = new LinuxLauncherEntry("org.example.App");
         Assert.AreEqual("application://org.example.App.desktop", entry.ApplicationUri);
         Assert.MatchesRegex("^/com/canonical/unity/launcherentry/[0-9]+$", entry.ObjectPath);
-        Assert.AreEqual(entry.ObjectPath, new LinuxLauncherEntry("org.example.App.desktop").ObjectPath);
+        Assert.AreEqual(entry.ObjectPath, new LinuxLauncherEntry("org.example.App").ObjectPath);
         Assert.AreEqual("('application://org.example.App.desktop', {'count': <int64 3>, 'count-visible': <true>})", entry.UpdateParameters(LinuxLauncherEntry.CountProperties(3)));
         Assert.AreEqual("{'count-visible': <false>}", LinuxLauncherEntry.CountProperties(null));
         Assert.AreEqual("{'progress': <double 0.5>, 'progress-visible': <true>}", LinuxLauncherEntry.ProgressProperties(0.5));

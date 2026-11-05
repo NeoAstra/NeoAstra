@@ -74,7 +74,7 @@ internal static class NeoWindowBadge
 
 // A Unity launcher entry (com.canonical.Unity.LauncherEntry) of the desktop file of the application: an Update signal on the
 // session bus that the docks which read it (KDE Plasma, Ubuntu Dock and Dash to Dock, Plank, Latte) show on the icon of the
-// application that has this desktop file. A signal changes only the properties it carries.
+// application that has this desktop file (see LinuxDesktopEntry). A signal changes only the properties it carries.
 internal sealed unsafe partial class LinuxLauncherEntry : IDisposable
 {
     private const string Interface = "com.canonical.Unity.LauncherEntry";
@@ -82,25 +82,16 @@ internal sealed unsafe partial class LinuxLauncherEntry : IDisposable
     private nint _connection;
     private bool _connected, _disposed;
 
-    internal LinuxLauncherEntry(string desktopEntryId)
+    // The desktop entry is the name of the desktop file without .desktop: codealta gives application://codealta.desktop.
+    internal LinuxLauncherEntry(string desktopEntry)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(desktopEntryId);
-        ApplicationUri = "application://" + desktopEntryId;
+        ArgumentException.ThrowIfNullOrWhiteSpace(desktopEntry);
+        ApplicationUri = "application://" + desktopEntry + ".desktop";
         ObjectPath = "/com/canonical/unity/launcherentry/" + Fnv1a(ApplicationUri).ToString(CultureInfo.InvariantCulture);
     }
 
     internal string ApplicationUri { get; }
     internal string ObjectPath { get; }
-
-    // The desktop file of an application ID, as the desktop-entry of a notification names it: org.example.App gives
-    // org.example.App.desktop (and org.example.desktop gives org.example.desktop.desktop), an ID that cannot name a file null.
-    internal static string? DesktopEntryId(string? applicationId)
-    {
-        if (string.IsNullOrWhiteSpace(applicationId)) return null;
-        var id = applicationId.Trim();
-        if (id.Length > 240 || id.Any(static character => char.IsControl(character) || char.IsWhiteSpace(character) || character is '/' or '\\')) return null;
-        return id + ".desktop";
-    }
 
     internal static string CountProperties(long? count) => count is { } value
         ? "{'count': <int64 " + value.ToString(CultureInfo.InvariantCulture) + ">, 'count-visible': <true>}"

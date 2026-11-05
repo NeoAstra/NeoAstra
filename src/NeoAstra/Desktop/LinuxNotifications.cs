@@ -66,7 +66,8 @@ internal sealed class LinuxNotifications : INeoNotifications, INeoApplicationBou
             lock (_sync) if (previous is null && _byId.Count >= 256) return NeoDesktopStatus.LimitExceeded;
             var actions = new List<string>(2 + request.Actions.Count * 2) { "default", "Open" };
             foreach (var action in request.Actions) { actions.Add(action.Id); actions.Add(action.Title); }
-            var hints = "{'desktop-entry': <" + VariantString(_applicationId) + ">}";
+            // The desktop entry follows the GLib program name, as the windows and the launcher entry of the application do.
+            var hints = "{'desktop-entry': <" + VariantString(LinuxDesktopEntry.Resolve(_applicationId) ?? _applicationId) + ">}";
             var args = new[] { "call", "--session", "--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify", _applicationName, (previous?.NativeId ?? 0).ToString(CultureInfo.InvariantCulture), string.Empty, request.Title, request.Body, VariantArray(actions), hints, "-1" };
             DesktopProcessResult result;
             try { result = await DesktopProcess.RunAsync(_gdbus, args, default, TimeSpan.FromSeconds(15), true, cancellationToken).ConfigureAwait(false); }
