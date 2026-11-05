@@ -27,7 +27,9 @@
     <Compile Include="..\NeoAstra\Rpc\NeoCapabilityScopes.cs" Link="Shared\NeoCapabilityScopes.cs" />
     <Compile Include="..\NeoAstra\Rpc\NeoRpcValidation.cs" Link="Shared\NeoRpcValidation.cs" />
     <Compile Include="..\NeoAstra\Rpc\NeoSecurity.cs" Link="Shared\NeoSecurity.cs" />
+    <Compile Include="..\NeoAstra.Mcp\NeoMcpWire.cs" Link="Shared\NeoMcpWire.cs" />
     <PackageReference Include="MinVer" PrivateAssets="all" />
+    <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="XenoAtom.CommandLine" />
     <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
     <None Include="$(MSBuildThisFileDirectory)../../schemas/neoastra-project-v1.schema.json" Pack="true" PackagePath="schemas/" />

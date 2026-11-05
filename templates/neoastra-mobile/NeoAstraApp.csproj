@@ -26,6 +26,8 @@
        repository and come in as properties at build time. -->
   <ItemGroup>
     <PackageReference Include="NeoAstra" Version="NeoAstraPackageVersion" />
+    <!-- In a dotnet neoastra dev session, an agent drives the page through dotnet neoastra mcp; release builds leave it out. -->
+    <PackageReference Include="NeoAstra.Mcp" Version="NeoAstraPackageVersion" Condition="'$(Configuration)' == 'Debug'" />
     <Compile Remove="Platforms/**" />
     <Compile Include="Platforms/iOS/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'" />
     <Compile Include="Platforms/Android/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />

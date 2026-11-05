@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/NeoAstra/NeoAstra.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Location/NeoAstra.Location.csproj" />
+    <ProjectReference Include="../../../src/NeoAstra.Mcp/NeoAstra.Mcp.csproj" Condition="'$(Configuration)' == 'Debug'" />
     <ProjectReference Include="../../../src/NeoAstra.Push/NeoAstra.Push.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Passkeys/NeoAstra.Passkeys.csproj" />
     <ProjectReference Include="../../../src/NeoAstra.Purchases/NeoAstra.Purchases.csproj" />
@@ -37,4 +38,6 @@
   <!-- A project reference to the purchases plugin takes the targets that its package gives an iOS application: they embed
        the StoreKit 2 bridge. -->
   <Import Project="../../../src/NeoAstra.Purchases/Build/NeoAstra.Purchases.targets" />
+  <!-- The MCP plugin, in debug builds only, asks for the local network, where an iPhone reaches the relay of a session. -->
+  <Import Project="../../../src/NeoAstra.Mcp/Build/NeoAstra.Mcp.targets" Condition="'$(Configuration)' == 'Debug'" />
 </Project>

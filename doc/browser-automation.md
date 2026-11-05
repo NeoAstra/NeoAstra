@@ -10,6 +10,9 @@ WebView2, WKWebView, and WebKitGTK.
 NeoAstra does not open a Model Context Protocol (MCP) server. It provides the operations, and the host
 decides whether to expose them: through an MCP server, to a test, or to anything else.
 
+In a development session, the `NeoAstra.Mcp` plugin and `dotnet neoastra mcp` bring the operations to an agent without a
+server in the application, on the desktop and on a phone: see [Agents and MCP](mcp.md).
+
 ## Turning it on
 
 ```csharp
@@ -199,7 +202,8 @@ not get in its way. What follows from this design:
   `resize_page` gives the window the size that the page needs, in one call. A window stops at its screen
   and at the least size of its frame, and at some scales and zooms no window size comes to a given
   page size: WebView2 has no page of 4n + 1 CSS pixels on a display at 125 percent. The answer of the
-  tool then says which size the page has.
+  tool then says which size the page has. On iOS and Android the page fills the screen of its application,
+  and `resize_page` says that it is not supported there.
 - **Pages** are the views of the application. `new_page` opens a window through `NewPageHandler`; the
   default one gives the pages of an `isolatedContext` an ephemeral profile of their own. `close_page`
   asks the window of the page to close, which the application may refuse.

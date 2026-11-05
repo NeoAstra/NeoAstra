@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
     <ProjectReference Include="..\NeoAstra.Location\NeoAstra.Location.csproj" />
+    <ProjectReference Include="..\NeoAstra.Mcp\NeoAstra.Mcp.csproj" />
     <ProjectReference Include="..\NeoAstra.Push\NeoAstra.Push.csproj" />
     <ProjectReference Include="..\NeoAstra.Passkeys\NeoAstra.Passkeys.csproj" />
     <ProjectReference Include="..\NeoAstra.Purchases\NeoAstra.Purchases.csproj" />

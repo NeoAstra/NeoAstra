@@ -4,6 +4,9 @@ using NeoAstra.Desktop;
 using NeoAstra.Desktop.Dialogs;
 using NeoAstra.Desktop.Opener;
 using NeoAstra.Location;
+#if DEBUG
+using NeoAstra.Mcp;
+#endif
 using NeoAstra.Passkeys;
 using NeoAstra.Purchases;
 using NeoAstra.Push;
@@ -84,7 +87,13 @@ internal sealed class MobileHost
         var push = NeoPush.CreateSystem(desktop.Notifications, application.Dispatcher);
         var passkeys = NeoPasskeys.CreateSystem(application.Dispatcher);
         var purchases = NeoPurchases.CreateSystem(application.Dispatcher);
-        var plugins = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).AddNeoAstraPush(push).AddNeoAstraPasskeys(passkeys).AddNeoAstraPurchases(purchases).Build();
+        var pluginBuilder = new NeoPluginBuilder().AddNeoAstraDesktop(desktop).AddNeoAstraLocation(location).AddNeoAstraPush(push).AddNeoAstraPasskeys(passkeys).AddNeoAstraPurchases(purchases);
+#if DEBUG
+        // In a development session of the NeoAstra tool, an agent drives the page through the relay of the session; the plugin does
+        // nothing outside a session, and release builds leave it out.
+        pluginBuilder.AddNeoAstraMcp();
+#endif
+        var plugins = pluginBuilder.Build();
 
         var capabilities = LoadCapabilities();
         var builder = new NeoRpcBuilder(new NeoRpcOptions

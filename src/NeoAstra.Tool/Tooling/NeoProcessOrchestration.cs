@@ -37,7 +37,11 @@ internal interface INeoProcessFactory
     INeoChildProcess Start(NeoProcessStart start);
 }
 
-internal sealed record NeoProcessStart(string Label, NeoCommand Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, IReadOnlySet<string> SecretEnvironment, Action<string, bool> Log);
+internal sealed record NeoProcessStart(string Label, NeoCommand Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, IReadOnlySet<string> SecretEnvironment, Action<string, bool> Log)
+{
+    // Text that the process reads on its standard input, such as a secret that must not appear in its arguments.
+    internal string? StandardInput { get; init; }
+}
 internal sealed class NeoProcessFactory : INeoProcessFactory
 {
     public INeoChildProcess Start(NeoProcessStart start) => new NeoChildProcess(start);
@@ -62,6 +66,7 @@ internal sealed class NeoChildProcess : INeoChildProcess
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = start.StandardInput is not null,
             CreateNoWindow = true,
         };
         foreach (var argument in executable.PrefixArguments)
@@ -86,6 +91,16 @@ internal sealed class NeoChildProcess : INeoChildProcess
             throw new NeoToolException("process_start", $"Unable to start {start.Label}; verify the configured executable.");
         }
 
+        if (start.StandardInput is { } input)
+        {
+            // A few bytes, which fit in the pipe whether or not the process reads them yet.
+            try
+            {
+                _process.StandardInput.Write(input);
+                _process.StandardInput.Close();
+            }
+            catch (IOException) { /* the process ended before it read its input; its exit code says so */ }
+        }
         _stdout = PumpAsync(_process.StandardOutput, false, start);
         _stderr = PumpAsync(_process.StandardError, true, start);
         _completion = CompleteAsync();
@@ -350,6 +365,23 @@ internal sealed class NeoReadinessProbe : INeoReadinessProbe
 
 internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFactory, INeoReadinessProbe readiness)
 {
+    internal const string McpUrlVariable = "NEOASTRA_MCP_URL";
+    internal const string McpTokenVariable = "NEOASTRA_MCP_TOKEN";
+    internal const string McpTunnelPortVariable = "NEOASTRA_MCP_TUNNEL_PORT";
+
+    /// <summary>Gets the address of this machine where an iPhone reaches the relay, or <see langword="null"/> to find it.</summary>
+    internal System.Net.IPAddress? McpNetworkAddress { get; init; }
+
+    /// <summary>Reads the address that <c>--mcp-address</c> gives.</summary>
+    /// <exception cref="NeoToolException">The value is not a private IPv4 address.</exception>
+    internal static System.Net.IPAddress ParseMcpAddress(string value)
+        => System.Net.IPAddress.TryParse(value.Trim(), out var address) && NeoMcpRelay.IsPrivateIPv4(address)
+            ? address
+            : throw new NeoToolException("mcp_address", "The address of the relay must be a private IPv4 address of this machine (10.x, 172.16-31.x, or 192.168.x).");
+
+    /// <summary>Gets the folder of the discovery file through which <c>dotnet neoastra mcp</c> finds the relay of the session.</summary>
+    internal string McpDiscoveryDirectory { get; init; } = NeoMcpRelayDiscovery.DefaultDirectory;
+
     internal Task<int> RunAsync(NeoResolvedProject project, CancellationToken cancellationToken)
         => RunAsync(project, null, cancellationToken);
 
@@ -365,6 +397,8 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         };
         var launcher = mobile is null ? null : new NeoMobileLauncher(processFactory);
         var framework = launcher is null ? null : await launcher.ResolveFrameworkAsync(project, mobile!, contractEnvironment, Log, cancellationToken).ConfigureAwait(false);
+        // A device of iOS is a simulator or an iPhone, which reaches neither the server nor the relay on the loopback interface.
+        if (launcher is not null) mobile = await launcher.ResolveIOSDeviceAsync(project, mobile!, contractEnvironment, Log, cancellationToken).ConfigureAwait(false);
         var contractCommand = framework is null ? project.ContractCommand : NeoMobileLauncher.ContractCommand(project.ContractCommand, framework);
         await using (var contract = processFactory.Start(new("contract", contractCommand, project.ProjectDirectory, contractEnvironment, project.SecretEnvironment, (line, error) => Log("contract", line, error))))
         {
@@ -395,6 +429,16 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
                 ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri,
                 ["NeoAstraBuildFrontend"] = "false",
             };
+            // The relay of the session: an application with the NeoAstra.Mcp plugin connects out to it, and an agent reaches the
+            // application through `dotnet neoastra mcp`, which finds the relay in the discovery file of the project.
+            // An iPhone reaches the machine on the local network only, so the relay listens on its address there too.
+            // It also tunnels the development server for the application there, which reaches it from its own loopback interface.
+            await using var relay = StartRelay(project, Log, mobile?.IsPhysicalIOSDevice == true);
+            if (relay is not null)
+            {
+                backendEnvironment[McpUrlVariable] = (relay.NetworkUrl ?? relay.Url).AbsoluteUri;
+                backendEnvironment[McpTokenVariable] = relay.Token;
+            }
             await using var backend = mobile is null
                 ? processFactory.Start(new("backend", project.BackendCommand, project.ProjectDirectory, backendEnvironment, project.SecretEnvironment, (line, error) => Log("backend", line, error)))
                 : await launcher!.StartAsync(project, mobile, framework!, backendEnvironment, Log, cancellationToken).ConfigureAwait(false);
@@ -411,6 +455,53 @@ internal sealed class NeoDevelopmentOrchestrator(INeoProcessFactory processFacto
         finally
         {
             await frontend.StopAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        }
+    }
+
+    private RelaySession? StartRelay(NeoResolvedProject project, Action<string, string, bool> log, bool onNetwork)
+    {
+        System.Net.IPAddress? address = null;
+        if (onNetwork)
+        {
+            address = McpNetworkAddress ?? NeoMcpRelay.FindNetworkAddress();
+            if (address is null) log("mcp", "This machine has no private IPv4 address on a local network: the device cannot reach the relay for agents.", true);
+        }
+        NeoMcpRelay relay;
+        // The development URL names 127.0.0.1 or [::1]; the relay connects the streams of the tunnel to that address.
+        var tunnel = onNetwork ? new System.Net.IPEndPoint(System.Net.IPAddress.Parse(project.DevUrl.Host.Trim('[', ']')), project.DevUrl.Port) : null;
+        try { relay = NeoMcpRelay.Start(address, tunnel); }
+        catch (Exception exception) when (exception is System.Net.HttpListenerException or System.Net.Sockets.SocketException or PlatformNotSupportedException)
+        {
+            // The session runs without the relay: only agents lose their way to the application.
+            log("mcp", $"The relay for agents could not start ({exception.GetType().Name}); the session runs without it.", true);
+            return null;
+        }
+        try
+        {
+            NeoMcpRelayDiscovery.Write(McpDiscoveryDirectory, project.ProjectDirectory, new(relay.Url, relay.Token, Environment.ProcessId));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            log("mcp", $"The discovery file of the relay could not be written ({exception.GetType().Name}); `dotnet neoastra mcp` will not find this session.", true);
+        }
+        if (address is not null && relay.NetworkUrl is null)
+            log("mcp", $"The relay could not listen on {address} of the local network (on Windows that needs administrator rights): the device cannot reach it.", true);
+        log("mcp", $"Agents reach the applications of this session with `dotnet neoastra mcp` (relay on port {relay.Port}{(relay.NetworkUrl is { } network ? $", for the device at {network.Host}" : "")}).", false);
+        return new RelaySession(relay, McpDiscoveryDirectory, project.ProjectDirectory);
+    }
+
+    private sealed class RelaySession(NeoMcpRelay relay, string directory, string projectDirectory) : IAsyncDisposable
+    {
+        internal Uri Url => relay.Url;
+
+        internal Uri? NetworkUrl => relay.NetworkUrl;
+
+        internal string Token => relay.Token;
+
+        public async ValueTask DisposeAsync()
+        {
+            NeoMcpRelayDiscovery.Delete(directory, projectDirectory, relay.Token);
+            await relay.DisposeAsync().ConfigureAwait(false);
         }
     }
 }

@@ -20,6 +20,7 @@ Build desktop and mobile apps with .NET and a web UI, on the platform's own webv
 - [Displays and window placement](displays-and-window-placement.md) — find the displays, put windows on them, follow a dragged tab across windows, and use virtual desktops.
 - [Chromeless windows and web title bars](chromeless-windows.md) — extend web content into the title bar while keeping native window behavior, and turn off built-in browser shortcuts and menus.
 - [Browser automation](browser-automation.md) — drive the views of an application with the operations of Chrome DevTools MCP, and surface them through an MCP server.
+- [Agents and MCP](mcp.md) — let an agent drive the pages of an application in a development session, on the desktop, in a simulator, or on a phone.
 - [Delivery and authenticated updates](delivery-and-updates.md) — create deterministic bundles and configure signed updates.
 
 ## Security guidance

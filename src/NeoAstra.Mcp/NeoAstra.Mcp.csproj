@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>MCP plugin for NeoAstra: in a development session, the application connects to the relay of the NeoAstra tool, which serves the browser automation tools of its views to an agent over the Model Context Protocol, on the desktop, in a simulator or an emulator, and on a phone.</Description>
+    <PackageTags>neoastra;mcp;model-context-protocol;automation;agent;ios;android;plugin</PackageTags>
+    <PackageReadmeFile>readme.md</PackageReadmeFile>
+    <PackageIcon>NeoAstra.png</PackageIcon>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/NeoAstra/NeoAstra</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/NeoAstra/NeoAstra</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NeoAstra\NeoAstra.csproj" />
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+    <PackageReference Include="ModelContextProtocol.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="neoastra.plugin.json" />
+    <None Update="neoastra.plugin.json" Pack="true" PackagePath="plugins/neoastra.mcp/neoastra.plugin.json" />
+    <None Update="Build\NeoAstra.Mcp.targets" Pack="true" PackagePath="buildTransitive/NeoAstra.Mcp.targets" />
+    <None Update="Build\local-network.plist" Pack="true" PackagePath="buildTransitive/local-network.plist" />
+    <None Include="$(MSBuildThisFileDirectory)../../img/NeoAstra.png" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../readme.md" Pack="true" PackagePath="/" />
+    <None Include="$(MSBuildThisFileDirectory)../../license.txt" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

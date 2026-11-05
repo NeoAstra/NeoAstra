@@ -456,6 +456,9 @@ public sealed class NeoAutomationPage
     private async Task<NeoSize?> ResizeCoreAsync(NeoSize wanted, CancellationToken cancellationToken)
     {
         ThrowIfClosed();
+        // A page on a phone fills the screen of its application, which no size of a window changes.
+        if (OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            throw new NeoAutomationException("not-supported", "A page on a phone fills the screen of its application, so its size cannot be set.");
         var window = View.Window ?? throw new NeoAutomationException("not-supported", "The view of this page is hosted by a window that NeoAstra does not own, so it cannot be resized.");
         if (window.State != NeoWindowState.Normal)
         {

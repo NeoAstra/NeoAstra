@@ -1,6 +1,9 @@
 using System.Text.Json.Serialization;
 using NeoAstra;
 using NeoAstra.Rpc;
+#if DEBUG
+using NeoAstra.Mcp;
+#endif
 
 [assembly: NeoRpcJsonContext(typeof(NeoAstraApp.AppJsonContext))]
 
@@ -13,6 +16,11 @@ internal static class App
     {
         app.Title = "NeoAstra App";
         app.UseRpc(rpc => rpc.AddGreetingService(new GreetingService()));
+#if DEBUG
+        // In a `dotnet neoastra dev` session, an agent reaches the page through `dotnet neoastra mcp`; the plugin does nothing
+        // outside a session. Add further plugins in this same call.
+        app.UsePlugins((_, plugins) => plugins.AddNeoAstraMcp());
+#endif
     }
 }
 

@@ -49,6 +49,7 @@ internal static class NeoToolApplication
             CreateDoctorCommand(),
             CreateInitCommand(),
             CreateDevCommand(),
+            CreateMcpCommand(),
             CreateAssetsCommand(),
             CreateFrontendCommand(),
             CreateContractCommand(),
@@ -101,6 +102,7 @@ internal static class NeoToolApplication
         string? devUrl = null;
         string? platform = null;
         string? device = null;
+        string? mcpAddress = null;
         return new Command("dev", "Restore dependencies and coordinate frontend and backend development.")
         {
             new CommandUsage(),
@@ -124,8 +126,29 @@ internal static class NeoToolApplication
                 "The iOS simulator {ID} or the Android device serial, when more than one is running.",
                 value => device = value
             },
+            {
+                "mcp-address=",
+                "The private IPv4 {ADDRESS} of this machine where an iPhone reaches the relay for agents (default: the address of the network with a gateway).",
+                value => mcpAddress = value
+            },
             new HelpOption(),
-            (_, _) => new ValueTask<int>(NeoToolCommands.DevAsync(config, devUrl, platform, device)),
+            (_, _) => new ValueTask<int>(NeoToolCommands.DevAsync(config, devUrl, platform, device, mcpAddress)),
+        };
+    }
+
+    private static Command CreateMcpCommand()
+    {
+        string? config = null;
+        return new Command("mcp", "Serve an agent the browser automation tools of the applications of the development session over MCP (stdio).")
+        {
+            new CommandUsage(),
+            {
+                "config=",
+                "Path to {FILE} (default: neoastra.json).",
+                value => config = value
+            },
+            new HelpOption(),
+            (_, _) => new ValueTask<int>(NeoToolCommands.McpAsync(config)),
         };
     }
 

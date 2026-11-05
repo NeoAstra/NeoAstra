@@ -78,6 +78,8 @@ An iOS or Android application (preview) runs against the same loopback developme
 dotnet neoastra dev --platform android            # the connected device or emulator
 dotnet neoastra dev --platform ios                # the booted simulator
 dotnet neoastra dev --platform ios --device <id>  # a simulator, or an Android serial, among several
+dotnet neoastra dev --platform ios --device <udid> # a connected iPhone
+dotnet neoastra dev --platform ios --device <udid> --mcp-address 192.168.1.20  # the address where the iPhone reaches the relay
 ```
 
 After the server is ready, the tool builds the debug build of the target framework of the platform (the contract step builds
@@ -104,6 +106,19 @@ its own.
 adb reverse tcp:5173 tcp:5173
 adb shell "run-as <application id> sh -c 'mkdir -p files && echo http://127.0.0.1:5173/ > files/neoastra-development-url'"
 ```
+
+Every development session also runs a relay on the loopback interface, through which an agent reaches the pages of the
+application with `dotnet neoastra mcp`; the application connects out to it with the `NeoAstra.Mcp` plugin. The session gives
+the application the address and the token of the relay the same way as the address of the server, in `NEOASTRA_MCP_URL` and
+`NEOASTRA_MCP_TOKEN` and on Android in `files/neoastra-development-mcp`, and removes them when it ends. See
+[Agents and MCP](mcp.md).
+
+On a connected iPhone, which does not reach the loopback interface of the machine, the tool builds the debug build for
+`ios-arm64`, signed with the `Apple Development` identity unless the project sets `CodesignKey`, installs and starts it with
+`devicectl`, and gives it the relay on the private address of the machine in the local network. An application with the
+`NeoAstra.Mcp` plugin tunnels the development server through the relay and loads the page from its own `127.0.0.1`, with the
+updates of the server; one without it, or one whose relay listens on the loopback interface alone, gets its frontend assets in
+its build, and a change of the frontend needs a new session there. See [Agents and MCP](mcp.md#an-iphone).
 
 ## Build, run, publish, and MSBuild properties
 
