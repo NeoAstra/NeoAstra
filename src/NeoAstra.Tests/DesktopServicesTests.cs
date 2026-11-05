@@ -578,8 +578,8 @@ public sealed class DesktopServicesTests
             var options = new NeoFileDialogOptions { Scope = new NeoFileScope([root]) };
             var dialogs = new LinuxDialogs(dispatcher: null);
 
-            Assert.AreEqual(File.Exists("/usr/bin/zenity") ? NeoSupportLevel.Limited : NeoSupportLevel.None, dialogs.Support.SupportLevel);
-            StringAssert.Contains(dialogs.Support.Details, File.Exists("/usr/bin/zenity") ? "GTK4-compatible dialogs" : "zenity is unavailable");
+            var zenity = File.Exists("/usr/bin/zenity") || File.Exists("/usr/local/bin/zenity");
+            Assert.AreEqual(LinuxDialogs.Describe(LinuxPortalFileChooser.SessionBusConfigured(), zenity), dialogs.Support);
             var allowed = LinuxDialogs.AuthorizeSelections(options, [file], save: false, folders: false);
             Assert.AreEqual(NeoDesktopStatus.Success, allowed.Status);
             Assert.AreEqual(NeoFileScope.Canonicalize(file, requireExisting: true), allowed.Value![0]);
@@ -589,6 +589,108 @@ public sealed class DesktopServicesTests
             Assert.AreEqual("path_scope", outside.Code);
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    public void LinuxDialogsSupportTellsThePortalAndTheZenityFallbackApart()
+    {
+        var none = LinuxDialogs.Describe(sessionBus: false, zenity: false);
+        var both = LinuxDialogs.Describe(sessionBus: true, zenity: true);
+        var portal = LinuxDialogs.Describe(sessionBus: true, zenity: false);
+        var helper = LinuxDialogs.Describe(sessionBus: false, zenity: true);
+
+        Assert.AreEqual(NeoSupportLevel.None, none.SupportLevel);
+        Assert.AreEqual(NeoSupportLevel.Limited, both.SupportLevel);
+        Assert.AreEqual(NeoSupportLevel.Limited, portal.SupportLevel);
+        Assert.AreEqual(NeoSupportLevel.Limited, helper.SupportLevel);
+        StringAssert.Contains(both.Details, "xdg-desktop-portal");
+        StringAssert.Contains(both.Details, "zenity helper process where no portal answers");
+        StringAssert.Contains(portal.Details, "Message dialogs need the zenity helper, which is unavailable");
+        StringAssert.Contains(helper.Details, "no session D-Bus for the desktop portal");
+    }
+
+    [TestMethod]
+    public async Task LinuxDialogsWithoutPortalOrZenityReportUnsupported()
+    {
+        var dialogs = new LinuxDialogs(dispatcher: null, zenity: string.Empty, sessionBus: true);
+        var options = new NeoFileDialogOptions { Scope = new NeoFileScope([Path.GetTempPath()]) };
+
+        // Without a dispatcher there is no main loop for the portal, and without zenity no helper: nothing is shown.
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.OpenFilesAsync(options)).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.OpenFoldersAsync(options)).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.SaveFileAsync(options)).Status);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, (await dialogs.ShowMessageAsync(new NeoMessageDialogOptions { Message = "Message" })).Status);
+    }
+
+    [TestMethod]
+    public void LinuxPortalRequestPathFollowsTheUniqueNameAndTheToken()
+    {
+        var token = LinuxPortalFileChooserProtocol.NewToken();
+
+        Assert.AreEqual(41, token.Length);
+        Assert.IsTrue(token.StartsWith("neoastra_", StringComparison.Ordinal) && token.All(static c => char.IsAsciiLetterOrDigit(c) || c == '_'));
+        Assert.AreNotEqual(token, LinuxPortalFileChooserProtocol.NewToken());
+        Assert.AreEqual("/org/freedesktop/portal/desktop/request/1_42/neoastra_t", LinuxPortalFileChooserProtocol.RequestPath(":1.42", "neoastra_t"));
+        Assert.ThrowsExactly<ArgumentException>(() => LinuxPortalFileChooserProtocol.RequestPath("1.42", "neoastra_t"));
+        Assert.ThrowsExactly<ArgumentException>(() => LinuxPortalFileChooserProtocol.RequestPath(":1.42", "neoastra/t"));
+    }
+
+    [TestMethod]
+    public void LinuxPortalOpenFileParametersAskForFoldersOrFilteredFiles()
+    {
+        var scope = new NeoFileScope([Path.GetTempPath()]);
+        var folders = new NeoFileDialogOptions { Title = "Add a folder", AllowMultiple = true, InitialDirectory = "/h/\u00e9", Scope = scope };
+        var files = new NeoFileDialogOptions
+        {
+            Scope = scope,
+            Filters = [new NeoFileDialogFilter("Images", ["png", "jpg"], ["image/png"]), new NeoFileDialogFilter("Text", ["txt"])],
+        };
+
+        Assert.AreEqual(
+            "('', 'Add a folder', {'handle_token': <'neoastra_t'>, 'multiple': <true>, 'directory': <true>, 'current_folder': <[byte 0x2f, byte 0x68, byte 0x2f, byte 0xc3, byte 0xa9, byte 0x00]>})",
+            LinuxPortalFileChooserProtocol.OpenFileParameters(folders, folders: true, "neoastra_t"));
+        Assert.AreEqual(
+            "('', '', {'handle_token': <'neoastra_t'>, 'filters': <[('Images', [(uint32 0, '*.png'), (uint32 0, '*.jpg'), (uint32 1, 'image/png')]), ('Text', [(uint32 0, '*.txt')])]>})",
+            LinuxPortalFileChooserProtocol.OpenFileParameters(files, folders: false, "neoastra_t"));
+        // A folder dialog has no filters.
+        Assert.IsFalse(LinuxPortalFileChooserProtocol.OpenFileParameters(files, folders: true, "neoastra_t").Contains("filters", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void LinuxPortalSaveFileParametersQuoteTheTitleAndTheName()
+    {
+        var options = new NeoFileDialogOptions { Title = "It's \\ a\nlist", SuggestedFileName = "notes 'v2'.md", InitialDirectory = "/t", Scope = new NeoFileScope([Path.GetTempPath()]) };
+
+        Assert.AreEqual(
+            "('', 'It\\'s \\\\ a\\nlist', {'handle_token': <'neoastra_t'>, 'current_name': <'notes \\'v2\\'.md'>, 'current_folder': <[byte 0x2f, byte 0x74, byte 0x00]>})",
+            LinuxPortalFileChooserProtocol.SaveFileParameters(options, "neoastra_t"));
+        Assert.AreEqual("'\\u0001'", LinuxPortalFileChooserProtocol.Quote("\u0001"));
+    }
+
+    [TestMethod]
+    public void LinuxPortalUrisBecomeLocalPathsOnly()
+    {
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.TryGetLocalPath("file:///home/a%20b/%C3%A9t%C3%A9.txt", out var escaped));
+        Assert.AreEqual("/home/a b/\u00e9t\u00e9.txt", escaped);
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.TryGetLocalPath("file://localhost/tmp/x", out var local));
+        Assert.AreEqual("/tmp/x", local);
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.TryGetLocalPath("file:///run/user/1000/doc/1a2b/\u00e9", out var raw));
+        Assert.AreEqual("/run/user/1000/doc/1a2b/\u00e9", raw);
+        foreach (var refused in new[] { null, "", "https://example.test/a", "file://host/a", "file://", "file:///a%2", "file:///a%zz", "file:///a%00b", "file:///a?b", "file:///a#b", "file:///a%FF", "file:///a\nb" })
+            Assert.IsFalse(LinuxPortalFileChooserProtocol.TryGetLocalPath(refused, out _), refused ?? "null");
+    }
+
+    [TestMethod]
+    public void LinuxPortalResponsesBecomeDialogResults()
+    {
+        var chosen = LinuxPortalFileChooserProtocol.Paths(0, ["file:///a", "file:///b%20c"]);
+        Assert.AreEqual(NeoDesktopStatus.Success, chosen.Status);
+        CollectionAssert.AreEqual(new[] { "/a", "/b c" }, chosen.Value!.ToArray());
+        Assert.AreEqual(NeoDesktopStatus.Canceled, LinuxPortalFileChooserProtocol.Paths(1, null).Status);
+        Assert.AreEqual(NeoDesktopStatus.Canceled, LinuxPortalFileChooserProtocol.Paths(0, []).Status);
+        Assert.AreEqual(new NeoDesktopResult<IReadOnlyList<string>>(NeoDesktopStatus.Failed, null, "dialog_failed"), LinuxPortalFileChooserProtocol.Paths(2, ["file:///a"]));
+        Assert.AreEqual(new NeoDesktopResult<IReadOnlyList<string>>(NeoDesktopStatus.Failed, null, "invalid_native_result"), LinuxPortalFileChooserProtocol.Paths(0, ["file:///a", "https://example.test/b"]));
+        Assert.AreEqual("invalid_native_result", LinuxPortalFileChooserProtocol.Paths(0, Enumerable.Repeat("file:///a", 257).ToArray()).Code);
     }
 
     [TestMethod]
