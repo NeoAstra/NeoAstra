@@ -1,6 +1,8 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
@@ -38,12 +40,21 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     internal static readonly Guid TaskbarList3InterfaceId = new("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF");
     private readonly Dictionary<NeoWindow, WindowIconEntry> _windowsIcons = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<NeoWindow, EventHandler> _linuxAttention = new(ReferenceEqualityComparer.Instance);
+    // The services that observe the messages of windows for their taskbar buttons, by the data of their subclass.
+    private static readonly ConcurrentDictionary<nuint, NeoWindowPolishService> TaskbarServices = new();
+    private static long s_nextTaskbarId;
+    private static uint s_taskbarButtonCreated;
+    private readonly WindowsTaskbarButtons _taskbarButtons = new();
+    private readonly Dictionary<nint, (NeoWindow Window, EventHandler Closed)> _taskbarWindows = [];
+    private nuint _taskbarId;
     private readonly object _sync = new();
     private readonly string? _linuxApplicationId;
     private LinuxLauncherEntry? _launcher;
     private bool _disposed;
 
     internal string? LinuxApplicationId => _linuxApplicationId;
+
+    internal int ObservedTaskbarButtons { get { lock (_sync) return _taskbarWindows.Count; } }
 
     /// <summary>Initializes the service. On Linux, the badge, progress, and attention go to the launcher entry of the desktop file named after the GLib program name, or else after the executable.</summary>
     public NeoWindowPolishService() : this(null) { }
@@ -180,15 +191,31 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        KeyValuePair<NeoWindow, WindowIconEntry>[] entries; KeyValuePair<NeoWindow, EventHandler>[] attention; LinuxLauncherEntry? launcher;
-        lock (_sync) { if (_disposed) return; _disposed = true; entries = _windowsIcons.ToArray(); _windowsIcons.Clear(); attention = _linuxAttention.ToArray(); _linuxAttention.Clear(); launcher = _launcher; _launcher = null; }
+        KeyValuePair<NeoWindow, WindowIconEntry>[] entries; KeyValuePair<NeoWindow, EventHandler>[] attention; LinuxLauncherEntry? launcher; KeyValuePair<nint, (NeoWindow Window, EventHandler Closed)>[] buttons; nuint taskbarId;
+        lock (_sync)
+        {
+            if (_disposed) return; _disposed = true; entries = _windowsIcons.ToArray(); _windowsIcons.Clear(); attention = _linuxAttention.ToArray(); _linuxAttention.Clear(); launcher = _launcher; _launcher = null;
+            buttons = _taskbarWindows.ToArray(); _taskbarWindows.Clear(); _taskbarButtons.Clear(); taskbarId = _taskbarId; _taskbarId = 0;
+        }
+        // The buttons keep what they show; the service stops observing their windows.
+        if (taskbarId != 0) TaskbarServices.TryRemove(taskbarId, out _);
         foreach (var pair in attention) { pair.Key.Activated -= pair.Value; pair.Key.Closed -= pair.Value; }
         if (launcher is not null)
         {
             try { if (attention.Length != 0) _ = launcher.Update(LinuxLauncherEntry.UrgentProperties(false)); } catch { }
             launcher.Dispose();
         }
-        var cleanups = new List<Task>(entries.Length);
+        var cleanups = new List<Task>(entries.Length + buttons.Length);
+        foreach (var pair in buttons)
+        {
+            var (window, closed) = pair.Value; var handle = pair.Key; window.Closed -= closed;
+            try
+            {
+                if (window.Application.Dispatcher.CheckAccess()) RemoveTaskbarSubclass(handle, taskbarId);
+                else cleanups.Add(window.Application.Dispatcher.InvokeAsync(() => RemoveTaskbarSubclass(handle, taskbarId)).AsTask());
+            }
+            catch { /* Without its service the subclass passes every message on. */ }
+        }
         foreach (var pair in entries)
         {
             pair.Key.Closed -= pair.Value.ClosedHandler; pair.Key.ScaleFactorChanged -= pair.Value.ScaleFactorChangedHandler;
@@ -306,15 +333,112 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
             return state == NeoWindowProgressState.Indeterminate ? NeoDesktopStatus.Unsupported
                 : Launcher()?.Update(LinuxLauncherEntry.ProgressProperties(state == NeoWindowProgressState.None ? null : value)) ?? NeoDesktopStatus.Unsupported;
         if (!OperatingSystem.IsWindows()) return NeoDesktopStatus.Unsupported;
-        var taskbar = CreateTaskbar(); if (taskbar == 0) return NeoDesktopStatus.Failed;
+        var handle = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+        if (!Native.IsWindow(handle)) return NeoDesktopStatus.NotFound;
+        KeepTaskbarButton(window, handle, buttons => buttons.SetProgress(handle, state, value));
+        return Deferred(handle, ApplyProgress(handle, state, value, out var refused), refused);
+    }
+
+    private static unsafe NeoDesktopStatus ApplyProgress(nint handle, NeoWindowProgressState state, double value, out bool refused)
+    {
+        // Without a taskbar (Explorer not running) the progress waits for the button too.
+        refused = false;
+        var taskbar = CreateTaskbar(); if (taskbar == 0) { refused = true; return NeoDesktopStatus.Failed; }
         try
         {
-            var vtable = *(nint**)taskbar; var hr = ((delegate* unmanaged[Stdcall]<nint, nint, uint, int>)vtable[10])(taskbar, window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, state switch { NeoWindowProgressState.None => 0u, NeoWindowProgressState.Indeterminate => 1u, NeoWindowProgressState.Normal => 2u, NeoWindowProgressState.Error => 4u, NeoWindowProgressState.Paused => 8u, _ => 0u });
-            if (hr < 0) return NeoDesktopStatus.Failed;
-            if (state is NeoWindowProgressState.Normal or NeoWindowProgressState.Error or NeoWindowProgressState.Paused) hr = ((delegate* unmanaged[Stdcall]<nint, nint, ulong, ulong, int>)vtable[9])(taskbar, window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, (ulong)Math.Round(value * 10_000), 10_000);
+            var vtable = *(nint**)taskbar; var hr = ((delegate* unmanaged[Stdcall]<nint, nint, uint, int>)vtable[10])(taskbar, handle, state switch { NeoWindowProgressState.None => 0u, NeoWindowProgressState.Indeterminate => 1u, NeoWindowProgressState.Normal => 2u, NeoWindowProgressState.Error => 4u, NeoWindowProgressState.Paused => 8u, _ => 0u });
+            if (hr >= 0 && state is NeoWindowProgressState.Normal or NeoWindowProgressState.Error or NeoWindowProgressState.Paused) hr = ((delegate* unmanaged[Stdcall]<nint, nint, ulong, ulong, int>)vtable[9])(taskbar, handle, (ulong)Math.Round(value * 10_000), 10_000);
+            refused = hr < 0;
             return hr >= 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed;
         }
         finally { Release(taskbar); }
+    }
+
+    // A hidden window has no taskbar button yet, so the taskbar can refuse what it should show: it is kept and given when Windows
+    // sends TaskbarButtonCreated, which makes the request a success.
+    private static NeoDesktopStatus Deferred(nint handle, NeoDesktopStatus status, bool refused)
+        => refused && !Native.IsWindowVisible(handle) ? NeoDesktopStatus.Success : status;
+
+    // Runs on the UI thread of the window: keeps what its button should show, observes the window while there is something, and
+    // stops when there is nothing.
+    private void KeepTaskbarButton(NeoWindow window, nint handle, Func<WindowsTaskbarButtons, bool> change)
+    {
+        bool observe, release;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            var shows = change(_taskbarButtons); var observed = _taskbarWindows.ContainsKey(handle);
+            observe = shows && !observed; release = !shows && observed;
+        }
+        if (observe) ObserveTaskbarButton(window, handle);
+        else if (release) ReleaseTaskbarButton(handle);
+    }
+
+    private unsafe void ObserveTaskbarButton(NeoWindow window, nint handle)
+    {
+        var message = TaskbarButtonCreatedMessage(); nuint id;
+        lock (_sync)
+        {
+            if (_disposed) return;
+            if (_taskbarId == 0) { _taskbarId = checked((nuint)Interlocked.Increment(ref s_nextTaskbarId)); TaskbarServices[_taskbarId] = this; }
+            id = _taskbarId;
+        }
+        // An elevated process gets the message of Explorer, which runs at a lower integrity level, only once it lets it through.
+        if (message != 0) _ = Native.ChangeWindowMessageFilterEx(handle, message, 1, 0); // MSGFLT_ALLOW
+        if (message == 0 || !Native.SetWindowSubclass(handle, &TaskbarSubclass, id, id))
+        {
+            lock (_sync) _taskbarButtons.Remove(handle);
+            return;
+        }
+        EventHandler closed = (_, _) => ReleaseTaskbarButton(handle);
+        lock (_sync)
+        {
+            if (_disposed) { RemoveTaskbarSubclass(handle, id); return; }
+            _taskbarWindows[handle] = (window, closed);
+        }
+        window.Closed += closed;
+    }
+
+    // Runs on the UI thread of the window, when its button shows nothing any more, when it closes, or when it is destroyed.
+    private void ReleaseTaskbarButton(nint handle)
+    {
+        (NeoWindow Window, EventHandler Closed) entry; nuint id;
+        lock (_sync) { _taskbarButtons.Remove(handle); if (!_taskbarWindows.Remove(handle, out entry)) return; id = _taskbarId; }
+        entry.Window.Closed -= entry.Closed;
+        RemoveTaskbarSubclass(handle, id);
+    }
+
+    // The taskbar created the button of the window, for the first time or after Explorer restarted: it is given what it shows.
+    private void RestoreTaskbarButton(nint handle)
+    {
+        WindowsTaskbarButtons.Button button;
+        lock (_sync) if (_disposed || !_taskbarButtons.TryGet(handle, out button)) return;
+        if (button.Progress != NeoWindowProgressState.None) _ = ApplyProgress(handle, button.Progress, button.Value, out _);
+        if (button.Badge is not null) _ = ApplyOverlay(handle, button.Badge, out _);
+    }
+
+    private static unsafe void RemoveTaskbarSubclass(nint handle, nuint id) { if (id != 0 && Native.IsWindow(handle)) _ = Native.RemoveWindowSubclass(handle, &TaskbarSubclass, id); }
+
+    private static uint TaskbarButtonCreatedMessage()
+    {
+        var message = Volatile.Read(ref s_taskbarButtonCreated);
+        if (message == 0) { message = Native.RegisterWindowMessage("TaskbarButtonCreated"); Volatile.Write(ref s_taskbarButtonCreated, message); }
+        return message;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static nint TaskbarSubclass(nint window, uint message, nuint wParam, nint lParam, nuint id, nuint data)
+    {
+        try
+        {
+            if (TaskbarServices.TryGetValue(data, out var service))
+            {
+                if (message == 0x0082) service.ReleaseTaskbarButton(window); // WM_NCDESTROY
+                else if (message != 0 && message == Volatile.Read(ref s_taskbarButtonCreated)) service.RestoreTaskbarButton(window);
+            }
+        }
+        catch { }
+        return Native.DefSubclassProc(window, message, wParam, lParam);
     }
 
     private NeoDesktopStatus SetBadge(NeoWindow window, string? badge)
@@ -344,26 +468,35 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         return Native.DwmSetWindowAttribute(window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, 20, ref dark, sizeof(int)) >= 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Unsupported;
     }
 
-    // The taskbar keeps a copy of the overlay icon it is given (ITaskbarList3::SetOverlayIcon), so the icon is destroyed at once and
-    // the service holds none: a later badge replaces the overlay, a null icon clears it, and the button goes with its window.
-    private static unsafe NeoDesktopStatus SetOverlayIcon(NeoWindow window, string? badge)
+    private NeoDesktopStatus SetOverlayIcon(NeoWindow window, string? badge)
     {
         var handle = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
         if (!Native.IsWindow(handle)) return NeoDesktopStatus.NotFound;
+        KeepTaskbarButton(window, handle, buttons => buttons.SetBadge(handle, badge));
+        return Deferred(handle, ApplyOverlay(handle, badge, out var refused), refused);
+    }
+
+    // The taskbar keeps a copy of the overlay icon it is given (ITaskbarList3::SetOverlayIcon), so the icon is destroyed at once and
+    // the service holds none: a later badge replaces the overlay, a null icon clears it, and the button goes with its window.
+    private static unsafe NeoDesktopStatus ApplyOverlay(nint handle, string? badge, out bool refused)
+    {
+        refused = false;
         var text = NeoWindowBadge.OverlayText(badge); nint icon = 0;
         if (text is not null)
         {
-            var size = Native.GetSystemMetricsForDpi(49, WindowDpi(window)); // SM_CXSMICON
+            var dpi = Native.GetDpiForWindow(handle);
+            var size = Native.GetSystemMetricsForDpi(49, dpi is >= 48 and <= 96 * 8 ? dpi : 96u); // SM_CXSMICON
             icon = CreateOverlayIcon(text, Math.Clamp(size, 16, 256)); if (icon == 0) return NeoDesktopStatus.Failed;
         }
         var taskbar = CreateTaskbar();
         try
         {
-            if (taskbar == 0) return NeoDesktopStatus.Failed;
+            if (taskbar == 0) { refused = true; return NeoDesktopStatus.Failed; }
             var vtable = *(nint**)taskbar;
             // The description of the overlay, for accessibility, is the whole badge.
             fixed (char* description = text is null ? null : badge!.Trim())
-                return ((delegate* unmanaged[Stdcall]<nint, nint, nint, char*, int>)vtable[18])(taskbar, handle, icon, description) >= 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed;
+                refused = ((delegate* unmanaged[Stdcall]<nint, nint, nint, char*, int>)vtable[18])(taskbar, handle, icon, description) < 0;
+            return refused ? NeoDesktopStatus.Failed : NeoDesktopStatus.Success;
         }
         finally { if (taskbar != 0) Release(taskbar); if (icon != 0) _ = Native.DestroyIcon(icon); }
     }
@@ -503,6 +636,13 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         [LibraryImport("gdi32.dll")] internal static partial uint SetTextColor(nint dc, uint color);
         [LibraryImport("gdi32.dll")] internal static partial int SetBkMode(nint dc, int mode);
         [LibraryImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GdiFlush();
+        [LibraryImport("user32.dll", EntryPoint = "RegisterWindowMessageW", StringMarshalling = StringMarshalling.Utf16)] internal static partial uint RegisterWindowMessage(string name);
+        [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool ChangeWindowMessageFilterEx(nint window, uint message, uint action, nint filter);
+        [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool IsWindowVisible(nint window);
+        [LibraryImport("user32.dll")] internal static partial uint GetDpiForWindow(nint window);
+        [LibraryImport("comctl32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool SetWindowSubclass(nint window, delegate* unmanaged[Stdcall]<nint, uint, nuint, nint, nuint, nuint, nint> callback, nuint id, nuint data);
+        [LibraryImport("comctl32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool RemoveWindowSubclass(nint window, delegate* unmanaged[Stdcall]<nint, uint, nuint, nint, nuint, nuint, nint> callback, nuint id);
+        [LibraryImport("comctl32.dll")] internal static partial nint DefSubclassProc(nint window, uint message, nuint wParam, nint lParam);
         [LibraryImport("ole32.dll")] internal static partial int CoCreateInstance(ref Guid clsid, nint outer, uint context, ref Guid iid, nint* value);
         [LibraryImport("libgtk-4.so.1", EntryPoint = "gtk_widget_set_sensitive")] internal static partial void GtkWidgetSetSensitive(nint widget, [MarshalAs(UnmanagedType.Bool)] bool sensitive);
     }

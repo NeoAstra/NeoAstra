@@ -187,6 +187,76 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public void WindowsTaskbarButtonsKeepWhatEachButtonShowsUntilItShowsNothing()
+    {
+        // Windows takes the calls of a taskbar button only after TaskbarButtonCreated: what a button shows is kept to be given then.
+        var buttons = new WindowsTaskbarButtons();
+        Assert.IsTrue(buttons.SetBadge(1, " 3 "));
+        Assert.IsTrue(buttons.TryGet(1, out var button));
+        Assert.AreEqual(new WindowsTaskbarButtons.Button("3", NeoWindowProgressState.None, 0), button);
+        Assert.IsTrue(buttons.SetProgress(1, NeoWindowProgressState.Normal, 0.25));
+        Assert.IsTrue(buttons.TryGet(1, out button));
+        Assert.AreEqual(new WindowsTaskbarButtons.Button("3", NeoWindowProgressState.Normal, 0.25), button);
+        // A later badge replaces the earlier one; clearing it keeps the progress, and the button shows something still.
+        Assert.IsTrue(buttons.SetBadge(1, "9+"));
+        Assert.IsTrue(buttons.TryGet(1, out button)); Assert.AreEqual("9+", button.Badge);
+        Assert.IsTrue(buttons.SetBadge(1, null));
+        Assert.IsTrue(buttons.TryGet(1, out button)); Assert.IsNull(button.Badge);
+        // Indeterminate progress has no value; None clears the progress, and a button that shows nothing has no entry.
+        Assert.IsTrue(buttons.SetProgress(1, NeoWindowProgressState.Indeterminate, 0.75));
+        Assert.IsTrue(buttons.TryGet(1, out button)); Assert.AreEqual(0d, button.Value);
+        Assert.IsFalse(buttons.SetProgress(1, NeoWindowProgressState.None, 0));
+        Assert.IsFalse(buttons.Contains(1));
+        Assert.IsFalse(buttons.SetBadge(2, ""));
+        Assert.AreEqual(0, buttons.Count);
+        // Each window has its own; a closed window or a disposed service lets them go.
+        Assert.IsTrue(buttons.SetBadge(1, "1")); Assert.IsTrue(buttons.SetProgress(2, NeoWindowProgressState.Error, 1));
+        Assert.AreEqual(2, buttons.Count);
+        Assert.IsTrue(buttons.Remove(1)); Assert.IsFalse(buttons.Remove(1));
+        Assert.IsTrue(buttons.Contains(2));
+        buttons.Clear();
+        Assert.AreEqual(0, buttons.Count);
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task WindowBadgeIsGivenAgainWhenTheTaskbarCreatesTheButton()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            await RunStaAsync(() => NeoApplication.Run(new NeoApplicationOptions { ApplicationName = "NeoAstra taskbar button test", QueueInitialLaunchEvent = false, ShutdownMode = NeoApplicationShutdownMode.Explicit }, async application =>
+            {
+                var service = new NeoWindowPolishService();
+                var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 });
+                var hwnd = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+                // A hidden window has no button yet: what it should show waits for TaskbarButtonCreated.
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetBadgeAsync(window, "3"));
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetProgressAsync(window, NeoWindowProgressState.Normal, 0.5));
+                Assert.AreEqual(1, service.ObservedTaskbarButtons);
+                // What Explorer sends when it creates the button, also after it restarted: the service gives it again.
+                _ = SendMessage(hwnd, RegisterWindowMessage("TaskbarButtonCreated"), 0, 0);
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetBadgeAsync(window, null));
+                Assert.AreEqual(1, service.ObservedTaskbarButtons, "the progress still shows");
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetProgressAsync(window, NeoWindowProgressState.None, 0));
+                Assert.AreEqual(0, service.ObservedTaskbarButtons);
+                // A window that closes lets go of its button, and so does a disposed service.
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetBadgeAsync(window, "7"));
+                Assert.AreEqual(1, service.ObservedTaskbarButtons);
+                await window.DisposeAsync();
+                await WaitUntilAsync(() => service.ObservedTaskbarButtons == 0);
+                await using var other = application.CreateWindow(new NeoWindowOptions { IsVisible = false, Width = 400, Height = 300 });
+                Assert.AreEqual(NeoDesktopStatus.Success, await service.SetBadgeAsync(other, "1"));
+                await service.DisposeAsync();
+                Assert.AreEqual(0, service.ObservedTaskbarButtons);
+                _ = SendMessage(other.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, RegisterWindowMessage("TaskbarButtonCreated"), 0, 0);
+                application.Shutdown(0);
+            }));
+        }
+        catch (NeoAstraNativeLibraryException) { }
+    }
+
+    [TestMethod]
     public void WindowBadgeOnWindowsIsASmallIconWithTheTextDrawn()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -1818,6 +1888,9 @@ public sealed class DesktopServicesTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyIcon(nint icon);
+
+    [DllImport("user32.dll", EntryPoint = "RegisterWindowMessageW", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string name);
 
     [DllImport("gdi32.dll", EntryPoint = "GetObjectW")]
     private static extern int GetObject(nint value, int size, out NativeBitmap bitmap);

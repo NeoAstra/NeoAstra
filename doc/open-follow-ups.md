@@ -10,6 +10,9 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   draws the text with GDI and creates the icon on Windows, but no badge was looked at on a taskbar. To
   check: the overlay appears and clears on the button of a window at 100 and 200 percent, the text is
   legible and centered in the dot, and nothing leaks (GDI objects in Task Manager) after many badges.
+  Since 2026-11-05 a badge and a progress are given again on `TaskbarButtonCreated`; the test
+  `WindowBadgeIsGivenAgainWhenTheTaskbarCreatesTheButton` sends that message itself. To check: a badge
+  set on a hidden window appears once it is shown, and a badge comes back after Explorer restarts.
 - **Linux: the badge, progress, and urgency of the launcher entry were not run.** `LinuxLauncherEntry` in
   `src/NeoAstra/Desktop/WindowBadge.cs` was written on macOS on 2026-11-05, and the text of its signal
   was parsed by GLib 2.86 there, but no signal reached a dock. To check on KDE Plasma and on Ubuntu Dock,

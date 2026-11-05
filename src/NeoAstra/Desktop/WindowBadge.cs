@@ -72,6 +72,49 @@ internal static class NeoWindowBadge
     }
 }
 
+// What the taskbar button of each window (by its HWND) should show, kept to be given again: Windows takes the ITaskbarList3 calls
+// of a window only once it sent it TaskbarButtonCreated, which a window shown later gets after a badge was set, and sends it again
+// when Explorer restarts with new buttons. A window whose button shows nothing has no entry, and its window is no longer observed.
+internal sealed class WindowsTaskbarButtons
+{
+    private readonly Dictionary<nint, Button> _buttons = [];
+
+    internal int Count => _buttons.Count;
+
+    internal bool Contains(nint window) => _buttons.ContainsKey(window);
+
+    internal bool TryGet(nint window, out Button button) => _buttons.TryGetValue(window, out button);
+
+    // Null or empty clears the badge. Answers whether the button still shows something.
+    internal bool SetBadge(nint window, string? badge)
+    {
+        var current = _buttons.GetValueOrDefault(window);
+        return Store(window, current with { Badge = string.IsNullOrWhiteSpace(badge) ? null : badge.Trim() });
+    }
+
+    // None clears the progress; the value matters only for a state that shows one.
+    internal bool SetProgress(nint window, NeoWindowProgressState state, double value)
+    {
+        var current = _buttons.GetValueOrDefault(window);
+        return Store(window, current with { Progress = state, Value = state is NeoWindowProgressState.Normal or NeoWindowProgressState.Paused or NeoWindowProgressState.Error ? value : 0 });
+    }
+
+    internal bool Remove(nint window) => _buttons.Remove(window);
+
+    internal void Clear() => _buttons.Clear();
+
+    private bool Store(nint window, Button button)
+    {
+        if (button.IsEmpty) { _buttons.Remove(window); return false; }
+        _buttons[window] = button; return true;
+    }
+
+    internal readonly record struct Button(string? Badge, NeoWindowProgressState Progress, double Value)
+    {
+        internal bool IsEmpty => Badge is null && Progress == NeoWindowProgressState.None;
+    }
+}
+
 // A Unity launcher entry (com.canonical.Unity.LauncherEntry) of the desktop file of the application: an Update signal on the
 // session bus that the docks which read it (KDE Plasma, Ubuntu Dock and Dash to Dock, Plank, Latte) show on the icon of the
 // application that has this desktop file (see LinuxDesktopEntry). A signal changes only the properties it carries.
