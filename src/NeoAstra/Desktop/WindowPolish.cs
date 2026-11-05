@@ -37,8 +37,43 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
 {
     internal static readonly Guid TaskbarList3InterfaceId = new("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF");
     private readonly Dictionary<NeoWindow, WindowIconEntry> _windowsIcons = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<NeoWindow, EventHandler> _linuxAttention = new(ReferenceEqualityComparer.Instance);
     private readonly object _sync = new();
+    private readonly string? _desktopEntryId;
+    private LinuxLauncherEntry? _launcher;
     private bool _disposed;
+
+    internal string? LinuxDesktopEntryId => _desktopEntryId;
+
+    /// <summary>Initializes the service. On Linux, the badge, progress, and attention go to the launcher entry of the desktop file named after the executable.</summary>
+    public NeoWindowPolishService() : this(null) { }
+
+    // On Linux the launcher entry is the one of the desktop file named after the application ID, as the desktop-entry of its
+    // notifications: org.example.App gives org.example.App.desktop.
+    internal NeoWindowPolishService(string? applicationId)
+    {
+        _desktopEntryId = LinuxLauncherEntry.DesktopEntryId(applicationId) ?? LinuxLauncherEntry.DesktopEntryId(Path.GetFileNameWithoutExtension(Environment.ProcessPath));
+        var docks = $"shown by the docks that read com.canonical.Unity.LauncherEntry (KDE Plasma, Ubuntu Dock and Dash to Dock, Plank, Latte; not stock GNOME) on the icon of the application, only when its desktop file {_desktopEntryId ?? "<application ID>.desktop"} is installed and matches its windows";
+        AttentionSupport = OperatingSystem.IsLinux()
+            ? new(NeoSupportLevel.Limited, 1, 0, $"Application-scoped Unity launcher-entry urgency, {docks}. It lasts until the window that asked is activated or closed; nothing is asked for a focused window, and critical requests are not distinct. GTK4 removed per-window urgency hints.")
+            : OperatingSystem.IsMacOS()
+                ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa user-attention requests are native but application-scoped rather than per-window.")
+                : OperatingSystem.IsWindows()
+                    ? new(NeoSupportLevel.Native, 1, 0, "Native Win32 taskbar and caption flashing.")
+                    : new(NeoSupportLevel.None, 1, 0, "No supported desktop window backend.");
+        ProgressSupport = OperatingSystem.IsWindows()
+            ? new(NeoSupportLevel.Native, 1, 0, "Windows ITaskbarList3 progress state/value.")
+            : OperatingSystem.IsLinux()
+                ? new(NeoSupportLevel.Limited, 1, 0, $"Application-scoped Unity launcher-entry progress, {docks}. Paused and error progress look like normal progress, and indeterminate progress is unsupported.")
+                : new(NeoSupportLevel.None, 1, 0, "The target desktop does not expose one reliable portable per-window taskbar/dock progress API.");
+        BadgeSupport = OperatingSystem.IsMacOS()
+            ? new(NeoSupportLevel.Native, 1, 0, "Native application dock-tile badge; macOS badges are application-scoped rather than window-scoped.")
+            : OperatingSystem.IsWindows()
+                ? new(NeoSupportLevel.Limited, 1, 0, "Overlay icon of the taskbar button of the window (ITaskbarList3::SetOverlayIcon): a red dot with at most two characters, so a number above 99 (or one that ends with a plus) shows 9+ and longer text keeps its first two characters. A taskbar button that groups several windows shows one overlay.")
+                : OperatingSystem.IsLinux()
+                    ? new(NeoSupportLevel.Limited, 1, 0, $"Application-scoped Unity launcher-entry count, {docks}. Numbers only: other text is unsupported, and 99+ shows 99.")
+                    : new(NeoSupportLevel.None, 1, 0, "No reliable built-in per-window text badge semantic exists on this target.");
+    }
 
     /// <summary>Gets icon support.</summary>
     public NeoCapabilityInfo IconSupport { get; } = OperatingSystem.IsWindows()
@@ -49,19 +84,13 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
                 ? new(NeoSupportLevel.None, 1, 0, "GTK4 removed per-window file icons; Linux applications should provide desktop-entry icon metadata.")
                 : new(NeoSupportLevel.None, 1, 0, "No supported desktop window backend.");
     /// <summary>Gets attention support.</summary>
-    public NeoCapabilityInfo AttentionSupport { get; } = OperatingSystem.IsLinux()
-        ? new(NeoSupportLevel.None, 1, 0, "GTK4 removed per-window urgency hints and no portable compositor-neutral replacement is available.")
-        : OperatingSystem.IsMacOS()
-            ? new(NeoSupportLevel.Limited, 1, 0, "Cocoa user-attention requests are native but application-scoped rather than per-window.")
-            : OperatingSystem.IsWindows()
-                ? new(NeoSupportLevel.Native, 1, 0, "Native Win32 taskbar and caption flashing.")
-                : new(NeoSupportLevel.None, 1, 0, "No supported desktop window backend.");
+    public NeoCapabilityInfo AttentionSupport { get; }
     /// <summary>Gets explicit window-enabled support.</summary>
     public NeoCapabilityInfo EnabledSupport { get; } = OperatingSystem.IsWindows() || OperatingSystem.IsLinux() ? new(NeoSupportLevel.Native, 1, 0, "Native window input enablement without a nested application loop.") : new(NeoSupportLevel.None, 1, 0, "Cocoa does not expose a correct general disabled-window semantic; owned modal sheets are provided by the core window owner relationship.");
     /// <summary>Gets taskbar/dock progress support.</summary>
-    public NeoCapabilityInfo ProgressSupport { get; } = OperatingSystem.IsWindows() ? new(NeoSupportLevel.Native, 1, 0, "Windows ITaskbarList3 progress state/value.") : new(NeoSupportLevel.None, 1, 0, "The target desktop does not expose one reliable portable per-window taskbar/dock progress API.");
+    public NeoCapabilityInfo ProgressSupport { get; }
     /// <summary>Gets app badge support.</summary>
-    public NeoCapabilityInfo BadgeSupport { get; } = OperatingSystem.IsMacOS() ? new(NeoSupportLevel.Native, 1, 0, "Native application dock-tile badge; macOS badges are application-scoped rather than window-scoped.") : new(NeoSupportLevel.None, 1, 0, "No reliable built-in per-window text badge semantic exists on this target.");
+    public NeoCapabilityInfo BadgeSupport { get; }
     /// <summary>Gets represented-file/document-edited support.</summary>
     public NeoCapabilityInfo DocumentSupport { get; } = OperatingSystem.IsMacOS() ? new(NeoSupportLevel.Native, 1, 0, "Native NSWindow represented filename and document-edited indicator.") : new(NeoSupportLevel.None, 1, 0, "The target does not expose macOS represented-document title-bar semantics.");
     /// <summary>Gets capture-protection support.</summary>
@@ -107,10 +136,23 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     }
 
     /// <summary>Sets or clears the application dock badge where the OS provides that semantic.</summary>
+    /// <param name="window">The window whose badge is set: on Windows the badge is the one of its taskbar button, elsewhere the one of the application.</param>
+    /// <param name="badge">The text of the badge, or <see langword="null"/> (or empty) to clear it.</param>
+    /// <param name="cancellationToken">Cancels the request before it reaches the UI thread.</param>
+    /// <returns>The status of the request: <see cref="NeoDesktopStatus.Unsupported"/> for a platform without a badge, or on Linux for text that is not a number.</returns>
+    /// <remarks>
+    /// macOS shows the text in the badge of the Dock tile. Windows draws it on a red dot in the overlay icon of the taskbar button of
+    /// the window, which holds two characters: a number of one or two digits as it is, a larger one (or one that ends with a plus, as
+    /// <c>99+</c>) as <c>9+</c>, and other text cut to its first two characters. Linux sends the number as the count of the Unity
+    /// launcher entry of the application (<c>99+</c> gives 99), which only some docks show; see <see cref="BadgeSupport"/>.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="window"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="badge"/> is longer than 16 characters or has control characters.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public ValueTask<NeoDesktopStatus> SetBadgeAsync(NeoWindow window, string? badge, CancellationToken cancellationToken = default)
     {
         if (badge is { } value && (value.Length > 16 || value.Any(char.IsControl))) throw new ArgumentException("A badge must be at most 16 non-control characters.", nameof(badge));
-        return Dispatch(window, () => SetBadge(badge), cancellationToken);
+        return Dispatch(window, () => SetBadge(window, badge), cancellationToken);
     }
 
     /// <summary>Sets native represented-document edited state where supported.</summary>
@@ -138,8 +180,14 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        KeyValuePair<NeoWindow, WindowIconEntry>[] entries;
-        lock (_sync) { if (_disposed) return; _disposed = true; entries = _windowsIcons.ToArray(); _windowsIcons.Clear(); }
+        KeyValuePair<NeoWindow, WindowIconEntry>[] entries; KeyValuePair<NeoWindow, EventHandler>[] attention; LinuxLauncherEntry? launcher;
+        lock (_sync) { if (_disposed) return; _disposed = true; entries = _windowsIcons.ToArray(); _windowsIcons.Clear(); attention = _linuxAttention.ToArray(); _linuxAttention.Clear(); launcher = _launcher; _launcher = null; }
+        foreach (var pair in attention) { pair.Key.Activated -= pair.Value; pair.Key.Closed -= pair.Value; }
+        if (launcher is not null)
+        {
+            try { if (attention.Length != 0) _ = launcher.Update(LinuxLauncherEntry.UrgentProperties(false)); } catch { }
+            launcher.Dispose();
+        }
         var cleanups = new List<Task>(entries.Length);
         foreach (var pair in entries)
         {
@@ -196,12 +244,47 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         return NeoDesktopStatus.Unsupported;
     }
 
-    private static NeoDesktopStatus RequestAttention(NeoWindow window, bool critical)
+    private NeoDesktopStatus RequestAttention(NeoWindow window, bool critical)
     {
         if (OperatingSystem.IsWindows()) { var handle=window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;if(!Native.IsWindow(handle))return NeoDesktopStatus.NotFound;var info = new FlashWindowInfo { Size = (uint)Marshal.SizeOf<FlashWindowInfo>(), Window = handle, Flags = 3 | 12, Count = critical ? 5u : 3u, Timeout = 0 }; _=Native.FlashWindowEx(ref info);return NeoDesktopStatus.Success; }
         if (OperatingSystem.IsMacOS()) { var app = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Selector("sharedApplication")); _ = ObjC.SendInt(app, ObjC.Selector("requestUserAttention:"), critical ? 0 : 10); return NeoDesktopStatus.Success; }
-        if (OperatingSystem.IsLinux()) return NeoDesktopStatus.Unsupported;
+        if (OperatingSystem.IsLinux()) return RequestLinuxAttention(window);
         return NeoDesktopStatus.Unsupported;
+    }
+
+    // Urgency is of the application: it stays until each window that asked for attention is activated or closed. A focused window
+    // asks for nothing, as an active application on macOS.
+    private NeoDesktopStatus RequestLinuxAttention(NeoWindow window)
+    {
+        if (window.IsClosed) return NeoDesktopStatus.NotFound;
+        if (window.IsFocused) return NeoDesktopStatus.Success;
+        var launcher = Launcher(); if (launcher is null) return NeoDesktopStatus.Unsupported;
+        var status = launcher.Update(LinuxLauncherEntry.UrgentProperties(true)); if (status != NeoDesktopStatus.Success) return status;
+        lock (_sync)
+        {
+            if (_disposed || _linuxAttention.ContainsKey(window)) return status;
+            EventHandler handler = (_, _) => EndLinuxAttention(window);
+            _linuxAttention[window] = handler; window.Activated += handler; window.Closed += handler;
+        }
+        return status;
+    }
+
+    private void EndLinuxAttention(NeoWindow window)
+    {
+        LinuxLauncherEntry? launcher;
+        lock (_sync)
+        {
+            if (!_linuxAttention.Remove(window, out var handler)) return;
+            window.Activated -= handler; window.Closed -= handler;
+            if (_linuxAttention.Count != 0) return;
+            launcher = _launcher;
+        }
+        try { _ = launcher?.Update(LinuxLauncherEntry.UrgentProperties(false)); } catch { }
+    }
+
+    private LinuxLauncherEntry? Launcher()
+    {
+        lock (_sync) return _disposed || _desktopEntryId is null ? null : _launcher ??= new LinuxLauncherEntry(_desktopEntryId);
     }
 
     private static NeoDesktopStatus SetEnabled(NeoWindow window, bool enabled)
@@ -211,8 +294,11 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         return NeoDesktopStatus.Unsupported;
     }
 
-    private static unsafe NeoDesktopStatus SetProgress(NeoWindow window, NeoWindowProgressState state, double value)
+    private unsafe NeoDesktopStatus SetProgress(NeoWindow window, NeoWindowProgressState state, double value)
     {
+        if (OperatingSystem.IsLinux())
+            return state == NeoWindowProgressState.Indeterminate ? NeoDesktopStatus.Unsupported
+                : Launcher()?.Update(LinuxLauncherEntry.ProgressProperties(state == NeoWindowProgressState.None ? null : value)) ?? NeoDesktopStatus.Unsupported;
         if (!OperatingSystem.IsWindows()) return NeoDesktopStatus.Unsupported;
         var taskbar = CreateTaskbar(); if (taskbar == 0) return NeoDesktopStatus.Failed;
         try
@@ -225,8 +311,15 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         finally { Release(taskbar); }
     }
 
-    private static NeoDesktopStatus SetBadge(string? badge)
+    private NeoDesktopStatus SetBadge(NeoWindow window, string? badge)
     {
+        if (OperatingSystem.IsWindows()) return SetOverlayIcon(window, badge);
+        if (OperatingSystem.IsLinux())
+        {
+            long? count = null;
+            if (!string.IsNullOrWhiteSpace(badge)) { if (!NeoWindowBadge.TryLauncherCount(badge, out var value)) return NeoDesktopStatus.Unsupported; count = value; }
+            return Launcher()?.Update(LinuxLauncherEntry.CountProperties(count)) ?? NeoDesktopStatus.Unsupported;
+        }
         if (!OperatingSystem.IsMacOS()) return NeoDesktopStatus.Unsupported;
         var app = ObjC.Send(ObjC.Class("NSApplication"), ObjC.Selector("sharedApplication")); var dock = ObjC.Send(app, ObjC.Selector("dockTile")); var text = ObjC.String(badge);
         try { ObjC.SendVoid(dock, ObjC.Selector("setBadgeLabel:"), text); return NeoDesktopStatus.Success; } finally { if (text != 0) ObjC.SendVoid(text, ObjC.Selector("release")); }
@@ -244,6 +337,90 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         var dark = theme switch { NeoWindowTitleBarTheme.Dark => 1, NeoWindowTitleBarTheme.Light => 0, _ => Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is int light && light == 0 ? 1 : 0 };
         return Native.DwmSetWindowAttribute(window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value, 20, ref dark, sizeof(int)) >= 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Unsupported;
     }
+
+    // The taskbar keeps a copy of the overlay icon it is given (ITaskbarList3::SetOverlayIcon), so the icon is destroyed at once and
+    // the service holds none: a later badge replaces the overlay, a null icon clears it, and the button goes with its window.
+    private static unsafe NeoDesktopStatus SetOverlayIcon(NeoWindow window, string? badge)
+    {
+        var handle = window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+        if (!Native.IsWindow(handle)) return NeoDesktopStatus.NotFound;
+        var text = NeoWindowBadge.OverlayText(badge); nint icon = 0;
+        if (text is not null)
+        {
+            var size = Native.GetSystemMetricsForDpi(49, WindowDpi(window)); // SM_CXSMICON
+            icon = CreateOverlayIcon(text, Math.Clamp(size, 16, 256)); if (icon == 0) return NeoDesktopStatus.Failed;
+        }
+        var taskbar = CreateTaskbar();
+        try
+        {
+            if (taskbar == 0) return NeoDesktopStatus.Failed;
+            var vtable = *(nint**)taskbar;
+            // The description of the overlay, for accessibility, is the whole badge.
+            fixed (char* description = text is null ? null : badge!.Trim())
+                return ((delegate* unmanaged[Stdcall]<nint, nint, nint, char*, int>)vtable[18])(taskbar, handle, icon, description) >= 0 ? NeoDesktopStatus.Success : NeoDesktopStatus.Failed;
+        }
+        finally { if (taskbar != 0) Release(taskbar); if (icon != 0) _ = Native.DestroyIcon(icon); }
+    }
+
+    internal static unsafe nint CreateOverlayIcon(string text, int size)
+    {
+        var coverage = DrawOverlayText(text, size); if (coverage is null) return 0;
+        var pixels = NeoWindowBadge.RenderOverlay(size, coverage);
+        var header = BitmapHeader(size); void* bits;
+        var color = Native.CreateDIBSection(0, &header, 0, &bits, 0, 0); if (color == 0 || bits is null) { if (color != 0) _ = Native.DeleteObject(color); return 0; }
+        nint mask = 0;
+        try
+        {
+            pixels.CopyTo(new Span<byte>(bits, pixels.Length));
+            // The alpha of the color bitmap gives the shape; the monochrome mask, rows of whole words, stays empty.
+            var empty = new byte[(size + 15) / 16 * 2 * size];
+            fixed (byte* maskBits = empty) mask = Native.CreateBitmap(size, size, 1, 1, maskBits);
+            if (mask == 0) return 0;
+            // CreateIconIndirect copies the bitmaps, which are deleted here.
+            var info = new IconInfo { Icon = 1, Mask = mask, Color = color };
+            return Native.CreateIconIndirect(&info);
+        }
+        finally { if (mask != 0) _ = Native.DeleteObject(mask); _ = Native.DeleteObject(color); }
+    }
+
+    // The coverage of the text, drawn white on black by GDI with grayscale smoothing in the bold Segoe UI font at the largest
+    // height whose text fits in the dot.
+    internal static unsafe byte[]? DrawOverlayText(string text, int size)
+    {
+        var dc = Native.CreateCompatibleDC(0); if (dc == 0) return null;
+        var header = BitmapHeader(size); void* bits; nint bitmap = 0, font = 0, previousBitmap = 0, previousFont = 0;
+        try
+        {
+            bitmap = Native.CreateDIBSection(dc, &header, 0, &bits, 0, 0); if (bitmap == 0 || bits is null) return null;
+            new Span<byte>(bits, size * size * 4).Clear();
+            previousBitmap = Native.SelectObject(dc, bitmap);
+            var room = size - Math.Max(2, size / 8);
+            for (var height = size * 4 / 5; ; height--)
+            {
+                font = Native.CreateFont(-height, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, "Segoe UI"); if (font == 0) return null; // FW_BOLD, DEFAULT_CHARSET, ANTIALIASED_QUALITY
+                var previous = Native.SelectObject(dc, font); if (previousFont == 0) previousFont = previous;
+                TextSize extent;
+                if (height <= size / 2 || (Native.GetTextExtentPoint32(dc, text, text.Length, &extent) && extent.Width <= room)) break;
+                _ = Native.SelectObject(dc, previousFont); _ = Native.DeleteObject(font); font = 0;
+            }
+            _ = Native.SetTextColor(dc, 0x00FFFFFF); _ = Native.SetBkMode(dc, 1); // TRANSPARENT
+            var rect = new TextRect { Right = size, Bottom = size };
+            _ = Native.DrawText(dc, text, text.Length, &rect, 0x1 | 0x4 | 0x20 | 0x100 | 0x800); // DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP | DT_NOPREFIX
+            _ = Native.GdiFlush();
+            var coverage = new byte[size * size]; var source = (byte*)bits;
+            for (var index = 0; index < coverage.Length; index++) coverage[index] = Math.Max(source[index * 4], Math.Max(source[index * 4 + 1], source[index * 4 + 2]));
+            return coverage;
+        }
+        finally
+        {
+            if (previousFont != 0) _ = Native.SelectObject(dc, previousFont); if (font != 0) _ = Native.DeleteObject(font);
+            if (previousBitmap != 0) _ = Native.SelectObject(dc, previousBitmap); if (bitmap != 0) _ = Native.DeleteObject(bitmap);
+            _ = Native.DeleteDC(dc);
+        }
+    }
+
+    // A top-down 32-bit bitmap.
+    private static unsafe BitmapInfoHeader BitmapHeader(int size) => new() { Size = (uint)sizeof(BitmapInfoHeader), Width = size, Height = -size, Planes = 1, BitCount = 32 };
 
     private static unsafe nint CreateTaskbar()
     {
@@ -291,6 +468,10 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         internal nint Big { get; set; }
         internal nint Small { get; set; }
     }
+    [StructLayout(LayoutKind.Sequential)] private struct BitmapInfoHeader { internal uint Size; internal int Width; internal int Height; internal ushort Planes; internal ushort BitCount; internal uint Compression; internal uint SizeImage; internal int XPelsPerMeter; internal int YPelsPerMeter; internal uint ColorsUsed; internal uint ColorsImportant; }
+    [StructLayout(LayoutKind.Sequential)] private struct IconInfo { internal int Icon; internal uint HotspotX; internal uint HotspotY; internal nint Mask; internal nint Color; }
+    [StructLayout(LayoutKind.Sequential)] private struct TextRect { internal int Left; internal int Top; internal int Right; internal int Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct TextSize { internal int Width; internal int Height; }
     [StructLayout(LayoutKind.Sequential)] private struct FlashWindowInfo { internal uint Size; internal nint Window; internal uint Flags; internal uint Count; internal uint Timeout; }
     private static unsafe partial class Native
     {
@@ -303,6 +484,19 @@ public sealed partial class NeoWindowPolishService : IAsyncDisposable
         [LibraryImport("user32.dll")] internal static partial int GetSystemMetricsForDpi(int index, uint dpi);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool SetWindowDisplayAffinity(nint window, uint affinity);
         [LibraryImport("dwmapi.dll")] internal static partial int DwmSetWindowAttribute(nint window, uint attribute, ref int value, int size);
+        [LibraryImport("user32.dll")] internal static partial nint CreateIconIndirect(IconInfo* info);
+        [LibraryImport("user32.dll", EntryPoint = "DrawTextW", StringMarshalling = StringMarshalling.Utf16)] internal static partial int DrawText(nint dc, string text, int length, TextRect* rect, uint format);
+        [LibraryImport("gdi32.dll")] internal static partial nint CreateDIBSection(nint dc, BitmapInfoHeader* info, uint usage, void** bits, nint section, uint offset);
+        [LibraryImport("gdi32.dll")] internal static partial nint CreateBitmap(int width, int height, uint planes, uint bitsPerPixel, void* bits);
+        [LibraryImport("gdi32.dll")] internal static partial nint CreateCompatibleDC(nint dc);
+        [LibraryImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool DeleteDC(nint dc);
+        [LibraryImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool DeleteObject(nint value);
+        [LibraryImport("gdi32.dll")] internal static partial nint SelectObject(nint dc, nint value);
+        [LibraryImport("gdi32.dll", EntryPoint = "CreateFontW", StringMarshalling = StringMarshalling.Utf16)] internal static partial nint CreateFont(int height, int width, int escapement, int orientation, int weight, uint italic, uint underline, uint strikeOut, uint charSet, uint outputPrecision, uint clipPrecision, uint quality, uint pitchAndFamily, string face);
+        [LibraryImport("gdi32.dll", EntryPoint = "GetTextExtentPoint32W", StringMarshalling = StringMarshalling.Utf16)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GetTextExtentPoint32(nint dc, string text, int length, TextSize* size);
+        [LibraryImport("gdi32.dll")] internal static partial uint SetTextColor(nint dc, uint color);
+        [LibraryImport("gdi32.dll")] internal static partial int SetBkMode(nint dc, int mode);
+        [LibraryImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool GdiFlush();
         [LibraryImport("ole32.dll")] internal static partial int CoCreateInstance(ref Guid clsid, nint outer, uint context, ref Guid iid, nint* value);
         [LibraryImport("libgtk-4.so.1", EntryPoint = "gtk_widget_set_sensitive")] internal static partial void GtkWidgetSetSensitive(nint widget, [MarshalAs(UnmanagedType.Bool)] bool sensitive);
     }

@@ -38,7 +38,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         Opener = opener ?? throw new ArgumentNullException(nameof(opener));
         DragDrop = dragDrop ?? throw new ArgumentNullException(nameof(dragDrop));
         SafeStorage = safeStorage ?? throw new ArgumentNullException(nameof(safeStorage));
-        WindowPolish = new NeoWindowPolishService();
+        WindowPolish = new NeoWindowPolishService(systemInfo.Metadata.ApplicationId);
         Haptics = NeoHaptics.CreateSystem();
     }
 

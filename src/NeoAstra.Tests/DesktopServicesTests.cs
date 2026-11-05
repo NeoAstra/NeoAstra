@@ -117,6 +117,8 @@ public sealed class DesktopServicesTests
         {
             Assert.AreEqual(NeoSupportLevel.Native, service.ProgressSupport.SupportLevel);
             Assert.AreEqual(NeoSupportLevel.Limited, service.ContentProtectionSupport.SupportLevel);
+            Assert.AreEqual(NeoSupportLevel.Limited, service.BadgeSupport.SupportLevel);
+            StringAssert.Contains(service.BadgeSupport.Details, "SetOverlayIcon");
         }
         else if (OperatingSystem.IsMacOS())
         {
@@ -126,7 +128,121 @@ public sealed class DesktopServicesTests
         else if (OperatingSystem.IsLinux())
         {
             Assert.AreEqual(NeoSupportLevel.None, service.ContentProtectionSupport.SupportLevel);
+            // The Unity launcher entry gives the badge, the progress, and the urgency of the application.
+            Assert.AreEqual(NeoSupportLevel.Limited, service.BadgeSupport.SupportLevel);
+            Assert.AreEqual(NeoSupportLevel.Limited, service.ProgressSupport.SupportLevel);
+            Assert.AreEqual(NeoSupportLevel.Limited, service.AttentionSupport.SupportLevel);
+            StringAssert.Contains(service.BadgeSupport.Details, "Numbers only");
         }
+        else
+        {
+            Assert.AreEqual(NeoSupportLevel.None, service.BadgeSupport.SupportLevel);
+        }
+    }
+
+    [TestMethod]
+    public void WindowBadgeFitsTheTaskbarOverlayAndTheLauncherCount()
+    {
+        // A 16-pixel overlay holds two characters.
+        Assert.IsNull(NeoWindowBadge.OverlayText(null));
+        Assert.IsNull(NeoWindowBadge.OverlayText(""));
+        Assert.IsNull(NeoWindowBadge.OverlayText("  "));
+        Assert.AreEqual("7", NeoWindowBadge.OverlayText("7"));
+        Assert.AreEqual("0", NeoWindowBadge.OverlayText("000"));
+        Assert.AreEqual("42", NeoWindowBadge.OverlayText("42"));
+        Assert.AreEqual("42", NeoWindowBadge.OverlayText(" 042 "));
+        Assert.AreEqual("9+", NeoWindowBadge.OverlayText("100"));
+        Assert.AreEqual("9+", NeoWindowBadge.OverlayText("99+"));
+        Assert.AreEqual("9+", NeoWindowBadge.OverlayText("9+"));
+        Assert.AreEqual("5+", NeoWindowBadge.OverlayText("5+"));
+        Assert.AreEqual("!", NeoWindowBadge.OverlayText("!"));
+        Assert.AreEqual("ne", NeoWindowBadge.OverlayText("new"));
+        // Text is cut between text elements, never inside one.
+        Assert.AreEqual("a\U0001F600", NeoWindowBadge.OverlayText("a\U0001F600b"));
+        Assert.AreEqual("e\u0301x", NeoWindowBadge.OverlayText("e\u0301xy"));
+
+        // A launcher entry shows a number only.
+        Assert.IsTrue(NeoWindowBadge.TryLauncherCount("12", out var count)); Assert.AreEqual(12L, count);
+        Assert.IsTrue(NeoWindowBadge.TryLauncherCount("99+", out count)); Assert.AreEqual(99L, count);
+        Assert.IsTrue(NeoWindowBadge.TryLauncherCount(" 0 ", out count)); Assert.AreEqual(0L, count);
+        Assert.IsFalse(NeoWindowBadge.TryLauncherCount("new", out _));
+        Assert.IsFalse(NeoWindowBadge.TryLauncherCount("-3", out _));
+        Assert.IsFalse(NeoWindowBadge.TryLauncherCount("+", out _));
+        Assert.IsFalse(NeoWindowBadge.TryLauncherCount(new string('9', 20), out _));
+
+        // The overlay is a red disc, transparent in its corners, white where the text covers it.
+        const int size = 16;
+        var coverage = new byte[size * size]; coverage[8 * size + 8] = 255; coverage[8 * size + 7] = 128;
+        var pixels = NeoWindowBadge.RenderOverlay(size, coverage);
+        Assert.HasCount(size * size * 4, pixels);
+        byte[] Pixel(int x, int y) => pixels.AsSpan((y * size + x) * 4, 4).ToArray();
+        CollectionAssert.AreEqual(new byte[] { 0x38, 0x34, 0xD1, 255 }, Pixel(8, 4));
+        CollectionAssert.AreEqual(new byte[] { 255, 255, 255, 255 }, Pixel(8, 8));
+        Assert.IsTrue(Pixel(7, 8)[0] is > 0x38 and < 255);
+        Assert.AreEqual(0, Pixel(0, 0)[3]);
+        Assert.AreEqual(0, Pixel(15, 15)[3]);
+        Assert.IsTrue(Pixel(2, 2)[3] is > 0 and < 255, "the edge of the disc is smoothed");
+        Assert.AreEqual(255, Pixel(0, 8)[3]);
+        Assert.Throws<ArgumentException>(() => NeoWindowBadge.RenderOverlay(size, new byte[10]));
+    }
+
+    [TestMethod]
+    public void WindowBadgeOnWindowsIsASmallIconWithTheTextDrawn()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        foreach (var size in new[] { 16, 32 })
+        {
+            // GDI draws the text in the middle of the dot, white on black, and leaves the corners empty.
+            var coverage = NeoWindowPolishService.DrawOverlayText("42", size);
+            Assert.IsNotNull(coverage);
+            Assert.HasCount(size * size, coverage);
+            Assert.IsTrue(coverage.Any(static value => value > 200), $"text drawn at {size} pixels");
+            Assert.AreEqual(0, coverage[0]); Assert.AreEqual(0, coverage[size * size - 1]);
+
+            var icon = NeoWindowPolishService.CreateOverlayIcon("9+", size);
+            Assert.AreNotEqual(0, icon);
+            try
+            {
+                Assert.IsTrue(GetIconInfo(icon, out var info));
+                try
+                {
+                    Assert.AreEqual(1, info.IsIcon);
+                    Assert.AreNotEqual(0, GetObject(info.Color, Marshal.SizeOf<NativeBitmap>(), out var bitmap));
+                    Assert.AreEqual(size, bitmap.Width); Assert.AreEqual(size, bitmap.Height); Assert.AreEqual(32, bitmap.BitsPerPixel);
+                }
+                finally { if (info.Color != 0) DeleteObject(info.Color); if (info.Mask != 0) DeleteObject(info.Mask); }
+            }
+            finally { Assert.IsTrue(DestroyIcon(icon)); }
+        }
+    }
+
+    [TestMethod]
+    public async Task WindowBadgeOnLinuxGoesToTheLauncherEntryOfTheDesktopFile()
+    {
+        Assert.AreEqual("org.codealta.desktop.desktop", LinuxLauncherEntry.DesktopEntryId("org.codealta.desktop"));
+        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId(null));
+        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId("a/b"));
+        Assert.IsNull(LinuxLauncherEntry.DesktopEntryId("a b"));
+        // The services name the desktop file after the application ID; a service created alone, after the executable.
+        await using (var named = new NeoWindowPolishService("org.example.App")) Assert.AreEqual("org.example.App.desktop", named.LinuxDesktopEntryId);
+        await using (var unnamed = new NeoWindowPolishService()) Assert.AreEqual(Path.GetFileNameWithoutExtension(Environment.ProcessPath) + ".desktop", unnamed.LinuxDesktopEntryId);
+        var root = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra", "Desktop"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
+        StringAssert.Contains(File.ReadAllText(Path.Combine(root, "src", "NeoAstra", "Desktop", "DesktopEssentialsPlugin.cs")), "new NeoWindowPolishService(systemInfo.Metadata.ApplicationId)");
+
+        // The parameters of the Update signal, in the GVariant text format that GLib parses (checked with GLib 2.86).
+        using var entry = new LinuxLauncherEntry("org.example.App.desktop");
+        Assert.AreEqual("application://org.example.App.desktop", entry.ApplicationUri);
+        Assert.MatchesRegex("^/com/canonical/unity/launcherentry/[0-9]+$", entry.ObjectPath);
+        Assert.AreEqual(entry.ObjectPath, new LinuxLauncherEntry("org.example.App.desktop").ObjectPath);
+        Assert.AreEqual("('application://org.example.App.desktop', {'count': <int64 3>, 'count-visible': <true>})", entry.UpdateParameters(LinuxLauncherEntry.CountProperties(3)));
+        Assert.AreEqual("{'count-visible': <false>}", LinuxLauncherEntry.CountProperties(null));
+        Assert.AreEqual("{'progress': <double 0.5>, 'progress-visible': <true>}", LinuxLauncherEntry.ProgressProperties(0.5));
+        Assert.AreEqual("{'progress': <double 1.0>, 'progress-visible': <true>}", LinuxLauncherEntry.ProgressProperties(1));
+        Assert.AreEqual("{'progress-visible': <false>}", LinuxLauncherEntry.ProgressProperties(null));
+        Assert.AreEqual("{'urgent': <true>}", LinuxLauncherEntry.UrgentProperties(true));
+        Assert.AreEqual("{'urgent': <false>}", LinuxLauncherEntry.UrgentProperties(false));
+        Assert.AreEqual("'it\\'s\\\\\\u0007'", LinuxLauncherEntry.Quote("it's\\\u0007"));
     }
 
     [TestMethod]
@@ -1587,6 +1703,10 @@ public sealed class DesktopServicesTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetIconInfo(nint icon, out NativeIconInfo info);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(nint icon);
 
     [DllImport("gdi32.dll", EntryPoint = "GetObjectW")]
     private static extern int GetObject(nint value, int size, out NativeBitmap bitmap);

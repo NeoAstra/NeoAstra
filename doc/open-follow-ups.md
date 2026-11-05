@@ -4,6 +4,17 @@ Notes for the people who work on NeoAstra: known or suspected defects that are n
 checks that have not been run. Remove an entry when it is done. What an application has to know is in
 [known limitations](known-limitations.md).
 
+- **Windows: the badge in the overlay icon of the taskbar button was not run.** `SetOverlayIcon` in
+  `src/NeoAstra/Desktop/WindowPolish.cs` was written and built on macOS on 2026-11-05; the unit tests
+  check the text rules and the picture of the dot, and `WindowBadgeOnWindowsIsASmallIconWithTheTextDrawn`
+  draws the text with GDI and creates the icon on Windows, but no badge was looked at on a taskbar. To
+  check: the overlay appears and clears on the button of a window at 100 and 200 percent, the text is
+  legible and centered in the dot, and nothing leaks (GDI objects in Task Manager) after many badges.
+- **Linux: the badge, progress, and urgency of the launcher entry were not run.** `LinuxLauncherEntry` in
+  `src/NeoAstra/Desktop/WindowBadge.cs` was written on macOS on 2026-11-05, and the text of its signal
+  was parsed by GLib 2.86 there, but no signal reached a dock. To check on KDE Plasma and on Ubuntu Dock,
+  with a desktop file named after the application ID: the count shows and hides, the progress shows,
+  and the urgency ends when the window is activated (`NeoWindow.Activated` raised by the GTK backend).
 - **Windows ARM64 has not been run.** The `win-arm64` library is cross-built and packaged, and its
   native tests are skipped. No browser view was created on ARM64 hardware.
 - **Windows: a window is counted in pixels where the application is aware of display scaling.** The
