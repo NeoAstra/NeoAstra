@@ -156,8 +156,10 @@ public static class NeoDialogs
     }
 }
 
-internal sealed class OwnerBoundDialogs(INeoDialogs presenter) : INeoDialogs, INeoApplicationBoundDesktopService
+internal sealed class OwnerBoundDialogs(INeoDialogs presenter) : INeoDialogs, INeoApplicationBoundDesktopService, IAsyncDisposable
 {
+    public ValueTask DisposeAsync() => presenter is IAsyncDisposable lifetime ? lifetime.DisposeAsync() : ValueTask.CompletedTask;
+
     public NeoCapabilityInfo Support => presenter.Support;
 
     public ValueTask<NeoDesktopResult<IReadOnlyList<string>>> OpenFilesAsync(NeoFileDialogOptions options, CancellationToken cancellationToken = default)

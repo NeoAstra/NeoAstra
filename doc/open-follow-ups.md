@@ -426,7 +426,9 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   keeps a reference on its request and waits like the other backends, the dialogs go through the
   FileChooser of the desktop portal (`src/NeoAstra/Desktop/LinuxPortalFileChooser.cs`) before `zenity`, and the clipboard
   request has the kind `ClipboardRead`. Checked on the Mac: the managed build, the unit tests of the
-  portal messages, and the GVariant text of those messages parsed by GLib 2.90.1. Not run: the portal calls
+  portal messages and of the lifetime of its calls and dialogs over a fake bus (cancellation, the portal
+  leaving the bus, the application stopping), and the GVariant text of those messages parsed by GLib
+  2.90.1. Not run: the portal calls
   over a real session bus (a KDE or GNOME desktop, and one without a portal, which falls back to
   `zenity`), and the native tests `test_file_input_waits_for_a_deferred_answer` and
   `test_clipboard_read_is_asked_as_a_clipboard_read`, which the `native` workflow builds and runs under

@@ -7,7 +7,7 @@ namespace NeoAstra.Desktop.Dialogs;
 /// The dialogs of a Linux desktop: the file and folder dialogs of its portal (<c>xdg-desktop-portal</c>), which every desktop
 /// has (KDE, GNOME, and the others), and the trusted <c>zenity</c> helper where no portal answers and for message dialogs.
 /// </summary>
-internal sealed class LinuxDialogs : INeoDialogs, INeoApplicationBoundDesktopService
+internal sealed class LinuxDialogs : INeoDialogs, INeoApplicationBoundDesktopService, IAsyncDisposable
 {
     private readonly ProcessDialogs _presenter;
     private readonly LinuxPortalFileChooser? _portal;
@@ -33,7 +33,12 @@ internal sealed class LinuxDialogs : INeoDialogs, INeoApplicationBoundDesktopSer
         ArgumentNullException.ThrowIfNull(application);
         if (_dispatcher is not null && !ReferenceEquals(_dispatcher, application.Dispatcher)) throw new InvalidOperationException("The dialog presenter is already bound to another dispatcher.");
         _dispatcher = application.Dispatcher;
+        // The dialogs of the portal close, and their callers are answered, before the main loop that delivers their answers stops.
+        if (_portal is { } portal) application.Stopping += (_, _) => portal.Stop();
     }
+
+    /// <summary>Closes the dialogs of the portal that are still open and releases the connection to the session bus.</summary>
+    public ValueTask DisposeAsync() => _portal?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     public async ValueTask<NeoDesktopResult<IReadOnlyList<string>>> OpenFilesAsync(NeoFileDialogOptions options, CancellationToken cancellationToken = default)
     {
@@ -75,7 +80,7 @@ internal sealed class LinuxDialogs : INeoDialogs, INeoApplicationBoundDesktopSer
     {
         if (_portal is null || _dispatcher is not { } dispatcher || !OperatingSystem.IsLinux()) return null;
         NeoDesktopResult<IReadOnlyList<string>>? result;
-        try { result = await _portal.PickAsync(dispatcher, options, folders, save, cancellationToken).ConfigureAwait(false); }
+        try { result = await _portal.PickAsync(new LinuxPortalDispatcherThread(dispatcher), options, folders, save, cancellationToken).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch { return null; }
         if (result is not { } answer) return null;

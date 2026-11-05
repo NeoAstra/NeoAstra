@@ -1,6 +1,8 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -23,6 +25,9 @@ internal static class LinuxPortalFileChooserProtocol
 
     /// <summary>The GVariant type of the <c>Response</c> signal of a request: the response code and the results.</summary>
     internal const string ResponseType = "(ua{sv})";
+
+    /// <summary>The well-known name of the desktop portal on the session bus.</summary>
+    internal const string PortalName = "org.freedesktop.portal.Desktop";
 
     /// <summary>The most paths that one answer may give, as for the other dialogs.</summary>
     internal const int MaximumSelections = 256;
@@ -126,6 +131,9 @@ internal static class LinuxPortalFileChooserProtocol
         return true;
     }
 
+    /// <summary>Tells whether a <c>NameOwnerChanged</c> signal of the bus says that the portal left it: its name has no owner any more.</summary>
+    internal static bool PortalVanished(string? name, string? newOwner) => string.Equals(name, PortalName, StringComparison.Ordinal) && string.IsNullOrEmpty(newOwner);
+
     /// <summary>A GVariant string literal: quoted, with its backslashes, quotes and control characters escaped.</summary>
     internal static string Quote(string value)
     {
@@ -176,31 +184,91 @@ internal static class LinuxPortalFileChooserProtocol
     private static string Parameters(string? title, List<string> entries) => "('', " + Quote(title ?? string.Empty) + ", {" + string.Join(", ", entries) + "})";
 }
 
+
+/// <summary>How a call to the portal ended.</summary>
+internal enum LinuxPortalReplyKind
+{
+    /// <summary>The portal answered.</summary>
+    Ok,
+    /// <summary>No portal, or no FileChooser of the portal, answers on the bus.</summary>
+    Missing,
+    /// <summary>The portal is there and the call failed.</summary>
+    Failed,
+    /// <summary>The call was canceled before it ended.</summary>
+    Canceled,
+}
+
+/// <summary>The end of a call to the portal and, when it answered, its value.</summary>
+internal readonly record struct LinuxPortalReply<T>(LinuxPortalReplyKind Kind, T? Value = default);
+
+/// <summary>A call to the portal that has not ended; it can be canceled from any thread.</summary>
+internal interface ILinuxPortalOperation
+{
+    /// <summary>Cancels the call; its completion then reports <see cref="LinuxPortalReplyKind.Canceled"/> unless it had ended.</summary>
+    void Cancel();
+}
+
+/// <summary>
+/// The session bus as the FileChooser needs it. Connect, the calls and the subscriptions run on the UI thread, whose main
+/// loop delivers their callbacks; <see cref="ILinuxPortalOperation.Cancel"/>, <see cref="IDisposable.Dispose"/> of a
+/// subscription, <see cref="CloseRequest"/> and <see cref="Release"/> may run on any thread.
+/// </summary>
+internal interface ILinuxPortalBus
+{
+    /// <summary>Connects to the session bus and returns the unique name of the connection, or null without a bus.</summary>
+    string? Connect();
+    /// <summary>Reads the version of the FileChooser interface.</summary>
+    ILinuxPortalOperation GetVersion(Action<LinuxPortalReply<uint>> completed);
+    /// <summary>Calls <c>OpenFile</c> or <c>SaveFile</c> with the GVariant text of its parameters; the reply is the path of the request.</summary>
+    ILinuxPortalOperation Open(string method, string parameters, Action<LinuxPortalReply<string>> completed);
+    /// <summary>Listens to the <c>Response</c> signal of the request at a path.</summary>
+    IDisposable Subscribe(string path, Action<uint, IReadOnlyList<string>?> responded);
+    /// <summary>Listens to the portal leaving the bus.</summary>
+    IDisposable WatchPortal(Action vanished);
+    /// <summary>Closes the request at a path, which closes its dialog; the answer is not awaited.</summary>
+    void CloseRequest(string path);
+    /// <summary>Releases the connection.</summary>
+    void Release();
+}
+
+/// <summary>The UI thread of the application, where the calls to the portal start.</summary>
+internal interface ILinuxPortalThread
+{
+    /// <summary>Runs an action on the UI thread.</summary>
+    /// <exception cref="OperationCanceledException">The token was canceled before the action ran.</exception>
+    ValueTask InvokeAsync(Action action, CancellationToken cancellationToken);
+}
+
+internal sealed class LinuxPortalDispatcherThread(NeoDispatcher dispatcher) : ILinuxPortalThread
+{
+    public ValueTask InvokeAsync(Action action, CancellationToken cancellationToken) => dispatcher.InvokeAsync(action, cancellationToken);
+}
+
 /// <summary>
 /// Shows the file and folder dialogs of the desktop through its portal (<c>xdg-desktop-portal</c>): the dialogs of KDE, GNOME
-/// and the other desktops, also from a sandbox. The calls go over the session bus with GIO, on the UI thread of the
-/// application, whose main loop delivers their answers.
+/// and the other desktops, also from a sandbox. Every pending call and dialog ends: with its answer, with the cancellation of
+/// its caller (which cancels the call or closes the dialog), when the portal leaves the bus, or when the application stops.
 /// </summary>
-internal sealed partial class LinuxPortalFileChooser
+internal sealed class LinuxPortalFileChooser : IAsyncDisposable
 {
-    private const string PortalName = "org.freedesktop.portal.Desktop";
-    private const string PortalPath = "/org/freedesktop/portal/desktop";
-    private const string FileChooserInterface = "org.freedesktop.portal.FileChooser";
-    private const string RequestInterface = "org.freedesktop.portal.Request";
-    private const int SessionBus = 2;
-
-    // The errors that say that no portal, or no FileChooser of the portal, answers on this bus.
-    private static readonly HashSet<string> MissingPortalErrors = new(StringComparer.Ordinal)
-    {
-        "org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner", "org.freedesktop.DBus.Error.UnknownMethod",
-        "org.freedesktop.DBus.Error.UnknownInterface", "org.freedesktop.DBus.Error.UnknownObject", "org.freedesktop.DBus.Error.UnknownProperty",
-        "org.freedesktop.DBus.Error.Spawn.ServiceNotFound",
-    };
-
-    // Used on the UI thread only.
-    private nint _connection;
+    private readonly ILinuxPortalBus _bus;
+    private readonly object _sync = new();
+    private readonly HashSet<Request> _requests = [];
+    private readonly HashSet<VersionQuery> _queries = [];
+    private string? _uniqueName;
+    private IDisposable? _ownerWatch;
     private uint? _version;
-    private volatile bool _missing;
+    private bool _connected;
+    private bool _missing;
+    private bool _stopped;
+    private bool _released;
+
+    internal LinuxPortalFileChooser() : this(new LinuxGioPortalBus()) { }
+
+    internal LinuxPortalFileChooser(ILinuxPortalBus bus) => _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+
+    /// <summary>Gets the number of version queries and dialogs that have not ended.</summary>
+    internal int PendingCount { get { lock (_sync) return _requests.Count + _queries.Count; } }
 
     /// <summary>Gets whether a session bus may be reached, where a portal could answer.</summary>
     internal static bool SessionBusConfigured()
@@ -213,81 +281,466 @@ internal sealed partial class LinuxPortalFileChooser
     /// <summary>
     /// Shows a dialog of the portal and returns the chosen paths, not yet checked against the scope, or null when no portal
     /// shows it (no session bus, no portal, an older portal without folder dialogs, a failed call), for another presenter.
+    /// After the application stopped, the answer is <see cref="NeoDesktopStatus.Canceled"/>.
     /// </summary>
-    /// <exception cref="OperationCanceledException">The caller canceled; the dialog is closed.</exception>
-    internal async ValueTask<NeoDesktopResult<IReadOnlyList<string>>?> PickAsync(NeoDispatcher dispatcher, NeoFileDialogOptions options, bool folders, bool save, CancellationToken cancellationToken)
+    /// <exception cref="OperationCanceledException">The caller canceled; the call is canceled or the dialog closed.</exception>
+    internal async ValueTask<NeoDesktopResult<IReadOnlyList<string>>?> PickAsync(ILinuxPortalThread thread, NeoFileDialogOptions options, bool folders, bool save, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(thread);
         ArgumentNullException.ThrowIfNull(options);
-        if (_missing) return null;
+        lock (_sync)
+        {
+            if (_stopped) return Stopped();
+            if (_missing) return null;
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        var version = await (await dispatcher.InvokeAsync(VersionAsync, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        var version = await QueryVersionAsync(thread, cancellationToken).ConfigureAwait(false);
+        lock (_sync) if (_stopped) return Stopped();
         if (version is null || folders && version < LinuxPortalFileChooserProtocol.DirectoryVersion) return null;
 
         var token = LinuxPortalFileChooserProtocol.NewToken();
         var parameters = save ? LinuxPortalFileChooserProtocol.SaveFileParameters(options, token) : LinuxPortalFileChooserProtocol.OpenFileParameters(options, folders, token);
-        var request = new Request(this, token);
-        await dispatcher.InvokeAsync(() => request.Start(save ? "SaveFile" : "OpenFile", parameters), cancellationToken).ConfigureAwait(false);
+        var request = new Request(this, token, save ? "SaveFile" : "OpenFile", parameters);
+        lock (_sync)
+        {
+            if (_stopped) return Stopped();
+            _requests.Add(request);
+        }
+        try { await thread.InvokeAsync(request.Start, cancellationToken).ConfigureAwait(false); }
+        catch { request.Finish(new(AnswerKind.Closed)); throw; }
         Answer answer;
-        using (cancellationToken.Register(() => { try { dispatcher.Post(request.Close); } catch (ObjectDisposedException) { request.Abandon(); } }))
+        using (cancellationToken.Register(static state => ((Request)state!).Close(AnswerKind.Closed), request))
             answer = await request.Completion.Task.ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         switch (answer.Kind)
         {
             case AnswerKind.Responded: return LinuxPortalFileChooserProtocol.Paths(answer.Response, answer.Uris);
-            case AnswerKind.Missing: _missing = true; return null;
-            case AnswerKind.Closed: return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Canceled);
+            case AnswerKind.Missing: lock (_sync) _missing = true; return null;
+            case AnswerKind.Vanished: return NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Failed, "portal_vanished");
+            case AnswerKind.Closed or AnswerKind.Stopped: return Stopped();
             default: return null;
         }
     }
 
-    // The version of the FileChooser of the portal, read once; null when no portal answers.
-    private unsafe Task<uint?> VersionAsync()
+    /// <summary>
+    /// The application stops: every dialog of the portal is closed, every call canceled, every listener removed, and every
+    /// caller answered <see cref="NeoDesktopStatus.Canceled"/>. Later dialogs are not shown. Runs on any thread.
+    /// </summary>
+    internal void Stop()
     {
-        if (_version is { } known) return Task.FromResult<uint?>(known);
-        if (!EnsureConnection()) { _missing = true; return Task.FromResult<uint?>(null); }
-        var call = new VersionCall(this);
-        var handle = GCHandle.Alloc(call);
+        Request[] requests;
+        VersionQuery[] queries;
+        IDisposable? watch;
+        lock (_sync)
+        {
+            if (_stopped) return;
+            _stopped = true;
+            requests = [.. _requests];
+            queries = [.. _queries];
+            watch = _ownerWatch;
+            _ownerWatch = null;
+        }
+        foreach (var request in requests) request.Close(AnswerKind.Stopped);
+        foreach (var query in queries) query.Cancel(stopping: true);
+        try { watch?.Dispose(); } catch { }
+    }
+
+    /// <summary>Stops, then releases the connection to the bus.</summary>
+    public ValueTask DisposeAsync()
+    {
+        Stop();
+        bool release;
+        lock (_sync) { release = _connected && !_released; _released = true; }
+        if (release) try { _bus.Release(); } catch { }
+        return ValueTask.CompletedTask;
+    }
+
+    private static NeoDesktopResult<IReadOnlyList<string>> Stopped() => NeoDesktopResult<IReadOnlyList<string>>.Failure(NeoDesktopStatus.Canceled);
+
+    // The version of the FileChooser of the portal, read once; null when no portal answers.
+    private async ValueTask<uint?> QueryVersionAsync(ILinuxPortalThread thread, CancellationToken cancellationToken)
+    {
+        var query = new VersionQuery(this);
+        lock (_sync)
+        {
+            if (_version is { } known) return known;
+            if (_stopped) return null;
+            _queries.Add(query);
+        }
+        try { await thread.InvokeAsync(query.Start, cancellationToken).ConfigureAwait(false); }
+        catch { query.Cancel(stopping: false); throw; }
+        using (cancellationToken.Register(static state => ((VersionQuery)state!).Cancel(stopping: false), query))
+            return await query.Completion.Task.ConfigureAwait(false);
+    }
+
+    // On the UI thread: the connection and the watch of the portal, made once.
+    private bool EnsureConnected()
+    {
+        lock (_sync) if (_connected) return true;
+        var unique = _bus.Connect();
+        if (string.IsNullOrEmpty(unique)) return false;
+        var watch = _bus.WatchPortal(PortalVanished);
+        bool stopped;
+        lock (_sync)
+        {
+            _uniqueName = unique;
+            _connected = true;
+            stopped = _stopped || _released;
+            if (!stopped) _ownerWatch = watch;
+        }
+        if (stopped) watch.Dispose();
+        return true;
+    }
+
+    // The portal left the bus: its dialogs answer nothing any more, and a portal that comes back is asked its version again.
+    private void PortalVanished()
+    {
+        Request[] requests;
+        lock (_sync) { _version = null; requests = [.. _requests]; }
+        foreach (var request in requests) request.Finish(new(AnswerKind.Vanished));
+    }
+
+    private enum AnswerKind { Responded, Closed, Stopped, Vanished, Missing, Failed }
+
+    private readonly record struct Answer(AnswerKind Kind, uint Response = 0, IReadOnlyList<string>? Uris = null);
+
+    private sealed class VersionQuery(LinuxPortalFileChooser owner)
+    {
+        private readonly object _gate = new();
+        private ILinuxPortalOperation? _operation;
+        private bool _done;
+
+        internal TaskCompletionSource<uint?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // On the UI thread.
+        internal void Start()
+        {
+            lock (_gate) if (_done) return;
+            ILinuxPortalOperation operation;
+            try
+            {
+                if (!owner.EnsureConnected()) { lock (owner._sync) owner._missing = true; Finish(null); return; }
+                operation = owner._bus.GetVersion(Completed);
+            }
+            catch { Finish(null); return; }
+            bool cancel;
+            lock (_gate) { cancel = _done; if (!cancel) _operation = operation; }
+            if (cancel) operation.Cancel();
+        }
+
+        // Any thread: the caller canceled, or the application stops.
+        internal void Cancel(bool stopping)
+        {
+            ILinuxPortalOperation? operation;
+            lock (_gate)
+            {
+                if (_done) return;
+                _done = true;
+                operation = _operation;
+                _operation = null;
+            }
+            lock (owner._sync) owner._queries.Remove(this);
+            try { operation?.Cancel(); } catch { }
+            if (stopping) Completion.TrySetResult(null);
+            else Completion.TrySetCanceled();
+        }
+
+        private void Completed(LinuxPortalReply<uint> reply)
+        {
+            lock (owner._sync)
+            {
+                if (reply.Kind == LinuxPortalReplyKind.Ok) owner._version = reply.Value;
+                else if (reply.Kind == LinuxPortalReplyKind.Missing) owner._missing = true;
+            }
+            Finish(reply.Kind == LinuxPortalReplyKind.Ok ? reply.Value : null);
+        }
+
+        private void Finish(uint? version)
+        {
+            lock (_gate)
+            {
+                if (_done) return;
+                _done = true;
+                _operation = null;
+            }
+            lock (owner._sync) owner._queries.Remove(this);
+            Completion.TrySetResult(version);
+        }
+    }
+
+    // One dialog. Start and the callbacks of the bus run on the UI thread; Close and Finish run on any thread.
+    private sealed class Request(LinuxPortalFileChooser owner, string token, string method, string parameters)
+    {
+        private readonly object _gate = new();
+        private IDisposable? _subscription;
+        private string? _path;
+        private bool _done;
+        private bool _closeWhenStarted;
+
+        internal TaskCompletionSource<Answer> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Listens for the response before it calls, at the path that the portal gives a request with this token.
+        internal void Start()
+        {
+            lock (_gate) if (_done) return;
+            try
+            {
+                string? unique;
+                lock (owner._sync) unique = owner._uniqueName;
+                if (string.IsNullOrEmpty(unique)) { Finish(new(AnswerKind.Failed)); return; }
+                if (!Subscribe(LinuxPortalFileChooserProtocol.RequestPath(unique, token))) return;
+                owner._bus.Open(method, parameters, Started);
+            }
+            catch { Finish(new(AnswerKind.Failed)); }
+        }
+
+        // The caller canceled (Closed) or the application stops (Stopped): the dialog of the portal is closed.
+        internal void Close(AnswerKind kind)
+        {
+            string? path;
+            lock (_gate)
+            {
+                if (_done) return;
+                _closeWhenStarted = true;
+                path = _path;
+            }
+            if (path is not null) try { owner._bus.CloseRequest(path); } catch { }
+            Finish(new(kind));
+        }
+
+        internal void Finish(Answer answer)
+        {
+            IDisposable? subscription;
+            lock (_gate)
+            {
+                if (_done) return;
+                _done = true;
+                subscription = _subscription;
+                _subscription = null;
+            }
+            lock (owner._sync) owner._requests.Remove(this);
+            try { subscription?.Dispose(); } catch { }
+            Completion.TrySetResult(answer);
+        }
+
+        // A portal older than the handle_token option names the request otherwise: it is followed at the path it gives.
+        private void Started(LinuxPortalReply<string> reply)
+        {
+            bool done, closeWhenStarted;
+            lock (_gate) { done = _done; closeWhenStarted = _closeWhenStarted; }
+            if (done)
+            {
+                if (closeWhenStarted && reply.Kind == LinuxPortalReplyKind.Ok && !string.IsNullOrEmpty(reply.Value)) try { owner._bus.CloseRequest(reply.Value); } catch { }
+                return;
+            }
+            if (reply.Kind != LinuxPortalReplyKind.Ok || string.IsNullOrEmpty(reply.Value))
+            {
+                Finish(new(reply.Kind == LinuxPortalReplyKind.Missing ? AnswerKind.Missing : AnswerKind.Failed));
+                return;
+            }
+            string? current;
+            lock (_gate) current = _path;
+            if (!string.Equals(reply.Value, current, StringComparison.Ordinal))
+            {
+                try { Subscribe(reply.Value); } catch { Finish(new(AnswerKind.Failed)); }
+            }
+        }
+
+        private void Responded(uint response, IReadOnlyList<string>? uris) => Finish(new(AnswerKind.Responded, response, uris));
+
+        // False when the request ended meanwhile, whose new subscription is then removed at once.
+        private bool Subscribe(string path)
+        {
+            var subscription = owner._bus.Subscribe(path, Responded);
+            IDisposable? previous = null;
+            bool done;
+            lock (_gate)
+            {
+                done = _done;
+                if (!done) { previous = _subscription; _subscription = subscription; _path = path; }
+            }
+            try { previous?.Dispose(); } catch { }
+            if (done) { try { subscription.Dispose(); } catch { } return false; }
+            return true;
+        }
+    }
+}
+
+/// <summary>
+/// The state that native callbacks reach by an id rather than by a <see cref="GCHandle"/>: an entry removed when its
+/// owner ends leaves a late callback with nothing to reach, instead of a freed handle.
+/// </summary>
+internal static class LinuxPortalCallbacks
+{
+    private static readonly ConcurrentDictionary<nint, object> Entries = new();
+    private static long _next;
+
+    /// <summary>Registers a value and returns its id, never 0.</summary>
+    internal static nint Register(object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var id = (nint)Interlocked.Increment(ref _next);
+        Entries[id] = value;
+        return id;
+    }
+
+    /// <summary>Finds the value of an id that is still registered.</summary>
+    internal static bool TryGet<T>(nint id, [NotNullWhen(true)] out T? value) where T : class
+    {
+        value = Entries.TryGetValue(id, out var entry) ? entry as T : null;
+        return value is not null;
+    }
+
+    /// <summary>Removes an id; false when it was not registered.</summary>
+    internal static bool Remove(nint id) => Entries.TryRemove(id, out _);
+}
+
+/// <summary>The session bus through GIO, for <see cref="LinuxPortalFileChooser"/>.</summary>
+internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
+{
+    private const string PortalPath = "/org/freedesktop/portal/desktop";
+    private const string FileChooserInterface = "org.freedesktop.portal.FileChooser";
+    private const string RequestInterface = "org.freedesktop.portal.Request";
+    private const int SessionBus = 2;
+    private const int IoErrorCancelled = 19;
+
+    // The errors that say that no portal, or no FileChooser of the portal, answers on this bus.
+    private static readonly HashSet<string> MissingPortalErrors = new(StringComparer.Ordinal)
+    {
+        "org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner", "org.freedesktop.DBus.Error.UnknownMethod",
+        "org.freedesktop.DBus.Error.UnknownInterface", "org.freedesktop.DBus.Error.UnknownObject", "org.freedesktop.DBus.Error.UnknownProperty",
+        "org.freedesktop.DBus.Error.Spawn.ServiceNotFound",
+    };
+
+    private readonly object _sync = new();
+    private nint _connection;
+
+    public string? Connect()
+    {
+        lock (_sync)
+        {
+            if (_connection == 0)
+            {
+                nint error = 0;
+                _connection = Native.g_bus_get_sync(SessionBus, 0, &error);
+                FreeError(error);
+            }
+            return _connection == 0 ? null : Marshal.PtrToStringUTF8(Native.g_dbus_connection_get_unique_name(_connection));
+        }
+    }
+
+    public ILinuxPortalOperation GetVersion(Action<LinuxPortalReply<uint>> completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var parameters = Parse("(ss)", "(" + LinuxPortalFileChooserProtocol.Quote(FileChooserInterface) + ", 'version')");
+        try { return Call.Start(Connection(), PortalPath, "org.freedesktop.DBus.Properties", "Get", parameters, "(v)", (kind, reply) => completed(kind == LinuxPortalReplyKind.Ok ? Version(reply) : new(kind))); }
+        finally { Native.g_variant_unref(parameters); }
+    }
+
+    public ILinuxPortalOperation Open(string method, string parameters, Action<LinuxPortalReply<string>> completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        var value = Parse(LinuxPortalFileChooserProtocol.ParametersType, parameters);
+        try { return Call.Start(Connection(), PortalPath, FileChooserInterface, method, value, "(o)", (kind, reply) => completed(kind == LinuxPortalReplyKind.Ok ? RequestPath(reply) : new(kind))); }
+        finally { Native.g_variant_unref(value); }
+    }
+
+    public IDisposable Subscribe(string path, Action<uint, IReadOnlyList<string>?> responded)
+    {
+        ArgumentNullException.ThrowIfNull(responded);
+        return Subscription.Start(Connection(), LinuxPortalFileChooserProtocol.PortalName, RequestInterface, "Response", path, null, parameters =>
+        {
+            if (Response(parameters) is { } response) responded(response.Code, response.Uris);
+            else responded(2, null);
+        });
+    }
+
+    public IDisposable WatchPortal(Action vanished)
+    {
+        ArgumentNullException.ThrowIfNull(vanished);
+        return Subscription.Start(Connection(), "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged", "/org/freedesktop/DBus", LinuxPortalFileChooserProtocol.PortalName, parameters =>
+        {
+            if (TypeString(parameters) != "(sss)") return;
+            if (LinuxPortalFileChooserProtocol.PortalVanished(ChildString(parameters, 0), ChildString(parameters, 2))) vanished();
+        });
+    }
+
+    public void CloseRequest(string path)
+    {
+        var connection = Connection();
+        Native.g_dbus_connection_call(connection, LinuxPortalFileChooserProtocol.PortalName, path, RequestInterface, "Close", 0, 0, 0, -1, 0, null, 0);
+    }
+
+    public void Release()
+    {
+        nint connection;
+        lock (_sync) { connection = _connection; _connection = 0; }
+        if (connection != 0) Native.g_object_unref(connection);
+    }
+
+    private nint Connection()
+    {
+        lock (_sync) return _connection != 0 ? _connection : throw new InvalidOperationException("The session bus is not connected.");
+    }
+
+    private static LinuxPortalReply<uint> Version(nint reply)
+    {
+        var boxed = Native.g_variant_get_child_value(reply, 0);
         try
         {
-            var parameters = Parse("(ss)", "(" + LinuxPortalFileChooserProtocol.Quote(FileChooserInterface) + ", 'version')");
-            try { Call(PortalPath, "org.freedesktop.DBus.Properties", "Get", parameters, "(v)", &VersionReceived, GCHandle.ToIntPtr(handle)); }
-            finally { Native.g_variant_unref(parameters); }
+            var inner = Native.g_variant_get_variant(boxed);
+            try { return TypeString(inner) == "u" ? new(LinuxPortalReplyKind.Ok, Native.g_variant_get_uint32(inner)) : new(LinuxPortalReplyKind.Failed); }
+            finally { Native.g_variant_unref(inner); }
         }
-        catch
+        finally { Native.g_variant_unref(boxed); }
+    }
+
+    private static LinuxPortalReply<string> RequestPath(nint reply)
+    {
+        var path = ChildString(reply, 0);
+        return string.IsNullOrEmpty(path) ? new(LinuxPortalReplyKind.Failed) : new(LinuxPortalReplyKind.Ok, path);
+    }
+
+    private static (uint Code, List<string>? Uris)? Response(nint parameters)
+    {
+        if (parameters == 0 || TypeString(parameters) != LinuxPortalFileChooserProtocol.ResponseType) return null;
+        uint code;
+        var child = Native.g_variant_get_child_value(parameters, 0);
+        try { code = Native.g_variant_get_uint32(child); }
+        finally { Native.g_variant_unref(child); }
+        List<string>? uris = null;
+        var results = Native.g_variant_get_child_value(parameters, 1);
+        try
         {
-            handle.Free();
-            return Task.FromResult<uint?>(null);
+            var type = Native.g_variant_type_new("as");
+            nint list;
+            try { list = Native.g_variant_lookup_value(results, "uris", type); }
+            finally { Native.g_variant_type_free(type); }
+            if (list != 0)
+            {
+                try
+                {
+                    var count = Native.g_variant_n_children(list);
+                    uris = new List<string>((int)Math.Min(count, (nuint)LinuxPortalFileChooserProtocol.MaximumSelections + 1));
+                    for (nuint index = 0; index < count && index <= (nuint)LinuxPortalFileChooserProtocol.MaximumSelections; index++) uris.Add(ChildString(list, index) ?? string.Empty);
+                }
+                finally { Native.g_variant_unref(list); }
+            }
         }
-        return call.Completion.Task;
+        finally { Native.g_variant_unref(results); }
+        return (code, uris);
     }
 
-    private unsafe bool EnsureConnection()
+    private static string? ChildString(nint value, nuint index)
     {
-        if (_connection != 0) return true;
-        nint error = 0;
-        _connection = Native.g_bus_get_sync(SessionBus, 0, &error);
-        FreeError(error);
-        return _connection != 0;
+        var child = Native.g_variant_get_child_value(value, index);
+        try { return Marshal.PtrToStringUTF8(Native.g_variant_get_string(child, null)); }
+        finally { Native.g_variant_unref(child); }
     }
 
-    private unsafe void Call(string path, string interfaceName, string method, nint parameters, string? replyType, delegate* unmanaged[Cdecl]<nint, nint, nint, void> callback, nint userData)
-    {
-        var type = replyType is null ? 0 : Native.g_variant_type_new(replyType);
-        try { Native.g_dbus_connection_call(_connection, PortalName, path, interfaceName, method, parameters, type, 0, -1, 0, callback, userData); }
-        finally { if (type != 0) Native.g_variant_type_free(type); }
-    }
+    private static string? TypeString(nint value) => Marshal.PtrToStringUTF8(Native.g_variant_get_type_string(value));
 
-    // A failed call tells whether the portal is missing, or whether it is there and failed.
-    private static AnswerKind Failure(nint error)
-    {
-        if (error == 0) return AnswerKind.Failed;
-        var name = Native.g_dbus_error_get_remote_error(error);
-        try { return name != 0 && MissingPortalErrors.Contains(Marshal.PtrToStringUTF8(name) ?? string.Empty) ? AnswerKind.Missing : AnswerKind.Failed; }
-        finally { if (name != 0) Native.g_free(name); Native.g_error_free(error); }
-    }
-
-    private static unsafe nint Parse(string signature, string text)
+    private static nint Parse(string signature, string text)
     {
         var type = Native.g_variant_type_new(signature);
         nint error = 0;
@@ -300,222 +753,132 @@ internal sealed partial class LinuxPortalFileChooser
         finally { Native.g_variant_type_free(type); }
     }
 
-    private static string? TypeString(nint value) => Marshal.PtrToStringUTF8(Native.g_variant_get_type_string(value));
+    // How a failed call ended: canceled, no portal, or a portal that failed. Frees the error.
+    private static LinuxPortalReplyKind Failure(nint error)
+    {
+        if (error == 0) return LinuxPortalReplyKind.Failed;
+        try
+        {
+            if (Native.g_error_matches(error, Native.g_io_error_quark(), IoErrorCancelled)) return LinuxPortalReplyKind.Canceled;
+            var name = Native.g_dbus_error_get_remote_error(error);
+            try { return name != 0 && MissingPortalErrors.Contains(Marshal.PtrToStringUTF8(name) ?? string.Empty) ? LinuxPortalReplyKind.Missing : LinuxPortalReplyKind.Failed; }
+            finally { if (name != 0) Native.g_free(name); }
+        }
+        finally { Native.g_error_free(error); }
+    }
 
     private static void FreeError(nint error) { if (error != 0) Native.g_error_free(error); }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static unsafe void VersionReceived(nint source, nint result, nint data)
+    // One call with its own cancellable, which it holds until GIO reports its end: a cancel can never reach a freed one.
+    private sealed class Call : ILinuxPortalOperation
     {
-        var handle = GCHandle.FromIntPtr(data);
-        try
-        {
-            if (handle.Target is not VersionCall call) return;
-            uint? version = null;
-            try
-            {
-                nint error = 0;
-                var reply = Native.g_dbus_connection_call_finish(source, result, &error);
-                if (reply == 0)
-                {
-                    if (Failure(error) == AnswerKind.Missing) call.Owner._missing = true;
-                }
-                else
-                {
-                    try
-                    {
-                        var boxed = Native.g_variant_get_child_value(reply, 0);
-                        try
-                        {
-                            var inner = Native.g_variant_get_variant(boxed);
-                            try { if (TypeString(inner) == "u") version = Native.g_variant_get_uint32(inner); }
-                            finally { Native.g_variant_unref(inner); }
-                        }
-                        finally { Native.g_variant_unref(boxed); }
-                    }
-                    finally { Native.g_variant_unref(reply); }
-                    if (version is { } value) call.Owner._version = value;
-                }
-            }
-            catch { version = null; }
-            call.Completion.TrySetResult(version);
-        }
-        finally { handle.Free(); }
-    }
+        private readonly object _gate = new();
+        private readonly Action<LinuxPortalReplyKind, nint> _completed;
+        private nint _cancellable;
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static unsafe void CallReturned(nint source, nint result, nint data)
-    {
-        var handle = GCHandle.FromIntPtr(data);
-        try
+        private Call(Action<LinuxPortalReplyKind, nint> completed) => _completed = completed;
+
+        internal static Call Start(nint connection, string path, string interfaceName, string method, nint parameters, string replyType, Action<LinuxPortalReplyKind, nint> completed)
         {
-            if (handle.Target is not Request request) return;
+            var call = new Call(completed) { _cancellable = Native.g_cancellable_new() };
+            var id = LinuxPortalCallbacks.Register(call);
+            var type = Native.g_variant_type_new(replyType);
+            try { Native.g_dbus_connection_call(connection, LinuxPortalFileChooserProtocol.PortalName, path, interfaceName, method, parameters, type, 0, -1, call._cancellable, &Finished, id); }
+            catch { LinuxPortalCallbacks.Remove(id); call.ReleaseCancellable(); throw; }
+            finally { Native.g_variant_type_free(type); }
+            return call;
+        }
+
+        public void Cancel()
+        {
+            lock (_gate) if (_cancellable != 0) Native.g_cancellable_cancel(_cancellable);
+        }
+
+        private void ReleaseCancellable()
+        {
+            nint cancellable;
+            lock (_gate) { cancellable = _cancellable; _cancellable = 0; }
+            if (cancellable != 0) Native.g_object_unref(cancellable);
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void Finished(nint source, nint result, nint data)
+        {
             nint error = 0;
-            var reply = Native.g_dbus_connection_call_finish(source, result, &error);
-            if (reply == 0) { request.Fail(Failure(error)); return; }
+            nint reply = 0;
+            try { reply = Native.g_dbus_connection_call_finish(source, result, &error); }
+            catch { }
+            LinuxPortalCallbacks.TryGet<Call>(data, out var call);
+            LinuxPortalCallbacks.Remove(data);
             try
             {
-                var child = Native.g_variant_get_child_value(reply, 0);
-                try { request.Started(Marshal.PtrToStringUTF8(Native.g_variant_get_string(child, null))); }
-                finally { Native.g_variant_unref(child); }
+                call?.ReleaseCancellable();
+                var kind = reply != 0 ? LinuxPortalReplyKind.Ok : Failure(error);
+                error = 0;
+                call?._completed(kind, reply);
             }
-            finally { Native.g_variant_unref(reply); }
-        }
-        catch { if (handle.Target is Request request) request.Fail(AnswerKind.Failed); }
-        finally { handle.Free(); }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static unsafe void ResponseReceived(nint connection, nint sender, nint objectPath, nint interfaceName, nint signalName, nint parameters, nint data)
-    {
-        try
-        {
-            if (GCHandle.FromIntPtr(data).Target is not Request request) return;
-            if (parameters == 0 || TypeString(parameters) != LinuxPortalFileChooserProtocol.ResponseType) { request.Fail(AnswerKind.Failed); return; }
-            uint response;
-            var code = Native.g_variant_get_child_value(parameters, 0);
-            try { response = Native.g_variant_get_uint32(code); }
-            finally { Native.g_variant_unref(code); }
-            List<string>? uris = null;
-            var results = Native.g_variant_get_child_value(parameters, 1);
-            try
+            catch { }
+            finally
             {
-                var type = Native.g_variant_type_new("as");
-                nint list;
-                try { list = Native.g_variant_lookup_value(results, "uris", type); }
-                finally { Native.g_variant_type_free(type); }
-                if (list != 0)
-                {
-                    try
-                    {
-                        var count = Native.g_variant_n_children(list);
-                        uris = new List<string>((int)Math.Min(count, (nuint)LinuxPortalFileChooserProtocol.MaximumSelections + 1));
-                        for (nuint index = 0; index < count && index <= (nuint)LinuxPortalFileChooserProtocol.MaximumSelections; index++)
-                        {
-                            var item = Native.g_variant_get_child_value(list, index);
-                            try { uris.Add(Marshal.PtrToStringUTF8(Native.g_variant_get_string(item, null)) ?? string.Empty); }
-                            finally { Native.g_variant_unref(item); }
-                        }
-                    }
-                    finally { Native.g_variant_unref(list); }
-                }
+                FreeError(error);
+                if (reply != 0) Native.g_variant_unref(reply);
             }
-            finally { Native.g_variant_unref(results); }
-            request.Respond(response, uris);
-        }
-        catch
-        {
-            if (GCHandle.FromIntPtr(data).Target is Request request) request.Fail(AnswerKind.Failed);
         }
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void SubscriptionReleased(nint data)
+    // One signal subscription; disposing it unsubscribes once, from any thread, and a signal that GIO still delivers after
+    // that finds no entry.
+    private sealed class Subscription : IDisposable
     {
-        try { GCHandle.FromIntPtr(data).Free(); } catch { }
-    }
-
-    private enum AnswerKind { Responded, Closed, Missing, Failed }
-
-    private readonly record struct Answer(AnswerKind Kind, uint Response = 0, IReadOnlyList<string>? Uris = null);
-
-    private sealed class VersionCall(LinuxPortalFileChooser owner)
-    {
-        internal LinuxPortalFileChooser Owner { get; } = owner;
-        internal TaskCompletionSource<uint?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    }
-
-    // One dialog. Its methods run on the UI thread, except Abandon.
-    private sealed class Request(LinuxPortalFileChooser owner, string token)
-    {
+        private readonly object _gate = new();
+        private readonly Action<nint> _received;
+        private nint _connection;
+        private nint _id;
         private uint _subscription;
-        private string? _path;
-        private bool _closeWhenStarted;
 
-        internal TaskCompletionSource<Answer> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Subscription(Action<nint> received) => _received = received;
 
-        // Listens for the response before it calls, at the path that the portal gives a request with this token.
-        internal unsafe void Start(string method, string parameters)
+        internal static Subscription Start(nint connection, string sender, string interfaceName, string member, string path, string? arg0, Action<nint> received)
         {
-            try
+            var subscription = new Subscription(received) { _connection = connection };
+            subscription._id = LinuxPortalCallbacks.Register(subscription);
+            try { subscription._subscription = Native.g_dbus_connection_signal_subscribe(connection, sender, interfaceName, member, path, arg0, 0, &Received, subscription._id, null); }
+            catch { LinuxPortalCallbacks.Remove(subscription._id); throw; }
+            if (subscription._subscription == 0) { LinuxPortalCallbacks.Remove(subscription._id); throw new InvalidOperationException("Could not listen to the desktop portal."); }
+            Native.g_object_ref(connection);
+            return subscription;
+        }
+
+        public void Dispose()
+        {
+            uint subscription;
+            nint connection;
+            lock (_gate)
             {
-                var unique = Marshal.PtrToStringUTF8(Native.g_dbus_connection_get_unique_name(owner._connection));
-                if (string.IsNullOrEmpty(unique)) { Fail(AnswerKind.Failed); return; }
-                Subscribe(LinuxPortalFileChooserProtocol.RequestPath(unique, token));
-                var value = Parse(LinuxPortalFileChooserProtocol.ParametersType, parameters);
-                var handle = GCHandle.Alloc(this);
-                try { owner.Call(PortalPath, FileChooserInterface, method, value, "(o)", &CallReturned, GCHandle.ToIntPtr(handle)); }
-                catch { handle.Free(); throw; }
-                finally { Native.g_variant_unref(value); }
+                subscription = _subscription;
+                connection = _connection;
+                _subscription = 0;
+                _connection = 0;
             }
-            catch { Fail(AnswerKind.Failed); }
+            if (subscription == 0) return;
+            LinuxPortalCallbacks.Remove(_id);
+            Native.g_dbus_connection_signal_unsubscribe(connection, subscription);
+            Native.g_object_unref(connection);
         }
 
-        // A portal older than the handle_token option names the request otherwise: it is followed at the path it gives.
-        internal void Started(string? path)
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void Received(nint connection, nint sender, nint objectPath, nint interfaceName, nint signalName, nint parameters, nint data)
         {
-            if (Completion.Task.IsCompleted)
-            {
-                if (_closeWhenStarted && !string.IsNullOrEmpty(path)) CloseRequest(path);
-                return;
-            }
-            if (string.IsNullOrEmpty(path)) { Fail(AnswerKind.Failed); return; }
-            if (!string.Equals(path, _path, StringComparison.Ordinal)) Subscribe(path);
-        }
-
-        internal void Respond(uint response, IReadOnlyList<string>? uris)
-        {
-            Unsubscribe();
-            Completion.TrySetResult(new(AnswerKind.Responded, response, uris));
-        }
-
-        internal void Fail(AnswerKind kind)
-        {
-            Unsubscribe();
-            Completion.TrySetResult(new(kind));
-        }
-
-        // The caller canceled: the dialog of the portal is closed.
-        internal void Close()
-        {
-            if (Completion.Task.IsCompleted) return;
-            var path = _path;
-            Unsubscribe();
-            if (path is not null) CloseRequest(path);
-            _closeWhenStarted = true;
-            Completion.TrySetResult(new(AnswerKind.Closed));
-        }
-
-        // The application is shutting down: nothing runs on its UI thread any more.
-        internal void Abandon() => Completion.TrySetResult(new(AnswerKind.Closed));
-
-        private unsafe void CloseRequest(string path)
-        {
-            try { owner.Call(path, RequestInterface, "Close", 0, null, null, 0); } catch { }
-        }
-
-        private unsafe void Subscribe(string path)
-        {
-            Unsubscribe();
-            var handle = GCHandle.Alloc(this);
-            try { _subscription = Native.g_dbus_connection_signal_subscribe(owner._connection, PortalName, RequestInterface, "Response", path, null, 0, &ResponseReceived, GCHandle.ToIntPtr(handle), &SubscriptionReleased); }
-            catch { handle.Free(); throw; }
-            if (_subscription == 0) { handle.Free(); throw new InvalidOperationException("Could not listen to the desktop portal."); }
-            _path = path;
-        }
-
-        private void Unsubscribe()
-        {
-            if (_subscription == 0) return;
-            Native.g_dbus_connection_signal_unsubscribe(owner._connection, _subscription);
-            _subscription = 0;
+            try { if (LinuxPortalCallbacks.TryGet<Subscription>(data, out var subscription)) subscription._received(parameters); }
+            catch { }
         }
     }
 
-    private static unsafe partial class Native
+    private static partial class Native
     {
         private const string Gio = "libgio-2.0.so.0";
         private const string Glib = "libglib-2.0.so.0";
+        private const string GObject = "libgobject-2.0.so.0";
         [LibraryImport(Gio)] internal static partial nint g_bus_get_sync(int busType, nint cancellable, nint* error);
         [LibraryImport(Gio)] internal static partial nint g_dbus_connection_get_unique_name(nint connection);
         [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial void g_dbus_connection_call(nint connection, string busName, string objectPath, string interfaceName, string methodName, nint parameters, nint replyType, int flags, int timeoutMilliseconds, nint cancellable, delegate* unmanaged[Cdecl]<nint, nint, nint, void> callback, nint userData);
@@ -523,6 +886,10 @@ internal sealed partial class LinuxPortalFileChooser
         [LibraryImport(Gio, StringMarshalling = StringMarshalling.Utf8)] internal static partial uint g_dbus_connection_signal_subscribe(nint connection, string sender, string interfaceName, string member, string objectPath, string? arg0, int flags, delegate* unmanaged[Cdecl]<nint, nint, nint, nint, nint, nint, nint, void> callback, nint userData, delegate* unmanaged[Cdecl]<nint, void> userDataFree);
         [LibraryImport(Gio)] internal static partial void g_dbus_connection_signal_unsubscribe(nint connection, uint subscriptionId);
         [LibraryImport(Gio)] internal static partial nint g_dbus_error_get_remote_error(nint error);
+        [LibraryImport(Gio)] internal static partial nint g_cancellable_new();
+        [LibraryImport(Gio)] internal static partial void g_cancellable_cancel(nint cancellable);
+        [LibraryImport(Gio)] internal static partial uint g_io_error_quark();
+        [LibraryImport(Glib)] [return: MarshalAs(UnmanagedType.Bool)] internal static partial bool g_error_matches(nint error, uint domain, int code);
         [LibraryImport(Glib, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_variant_type_new(string typeString);
         [LibraryImport(Glib)] internal static partial void g_variant_type_free(nint type);
         [LibraryImport(Glib, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_variant_parse(nint type, string text, nint limit, nint endPointer, nint* error);
@@ -536,5 +903,7 @@ internal sealed partial class LinuxPortalFileChooser
         [LibraryImport(Glib, StringMarshalling = StringMarshalling.Utf8)] internal static partial nint g_variant_lookup_value(nint dictionary, string key, nint expectedType);
         [LibraryImport(Glib)] internal static partial void g_error_free(nint error);
         [LibraryImport(Glib)] internal static partial void g_free(nint value);
+        [LibraryImport(GObject)] internal static partial nint g_object_ref(nint value);
+        [LibraryImport(GObject)] internal static partial void g_object_unref(nint value);
     }
 }

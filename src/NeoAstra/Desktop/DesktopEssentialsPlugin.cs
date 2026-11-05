@@ -153,6 +153,7 @@ public sealed class NeoDesktopServices : IAsyncDisposable
         foreach (var registration in registrations) try { await registration.DisposeAsync().ConfigureAwait(false); } catch { }
         SystemInfo.Dispose();
         if (Notifications is IAsyncDisposable notificationLifetime) await notificationLifetime.DisposeAsync().ConfigureAwait(false);
+        if (Dialogs is IAsyncDisposable dialogLifetime) await dialogLifetime.DisposeAsync().ConfigureAwait(false);
         await GlobalShortcuts.DisposeAsync().ConfigureAwait(false);
         await DragDrop.DisposeAsync().ConfigureAwait(false);
         await WindowPolish.DisposeAsync().ConfigureAwait(false);
