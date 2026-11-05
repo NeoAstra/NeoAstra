@@ -31,6 +31,9 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
     private bool _disposed;
     private readonly string _nativePrefix;
     private readonly bool _attachOnBind;
+    // UNUserNotificationCenter asserts that the process is an application bundle and aborts the whole process when it is not (a
+    // program started from its build output, a test host): without one, the presenter answers Unsupported and never asks for it.
+    private readonly string? _unavailable;
 
     internal MacNotifications() : this("neoastra.application") { }
     // iOS reports a tapped notification only to a delegate that is there, so an iOS presenter takes the delegate when it is
@@ -39,38 +42,47 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationId);
         _attachOnBind = attachOnBind;
+        _unavailable = OperatingSystem.IsMacOS() ? MacApplicationBundle.UnavailableReason() : null;
+        Support = _unavailable is null ? NativeSupport : new(NeoSupportLevel.None, 1, 0, _unavailable);
         _nativePrefix = "neoastra." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(applicationId)))[..24].ToLowerInvariant();
     }
 
-    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0, "Modern UNUserNotificationCenter authorization status and first-display request, identifier replacement, scheduled delivery through a time-interval trigger, action/default activation, custom dismissal, explicit pending/delivered removal (also of what an earlier run scheduled), generation routing, and deterministic delegate/category teardown that keeps scheduled notifications.");
+    private static readonly NeoCapabilityInfo NativeSupport = new(NeoSupportLevel.Native, 1, 0, "Modern UNUserNotificationCenter authorization status and first-display request, identifier replacement, scheduled delivery through a time-interval trigger, action/default activation, custom dismissal, explicit pending/delivered removal (also of what an earlier run scheduled), generation routing, and deterministic delegate/category teardown that keeps scheduled notifications.");
+    public NeoCapabilityInfo Support { get; }
     public event EventHandler<NeoNotificationActivation>? Activated;
     public event EventHandler<NeoExternalNotification>? ExternalReceived;
     public event EventHandler<NeoExternalNotification>? ExternalActivated;
     public Func<NeoExternalNotification, CancellationToken, ValueTask<bool>>? ExternalPresentation { get; set; }
 
-    void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; if (_attachOnBind && !_disposed) { if (_dispatcher.CheckAccess()) EnsureCenter(); else _ = _dispatcher.InvokeAsync(() => { if (!_disposed) EnsureCenter(); }); } }
+    void INeoApplicationBoundDesktopService.BindApplication(NeoApplication application) { ArgumentNullException.ThrowIfNull(application); if (_application is not null && !ReferenceEquals(_application, application)) throw new InvalidOperationException("The notification presenter is already bound to an application."); _application = application; _dispatcher = application.Dispatcher; if (_attachOnBind && !_disposed && _unavailable is null) { if (_dispatcher.CheckAccess()) EnsureCenter(); else _ = _dispatcher.InvokeAsync(() => { if (!_disposed) EnsureCenter(); }); } }
 
     public ValueTask<NeoNotificationPermissionStatus> GetPermissionStatusAsync(CancellationToken cancellationToken = default)
     {
+        if (_unavailable is not null) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoNotificationPermissionStatus.Unsupported); }
         var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
         return dispatcher.CheckAccess() ? new(MacNotificationTasks.WaitAsync(StartSettingsQuery(), TimeSpan.FromSeconds(10), cancellationToken)) : new(MacNotificationTasks.DispatchAndWaitAsync(dispatcher.InvokeAsync(StartSettingsQuery, cancellationToken), TimeSpan.FromSeconds(10), cancellationToken));
     }
 
     public ValueTask<NeoNotificationPermissionStatus> RequestPermissionAsync(CancellationToken cancellationToken = default)
     {
+        if (_unavailable is not null) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoNotificationPermissionStatus.Unsupported); }
         var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
         return new(MacNotificationTasks.RequestPermissionAsync(dispatcher, StartSettingsQuery, StartAuthorizationRequest, cancellationToken));
     }
 
     public ValueTask<NeoDesktopStatus> ShowAsync(NeoNotificationRequest request, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request); request.Validate(); var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
+        ArgumentNullException.ThrowIfNull(request); request.Validate();
+        if (_unavailable is not null) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoDesktopStatus.Unsupported); }
+        var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
         return new(MacNotificationTasks.ShowWithAuthorizationAsync(dispatcher, StartSettingsQuery, StartAuthorizationRequest, () => StartShow(request), cancellationToken));
     }
 
     public ValueTask<NeoDesktopStatus> RemoveAsync(string id, CancellationToken cancellationToken = default)
     {
-        NeoNotificationRequest.ValidateId(id, nameof(id)); var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
+        NeoNotificationRequest.ValidateId(id, nameof(id));
+        if (_unavailable is not null) { cancellationToken.ThrowIfCancellationRequested(); return ValueTask.FromResult(NeoDesktopStatus.Unsupported); }
+        var dispatcher = _dispatcher ?? throw new InvalidOperationException("The macOS notification presenter must be bound to the UI dispatcher before use.");
         return dispatcher.CheckAccess() ? ValueTask.FromResult(RemoveOnDispatcher(id)) : dispatcher.InvokeAsync(() => RemoveOnDispatcher(id), cancellationToken);
     }
 
@@ -211,7 +223,7 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
 
     private void EnsureCenter()
     {
-        if (_center != 0) return; EnsureDelegateClass(); EnsureBlockRuntime(); _center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); _delegate = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (_center == 0 || _delegate == 0 || !Owners.TryAdd(_delegate, this)) throw new PlatformNotSupportedException("UNUserNotificationCenter is unavailable."); Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), _delegate); ReplayLaunchResponses();
+        if (_center != 0) return; if (_unavailable is not null) throw new PlatformNotSupportedException(_unavailable); EnsureDelegateClass(); EnsureBlockRuntime(); _center = Native.Send(Native.GetClass("UNUserNotificationCenter"), Native.GetSelector("currentNotificationCenter")); _delegate = Native.Send(Native.Send(s_delegateClass, Native.GetSelector("alloc")), Native.GetSelector("init")); if (_center == 0 || _delegate == 0 || !Owners.TryAdd(_delegate, this)) throw new PlatformNotSupportedException("UNUserNotificationCenter is unavailable."); Native.SendVoidArg(_center, Native.GetSelector("setDelegate:"), _delegate); ReplayLaunchResponses();
     }
 
     private static void EnsureDelegateClass()
@@ -357,6 +369,59 @@ internal sealed unsafe partial class MacNotifications : INeoNotifications, INeoE
         [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send2(nint target, nint selector, nint first, nint second); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send3(nint target, nint selector, nint first, nint second, nint third); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint Send4(nint target, nint selector, nint first, nint second, nint third, nuint fourth); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendPointerCount(nint target, nint selector, nint* values, nuint count); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendUtf8(nint target, nint selector, byte* value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoid(nint target, nint selector); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendVoidArg(nint target, nint selector, nint value); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendBlock(nint target, nint selector, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendAuthorization(nint target, nint selector, nuint options, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial void SendRequest(nint target, nint selector, nint request, Block* block); [LibraryImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static partial nint SendInterval(nint target, nint selector, double interval, byte repeats);
         internal static nint GetClass(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return objc_getClass(pointer); } internal static nint GetSelector(string name) { var bytes = Encoding.UTF8.GetBytes(name + '\0'); fixed (byte* pointer = bytes) return sel_registerName(pointer); }
     }
+}
+
+// The main bundle of the process, as CoreFoundation sees it, also without Foundation or AppKit loaded.
+internal static unsafe partial class MacApplicationBundle
+{
+    private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    private static readonly Lazy<string?> Reason = new(Read);
+
+    // Why the process cannot use the services of an application bundle, or null when it runs from one.
+    internal static string? UnavailableReason() => Reason.Value;
+
+    // An executable can carry a bundle identifier in its embedded Info.plist without being an application of the system: the
+    // notification center wants both an identifier and a .app bundle.
+    internal static string? UnavailableReason(string? identifier, string? bundlePath)
+    {
+        if (string.IsNullOrWhiteSpace(identifier)) return "The process has no application bundle identifier (it does not run from a .app bundle, as a program started from its build output or with dotnet run): UNUserNotificationCenter requires an application bundle and would abort the process, so notifications are unavailable.";
+        if (bundlePath is null || !bundlePath.TrimEnd('/').EndsWith(".app", StringComparison.OrdinalIgnoreCase)) return "The process does not run from a .app bundle: UNUserNotificationCenter requires an application bundle and would abort the process, so notifications are unavailable.";
+        return null;
+    }
+
+    private static string? Read()
+    {
+        try
+        {
+            var bundle = CFBundleGetMainBundle();
+            if (bundle == 0) return UnavailableReason(null, null);
+            var identifier = ReadString(CFBundleGetIdentifier(bundle));
+            string? path = null;
+            var url = CFBundleCopyBundleURL(bundle);
+            if (url != 0)
+            {
+                try { var buffer = stackalloc byte[4096]; if (CFURLGetFileSystemRepresentation(url, 1, buffer, 4096) != 0) path = Marshal.PtrToStringUTF8((nint)buffer); }
+                finally { CFRelease(url); }
+            }
+            return UnavailableReason(identifier, path);
+        }
+        catch (DllNotFoundException) { return "CoreFoundation is unavailable."; }
+        catch (EntryPointNotFoundException) { return "CoreFoundation is unavailable."; }
+    }
+
+    private static string? ReadString(nint value)
+    {
+        if (value == 0) return null;
+        var buffer = stackalloc byte[1024];
+        return CFStringGetCString(value, buffer, 1024, 0x08000100) != 0 ? Marshal.PtrToStringUTF8((nint)buffer) : null; // kCFStringEncodingUTF8
+    }
+
+    [LibraryImport(CoreFoundation)] private static partial nint CFBundleGetMainBundle();
+    [LibraryImport(CoreFoundation)] private static partial nint CFBundleGetIdentifier(nint bundle);
+    [LibraryImport(CoreFoundation)] private static partial nint CFBundleCopyBundleURL(nint bundle);
+    [LibraryImport(CoreFoundation)] private static partial byte CFURLGetFileSystemRepresentation(nint url, byte resolveAgainstBase, byte* buffer, nint maxLength);
+    [LibraryImport(CoreFoundation)] private static partial byte CFStringGetCString(nint value, byte* buffer, nint length, uint encoding);
+    [LibraryImport(CoreFoundation)] private static partial void CFRelease(nint value);
 }
 
 internal static class MacNotificationTasks

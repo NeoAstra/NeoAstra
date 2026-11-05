@@ -620,6 +620,30 @@ public sealed class DesktopServicesTests
     }
 
     [TestMethod]
+    public async Task MacNotificationsAnswerUnsupportedOutsideAnApplicationBundle()
+    {
+        Assert.IsNull(MacApplicationBundle.UnavailableReason("org.example.App", "/Applications/Example.app"));
+        Assert.IsNull(MacApplicationBundle.UnavailableReason("org.example.App", "/Applications/Example.app/"));
+        Assert.IsNotNull(MacApplicationBundle.UnavailableReason(null, "/usr/local/share/dotnet"));
+        Assert.IsNotNull(MacApplicationBundle.UnavailableReason(" ", "/Applications/Example.app"));
+        // An executable with an embedded Info.plist has an identifier but is no application of the system.
+        Assert.IsNotNull(MacApplicationBundle.UnavailableReason("org.example.tool", "/usr/local/bin"));
+        if (!OperatingSystem.IsMacOS()) return;
+
+        // The test host is a program without a bundle: UNUserNotificationCenter would abort it, so nothing reaches the center,
+        // not even before the presenter is bound.
+        Assert.IsNotNull(MacApplicationBundle.UnavailableReason());
+        await using var notifications = new MacNotifications("dev.neoastra.tests");
+        Assert.AreEqual(NeoSupportLevel.None, notifications.Support.SupportLevel);
+        StringAssert.Contains(notifications.Support.Details, "application bundle");
+        Assert.AreEqual(NeoNotificationPermissionStatus.Unsupported, await notifications.GetPermissionStatusAsync());
+        Assert.AreEqual(NeoNotificationPermissionStatus.Unsupported, await notifications.RequestPermissionAsync());
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await notifications.ShowAsync(new NeoNotificationRequest { Id = "bundle-test", Title = "Title", Body = "Body" }));
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, await notifications.RemoveAsync("bundle-test"));
+        Assert.AreEqual(NeoSupportLevel.None, NeoNotifications.CreateSystem("dev.neoastra.tests", "Tests").Support.SupportLevel);
+    }
+
+    [TestMethod]
     public void MacNotificationPermissionFailuresRemainTruthful()
     {
         Assert.AreEqual(NeoDesktopStatus.Denied, MacNotifications.PermissionFailureStatus(NeoNotificationPermissionStatus.Denied));
