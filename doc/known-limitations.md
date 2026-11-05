@@ -333,9 +333,12 @@ What a request tells differs:
   GitHub Actions whose processes have the access of the system without a bundle.
 - **Linux.** WebKitGTK does not tell which origin asks. For a microphone or a camera NeoAstra gives the
   origin of the page of the view, which is the top document that asks: WebKit drops the request of a
-  page that the view has left. The other kinds of request have no origin. `IsUserInitiated` and
-  `CanPersist` are `false`. WebKitGTK has capture on by default since 2.46 and off before; NeoAstra
-  turns it on for every view. The capture of a microphone into an `AudioWorklet` was run with
+  page that the view has left. The other kinds of request have no origin. A page that reads what
+  another application copied (`navigator.clipboard.readText` or `read`) asks with the kind
+  `ClipboardRead` from WebKitGTK 2.42 on, without an origin: any frame of the page with a user gesture
+  can make that request, so a host that allows it allows every frame of the page. A page reads what it
+  copied itself without asking. `IsUserInitiated` and `CanPersist` are `false`. WebKitGTK has capture
+  on by default since 2.46 and off before; NeoAstra turns it on for every view. The capture of a microphone into an `AudioWorklet` was run with
   WebKitGTK 2.52 by the conformance harness, in a desktop session; a machine without a microphone
   refuses the page with an `OverconstrainedError` before the host is asked.
 

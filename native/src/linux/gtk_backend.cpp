@@ -391,6 +391,13 @@ std::string page_origin(WebKitWebView* web_view){
     }
     g_uri_unref(uri);return origin;
 }
+// WebKitGTK 2.42 asks for the clipboard (navigator.clipboard.readText and read, document.execCommand("paste")) with a request
+// of its own, which has no origin: any frame of the page with a user gesture can make it, so none is given. Its type is found by
+// name, so that the library still loads with a WebKitGTK that does not have it.
+bool is_clipboard_permission_request(WebKitPermissionRequest* request) noexcept {
+    const GType type=g_type_from_name("WebKitClipboardPermissionRequest");
+    return type!=0&&G_TYPE_CHECK_INSTANCE_TYPE(request,type);
+}
 // WebKitGTK does not tell which origin asks for a capture. It asks only while the view still shows the page of the top document
 // that wants it, so that the origin of that page is given, as WKWebView gives the origin of the top document. The other kinds of
 // request come without that guarantee, and without an origin. A request for the screen is told apart from one for a microphone.
@@ -400,6 +407,7 @@ gboolean permission_requested(WebKitWebView* web_view,WebKitPermissionRequest* r
     neoastra_permission_kind_t kinds[2]={NEOASTRA_PERMISSION_UNKNOWN,NEOASTRA_PERMISSION_UNKNOWN};int count=1;std::string origin;
     if(WEBKIT_IS_GEOLOCATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_GEOLOCATION;
     else if(WEBKIT_IS_NOTIFICATION_PERMISSION_REQUEST(request))kinds[0]=NEOASTRA_PERMISSION_NOTIFICATIONS;
+    else if(is_clipboard_permission_request(request))kinds[0]=NEOASTRA_PERMISSION_CLIPBOARD_READ;
     else if(WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)){
         auto* media=WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);
         const bool video=webkit_user_media_permission_is_for_video_device(media);
