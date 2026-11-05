@@ -255,38 +255,54 @@ internal sealed class LinuxPortalDispatcherThread(NeoDispatcher dispatcher) : IL
     public ValueTask InvokeAsync(Action action, CancellationToken cancellationToken) => dispatcher.InvokeAsync(action, cancellationToken);
 }
 
-/// <summary>A native call that a <see cref="LinuxPortalCallTracker"/> follows until the main loop reports its end.</summary>
+/// <summary>
+/// A native call or signal subscription that a <see cref="LinuxPortalCallTracker"/> follows until the main loop reports its
+/// end: the end of a call, or the release (<c>GDestroyNotify</c>) of a subscription after its queued signals.
+/// </summary>
 internal interface ILinuxPortalTrackedCall
 {
-    /// <summary>Gets a task completed when the call ended or was abandoned.</summary>
+    /// <summary>Gets a task completed when the call or subscription ended or was abandoned.</summary>
     Task Ended { get; }
-    /// <summary>Cancels the call; the main loop then reports its end.</summary>
+    /// <summary>Cancels the call, or removes the subscription; the main loop then reports its end.</summary>
     void Cancel();
-    /// <summary>Cancels the call and releases what it holds at once; a later report of its end finds nothing.</summary>
+    /// <summary>Cancels and releases what it holds at once; a later report of its end finds nothing.</summary>
     void Abandon();
 }
 
-/// <summary>The native calls that have not ended, so that none outlives the stop of the application.</summary>
+/// <summary>
+/// The native calls and subscriptions that have not ended, so that none outlives the stop of the application. Its stop (a
+/// drain or an abandonment) is final: nothing is added after it.
+/// </summary>
 internal sealed class LinuxPortalCallTracker
 {
     private readonly object _sync = new();
     private readonly HashSet<ILinuxPortalTrackedCall> _calls = [];
+    private bool _stopped;
 
-    /// <summary>Gets the number of calls that have not ended.</summary>
+    /// <summary>Gets the number of calls and subscriptions that have not ended.</summary>
     internal int Count { get { lock (_sync) return _calls.Count; } }
 
-    internal void Add(ILinuxPortalTrackedCall call) { lock (_sync) _calls.Add(call); }
+    /// <summary>Follows a call or a subscription that is about to start; false after the stop, when it must not start.</summary>
+    internal bool TryAdd(ILinuxPortalTrackedCall call)
+    {
+        lock (_sync)
+        {
+            if (_stopped) return false;
+            _calls.Add(call);
+            return true;
+        }
+    }
 
     internal void Remove(ILinuxPortalTrackedCall call) { lock (_sync) _calls.Remove(call); }
 
     /// <summary>
-    /// Cancels every call and waits, without blocking, until the main loop reported their end; those not ended when the
-    /// token is canceled are abandoned.
+    /// Stops, cancels every call and subscription, and waits without blocking until the main loop reported their end; those
+    /// not ended when the token is canceled are abandoned.
     /// </summary>
     internal async ValueTask DrainAsync(CancellationToken cancellationToken)
     {
         ILinuxPortalTrackedCall[] calls;
-        lock (_sync) calls = [.. _calls];
+        lock (_sync) { _stopped = true; calls = [.. _calls]; }
         foreach (var call in calls) try { call.Cancel(); } catch { }
         if (calls.Length != 0)
         {
@@ -296,11 +312,11 @@ internal sealed class LinuxPortalCallTracker
         Abandon();
     }
 
-    /// <summary>Abandons every call that has not ended.</summary>
+    /// <summary>Stops and abandons every call and subscription that has not ended.</summary>
     internal void Abandon()
     {
         ILinuxPortalTrackedCall[] calls;
-        lock (_sync) { calls = [.. _calls]; _calls.Clear(); }
+        lock (_sync) { _stopped = true; calls = [.. _calls]; _calls.Clear(); }
         foreach (var call in calls) try { call.Abandon(); } catch { }
     }
 }
@@ -588,9 +604,10 @@ internal sealed class LinuxPortalFileChooser : IAsyncDisposable
         }
     }
 
-    // One dialog. Start and the callbacks of the bus run on the UI thread; Close and Finish run on any thread. The paths of the
-    // request (the one listened to and the one the portal returned) change only under the gate, with its end, so that a close
-    // closes every path it knows and a path learned after the end is closed by whoever learns it.
+    // One dialog. Start and the callbacks of the bus run on the UI thread; Close and Finish run on any thread. Its request lives
+    // at the path that the portal spec predicts from the unique name and the token (handle_token, which every portal from
+    // xdg-desktop-portal 0.9 on honours): a close always knows it, also before the portal answered the call. A portal that
+    // returns another path is not followed: that request is closed and the dialog fails.
     private sealed class Request(LinuxPortalFileChooser owner, string token, string method, string parameters)
     {
         private readonly object _gate = new();
@@ -598,56 +615,48 @@ internal sealed class LinuxPortalFileChooser : IAsyncDisposable
         private IDisposable? _subscription;
         private ILinuxPortalOperation? _open;
         private string? _path;
-        private string? _returnedPath;
-        private bool _started;
         private bool _done;
-        private AnswerKind _end;
 
         internal TaskCompletionSource<Answer> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Listens for the response before it calls, at the path that the portal gives a request with this token.
+        // Listens for the response before it calls. The call is sent under the gate, so that a close either comes first and
+        // nothing is opened, or comes after the call was sent, and its close of the path follows the call on the connection.
         internal void Start()
         {
-            lock (_gate) if (_done) return;
-            ILinuxPortalOperation open;
+            string? unique;
+            lock (owner._sync) unique = owner._uniqueName;
+            if (string.IsNullOrEmpty(unique)) { Finish(new(AnswerKind.Failed)); return; }
             try
             {
-                string? unique;
-                lock (owner._sync) unique = owner._uniqueName;
-                if (string.IsNullOrEmpty(unique)) { Finish(new(AnswerKind.Failed)); return; }
                 if (!Subscribe(LinuxPortalFileChooserProtocol.RequestPath(unique, token))) return;
-                open = owner._bus.Open(method, parameters, Started);
+                lock (_gate)
+                {
+                    if (_done) return;
+                    _open = owner._bus.Open(method, parameters, Started);
+                }
             }
-            catch { Finish(new(AnswerKind.Failed)); return; }
-            bool cancel;
-            lock (_gate)
-            {
-                cancel = _done && _end == AnswerKind.Stopped && !_started;
-                if (!_done && !_started) _open = open;
-            }
-            if (cancel) try { open.Cancel(); } catch { }
+            catch { Finish(new(AnswerKind.Failed)); }
         }
 
-        // The caller canceled (Closed) or the application stops (Stopped): every request path known is closed, and a call that
-        // has not returned is canceled when the application stops, since its answer could no longer be delivered.
+        // The caller canceled (Closed) or the application stops (Stopped): the request is closed at its path, and a call that has
+        // not returned is canceled when the application stops, since its answer could no longer be delivered.
         internal void Close(AnswerKind kind)
         {
-            List<string> paths = [];
+            string? path = null;
             IDisposable? subscription;
             ILinuxPortalOperation? open;
             lock (_gate)
             {
                 if (_done) return;
                 _done = true;
-                _end = kind;
-                foreach (var path in new[] { _path, _returnedPath }) if (path is not null && _closed.Add(path)) paths.Add(path);
+                if (_path is not null && _closed.Add(_path)) path = _path;
                 subscription = _subscription;
                 _subscription = null;
                 open = kind == AnswerKind.Stopped ? _open : null;
                 _open = null;
             }
             Ended(subscription);
-            foreach (var path in paths) try { owner._bus.CloseRequest(path); } catch { }
+            if (path is not null) try { owner._bus.CloseRequest(path); } catch { }
             try { open?.Cancel(); } catch { }
             Completion.TrySetResult(new(kind));
         }
@@ -660,7 +669,6 @@ internal sealed class LinuxPortalFileChooser : IAsyncDisposable
             {
                 if (_done) return;
                 _done = true;
-                _end = answer.Kind;
                 subscription = _subscription;
                 _subscription = null;
                 _open = null;
@@ -675,46 +683,35 @@ internal sealed class LinuxPortalFileChooser : IAsyncDisposable
             try { subscription?.Dispose(); } catch { }
         }
 
-        // A portal older than the handle_token option names the request otherwise: it is followed at the path it gives.
+        // The portal returned the path of the request: anything but the predicted one is closed, whether or not the dialog ended.
         private void Started(LinuxPortalReply<string> reply)
         {
             var path = reply.Kind == LinuxPortalReplyKind.Ok && !string.IsNullOrEmpty(reply.Value) ? reply.Value : null;
             string? closeNow = null;
-            bool follow = false, fail = false;
+            bool fail;
             lock (_gate)
             {
-                _started = true;
                 _open = null;
-                if (_done)
-                {
-                    if (path is not null && (_end is AnswerKind.Closed or AnswerKind.Stopped) && _closed.Add(path)) closeNow = path;
-                }
-                else if (path is null) fail = true;
-                else
-                {
-                    _returnedPath = path;
-                    follow = !string.Equals(path, _path, StringComparison.Ordinal);
-                }
+                var predicted = string.Equals(path, _path, StringComparison.Ordinal);
+                if (path is not null && !predicted && _closed.Add(path)) closeNow = path;
+                fail = !_done && !predicted;
             }
-            if (closeNow is not null) { try { owner._bus.CloseRequest(closeNow); } catch { } return; }
-            if (fail) { Finish(new(reply.Kind == LinuxPortalReplyKind.Missing ? AnswerKind.Missing : AnswerKind.Failed)); return; }
-            if (follow) try { Subscribe(path!); } catch { Finish(new(AnswerKind.Failed)); }
+            if (closeNow is not null) try { owner._bus.CloseRequest(closeNow); } catch { }
+            if (fail) Finish(new(reply.Kind == LinuxPortalReplyKind.Missing ? AnswerKind.Missing : AnswerKind.Failed));
         }
 
         private void Responded(uint response, IReadOnlyList<string>? uris) => Finish(new(AnswerKind.Responded, response, uris));
 
-        // False when the request ended meanwhile, whose new subscription is then removed at once.
+        // False when the request ended meanwhile, whose subscription is then removed at once.
         private bool Subscribe(string path)
         {
             var subscription = owner._bus.Subscribe(path, Responded);
-            IDisposable? previous = null;
             bool done;
             lock (_gate)
             {
                 done = _done;
-                if (!done) { previous = _subscription; _subscription = subscription; _path = path; }
+                if (!done) { _subscription = subscription; _path = path; }
             }
-            try { previous?.Dispose(); } catch { }
             if (done) { try { subscription.Dispose(); } catch { } return false; }
             return true;
         }
@@ -864,7 +861,7 @@ internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
     private Subscription StartSubscription(string sender, string interfaceName, string member, string path, string? arg0, Action<nint> received)
     {
         var connection = AcquireConnection();
-        try { return Subscription.Start(connection, sender, interfaceName, member, path, arg0, received); }
+        try { return Subscription.Start(_calls, connection, sender, interfaceName, member, path, arg0, received); }
         finally { Native.g_object_unref(connection); }
     }
 
@@ -954,8 +951,9 @@ internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
 
     private static void FreeError(nint error) { if (error != 0) Native.g_error_free(error); }
 
-    // One call with its own cancellable, which it holds until GIO reports its end or until it is abandoned: a cancel never
-    // reaches a freed cancellable, and an abandoned call leaves no entry for its late callback to reach.
+    // One call with its own cancellable, which it holds until GIO reports its end or until it is abandoned. It starts under its
+    // gate, which an abandonment takes too: the cancellable is never released while GIO has not taken it, and a call that the
+    // stopped tracker refuses never starts.
     private sealed class Call : ILinuxPortalOperation, ILinuxPortalTrackedCall
     {
         private readonly object _gate = new();
@@ -973,15 +971,28 @@ internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
 
         public Task Ended => _ended.Task;
 
+        /// <exception cref="OperationCanceledException">The application stopped: the call is not made.</exception>
         internal static Call Start(LinuxPortalCallTracker tracker, nint connection, string path, string interfaceName, string method, nint parameters, string replyType, Action<LinuxPortalReplyKind, nint> completed)
         {
-            var call = new Call(tracker, completed) { _cancellable = Native.g_cancellable_new() };
-            call._id = LinuxPortalCallbacks.Register(call);
-            tracker.Add(call);
-            var type = Native.g_variant_type_new(replyType);
-            try { Native.g_dbus_connection_call(connection, LinuxPortalFileChooserProtocol.PortalName, path, interfaceName, method, parameters, type, 0, -1, call._cancellable, &Finished, call._id); }
-            catch { call.Abandon(); tracker.Remove(call); throw; }
-            finally { Native.g_variant_type_free(type); }
+            var call = new Call(tracker, completed);
+            lock (call._gate)
+            {
+                if (!tracker.TryAdd(call)) throw new OperationCanceledException("The application stopped: no call to the desktop portal starts.");
+                try
+                {
+                    call._cancellable = Native.g_cancellable_new();
+                    call._id = LinuxPortalCallbacks.Register(call);
+                    var type = Native.g_variant_type_new(replyType);
+                    try { Native.g_dbus_connection_call(connection, LinuxPortalFileChooserProtocol.PortalName, path, interfaceName, method, parameters, type, 0, -1, call._cancellable, &Finished, call._id); }
+                    finally { Native.g_variant_type_free(type); }
+                }
+                catch
+                {
+                    tracker.Remove(call);
+                    call.Abandon();
+                    throw;
+                }
+            }
             return call;
         }
 
@@ -1039,27 +1050,50 @@ internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
         }
     }
 
-    // One signal subscription with its own reference on the connection; disposing it unsubscribes once, from any thread, and
-    // a signal that GIO still delivers after that finds no entry.
-    private sealed class Subscription : IDisposable
+    // One signal subscription with its own reference on the connection. Disposing it unsubscribes once, from any thread, and
+    // stops its deliveries; it ends only when GIO releases it (its GDestroyNotify, on the main loop, after the signals that
+    // were already queued), which is what a drain waits for. It starts under its gate, as a call does.
+    private sealed class Subscription : IDisposable, ILinuxPortalTrackedCall
     {
         private readonly object _gate = new();
+        private readonly LinuxPortalCallTracker _tracker;
         private readonly Action<nint> _received;
+        private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private nint _connection;
         private nint _id;
         private uint _subscription;
+        private volatile bool _disposed;
 
-        private Subscription(Action<nint> received) => _received = received;
-
-        internal static Subscription Start(nint connection, string sender, string interfaceName, string member, string path, string? arg0, Action<nint> received)
+        private Subscription(LinuxPortalCallTracker tracker, Action<nint> received)
         {
-            var subscription = new Subscription(received) { _connection = Native.g_object_ref(connection) };
-            subscription._id = LinuxPortalCallbacks.Register(subscription);
-            try { subscription._subscription = Native.g_dbus_connection_signal_subscribe(connection, sender, interfaceName, member, path, arg0, 0, &Received, subscription._id, null); }
-            catch { subscription.Dispose(); throw; }
-            if (subscription._subscription == 0) { subscription.Dispose(); throw new InvalidOperationException("Could not listen to the desktop portal."); }
+            _tracker = tracker;
+            _received = received;
+        }
+
+        public Task Ended => _ended.Task;
+
+        /// <exception cref="OperationCanceledException">The application stopped: nothing is subscribed.</exception>
+        internal static Subscription Start(LinuxPortalCallTracker tracker, nint connection, string sender, string interfaceName, string member, string path, string? arg0, Action<nint> received)
+        {
+            var subscription = new Subscription(tracker, received);
+            lock (subscription._gate)
+            {
+                if (!tracker.TryAdd(subscription)) throw new OperationCanceledException("The application stopped: nothing listens to the desktop portal.");
+                subscription._connection = Native.g_object_ref(connection);
+                subscription._id = LinuxPortalCallbacks.Register(subscription);
+                try { subscription._subscription = Native.g_dbus_connection_signal_subscribe(connection, sender, interfaceName, member, path, arg0, 0, &Received, subscription._id, &Released); }
+                catch { subscription._subscription = 0; }
+                if (subscription._subscription == 0)
+                {
+                    tracker.Remove(subscription);
+                    subscription.Abandon();
+                    throw new InvalidOperationException("Could not listen to the desktop portal.");
+                }
+            }
             return subscription;
         }
+
+        public void Cancel() => Dispose();
 
         public void Dispose()
         {
@@ -1067,20 +1101,41 @@ internal sealed unsafe partial class LinuxGioPortalBus : ILinuxPortalBus
             nint connection;
             lock (_gate)
             {
+                _disposed = true;
                 subscription = _subscription;
                 connection = _connection;
                 _subscription = 0;
                 _connection = 0;
             }
-            LinuxPortalCallbacks.Remove(_id);
             if (subscription != 0) Native.g_dbus_connection_signal_unsubscribe(connection, subscription);
             if (connection != 0) Native.g_object_unref(connection);
+        }
+
+        // At the deadline of a drain, or for a main loop that may not run any more: GIO's release is not awaited.
+        public void Abandon()
+        {
+            Dispose();
+            LinuxPortalCallbacks.Remove(_id);
+            _ended.TrySetResult();
         }
 
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static void Received(nint connection, nint sender, nint objectPath, nint interfaceName, nint signalName, nint parameters, nint data)
         {
-            try { if (LinuxPortalCallbacks.TryGet<Subscription>(data, out var subscription)) subscription._received(parameters); }
+            try { if (LinuxPortalCallbacks.TryGet<Subscription>(data, out var subscription) && !subscription._disposed) subscription._received(parameters); }
+            catch { }
+        }
+
+        [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+        private static void Released(nint data)
+        {
+            try
+            {
+                if (!LinuxPortalCallbacks.TryGet<Subscription>(data, out var subscription)) return;
+                LinuxPortalCallbacks.Remove(data);
+                subscription._tracker.Remove(subscription);
+                subscription._ended.TrySetResult();
+            }
             catch { }
         }
     }

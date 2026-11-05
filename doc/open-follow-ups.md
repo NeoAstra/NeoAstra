@@ -428,7 +428,8 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   request has the kind `ClipboardRead`. Checked on the Mac: the managed build, the unit tests of the
   portal messages and of the lifetime of its calls and dialogs over a fake bus (cancellation, races of a
   cancel with the returned request path and of a disposal with the first connection, the owner of the
-  portal leaving or being replaced, the application stopping and draining its native calls), and the GVariant text of those messages parsed by GLib
+  portal leaving or being replaced, the application stopping and draining its native calls and the
+  release of its signal subscriptions), and the GVariant text of those messages parsed by GLib
   2.90.1. Not run: the portal calls
   over a real session bus (a KDE or GNOME desktop, and one without a portal, which falls back to
   `zenity`), and the native tests `test_file_input_waits_for_a_deferred_answer` and

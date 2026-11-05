@@ -59,22 +59,23 @@ public sealed class LinuxPortalFileChooserTests
     }
 
     [TestMethod]
-    public async Task ARequestThePortalNamesOtherwiseIsFollowedAtItsPath()
+    public async Task ARequestThePortalNamesOtherwiseIsClosedAndTheDialogFails()
     {
         var bus = new FakeBus { Version = 4 };
         var chooser = new LinuxPortalFileChooser(bus);
+        const string other = "/org/freedesktop/portal/desktop/request/1_42/other";
 
         var pick = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: true, CancellationToken.None).AsTask();
         Assert.AreEqual("SaveFile", bus.Opens.Single().Method);
         var predicted = bus.Requests.Single();
-        bus.Opens.Single().Completed(new(LinuxPortalReplyKind.Ok, "/org/freedesktop/portal/desktop/request/1_42/other"));
-        Assert.IsTrue(predicted.Disposed);
-        var followed = bus.Requests.Last();
-        Assert.AreEqual("/org/freedesktop/portal/desktop/request/1_42/other", followed.Path);
-        followed.Raise(1, null);
+        bus.Opens.Single().Completed(new(LinuxPortalReplyKind.Ok, other));
 
-        Assert.AreEqual(NeoDesktopStatus.Canceled, (await pick)!.Value.Status);
-        Assert.IsTrue(followed.Disposed);
+        // A portal that does not honour handle_token is not followed: a stop could not close a request it has not named yet.
+        Assert.IsNull(await pick, "Another presenter may show the dialog.");
+        CollectionAssert.AreEqual(new[] { other }, bus.ClosedRequests);
+        Assert.IsTrue(predicted.Disposed);
+        Assert.AreEqual(1, bus.Requests.Count, "Nothing listens at the other path.");
+        Assert.AreEqual(0, chooser.PendingCount);
     }
 
     [TestMethod]
@@ -310,22 +311,37 @@ public sealed class LinuxPortalFileChooserTests
     }
 
     [TestMethod]
-    public async Task ACancelThatWinsAgainstTheReturnedRequestPathClosesThatPathToo()
+    public async Task AStopBeforeTheCallIsSentOpensNothing()
+    {
+        var bus = new FakeBus { Version = 4 };
+        var chooser = new LinuxPortalFileChooser(bus);
+        // The application stops while the request starts to listen, before it calls the portal.
+        bus.Subscribing = _ => chooser.Stop();
+
+        var result = await chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None);
+
+        Assert.AreEqual(NeoDesktopStatus.Canceled, result!.Value.Status);
+        Assert.AreEqual(0, bus.Opens.Count, "No request is made that nobody would close.");
+        Assert.AreEqual(0, bus.ClosedRequests.Count);
+        Assert.IsTrue(bus.Requests.Single().Disposed);
+        Assert.AreEqual(0, chooser.PendingCount);
+    }
+
+    [TestMethod]
+    public async Task ACancelWhileTheRequestStartsClosesItAfterTheCall()
     {
         var bus = new FakeBus { Version = 4 };
         var chooser = new LinuxPortalFileChooser(bus);
         using var cancellation = new CancellationTokenSource();
-        const string returned = "/org/freedesktop/portal/desktop/request/1_42/other";
-        // The caller cancels while the request follows the path that the portal returned, before it listens there.
-        bus.Subscribing = path => { if (path == returned) cancellation.Cancel(); };
+        var opensAtClose = -1;
+        bus.Subscribing = _ => cancellation.Cancel();
+        bus.Closing = _ => opensAtClose = bus.Opens.Count;
 
         var pick = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, cancellation.Token).AsTask();
-        var predicted = bus.Requests.Single();
-        bus.Opens.Single().Completed(new(LinuxPortalReplyKind.Ok, returned));
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => pick);
-        CollectionAssert.AreEquivalent(new[] { predicted.Path, returned }, bus.ClosedRequests, "Both paths are closed, each once.");
-        Assert.IsTrue(bus.Requests.All(static subscription => subscription.Disposed));
+        CollectionAssert.AreEqual(new[] { bus.Requests.Single().Path }, bus.ClosedRequests);
+        Assert.AreEqual(1, opensAtClose, "The close of the predicted path follows the call that makes the request.");
         Assert.AreEqual(0, chooser.PendingCount);
     }
 
@@ -340,7 +356,11 @@ public sealed class LinuxPortalFileChooserTests
 
         Assert.AreEqual(NeoDesktopStatus.Canceled, (await pick)!.Value.Status);
         Assert.IsTrue(bus.Opens.Single().Operation.Canceled, "Its answer could not be delivered any more.");
+        CollectionAssert.AreEqual(new[] { bus.Requests.Single().Path }, bus.ClosedRequests, "The request is closed at the path it is predicted to have.");
         Assert.AreEqual(1, bus.Drains, "The main loop reports the end of the native calls before the application quits.");
+        // A late answer of a portal that named the request otherwise still closes that request.
+        bus.Opens.Single().Completed(new(LinuxPortalReplyKind.Ok, "/org/freedesktop/portal/desktop/request/1_42/late"));
+        Assert.AreEqual("/org/freedesktop/portal/desktop/request/1_42/late", bus.ClosedRequests.Last());
         await chooser.DisposeAsync();
         Assert.AreEqual(1, bus.Abandons);
         Assert.AreEqual(1, bus.Releases);
@@ -356,39 +376,45 @@ public sealed class LinuxPortalFileChooserTests
     public async Task TheCallTrackerDrainsWithoutBlockingAndAbandonsWhatOutlivesTheDeadline()
     {
         var tracker = new LinuxPortalCallTracker();
-        var first = new FakeTrackedCall(tracker);
-        var second = new FakeTrackedCall(tracker);
+        var call = new FakeTrackedCall(tracker);
+        var subscription = new FakeTrackedCall(tracker);
 
         var drain = tracker.DrainAsync(CancellationToken.None).AsTask();
-        Assert.IsTrue(first.Canceled && second.Canceled);
-        Assert.IsFalse(drain.IsCompleted, "The drain waits for the main loop to report the end of the calls.");
-        first.End();
-        Assert.IsFalse(drain.IsCompleted);
-        second.End();
+        Assert.IsTrue(call.Canceled && subscription.Canceled);
+        Assert.IsFalse(drain.IsCompleted, "The drain waits for the main loop to report the end of the call and the release of the subscription.");
+        call.End();
+        Assert.IsFalse(drain.IsCompleted, "A subscription whose queued signals were not delivered yet is still held.");
+        subscription.End();
         await drain;
         Assert.AreEqual(0, tracker.Count);
-        Assert.IsFalse(first.Abandoned || second.Abandoned);
+        Assert.IsFalse(call.Abandoned || subscription.Abandoned);
+        Assert.IsFalse(tracker.TryAdd(new FakeTrackedCall()), "After the drain, nothing starts.");
 
-        var stuck = new FakeTrackedCall(tracker);
+        var stuckTracker = new LinuxPortalCallTracker();
+        var stuck = new FakeTrackedCall(stuckTracker);
         using var deadline = new CancellationTokenSource();
-        var late = tracker.DrainAsync(deadline.Token).AsTask();
+        var late = stuckTracker.DrainAsync(deadline.Token).AsTask();
         deadline.Cancel();
         await late;
-        Assert.IsTrue(stuck.Canceled && stuck.Abandoned, "A call whose end never comes is released at the deadline.");
-        Assert.AreEqual(0, tracker.Count);
+        Assert.IsTrue(stuck.Canceled && stuck.Abandoned, "What never ends is released at the deadline.");
+        Assert.AreEqual(0, stuckTracker.Count);
 
-        var forgotten = new FakeTrackedCall(tracker);
-        tracker.Abandon();
+        var abandoned = new LinuxPortalCallTracker();
+        var forgotten = new FakeTrackedCall(abandoned);
+        abandoned.Abandon();
         Assert.IsTrue(forgotten.Abandoned);
-        Assert.AreEqual(0, tracker.Count);
+        Assert.AreEqual(0, abandoned.Count);
+        Assert.IsFalse(abandoned.TryAdd(new FakeTrackedCall()), "The abandonment is final too.");
+        Assert.AreEqual(0, abandoned.Count);
     }
 
     private sealed class FakeTrackedCall : ILinuxPortalTrackedCall
     {
-        private readonly LinuxPortalCallTracker _tracker;
+        private readonly LinuxPortalCallTracker? _tracker;
         private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        internal FakeTrackedCall(LinuxPortalCallTracker tracker) { _tracker = tracker; tracker.Add(this); }
+        internal FakeTrackedCall() { }
+        internal FakeTrackedCall(LinuxPortalCallTracker tracker) { _tracker = tracker; Assert.IsTrue(tracker.TryAdd(this)); }
 
         internal bool Canceled { get; private set; }
         internal bool Abandoned { get; private set; }
@@ -396,7 +422,7 @@ public sealed class LinuxPortalFileChooserTests
         public void Cancel() => Canceled = true;
         public void Abandon() { Canceled = true; Abandoned = true; _ended.TrySetResult(); }
         // The main loop reports the end of the call.
-        internal void End() { _tracker.Remove(this); _ended.TrySetResult(); }
+        internal void End() { _tracker?.Remove(this); _ended.TrySetResult(); }
     }
 
     private sealed class DisposablePresenter : INeoDialogs, IAsyncDisposable
@@ -488,7 +514,9 @@ public sealed class LinuxPortalFileChooserTests
 
         public IDisposable WatchPortal(Action vanished) => Watch = new FakeSubscription("NameOwnerChanged", null, vanished);
 
-        public void CloseRequest(string path) => ClosedRequests.Add(path);
+        internal Action<string>? Closing { get; set; }
+
+        public void CloseRequest(string path) { Closing?.Invoke(path); ClosedRequests.Add(path); }
 
         public ValueTask DrainAsync(CancellationToken cancellationToken) { Drains++; return ValueTask.CompletedTask; }
 
