@@ -413,3 +413,45 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   the policy of `NeoApp`, which keeps subframe links away from the system browser by that flag, does
   not on Linux. Read in the source on a Mac, not run. To do: see what WebKitGTK 6.0 tells about the
   frame of a `WebKitNavigationAction` and set the bit from it, or document the difference.
+- **Linux: the attachments of CodeAlta#326 were fixed by reading the code, and the runtimes predate
+  the fix.** Three causes were found on 2026-11-05 on a Mac, for KDE Plasma 6.6 with GTK 4.22 and
+  WebKitGTK 2.52: `run_file_chooser` in `native/src/linux/gtk_backend.cpp` completed a decision that
+  the host deferred with its default (cancel), so a file input answered after a dialog never got its
+  files; `LinuxDialogs` showed dialogs only through `zenity`, which a KDE desktop does not install, so
+  every file and folder dialog was `Unsupported`; and WebKitGTK's request to read the clipboard
+  (`WebKitClipboardPermissionRequest`) reached the host with the kind `Unknown`. The file chooser now
+  keeps a reference on its request and waits like the other backends, the dialogs go through the
+  FileChooser of the desktop portal (`src/NeoAstra/Desktop/LinuxPortalFileChooser.cs`) before `zenity`, and the clipboard
+  request has the kind `ClipboardRead`. Checked on the Mac: the managed build, the unit tests of the
+  portal messages, and the GVariant text of those messages parsed by GLib 2.90.1. Not run: the portal calls
+  over a real session bus (a KDE or GNOME desktop, and one without a portal, which falls back to
+  `zenity`), and the native tests `test_file_input_waits_for_a_deferred_answer` and
+  `test_clipboard_read_is_asked_as_a_clipboard_read`, which the `native` workflow builds and runs under
+  Xvfb. The `linux-x64` and `linux-arm64` runtimes in `src/NeoAstra.Core/runtimes` are still those of
+  the run before: a `native` workflow run of the fix and a commit of its runtimes are needed, as
+  "Fix native runtimes with CI builds of ..." did before.
+- **Linux and Windows: an external file drop reaches the host and not the page.** NeoAstra's GTK drop
+  target, added after WebKitGTK's own, runs first (GTK prepends controllers) and takes every drop that
+  did not start in the application, and the OLE targets of the Windows backend do the same; the files
+  go to `NeoDragDropBroker` as tokens, and the page gets neither `drop` nor `dataTransfer.files`.
+  macOS gives the drop to the page and to the host. A page that takes dropped files with HTML5, as the
+  prompt of CodeAlta does, gets nothing on Linux and Windows. Left as it is on 2026-11-05, because
+  giving the drop to WebKitGTK also gives the page the paths of the files in `text/uri-list`, against
+  the rule of [desktop services](desktop-services.md) that paths never reach the page. A way that GTK
+  allows, read in the source of GTK 4 and WebKitGTK 2.52 and not run: a `GtkDropTargetAsync` of
+  NeoAstra that reads the file list when it accepts the drop, as WebKitGTK does, answers no action in
+  `drag-enter` and `drag-motion`, brokers the list in `drop`, and returns `FALSE`, so that the
+  controller of WebKitGTK gets the drop after it. To decide first: whether the page of a view may get
+  external drops (an option of the view, on every backend), or whether an application takes them
+  through `dragDrop.onInbound` only.
+- **A file input is canceled after `DecisionTimeout` while its dialog stays open.** A host that answers
+  a file input with a dialog of its own (CodeAlta) has 30 seconds by default: the native deadline and
+  `ResolveDecisionAsync` then cancel the input, and the files chosen later go nowhere. The same holds
+  on macOS. `zenity` dialogs are also ended after two minutes (`ProcessDialogs.SelectAsync`). To
+  decide: a deadline of its own for file-chooser decisions, such as the ten minutes that
+  `DecisionTimeout` allows at most.
+- **Linux: a pasted screenshot was not explained.** On the KDE desktop of CodeAlta#326, Ctrl+V of a
+  screenshot attached nothing. WebKitGTK 2.52 gives a pasted PNG to the page as a file of
+  `clipboardData.files` (`Pasteboard::read(PasteboardFileReader&)` in `PasteboardGLib.cpp`), and
+  NeoAstra does not handle Ctrl+V on Linux, so the cause is not in the code that was read. To do on
+  that desktop: log `clipboardData.types` and `clipboardData.files.length` of the `paste` event.
