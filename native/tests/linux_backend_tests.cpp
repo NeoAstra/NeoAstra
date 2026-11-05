@@ -1,4 +1,5 @@
 #include "neoastra.h"
+#include "../src/linux/gtk_permissions.hpp"
 #include "../src/linux/gtk_renderer.hpp"
 
 #include <gtk/gtk.h>
@@ -662,75 +663,18 @@ void test_file_input_waits_for_a_deferred_answer(neoastra_app_t* app) {
     std::filesystem::remove_all(folder, ignored);
 }
 
-// What a view asked its host about the clipboard, as the kind and the origin of each request, and what the test answers.
-struct clipboard_events {
-    bool loaded{};
-    std::vector<std::pair<uint64_t, std::string>> requests;
-    neoastra_decision_action_t answer{NEOASTRA_DECISION_DENY};
-};
-
-void NEOASTRA_CALL answer_clipboard_request(void* context, const neoastra_event_t* event) {
-    auto* events = static_cast<clipboard_events*>(context);
-    if (event->header.type == NEOASTRA_EVENT_NAVIGATION_COMPLETED) events->loaded = true;
-    if (event->header.type != NEOASTRA_EVENT_PERMISSION_REQUESTED) return;
-    std::string origin;
-    if (event->uri.data) origin.assign(reinterpret_cast<const char*>(event->uri.data), static_cast<size_t>(event->uri.length));
-    events->requests.emplace_back(event->value, origin);
-    neoastra_decision_response_t response{};
-    response.size = sizeof(response);
-    response.version = 1;
-    response.action = events->answer;
-    assert(neoastra_decision_complete(event->decision, &response, nullptr) == NEOASTRA_OK);
-}
-
-// Lets the page read the clipboard with a user gesture and returns what it got: the text it read, or the name of its error.
-std::string read_clipboard(neoastra_view_t* view) {
-    evaluate(view, "globalThis.outcome='pending';navigator.clipboard.readText().then("
-        "text=>{globalThis.outcome='read:'+text;},error=>{globalThis.outcome=error.name;});0");
-    std::string outcome;
-    wait_until([&] { outcome = evaluate(view, "globalThis.outcome"); return outcome != "\"pending\""; });
-    return outcome;
-}
-
-// WebKitGTK asks before a page reads what another application copied (navigator.clipboard.readText). The host is asked about
-// the clipboard, as WebView2 asks, without an origin, since any frame of the page can ask; the page reads only when it allows.
-void test_clipboard_read_is_asked_as_a_clipboard_read(neoastra_app_t* app) {
-    auto* environment = create_environment(app, "", true);
-    auto* window = create_window(app);
-    auto* view = create_view(environment, window);
-    clipboard_events events;
-    assert(neoastra_view_set_event_callback(view, answer_clipboard_request, &events) == NEOASTRA_OK);
-    assert(neoastra_window_show(window) == NEOASTRA_OK);
-    const std::string page = "<!doctype html><title>Clipboard</title><p>Clipboard</p>";
-    const std::string base = "https://clipboard.invalid/";
-    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
-    wait_until([&] { return events.loaded; });
-    wait_until([&] { return evaluate(view, "document.visibilityState") == "\"visible\""; });
-    // Text that the page did not copy, so that WebKit asks before giving it.
-    gdk_clipboard_set_text(gdk_display_get_clipboard(gdk_display_get_default()), "copied elsewhere");
-
-    const uint64_t clipboard_read = NEOASTRA_PERMISSION_CLIPBOARD_READ;
-    auto outcome = read_clipboard(view);
-    bool as_expected = outcome == "\"NotAllowedError\"" && events.requests.size() == 1
-        && events.requests[0].first == clipboard_read && events.requests[0].second.empty();
-    events.answer = NEOASTRA_DECISION_ALLOW;
-    events.requests.clear();
-    if (as_expected) {
-        outcome = read_clipboard(view);
-        as_expected = outcome == "\"read:copied elsewhere\"" && events.requests.size() == 1
-            && events.requests[0].first == clipboard_read && events.requests[0].second.empty();
-    }
-    if (!as_expected) {
-        std::fprintf(stderr, "A page that read the clipboard got %s, and the host was asked %zu times:", outcome.c_str(), events.requests.size());
-        for (const auto& made : events.requests) std::fprintf(stderr, " kind %llu from '%s'", static_cast<unsigned long long>(made.first), made.second.c_str());
-        std::fprintf(stderr, "\n");
-        assert(false);
-    }
-
-    assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
-    neoastra_view_release(view);
-    neoastra_window_release(window);
-    neoastra_environment_release(environment);
+// The kind of a request that is not a capture comes from its type alone, which needs no page: a page cannot read the
+// clipboard headless, since WebKitGTK refuses the read under Xvfb before it asks (no user activation that a test can give).
+// A request for the clipboard is a ClipboardRead request, found by the name of its type, which WebKitGTK registers before a
+// page can make one; a capture is told by its devices in permission_requested, not by its type.
+void test_permission_kinds_follow_the_request_type() {
+    assert(neo_gtk_permission_kind(WEBKIT_TYPE_GEOLOCATION_PERMISSION_REQUEST) == NEOASTRA_PERMISSION_GEOLOCATION);
+    assert(neo_gtk_permission_kind(WEBKIT_TYPE_NOTIFICATION_PERMISSION_REQUEST) == NEOASTRA_PERMISSION_NOTIFICATIONS);
+    assert(neo_gtk_permission_kind(WEBKIT_TYPE_USER_MEDIA_PERMISSION_REQUEST) == NEOASTRA_PERMISSION_UNKNOWN);
+    assert(neo_gtk_permission_kind(G_TYPE_OBJECT) == NEOASTRA_PERMISSION_UNKNOWN);
+#if WEBKIT_CHECK_VERSION(2, 42, 0)
+    assert(neo_gtk_permission_kind(WEBKIT_TYPE_CLIPBOARD_PERMISSION_REQUEST) == NEOASTRA_PERMISSION_CLIPBOARD_READ);
+#endif
 }
 
 // The swipe of WebKitGTK that walks the history is off while history navigation is off for a view, which then refuses the
@@ -986,6 +930,7 @@ int main() {
     g_setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", TRUE);
 
     test_renderer_is_gl_on_wayland_with_the_nvidia_driver();
+    test_permission_kinds_follow_the_request_type();
     test_opened_applications_do_not_get_the_renderer_of_neoastra();
     // A copy: the attach may set the variable, which can free the value read before.
     auto* renderer_before = g_strdup(g_getenv("GSK_RENDERER"));
@@ -1013,7 +958,6 @@ int main() {
     test_media_capture_is_available_to_the_view(app);
     test_a_microphone_and_a_camera_are_asked_about_one_by_one(app);
     test_file_input_waits_for_a_deferred_answer(app);
-    test_clipboard_read_is_asked_as_a_clipboard_read(app);
     test_history_navigation_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 

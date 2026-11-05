@@ -432,9 +432,10 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   release of its signal subscriptions), and the GVariant text of those messages parsed by GLib
   2.90.1. Not run: the portal calls
   over a real session bus (a KDE or GNOME desktop, and one without a portal, which falls back to
-  `zenity`), and the native tests `test_file_input_waits_for_a_deferred_answer` and
-  `test_clipboard_read_is_asked_as_a_clipboard_read`, which the `native` workflow builds and runs under
-  Xvfb. The `linux-x64` and `linux-arm64` runtimes in `src/NeoAstra.Core/runtimes` are still those of
+  `zenity`). The `native` workflow runs `test_file_input_waits_for_a_deferred_answer`, and
+  `test_permission_kinds_follow_the_request_type` for the kind of a clipboard request: a page cannot
+  read the clipboard under Xvfb, where WebKitGTK refuses the read before it asks the host (run
+  41992391702), so the request of a real page, and its answer, were not run. The `linux-x64` and `linux-arm64` runtimes in `src/NeoAstra.Core/runtimes` are still those of
   the run before: a `native` workflow run of the fix and a commit of its runtimes are needed, as
   "Fix native runtimes with CI builds of ..." did before.
 - **Linux and Windows: an external file drop reaches the host and not the page.** NeoAstra's GTK drop
