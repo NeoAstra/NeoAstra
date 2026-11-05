@@ -587,6 +587,81 @@ void test_a_microphone_and_a_camera_are_asked_about_one_by_one(neoastra_app_t* a
     neoastra_environment_release(environment);
 }
 
+// What a view asked its host about a file input, and the decision that the test keeps to answer later, as a host does that
+// shows a dialog of its own.
+struct chooser_events {
+    bool loaded{};
+    unsigned requests{};
+    uint64_t multiple{};
+    neoastra_decision_t* decision{};
+};
+
+void NEOASTRA_CALL defer_file_chooser(void* context, const neoastra_event_t* event) {
+    auto* events = static_cast<chooser_events*>(context);
+    if (event->header.type == NEOASTRA_EVENT_NAVIGATION_COMPLETED) events->loaded = true;
+    if (event->header.type != NEOASTRA_EVENT_FILE_CHOOSER_REQUESTED) return;
+    ++events->requests;
+    events->multiple = event->value;
+    assert(!events->decision && event->decision);
+    neoastra_decision_retain(event->decision);
+    assert(neoastra_decision_defer(event->decision) == NEOASTRA_OK);
+    events->decision = event->decision;
+}
+
+// A host answers a file input once the user has chosen in a dialog of its own, after the signal of WebKitGTK returned. The
+// input waits for that answer and gets the chosen file, where it was canceled at once before.
+void test_file_input_waits_for_a_deferred_answer(neoastra_app_t* app) {
+    char* created = g_dir_make_tmp("neoastra-file-chooser-XXXXXX", nullptr);
+    assert(created != nullptr);
+    const auto folder = std::filesystem::path(created);
+    g_free(created);
+    const auto chosen = (folder / "neoastra-chosen.txt").string();
+    assert(g_file_set_contents(chosen.c_str(), "chosen", -1, nullptr));
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    chooser_events events;
+    assert(neoastra_view_set_event_callback(view, defer_file_chooser, &events) == NEOASTRA_OK);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    const std::string page = "<!doctype html><title>Files</title><input type=file id=files multiple>";
+    const std::string base = "https://files.invalid/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return events.loaded; });
+    // A script of the host runs with a user gesture, which a file input needs to open.
+    evaluate(view, "globalThis.outcome='pending';const input=document.getElementById('files');"
+        "input.addEventListener('change',()=>{globalThis.outcome=Array.from(input.files,file=>file.name).join(',');});"
+        "input.addEventListener('cancel',()=>{globalThis.outcome='canceled';});input.click();0");
+    wait_until([&] { return events.decision != nullptr; });
+    assert(events.requests == 1 && events.multiple == 1);
+    // Nothing answered for the host while the main loop ran.
+    const auto until = g_get_monotonic_time() + G_USEC_PER_SEC / 2;
+    while (g_get_monotonic_time() < until) if (!g_main_context_iteration(nullptr, FALSE)) g_usleep(1000);
+    assert(evaluate(view, "globalThis.outcome") == "\"pending\"");
+
+    const neoastra_string_view_t paths[] = {string_view(chosen)};
+    neoastra_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = NEOASTRA_DECISION_ALLOW;
+    response.paths = paths;
+    response.path_count = 1;
+    assert(neoastra_decision_complete(events.decision, &response, nullptr) == NEOASTRA_OK);
+    neoastra_decision_release(std::exchange(events.decision, nullptr));
+    std::string outcome;
+    wait_until([&] { outcome = evaluate(view, "globalThis.outcome"); return outcome != "\"pending\""; });
+    if (outcome != "\"neoastra-chosen.txt\"") {
+        std::fprintf(stderr, "A file input answered after its signal got %s instead of the chosen file.\n", outcome.c_str());
+        assert(false);
+    }
+
+    assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+    std::error_code ignored;
+    std::filesystem::remove_all(folder, ignored);
+}
+
 // The swipe of WebKitGTK that walks the history is off while history navigation is off for a view, which then refuses the
 // commands of the history. Turning history navigation on again does not turn the swipe on: a host does that itself.
 void test_history_navigation_setting_reaches_the_view(neoastra_app_t* app) {
@@ -866,6 +941,7 @@ int main() {
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);
     test_a_microphone_and_a_camera_are_asked_about_one_by_one(app);
+    test_file_input_waits_for_a_deferred_answer(app);
     test_history_navigation_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 

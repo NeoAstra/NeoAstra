@@ -49,10 +49,12 @@ assuming that every browser engine supports every portable event.
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
 
-WebKit callback contracts require some decisions synchronously: a popup request on macOS and Linux,
-and a file-chooser request on Linux. A handler for one of those that does not complete inline receives
-the documented safe default instead of an unbounded asynchronous deferral. A JavaScript dialog waits
-for its handler on every backend, for at most `NeoAstraOptions.DecisionTimeout`.
+WebKit callback contracts require a popup request on macOS and Linux to be decided synchronously. A
+handler for one that does not complete inline receives the documented safe default instead of an
+unbounded asynchronous deferral. A JavaScript dialog waits for its handler on every backend, and a
+file chooser on the backends that ask about one (WebView2 shows its own), for at most
+`NeoAstraOptions.DecisionTimeout`: a host that shows a dialog of its own for a file input answers once
+the user has chosen, and a file input still open at the deadline is canceled.
 
 The engine's own JavaScript dialogs and the `ScriptDialogRequested` handler exclude each other; see
 [built-in browser shortcuts and menus](chromeless-windows.md#built-in-browser-shortcuts-and-menus).
