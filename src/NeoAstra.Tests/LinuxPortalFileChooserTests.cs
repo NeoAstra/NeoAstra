@@ -110,6 +110,7 @@ public sealed class LinuxPortalFileChooserTests
 
         CollectionAssert.AreEqual(new[] { predicted, "/org/freedesktop/portal/desktop/request/1_42/late" }, bus.ClosedRequests);
         Assert.AreEqual(1, bus.Requests.Count, "No listener is added for a dialog that already ended.");
+        Assert.IsFalse(bus.Opens.Single().Operation.Canceled, "A caller's cancel keeps the call, whose answer names the request to close.");
     }
 
     [TestMethod]
@@ -241,10 +242,161 @@ public sealed class LinuxPortalFileChooserTests
     [TestMethod]
     public void OnlyTheLossOfItsOwnerIsTheLossOfThePortal()
     {
-        Assert.IsTrue(LinuxPortalFileChooserProtocol.PortalVanished("org.freedesktop.portal.Desktop", ""));
-        Assert.IsTrue(LinuxPortalFileChooserProtocol.PortalVanished("org.freedesktop.portal.Desktop", null));
-        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalVanished("org.freedesktop.portal.Desktop", ":1.7"), "A portal that starts or restarts did not leave.");
-        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalVanished("org.example.Other", ""));
+        const string portal = "org.freedesktop.portal.Desktop";
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, ":1.5", ""), "The portal left the bus.");
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, ":1.5", null));
+        Assert.IsTrue(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, ":1.5", ":1.9"), "Another portal replaced it directly.");
+        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, "", ":1.9"), "The bus starts a first portal.");
+        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, null, ":1.9"));
+        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalOwnerLost(portal, ":1.5", ":1.5"));
+        Assert.IsFalse(LinuxPortalFileChooserProtocol.PortalOwnerLost("org.example.Other", ":1.5", ""));
+    }
+
+    [TestMethod]
+    public async Task ALostOwnerEndsAPendingVersionQueryAndDropsALateReply()
+    {
+        var bus = new FakeBus();
+        var chooser = new LinuxPortalFileChooser(bus);
+
+        var pick = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None).AsTask();
+        bus.Watch!.Raise();
+        var result = (await pick)!.Value;
+        Assert.AreEqual(NeoDesktopStatus.Failed, result.Status);
+        Assert.AreEqual("portal_vanished", result.Code);
+        Assert.IsTrue(bus.VersionCalls.Single().Operation.Canceled);
+        // The old owner answers late: its version is not kept for the new one.
+        bus.VersionCalls.Single().Completed(new(LinuxPortalReplyKind.Ok, 4));
+        _ = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None).AsTask();
+        Assert.AreEqual(2, bus.VersionCalls.Count);
+        Assert.AreEqual(0, bus.Opens.Count);
+    }
+
+    [TestMethod]
+    public async Task DisposingWhileTheFirstConnectionIsMadeReleasesItOnceMade()
+    {
+        var bus = new FakeBus { Version = 4 };
+        var chooser = new LinuxPortalFileChooser(bus);
+        bus.Connecting = () =>
+        {
+            Assert.IsTrue(chooser.DisposeAsync().IsCompletedSuccessfully);
+            Assert.AreEqual(0, bus.Releases, "Nothing to release before the bus gave the connection.");
+        };
+
+        var result = await chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None);
+
+        Assert.AreEqual(NeoDesktopStatus.Canceled, result!.Value.Status);
+        Assert.AreEqual(1, bus.Releases, "The connection made after the disposal is released at once.");
+        Assert.AreEqual(0, bus.VersionCalls.Count, "No version query starts on it.");
+        Assert.IsNull(bus.Watch);
+        await chooser.DisposeAsync();
+        Assert.AreEqual(1, bus.Releases);
+    }
+
+    [TestMethod]
+    public async Task StoppingWhileTheFirstConnectionIsMadeKeepsItForTheDisposal()
+    {
+        var bus = new FakeBus { Version = 4 };
+        var chooser = new LinuxPortalFileChooser(bus);
+        bus.Connecting = chooser.Stop;
+
+        var result = await chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None);
+
+        Assert.AreEqual(NeoDesktopStatus.Canceled, result!.Value.Status);
+        Assert.AreEqual(0, bus.VersionCalls.Count);
+        Assert.IsNull(bus.Watch);
+        Assert.AreEqual(0, bus.Releases);
+        await chooser.DisposeAsync();
+        Assert.AreEqual(1, bus.Releases);
+    }
+
+    [TestMethod]
+    public async Task ACancelThatWinsAgainstTheReturnedRequestPathClosesThatPathToo()
+    {
+        var bus = new FakeBus { Version = 4 };
+        var chooser = new LinuxPortalFileChooser(bus);
+        using var cancellation = new CancellationTokenSource();
+        const string returned = "/org/freedesktop/portal/desktop/request/1_42/other";
+        // The caller cancels while the request follows the path that the portal returned, before it listens there.
+        bus.Subscribing = path => { if (path == returned) cancellation.Cancel(); };
+
+        var pick = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, cancellation.Token).AsTask();
+        var predicted = bus.Requests.Single();
+        bus.Opens.Single().Completed(new(LinuxPortalReplyKind.Ok, returned));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => pick);
+        CollectionAssert.AreEquivalent(new[] { predicted.Path, returned }, bus.ClosedRequests, "Both paths are closed, each once.");
+        Assert.IsTrue(bus.Requests.All(static subscription => subscription.Disposed));
+        Assert.AreEqual(0, chooser.PendingCount);
+    }
+
+    [TestMethod]
+    public async Task StoppingCancelsACallThatHasNotReturnedAndDrainsTheCalls()
+    {
+        var bus = new FakeBus { Version = 4 };
+        var chooser = new LinuxPortalFileChooser(bus);
+
+        var pick = chooser.PickAsync(InlineThread.Instance, Options, folders: false, save: false, CancellationToken.None).AsTask();
+        await chooser.StopAsync(CancellationToken.None);
+
+        Assert.AreEqual(NeoDesktopStatus.Canceled, (await pick)!.Value.Status);
+        Assert.IsTrue(bus.Opens.Single().Operation.Canceled, "Its answer could not be delivered any more.");
+        Assert.AreEqual(1, bus.Drains, "The main loop reports the end of the native calls before the application quits.");
+        await chooser.DisposeAsync();
+        Assert.AreEqual(1, bus.Abandons);
+        Assert.AreEqual(1, bus.Releases);
+
+        var unused = new FakeBus();
+        var idle = new LinuxPortalFileChooser(unused);
+        await idle.StopAsync(CancellationToken.None);
+        await idle.DisposeAsync();
+        Assert.AreEqual(0, unused.Drains + unused.Abandons + unused.Releases, "A chooser that never connected has nothing to drain.");
+    }
+
+    [TestMethod]
+    public async Task TheCallTrackerDrainsWithoutBlockingAndAbandonsWhatOutlivesTheDeadline()
+    {
+        var tracker = new LinuxPortalCallTracker();
+        var first = new FakeTrackedCall(tracker);
+        var second = new FakeTrackedCall(tracker);
+
+        var drain = tracker.DrainAsync(CancellationToken.None).AsTask();
+        Assert.IsTrue(first.Canceled && second.Canceled);
+        Assert.IsFalse(drain.IsCompleted, "The drain waits for the main loop to report the end of the calls.");
+        first.End();
+        Assert.IsFalse(drain.IsCompleted);
+        second.End();
+        await drain;
+        Assert.AreEqual(0, tracker.Count);
+        Assert.IsFalse(first.Abandoned || second.Abandoned);
+
+        var stuck = new FakeTrackedCall(tracker);
+        using var deadline = new CancellationTokenSource();
+        var late = tracker.DrainAsync(deadline.Token).AsTask();
+        deadline.Cancel();
+        await late;
+        Assert.IsTrue(stuck.Canceled && stuck.Abandoned, "A call whose end never comes is released at the deadline.");
+        Assert.AreEqual(0, tracker.Count);
+
+        var forgotten = new FakeTrackedCall(tracker);
+        tracker.Abandon();
+        Assert.IsTrue(forgotten.Abandoned);
+        Assert.AreEqual(0, tracker.Count);
+    }
+
+    private sealed class FakeTrackedCall : ILinuxPortalTrackedCall
+    {
+        private readonly LinuxPortalCallTracker _tracker;
+        private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal FakeTrackedCall(LinuxPortalCallTracker tracker) { _tracker = tracker; tracker.Add(this); }
+
+        internal bool Canceled { get; private set; }
+        internal bool Abandoned { get; private set; }
+        public Task Ended => _ended.Task;
+        public void Cancel() => Canceled = true;
+        public void Abandon() { Canceled = true; Abandoned = true; _ended.TrySetResult(); }
+        // The main loop reports the end of the call.
+        internal void End() { _tracker.Remove(this); _ended.TrySetResult(); }
     }
 
     private sealed class DisposablePresenter : INeoDialogs, IAsyncDisposable
@@ -303,7 +455,13 @@ public sealed class LinuxPortalFileChooserTests
         internal FakeSubscription? Watch { get; private set; }
         internal int Calls => VersionCalls.Count + Opens.Count + Requests.Count + ClosedRequests.Count + Connects;
 
-        public string? Connect() { Connects++; return UniqueName; }
+        // Runs inside Connect and inside Subscribe, as another thread would between two steps of the chooser.
+        internal Action? Connecting { get; set; }
+        internal Action<string>? Subscribing { get; set; }
+        internal int Drains { get; private set; }
+        internal int Abandons { get; private set; }
+
+        public string? Connect() { Connects++; Connecting?.Invoke(); return UniqueName; }
 
         public ILinuxPortalOperation GetVersion(Action<LinuxPortalReply<uint>> completed)
         {
@@ -324,12 +482,17 @@ public sealed class LinuxPortalFileChooserTests
         {
             var subscription = new FakeSubscription(path, responded, null);
             Requests.Add(subscription);
+            Subscribing?.Invoke(path);
             return subscription;
         }
 
         public IDisposable WatchPortal(Action vanished) => Watch = new FakeSubscription("NameOwnerChanged", null, vanished);
 
         public void CloseRequest(string path) => ClosedRequests.Add(path);
+
+        public ValueTask DrainAsync(CancellationToken cancellationToken) { Drains++; return ValueTask.CompletedTask; }
+
+        public void Abandon() => Abandons++;
 
         public void Release() => Releases++;
     }

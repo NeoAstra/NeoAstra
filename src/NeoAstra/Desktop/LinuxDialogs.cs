@@ -33,8 +33,13 @@ internal sealed class LinuxDialogs : INeoDialogs, INeoApplicationBoundDesktopSer
         ArgumentNullException.ThrowIfNull(application);
         if (_dispatcher is not null && !ReferenceEquals(_dispatcher, application.Dispatcher)) throw new InvalidOperationException("The dialog presenter is already bound to another dispatcher.");
         _dispatcher = application.Dispatcher;
-        // The dialogs of the portal close, and their callers are answered, before the main loop that delivers their answers stops.
-        if (_portal is { } portal) application.Stopping += (_, _) => portal.Stop();
+        // The dialogs of the portal close, and their callers are answered, as soon as the application stops; the asynchronous
+        // stop then lets the main loop, which still runs, report the end of the native calls before the application quits.
+        if (_portal is { } portal)
+        {
+            application.Stopping += (_, _) => portal.Stop();
+            application.StoppingAsync += portal.StopAsync;
+        }
     }
 
     /// <summary>Closes the dialogs of the portal that are still open and releases the connection to the session bus.</summary>
