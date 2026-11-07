@@ -152,7 +152,7 @@ public final class NeoAstraWebHost {
         this.parent = parent;
         this.view = nativeView;
         this.projectedSuffix = suffix;
-        webView = new WebView(parent.getContext());
+        webView = new NeoAstraKeyboard.InsetsWebView(parent.getContext());
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setAllowFileAccess(false);

@@ -195,7 +195,8 @@ A page on a phone runs in WKWebView or the Android System WebView, which give it
 the rest itself:
 
 - **Safe area.** With `NeoAstraAndroidEdgeToEdge` the Android window draws under the system bars as an iOS window does, and the
-  page keeps its content clear of them with `env(safe-area-inset-*)` in CSS on both platforms.
+  page keeps its content clear of them with `env(safe-area-inset-*)` in CSS on both platforms. Before Android 9 or with a WebView
+  before Chromium 136, which does not report the bars there, the window keeps clear of them itself and the insets read `0`.
 - **Keyboard.** With `NeoAstraIOSKeyboardOverlay` and `NeoAstraAndroidKeyboardOverlay` the keyboard lies over the page;
   `onKeyboard` of `@neoastra/client` tells its height and the duration of its animation (see [building](building.md)).
 - **Back.** Android reports its back button as a request to close the window; the page steps back out of what it shows with
