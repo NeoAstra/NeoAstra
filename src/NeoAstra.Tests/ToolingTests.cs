@@ -298,6 +298,48 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
+    public void AndroidEdgeToEdge_KeepsClearOfTheSystemBarsWithAWebViewThatDoesNotReportThem()
+    {
+        // A WebView before Chromium 136 reports only display cutouts as env(safe-area-inset-*), not the system bars, on every
+        // version of Android (Android 15 and 16 emulators with WebView 124 and 133), so a page drawn under them would lie under
+        // the navigation bar: the opt-in takes effect only with a WebView that reports them.
+        var root = FindRepositoryRoot();
+        var window = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, "static final int EDGE_TO_EDGE_WEBVIEW = 136;");
+        var method = window[window.IndexOf("private static boolean edgeToEdge(Activity activity)", StringComparison.Ordinal)..];
+        method = method[..method.IndexOf("\n    }", StringComparison.Ordinal)];
+        StringAssert.Contains(method, "if (webViewMajorVersion(activity) < EDGE_TO_EDGE_WEBVIEW) return false;");
+        Assert.IsFalse(method.Contains("SDK_INT", StringComparison.Ordinal), "The version of Android does not decide whether the WebView reports the bars.");
+    }
+
+    [TestMethod]
+    public void AndroidWindow_GivesTheBarsTheirAppearanceThroughTheFlagsOfTheDecorViewUpToAndroid11()
+    {
+        // Android 11 lets the flags of the decor view override the appearance of the insets controller: Fire OS showed white
+        // symbols over a light page drawn under its bars. The light navigation bar applies only under such a window, since the
+        // bar keeps the color of the theme otherwise.
+        var root = FindRepositoryRoot();
+        var window = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, "Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 30");
+        StringAssert.Contains(window, "underSystemBars && Build.VERSION.SDK_INT >= 26 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0");
+    }
+
+    [TestMethod]
+    public void AndroidKeyboardOverlay_KeepsTheInsetsListenerOfChromium()
+    {
+        // Up to Android 11 Chromium reads the safe area through a listener of its own on the WebView; a listener that NeoAstra set
+        // there replaced it, and the page read 0 for the system bars (Fire OS on Android 11). The WebView filters the keyboard out
+        // of its insets as they arrive instead.
+        var root = FindRepositoryRoot();
+        var backend = Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend");
+        foreach (var file in Directory.GetFiles(backend, "*.java"))
+            Assert.IsFalse(File.ReadAllText(file).Contains("webView.setOnApplyWindowInsetsListener", StringComparison.Ordinal), $"{Path.GetFileName(file)} replaces the insets listener of Chromium.");
+        var keyboard = File.ReadAllText(Path.Combine(backend, "NeoAstraKeyboard.java"));
+        StringAssert.Contains(keyboard, "public WindowInsets dispatchApplyWindowInsets(WindowInsets insets)");
+        StringAssert.Contains(File.ReadAllText(Path.Combine(backend, "NeoAstraWebHost.java")), "new NeoAstraKeyboard.InsetsWebView(");
+    }
+
+    [TestMethod]
     public void AndroidKeyboardOverlay_IsAnOptInThatTheTargetsMergeIntoTheManifest()
     {
         // NeoAstraAndroidKeyboardOverlay=true merges an application meta-data entry, which a view reads to keep the window from

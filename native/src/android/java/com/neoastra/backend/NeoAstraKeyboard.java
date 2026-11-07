@@ -75,9 +75,12 @@ final class NeoAstraKeyboard {
         // Chromium shrinks its visual viewport by the keyboard that the insets of the WebView report, even with overlaysContent,
         // and the page can then be dragged up as a whole. The WebView sees the insets without the keyboard; the system bars
         // stay, which the page reads as env(safe-area-inset-*). The height reported to the page comes from the root insets.
-        if (Build.VERSION.SDK_INT >= 30) {
-            webView.setOnApplyWindowInsetsListener((target, insets) ->
-                target.onApplyWindowInsets(new WindowInsets.Builder(insets).setInsets(WindowInsets.Type.ime(), Insets.NONE).build()));
+        // The WebView filters them as they arrive (InsetsWebView), not with a listener: up to Android 11 Chromium reads the insets
+        // through a listener of its own on the WebView, which another listener would replace, and the page would no longer
+        // learn the system bars.
+        if (Build.VERSION.SDK_INT >= 30 && webView instanceof InsetsWebView) {
+            ((InsetsWebView) webView).withoutKeyboard = true;
+            webView.requestApplyInsets();
         }
         webView.getViewTreeObserver().addOnGlobalLayoutListener(layout);
     }
@@ -87,7 +90,25 @@ final class NeoAstraKeyboard {
         webView.getViewTreeObserver().removeOnGlobalLayoutListener(layout);
         if (Build.VERSION.SDK_INT >= 30) {
             parent.setWindowInsetsAnimationCallback(null);
-            webView.setOnApplyWindowInsetsListener(null);
+            if (webView instanceof InsetsWebView) {
+                ((InsetsWebView) webView).withoutKeyboard = false;
+                webView.requestApplyInsets();
+            }
+        }
+    }
+
+    /** The WebView of a view, which can take its insets without the keyboard. */
+    static final class InsetsWebView extends WebView {
+        /** Whether the WebView sees its insets without the keyboard, which the page learns from NeoAstraKeyboard instead. */
+        boolean withoutKeyboard;
+
+        InsetsWebView(Context context) { super(context); }
+
+        @Override
+        public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
+            if (withoutKeyboard && Build.VERSION.SDK_INT >= 30)
+                insets = new WindowInsets.Builder(insets).setInsets(WindowInsets.Type.ime(), Insets.NONE).build();
+            return super.dispatchApplyWindowInsets(insets);
         }
     }
 

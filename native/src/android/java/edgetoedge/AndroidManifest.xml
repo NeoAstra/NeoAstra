@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Merged into the manifest of an application built with NeoAstraAndroidEdgeToEdge=true: its windows draw under the system bars,
-     and the page keeps its content clear of them with env(safe-area-inset-*), as on iOS. -->
+     and the page keeps its content clear of them with env(safe-area-inset-*), as on iOS. With a WebView before Chromium 136, which
+     does not report the bars there, the windows keep clear of them themselves. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <application>
     <meta-data android:name="com.neoastra.window.edgeToEdge" android:value="true" />
