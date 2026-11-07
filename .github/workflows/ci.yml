@@ -26,7 +26,7 @@ jobs:
         run: python -m unittest discover -s eng/tests -v
       - uses: actions/setup-dotnet@v4
         with:
-          global-json-file: src/global.json
+          global-json-file: global.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -69,3 +69,4 @@ jobs:
         uses: xoofx/.github/.github/actions/dotnet-releaser-action@main
         with:
           checkout-repo: 'false'
+          dotnet-version: '10.0.114'

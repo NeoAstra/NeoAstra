@@ -5,7 +5,10 @@ This guide covers development from a source checkout. For package-based applicat
 
 ## Prerequisites
 
-- The .NET 10 SDK, selected by [`src/global.json`](../src/global.json).
+- The .NET 10.0.114 SDK or a later patch in the 10.0.1xx feature band, selected by
+  [`global.json`](../global.json) at the repository root, so it applies to commands run from the root, `src`, or a desktop
+  sample. Patch-only roll-forward keeps NativeAOT on the patched 10.0.14 runtime/compiler
+  instead of selecting an installed newer feature band that still carries an older runtime. CI uses the same SDK floor.
 - Node.js and npm to compile the repository's frontend SDK and advanced sample. CI uses Node.js 22.
   Normal source builds perform an incremental locked npm restore when required.
 - A graphical desktop and the [platform runtime dependencies](platform-support.md#runtime-requirements)
