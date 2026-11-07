@@ -1088,44 +1088,52 @@ public sealed class ToolingTests
     }
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task DevelopmentOrchestrator_LaunchesOnAnIPhoneWithTheRelayOnTheLocalNetwork(bool withPlugin)
+    [DataRow(true, true)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(false, false)]
+    public async Task MobileDevelopment_LaunchesAnIPhoneWithTheAvailableRelay(bool reachable, bool withPlugin)
     {
-        // An iPhone does not reach the loopback interface of the machine. With the MCP plugin, the application tunnels the
-        // development server through the relay on the address of the machine in the local network and loads the page from its own
-        // 127.0.0.1; without it, the application loads the assets of its build.
+        // Give the launcher each relay address directly: binding a real LAN listener depends on the interfaces and privileges
+        // of the machine. An iPhone tunnels the development server only through a reachable relay and with the MCP plugin;
+        // a loopback fallback must build and load the packaged assets, even when the plugin is present.
         using var fixture = new ProjectFixture(); var project = NeoProjectConfiguration.Load(fixture.ConfigurationPath); var order = new List<string>();
         var output = Path.Combine(fixture.Root, "bin"); Directory.CreateDirectory(Path.Combine(output, "Fixture.app"));
         var factory = new ScriptedFactory(order);
         factory.Output["properties"] = new Queue<string>([
-            """{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net11.0-ios;net11.0-android" } }""",
             "",
             $$"""{ "Properties": { "TargetDir": {{System.Text.Json.JsonSerializer.Serialize(output)}}, "ApplicationId": "dev.neoastra.fixture" } }"""]);
         factory.Output["references"] = new Queue<string>([withPlugin
             ? """{ "Items": { "PackageReference": [ { "Identity": "NeoAstra" }, { "Identity": "NeoAstra.Mcp" } ], "ProjectReference": [] } }"""
             : """{ "Items": { "PackageReference": [ { "Identity": "NeoAstra" } ] } }"""]);
-        var readiness = new FakeReadiness(order); readiness.Release.SetResult();
         const string Device = "00008101-000A1B2C3D4E5F60";
-        factory.Output["simulators"] = new Queue<string>(["""{ "devices": { "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [ { "udid": "466D6112-4DA1-4624-A96A-38825BC7C7C4", "name": "iPhone 17e" } ] } }"""]);
-        var run = new NeoDevelopmentOrchestrator(factory, readiness) { McpDiscoveryDirectory = Path.Combine(fixture.Root, "discovery") }.RunAsync(project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device), CancellationToken.None);
-        await factory.AppStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var environment = new Dictionary<string, string>(project.Environment, StringComparer.OrdinalIgnoreCase)
+        {
+            ["NEOASTRA_ENVIRONMENT"] = "Development",
+            ["NEOASTRA_DEV_URL"] = project.DevUrl.AbsoluteUri,
+            ["NeoAstraBuildFrontend"] = "false",
+            [NeoDevelopmentOrchestrator.McpUrlVariable] = reachable ? "ws://192.168.1.20:12345/" : "ws://127.0.0.1:12345/",
+            [NeoDevelopmentOrchestrator.McpTokenVariable] = "fixture-relay-token",
+        };
+        await using var process = await new NeoMobileLauncher(factory).StartAsync(
+            project, new NeoMobileTarget(NeoDevelopmentPlatform.IOS, Device) { IsPhysical = true }, "net11.0-ios",
+            environment, static (_, _, _) => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         factory.App!.Exit(4);
-        Assert.AreEqual(4, await run.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.AreEqual(4, await process.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
 
-        CollectionAssert.AreEqual(new[] { "start:properties", "start:simulators", "start:contract", "start:frontend", "readiness", "start:references", "start:properties", "start:build", "start:properties", "start:install", "start:app" }, order, string.Join(", ", order));
-        var build = factory.Starts[6];
+        string[] expected = reachable
+            ? ["start:references", "start:properties", "start:build", "start:properties", "start:install", "start:app"]
+            : ["start:properties", "start:build", "start:properties", "start:install", "start:app"];
+        CollectionAssert.AreEqual(expected, order, string.Join(", ", order));
+        var build = factory.Starts.Single(static start => start.Label == "build");
         CollectionAssert.IsSubsetOf(new[] { "-r", "ios-arm64", "-p:CodesignKey=Apple Development" }, build.Command.Arguments.ToArray());
-        Assert.AreEqual(withPlugin ? "false" : "true", build.Environment["NeoAstraBuildFrontend"]);
-        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "install", "app", "--device", Device, Path.Combine(output, "Fixture.app") }, factory.Starts[8].Command.Arguments.ToArray());
-        var app = factory.Starts[9];
+        Assert.AreEqual(reachable && withPlugin ? "false" : "true", build.Environment["NeoAstraBuildFrontend"]);
+        CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "install", "app", "--device", Device, Path.Combine(output, "Fixture.app") }, factory.Starts.Single(static start => start.Label == "install").Command.Arguments.ToArray());
+        var app = factory.Starts.Single(static start => start.Label == "app");
         CollectionAssert.AreEqual(new[] { "xcrun", "devicectl", "device", "process", "launch", "--device", Device, "--terminate-existing", "--console", "dev.neoastra.fixture" }, app.Command.Arguments.ToArray());
         Assert.AreEqual(app.Environment["NEOASTRA_MCP_TOKEN"], app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_TOKEN"]);
-        // The address of the machine in the local network, or the loopback interface where the system lets the relay listen there
-        // only, as Windows does for a user without administrator rights.
-        var relay = new Uri(app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]);
-        Assert.IsTrue(relay.IsLoopback || NeoMcpRelay.FindNetworkAddress()?.ToString() == relay.Host, relay.Host);
-        if (withPlugin)
+        Assert.AreEqual(environment[NeoDevelopmentOrchestrator.McpUrlVariable], app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_URL"]);
+        if (reachable && withPlugin)
         {
             Assert.AreEqual("http://127.0.0.1:5173/", app.Environment["DEVICECTL_CHILD_NEOASTRA_DEV_URL"]);
             Assert.AreEqual("5173", app.Environment["DEVICECTL_CHILD_NEOASTRA_MCP_TUNNEL_PORT"]);
