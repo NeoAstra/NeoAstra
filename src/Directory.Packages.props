@@ -4,14 +4,16 @@
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="MinVer" Version="7.0.0" />
-    <PackageVersion Include="MSTest" Version="4.1.0" />
+    <PackageVersion Include="MinVer" Version="8.0.0" />
+    <PackageVersion Include="MSTest" Version="4.5.2" />
+    <!-- The generator must load in the Roslyn 5.0 compiler of the minimum supported .NET 10 SDK. -->
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
-    <PackageVersion Include="ModelContextProtocol.Core" Version="2.3.1" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.4.0" />
     <PackageVersion Include="XenoAtom.CommandLine" Version="2.0.3" />
     <PackageVersion Include="CppAst.CodeGen" Version="0.28.2" />
+    <!-- Match the Clang 21 ABI used by CppAst.CodeGen's ClangSharp dependency. -->
     <PackageVersion Include="libclang.runtime.win-x64" Version="21.1.8" />
     <PackageVersion Include="libclang.runtime.win-arm64" Version="21.1.8" />
     <PackageVersion Include="libclang.runtime.linux-x64" Version="21.1.8" />

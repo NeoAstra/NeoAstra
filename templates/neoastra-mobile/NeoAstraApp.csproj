@@ -33,6 +33,6 @@
     <Compile Include="Platforms/Android/**/*.cs" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'" />
   </ItemGroup>
   <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
-    <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.0" />
+    <PackageReference Include="Xamarin.AndroidX.WebKit" Version="1.17.1" />
   </ItemGroup>
 </Project>
