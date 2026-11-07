@@ -309,7 +309,8 @@ public sealed class ToolingTests
         var method = window[window.IndexOf("private static boolean edgeToEdge(Activity activity)", StringComparison.Ordinal)..];
         method = method[..method.IndexOf("\n    }", StringComparison.Ordinal)];
         StringAssert.Contains(method, "if (webViewMajorVersion(activity) < EDGE_TO_EDGE_WEBVIEW) return false;");
-        Assert.IsFalse(method.Contains("SDK_INT", StringComparison.Ordinal), "The version of Android does not decide whether the WebView reports the bars.");
+        // AwDisplayCutoutController.maybeCreate returns null before Android 9, even with Chromium 136 or later.
+        StringAssert.Contains(method, "if (Build.VERSION.SDK_INT < 28) return false;");
     }
 
     [TestMethod]
@@ -320,6 +321,7 @@ public sealed class ToolingTests
         // bar keeps the color of the theme otherwise.
         var root = FindRepositoryRoot();
         var window = File.ReadAllText(Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", "NeoAstraWindow.java"));
+        StringAssert.Contains(window, "underSystemBars ? WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS : 0");
         StringAssert.Contains(window, "Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 30");
         StringAssert.Contains(window, "underSystemBars && Build.VERSION.SDK_INT >= 26 ? View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0");
     }

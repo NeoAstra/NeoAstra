@@ -51,8 +51,8 @@ public final class NeoAstraWindow {
     private final boolean underSystemBars;
 
     /**
-     * The first major version of the WebView (Chromium 136) that reports the system bars to the page as env(safe-area-inset-*);
-     * earlier versions report only display cutouts there, on every version of Android.
+     * The first major version of the WebView (Chromium 136) that reports the system bars to the page as env(safe-area-inset-*)
+     * on Android 9 and later; earlier WebViews report only display cutouts there.
      */
     static final int EDGE_TO_EDGE_WEBVIEW = 136;
 
@@ -69,8 +69,8 @@ public final class NeoAstraWindow {
         content = new FrameLayout(owner);
         // By default the layout keeps its content clear of the system bars, which Android 15 otherwise draws over an
         // application. With the edge-to-edge opt-in the window draws under them, transparent, and the WebView reports their
-        // size to the page as env(safe-area-inset-*); a WebView before Chromium 136 reports only display cutouts there, so the
-        // window keeps clear of the bars with such a WebView even with the opt-in.
+        // size to the page as env(safe-area-inset-*); before Android 9 or Chromium 136 the WebView does not report the bars,
+        // so the window keeps clear of them even with the opt-in.
         underSystemBars = edgeToEdge(owner);
         content.setFitsSystemWindows(!underSystemBars);
         if (underSystemBars) drawUnderSystemBars(owner);
@@ -113,7 +113,7 @@ public final class NeoAstraWindow {
         boolean light = Color.alpha(color) > 0 && (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) > 160;
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController controller = activity.getWindow().getInsetsController();
-            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | (underSystemBars ? WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS : 0);
             if (controller != null) controller.setSystemBarsAppearance(light ? mask : 0, mask);
         }
         // Android 11 lets the flags of the decor view override the appearance of the controller (Fire OS on Android 11 showed
@@ -184,10 +184,11 @@ public final class NeoAstraWindow {
 
     /**
      * Whether the window draws under the system bars: the application opted into edge-to-edge windows (NeoAstraAndroidEdgeToEdge=true
-     * merges the meta-data) and the WebView reports the bars as env(safe-area-inset-*), which depends on its version, not on the
-     * version of Android.
+     * merges the meta-data) and the WebView reports the bars as env(safe-area-inset-*), which requires Android 9 or later and
+     * Chromium 136 or later.
      */
     private static boolean edgeToEdge(Activity activity) {
+        if (Build.VERSION.SDK_INT < 28) return false;
         if (webViewMajorVersion(activity) < EDGE_TO_EDGE_WEBVIEW) return false;
         try {
             Bundle metaData = activity.getPackageManager().getApplicationInfo(activity.getPackageName(), PackageManager.GET_META_DATA).metaData;
