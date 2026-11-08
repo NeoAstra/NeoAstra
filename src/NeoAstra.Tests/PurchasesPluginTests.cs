@@ -100,6 +100,206 @@ public sealed class PurchasesPluginTests
     }
 
     [TestMethod]
+    public void Wire_ReadsTheBasePlansOfAGooglePlaySubscription()
+    {
+        // One subscription with a monthly and an annual base plan, each with a free trial, and a win-back offer whose
+        // eligibility the developer determines: what the Java service answers.
+        using var products = JsonDocument.Parse("""
+            {"status":"Success","products":[
+              {"id":"premium","type":"Subscription","title":"Premium","description":"Every feature","displayPrice":"€ 2,49","price":"2.49","currency":"EUR","period":"P1M",
+               "offers":[
+                 {"id":"token-monthly","displayPrice":"€ 2,49","period":"P1M","introductory":false,"basePlanId":"monthly"},
+                 {"id":"token-monthly-trial","displayPrice":"Free","period":"P1W","introductory":true,"basePlanId":"monthly","offerId":"free-trial-7d"},
+                 {"id":"token-annual","displayPrice":"€ 19,99","period":"P1Y","introductory":false,"basePlanId":"annual","tags":[]},
+                 {"id":"token-annual-trial","displayPrice":"Free","period":"P1W","introductory":true,"basePlanId":"annual","offerId":"free-trial-7d","tags":["trial"]},
+                 {"id":"token-annual-winback","displayPrice":"€ 9,99","period":"P1Y","introductory":true,"basePlanId":"annual","offerId":"winback-50","tags":["winback",7]}]}]}
+            """);
+        var product = NeoPurchases.Products(products.RootElement).Value!.Single();
+        // The product has the price of its first base plan; each plan has its own in its offers.
+        Assert.AreEqual("P1M", product.SubscriptionPeriod);
+        Assert.AreEqual(5, product.Offers.Count);
+        var annual = product.Offers.Single(static offer => offer.BasePlanId == "annual" && offer.OfferId is null);
+        Assert.AreEqual(new NeoProductOffer("token-annual", "€ 19,99", "P1Y", false) { BasePlanId = "annual" }, annual);
+        // Every offer of a plan has a lower first phase; the offer identifier or the tags tell a trial from a win-back offer.
+        Assert.AreEqual(2, product.Offers.Count(static offer => offer.BasePlanId == "annual" && offer.IsIntroductory));
+        var trial = product.Offers.Single(static offer => offer.BasePlanId == "annual" && offer.OfferId == "free-trial-7d");
+        Assert.AreEqual(new NeoProductOffer("token-annual-trial", "Free", "P1W", true) { BasePlanId = "annual", OfferId = "free-trial-7d", Tags = ["trial"] }, trial);
+        Assert.AreEqual(trial, product.Offers.Single(static offer => offer.Tags.Contains("trial")));
+        CollectionAssert.AreEqual(new[] { "winback" }, product.Offers.Single(static offer => offer.OfferId == "winback-50").Tags.ToArray());
+        Assert.AreNotEqual(trial, trial with { Tags = ["other"] });
+        Assert.AreEqual("token-monthly-trial", product.Offers.Single(static offer => offer.BasePlanId == "monthly" && offer.IsIntroductory).Id);
+
+        // The App Store has no base plans: its introductory offer has neither identifier.
+        using var apple = JsonDocument.Parse("""
+            {"status":"Success","products":[{"id":"premium_annual","type":"Subscription","title":"Premium","description":"","displayPrice":"19,99 €","price":"19.99","currency":"EUR","period":"P1Y",
+              "offers":[{"id":"introductory","displayPrice":"0,00 €","period":"P1W","introductory":true}]}]}
+            """);
+        var yearly = NeoPurchases.Products(apple.RootElement).Value!.Single();
+        var introductory = yearly.Offers.Single();
+        Assert.IsNull(introductory.BasePlanId);
+        Assert.IsNull(introductory.OfferId);
+        Assert.AreEqual(0, introductory.Tags.Count);
+        Assert.IsNull(yearly.SubscriptionGroupId);
+        Assert.IsNull(yearly.SubscriptionGroupLevel);
+        Assert.IsNull(product.SubscriptionGroupId);
+    }
+
+    [TestMethod]
+    public void Wire_ReadsTheSubscriptionGroupsAndTheChangesOfTheAppStore()
+    {
+        // Its plans are the subscriptions of a group, ranked from 1, the highest level of service.
+        using var products = JsonDocument.Parse("""
+            {"status":"Success","products":[
+              {"id":"premium_monthly","type":"Subscription","title":"Premium","description":"","displayPrice":"2,49 €","price":"2.49","currency":"EUR","period":"P1M","group":"21000001","groupLevel":1},
+              {"id":"basic_monthly","type":"Subscription","title":"Basic","description":"","displayPrice":"0,99 €","price":"0.99","currency":"EUR","period":"P1M","group":"21000001","groupLevel":2},
+              {"id":"family_monthly","type":"Subscription","title":"Family","description":"","displayPrice":"4,99 €","price":"4.99","currency":"EUR","period":"P1M","group":"21000001","groupLevel":0}]}
+            """);
+        var plans = NeoPurchases.Products(products.RootElement).Value!;
+        Assert.IsTrue(plans.All(static plan => plan.SubscriptionGroupId == "21000001"));
+        // Before iOS 17 the App Store answers 0 for a level that it does not know, which is no level.
+        Assert.IsNull(plans[2].SubscriptionGroupLevel);
+        Assert.AreEqual("premium_monthly", plans.Where(static plan => plan.SubscriptionGroupLevel is not null).MinBy(static plan => plan.SubscriptionGroupLevel)!.Id);
+
+        // After an upgrade the old subscription is replaced; after a downgrade the current one renews as the lower one.
+        using var list = JsonDocument.Parse("""
+            {"status":"Success","purchases":[
+              {"productId":"basic_monthly","store":"AppStore","state":"Replaced","proof":"jws-1","transactionId":"1","originalTransactionId":"1","purchaseDate":1},
+              {"productId":"premium_monthly","store":"AppStore","state":"Purchased","proof":"jws-2","transactionId":"2","originalTransactionId":"1","purchaseDate":2,"renewalProductId":"basic_monthly"}]}
+            """);
+        var purchases = NeoPurchases.PurchaseList(list.RootElement).Value!;
+        Assert.AreEqual(NeoPurchaseState.Replaced, purchases[0].State);
+        Assert.IsNull(purchases[0].RenewalProductId);
+        Assert.AreEqual(NeoPurchaseState.Purchased, purchases[1].State);
+        Assert.AreEqual("basic_monthly", purchases[1].RenewalProductId);
+
+        // A replaced subscription is not one that a purchase replaces again.
+        Assert.ThrowsExactly<ArgumentException>(() => NeoPurchases.Validate(new("premium_annual", NeoProductType.Subscription), new() { ReplacedPurchase = purchases[0], ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
+    }
+
+    [TestMethod]
+    public async Task Fake_ReplacesTheSubscriptionThatTheUserOwns()
+    {
+        var yearly = Monthly with { Id = "premium_annual", SubscriptionPeriod = "P1Y" };
+        var store = new NeoFakePurchases { Products = [Monthly, yearly] };
+        var request = new NeoProductRequest("premium_monthly", NeoProductType.Subscription);
+        var monthly = (await store.PurchaseAsync(request)).Value!;
+        // A second purchase of an owned subscription conflicts, unless it replaces the first.
+        Assert.AreEqual(NeoDesktopStatus.Conflict, (await store.PurchaseAsync(request)).Status);
+        var stranger = monthly with { Proof = "not-held" };
+        Assert.AreEqual(NeoDesktopStatus.NotFound, (await store.PurchaseAsync(request, new() { ReplacedPurchase = stranger, ReplacementMode = NeoSubscriptionReplacementMode.WithoutProration })).Status);
+        Assert.AreEqual(monthly.Proof, store.Purchases.Single().Proof);
+
+        // Another subscription replaces it with a mode; which modes Google Play takes depends on the kinds of the plans, which it
+        // checks itself, so every defined mode passes here.
+        var annual = await store.PurchaseAsync(new("premium_annual", NeoProductType.Subscription), new() { ReplacedPurchase = monthly, ReplacementMode = NeoSubscriptionReplacementMode.WithTimeProration });
+        Assert.AreEqual(NeoDesktopStatus.Success, annual.Status);
+        Assert.AreEqual(annual.Value, store.Purchases.Single());
+        var again = new NeoProductRequest("premium_annual", NeoProductType.Subscription);
+        var changed = await store.PurchaseAsync(again, new() { ReplacedPurchase = annual.Value, ReplacementMode = NeoSubscriptionReplacementMode.ChargeProratedPrice });
+        Assert.AreEqual(NeoDesktopStatus.Success, changed.Status);
+        Assert.AreNotEqual(annual.Value!.Proof, changed.Value!.Proof);
+
+        // A replacement needs a mode, a subscription, and a purchased subscription with a proof; a JWS of the App Store is long.
+        var owned = changed.Value;
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(again, new() { ReplacedPurchase = owned }));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(new("credits_100", NeoProductType.InApp), new() { ReplacedPurchase = owned, ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(again, new() { ReplacedPurchase = owned with { Proof = "" }, ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(again, new() { ReplacedPurchase = owned with { State = NeoPurchaseState.Pending }, ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(again, new() { ReplacedPurchase = owned, ReplacementMode = (NeoSubscriptionReplacementMode)9 }));
+        // A mode without the purchase that it replaces would be dropped without a word.
+        await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(again, new() { ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
+        Assert.AreEqual(NeoDesktopStatus.Success, (await store.PurchaseAsync(again, new() { ReplacedPurchase = owned, ReplacementMode = NeoSubscriptionReplacementMode.WithoutProration })).Status);
+        var jws = owned with { Proof = new string('j', 8000), Store = NeoPurchaseStore.AppStore };
+        Assert.AreEqual(NeoDesktopStatus.NotFound, (await store.PurchaseAsync(again, new() { ReplacedPurchase = jws, ReplacementMode = NeoSubscriptionReplacementMode.WithoutProration })).Status);
+
+        // A deferred replacement issues the new purchase at once, with the old product until the next renewal.
+        var current = store.Purchases.Single();
+        var downgrade = await store.PurchaseAsync(request, new() { ReplacedPurchase = current, ReplacementMode = NeoSubscriptionReplacementMode.Deferred });
+        Assert.AreEqual(NeoDesktopStatus.Success, downgrade.Status);
+        Assert.AreEqual("premium_annual", downgrade.Value!.ProductId);
+        Assert.AreEqual("premium_monthly", downgrade.Value.RenewalProductId);
+        Assert.AreNotEqual(current.Proof, downgrade.Value.Proof);
+        Assert.AreEqual(downgrade.Value, store.Purchases.Single());
+    }
+
+    [TestMethod]
+    public async Task Fake_KeepsTheCurrentBasePlanUntilADeferredReplacementTakesPlace()
+    {
+        var premium = new NeoProduct("premium", NeoProductType.Subscription, "Premium", "", "€ 2,49", 2.49m, "EUR")
+        {
+            Offers = [new("token-yearly", "€ 19,99", "P1Y", false) { BasePlanId = "yearly" }, new("token-monthly", "€ 2,49", "P1M", false) { BasePlanId = "monthly" }],
+        };
+        var basic = new NeoProduct("basic", NeoProductType.Subscription, "Basic", "", "€ 0,99", 0.99m, "EUR") { Offers = [new("token-basic", "€ 0,99", "P1M", false) { BasePlanId = "monthly" }] };
+        var store = new NeoFakePurchases { Products = [premium, basic] };
+        var yearly = (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-yearly" })).Value!;
+        var deferred = (await store.PurchaseAsync(new("basic", NeoProductType.Subscription), new() { OfferId = "token-basic", ReplacedPurchase = yearly, ReplacementMode = NeoSubscriptionReplacementMode.Deferred })).Value!;
+        Assert.AreEqual("premium", deferred.ProductId);
+        Assert.AreEqual("basic", deferred.RenewalProductId);
+
+        // The purchase still holds the yearly plan of premium: the same plan is owned, the monthly one changes the plan.
+        Assert.AreEqual(NeoDesktopStatus.Conflict, (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-yearly" })).Status);
+        var monthly = (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-monthly" })).Value!;
+
+        // Within one subscription as well, as Google Play does for installment base plans, a deferred replacement keeps the
+        // current base plan until the renewal; the fake does not tell kinds of base plans apart.
+        var within = (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-yearly", ReplacedPurchase = monthly, ReplacementMode = NeoSubscriptionReplacementMode.Deferred })).Value!;
+        Assert.AreEqual("premium", within.ProductId);
+        Assert.IsNull(within.RenewalProductId);
+        Assert.AreEqual(NeoDesktopStatus.Conflict, (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-monthly" })).Status);
+        Assert.AreEqual(NeoDesktopStatus.Success, (await store.PurchaseAsync(new("premium", NeoProductType.Subscription), new() { OfferId = "token-yearly" })).Status);
+    }
+
+    [TestMethod]
+    public void Wire_ReadsADeferredReplacementOfGooglePlay()
+    {
+        // The new purchase token stays with the old product until the renewal; the answer of the purchase names the new one.
+        using var answer = JsonDocument.Parse("""
+            {"status":"Success","purchase":{"productId":"premium_annual","store":"GooglePlay","state":"Purchased","proof":"new-token","purchaseDate":1,"finished":false,"renewalProductId":"basic_annual"}}
+            """);
+        var purchase = NeoPurchases.Purchase(answer.RootElement).Value!;
+        Assert.AreEqual("premium_annual", purchase.ProductId);
+        Assert.AreEqual("basic_annual", purchase.RenewalProductId);
+        Assert.AreEqual("new-token", purchase.Proof);
+        Assert.IsFalse(purchase.IsFinished);
+    }
+
+    [TestMethod]
+    public async Task Renderer_ShowsTheBasePlansAndChangesThePlan()
+    {
+        var premium = new NeoProduct("premium", NeoProductType.Subscription, "Premium", "Every feature", "€ 2,49", 2.49m, "EUR")
+        {
+            SubscriptionPeriod = "P1M",
+            Offers = [new("token-monthly", "€ 2,49", "P1M", false) { BasePlanId = "monthly" }, new("token-annual-trial", "Free", "P1W", true) { BasePlanId = "annual", OfferId = "free-trial-7d", Tags = ["trial"] }],
+        };
+        var store = new NeoFakePurchases { Products = [premium] };
+        await using var session = Session(store, ["purchases:read", "purchases:buy"], out var frames);
+        var offers = (await InvokeAsync(session, frames, "1", "purchases.products", """{"products":[{"id":"premium","type":"Subscription"}]}""")).GetProperty("value")[0].GetProperty("offers");
+        Assert.AreEqual("monthly", offers[0].GetProperty("basePlanId").GetString());
+        Assert.AreEqual(JsonValueKind.Null, offers[0].GetProperty("offerId").ValueKind);
+        Assert.AreEqual("annual", offers[1].GetProperty("basePlanId").GetString());
+        Assert.AreEqual("free-trial-7d", offers[1].GetProperty("offerId").GetString());
+        Assert.AreEqual("trial", offers[1].GetProperty("tags")[0].GetString());
+
+        // A subscription of several base plans is not bought without the offer of the plan that the user chose.
+        var unnamed = await InvokeAsync(session, frames, "2", "purchases.purchase", """{"id":"premium","type":"Subscription"}""");
+        Assert.AreEqual("NotFound", unnamed.GetProperty("status").GetString());
+        Assert.AreEqual(NeoPurchases.OfferRequiredCode, unnamed.GetProperty("code").GetString());
+
+        // The same base plan again is owned; another base plan of the same subscription changes the plan, as Google Play does with
+        // the default replacement mode of the Play Console, and a replacement with a mode overrides that default.
+        var monthly = (await InvokeAsync(session, frames, "3", "purchases.purchase", """{"id":"premium","type":"Subscription","offerId":"token-monthly"}""")).GetProperty("value");
+        Assert.AreEqual("Conflict", (await InvokeAsync(session, frames, "4", "purchases.purchase", """{"id":"premium","type":"Subscription","offerId":"token-monthly"}""")).GetProperty("status").GetString());
+        var annual = (await InvokeAsync(session, frames, "5", "purchases.purchase", """{"id":"premium","type":"Subscription","offerId":"token-annual-trial"}""")).GetProperty("value");
+        Assert.AreEqual(annual.GetProperty("proof").GetString(), store.Purchases.Single().Proof);
+        Assert.AreEqual("purchases_invalid", await ErrorAsync(session, frames, "6", "purchases.purchase", $$$"""{"id":"premium","type":"Subscription","offerId":"token-monthly","replacedPurchase":{{{annual.GetRawText()}}}}"""));
+        var changed = await InvokeAsync(session, frames, "7", "purchases.purchase", $$$"""{"id":"premium","type":"Subscription","offerId":"token-monthly","replacedPurchase":{{{annual.GetRawText()}}},"replacementMode":"WithoutProration"}""");
+        Assert.AreEqual("Success", changed.GetProperty("status").GetString());
+        Assert.AreEqual(changed.GetProperty("value").GetProperty("proof").GetString(), store.Purchases.Single().Proof);
+        Assert.AreEqual("NotFound", (await InvokeAsync(session, frames, "8", "purchases.purchase", $$$"""{"id":"premium","type":"Subscription","offerId":"token-annual-trial","replacedPurchase":{{{monthly.GetRawText()}}},"replacementMode":"ChargeFullPrice"}""")).GetProperty("status").GetString());
+        Assert.AreEqual("purchases_invalid", await ErrorAsync(session, frames, "9", "purchases.purchase", $$$"""{"id":"premium","type":"InApp","replacedPurchase":{{{monthly.GetRawText()}}},"replacementMode":"ChargeFullPrice"}"""));
+    }
+
+    [TestMethod]
     public async Task Renderer_SellsAndFinishesWithTheGrantedPermissions()
     {
         var store = new NeoFakePurchases { Products = [Credits, Monthly] };
@@ -151,6 +351,9 @@ public sealed class PurchasesPluginTests
         await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(new("credits_100", (NeoProductType)9)));
         await Assert.ThrowsAsync<ArgumentException>(async () => await store.PurchaseAsync(new("credits_100", NeoProductType.Subscription), new() { OfferId = "" }));
         Assert.AreEqual(NeoSupportLevel.Native, new AndroidPurchases(null).Support.SupportLevel);
+        // Google Play replaces only a purchase of its own, which the adapter checks before it reaches the Java service.
+        var appStore = new NeoPurchase("premium_monthly", NeoPurchaseStore.AppStore, NeoPurchaseState.Purchased, "jws", DateTimeOffset.UtcNow);
+        await Assert.ThrowsAsync<ArgumentException>(async () => await new AndroidPurchases(null).PurchaseAsync(new("premium_annual", NeoProductType.Subscription), new() { ReplacedPurchase = appStore, ReplacementMode = NeoSubscriptionReplacementMode.ChargeFullPrice }));
         // A desktop backend has no platform services to reach the Java service with.
         DesktopPlatformCall.AssertNotSupported(() => AndroidPurchases.Call("list", null));
     }

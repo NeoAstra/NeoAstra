@@ -56,10 +56,10 @@ internal sealed partial class IosPurchases : INeoPurchases, INeoPurchasesDispatc
 
     public async ValueTask<NeoDesktopResult<NeoPurchase>> PurchaseAsync(NeoProductRequest product, NeoPurchaseOptions? options = null, CancellationToken cancellationToken = default)
     {
-        NeoPurchases.Validate(product);
-        NeoPurchases.Validate(options);
+        NeoPurchases.Validate(product, options);
         var account = options?.AccountToken;
-        // The App Store applies the introductory offer that the user is eligible for by itself.
+        // The App Store applies the introductory offer that the user is eligible for by itself, and replaces a subscription of
+        // the same subscription group by itself.
         using var response = await CallAsync("purchase", writer =>
         {
             writer.WriteString("id", product.Id);

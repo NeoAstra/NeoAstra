@@ -25,7 +25,7 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
     }
 
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0,
-        "The Play Billing Library: products, purchases with offers, acknowledgement and consumption, and the purchases that Google Play completes outside a request (Xamarin.Android.Google.BillingClient).");
+        "The Play Billing Library: products with their base plans and offers, purchases with offers and plan changes, acknowledgement and consumption, and the purchases that Google Play completes outside a request (Xamarin.Android.Google.BillingClient).");
 
     public event EventHandler<NeoPurchase>? PurchaseUpdated;
 
@@ -50,16 +50,28 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
 
     public ValueTask<NeoDesktopResult<NeoPurchase>> PurchaseAsync(NeoProductRequest product, NeoPurchaseOptions? options = null, CancellationToken cancellationToken = default)
     {
-        NeoPurchases.Validate(product);
-        NeoPurchases.Validate(options);
+        NeoPurchases.Validate(product, options);
         var offer = options?.OfferId;
-        var account = options?.AccountToken;
+        var replaced = options?.ReplacedPurchase;
+        // Google Play asks for the account of the replaced subscription with a change of plan.
+        var account = options?.AccountToken ?? replaced?.AccountToken;
+        var mode = options?.ReplacementMode;
+        if (replaced is not null && replaced.Store != NeoPurchaseStore.GooglePlay) throw new ArgumentException("Google Play replaces only a purchase of Google Play.", nameof(options));
         return Run(() => Read("purchase", writer =>
         {
             writer.WriteString("id", product.Id);
             writer.WriteString("type", product.Type.ToString());
             if (offer is not null) writer.WriteString("offer", offer);
             if (account is { } token) writer.WriteString("accountToken", token.ToString());
+            if (replaced is not null)
+            {
+                writer.WriteStartObject("replaced");
+                writer.WriteString("productId", replaced.ProductId);
+                writer.WriteString("token", replaced.Proof);
+                // Validate requires a mode with a replacement.
+                writer.WriteString("mode", mode.GetValueOrDefault().ToString());
+                writer.WriteEndObject();
+            }
         }, NeoPurchases.Purchase), cancellationToken);
     }
 
