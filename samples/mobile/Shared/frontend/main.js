@@ -128,15 +128,33 @@ card("Passkeys", (row, run) => {
 card("Purchases", (row, run) => {
   const id = input(row, localStorage.getItem("purchases.id") ?? "");
   id.placeholder = "product identifier";
-  id.onchange = () => localStorage.setItem("purchases.id", id.value);
+  id.onchange = () => { localStorage.setItem("purchases.id", id.value); clearOffers(); };
   const type = document.createElement("select");
   type.innerHTML = `<option>InApp</option><option>Subscription</option>`;
   type.value = localStorage.getItem("purchases.type") ?? "InApp";
-  type.onchange = () => localStorage.setItem("purchases.type", type.value);
+  type.onchange = () => { localStorage.setItem("purchases.type", type.value); clearOffers(); };
   row.append(type);
+  // A subscription of several base plans of Google Play is bought with the offer of one of them, which Load lists for the
+  // product and kind that it loaded; another product or kind clears them.
+  const offer = document.createElement("select");
+  function clearOffers() { offer.innerHTML = `<option value="">default offer</option>`; }
+  clearOffers();
+  row.append(offer);
   let last;
-  button(row, "Load", () => run(() => invoke("purchases.products", { products: [{ id: id.value, type: type.value }] })));
-  button(row, "Buy", () => run(async () => { const result = await invoke("purchases.purchase", { id: id.value, type: type.value }); last = result.value ?? last; return result; }));
+  button(row, "Load", () => run(async () => {
+    const product = { id: id.value, type: type.value };
+    const result = await invoke("purchases.products", { products: [product] });
+    if (id.value !== product.id || type.value !== product.type) return result;
+    clearOffers();
+    for (const item of result.value?.[0]?.offers ?? []) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = [item.basePlanId, item.offerId ?? (item.basePlanId ? "base plan" : "introductory"), item.displayPrice].filter(Boolean).join(" · ");
+      offer.append(option);
+    }
+    return result;
+  }));
+  button(row, "Buy", () => run(async () => { const result = await invoke("purchases.purchase", { id: id.value, type: type.value, ...(offer.value ? { offerId: offer.value } : {}) }); last = result.value ?? last; return result; }));
   button(row, "Owned", () => run(async () => { const result = await invoke("purchases.list", {}); last = result.value?.[0] ?? last; return result; }));
   button(row, "Restore", () => run(() => invoke("purchases.restore", {})));
   button(row, "Finish", () => run(() => last ? invoke("purchases.finish", { purchase: last, consume: type.value === "InApp" }) : { status: "NotFound" }));

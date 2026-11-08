@@ -136,7 +136,8 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
             if (offer != null) price(value, offer.getFormattedPrice(), offer.getPriceAmountMicros(), offer.getPriceCurrencyCode());
             return value;
         }
-        // The base plan is the offer without an offer ID; its last phase is the price that the subscription renews at.
+        // The offer of a base plan is the one without an offer ID, and its last phase is the price that the plan renews at; the
+        // product takes the price of the first base plan, and each offer says its base plan, so that every plan has its price.
         JSONArray offers = new JSONArray();
         List<ProductDetails.SubscriptionOfferDetails> details = product.getSubscriptionOfferDetails();
         boolean priced = false;
@@ -149,7 +150,10 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
                 value.put("period", last.getBillingPeriod());
                 priced = true;
             }
-            offers.put(new JSONObject().put("id", offer.getOfferToken()).put("displayPrice", first.getFormattedPrice()).put("period", first.getBillingPeriod()).put("introductory", offer.getOfferId() != null));
+            // An offer of a base plan, such as a trial or a win-back offer, has phases before the price that the plan renews at; the
+            // offer of the base plan itself has one. Google Play lists an offer whose eligibility the developer determines to everyone.
+            offers.put(new JSONObject().put("id", offer.getOfferToken()).put("displayPrice", first.getFormattedPrice()).put("period", first.getBillingPeriod()).put("introductory", phases.size() > 1)
+                .put("basePlanId", offer.getBasePlanId()).put("offerId", offer.getOfferId()).put("tags", new JSONArray(offer.getOfferTags())));
         }
         return value.put("offers", offers);
     }
@@ -169,11 +173,26 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
         if ("Subscription".equals(type)) {
             String offer = input.optString("offer", "");
             List<ProductDetails.SubscriptionOfferDetails> offers = product.getSubscriptionOfferDetails();
-            if (offer.isEmpty() && offers != null && !offers.isEmpty()) offer = offers.get(0).getOfferToken();
+            if (offer.isEmpty() && offers != null && !offers.isEmpty()) {
+                // The first offer of one of several base plans may be another plan than the one that the application shows.
+                java.util.Set<String> plans = new java.util.HashSet<>();
+                for (ProductDetails.SubscriptionOfferDetails each : offers) plans.add(each.getBasePlanId());
+                if (plans.size() > 1) { output.put("status", "NotFound").put("code", "offer-required"); return; }
+                offer = offers.get(0).getOfferToken();
+            }
+            // Google Play tells a user who is no longer eligible for the offer, and lets the user buy the base plan instead.
             if (offer.isEmpty()) { output.put("status", "NotFound").put("code", "unknown-product"); return; }
             item.setOfferToken(offer);
         }
+        // A replacement names the subscription that the user owns: it overrides the default replacement mode of the Play Console
+        // for another base plan of the same subscription, and a change from another subscription needs it.
+        JSONObject replaced = input.optJSONObject("replaced");
+        if (replaced != null) {
+            item.setSubscriptionProductReplacementParams(BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.newBuilder()
+                .setOldProductId(replaced.getString("productId")).setReplacementMode(replacementMode(replaced.optString("mode"))).build());
+        }
         BillingFlowParams.Builder parameters = BillingFlowParams.newBuilder().setProductDetailsParamsList(Collections.singletonList(item.build()));
+        if (replaced != null) parameters.setSubscriptionUpdateParams(BillingFlowParams.SubscriptionUpdateParams.newBuilder().setOldPurchaseToken(replaced.getString("token")).build());
         String account = input.optString("accountToken", "");
         if (!account.isEmpty()) parameters.setObfuscatedAccountId(account);
         Activity activity = resumed.get();
@@ -195,8 +214,18 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
             BillingResult result = (BillingResult) answer.get()[0];
             @SuppressWarnings("unchecked") List<Purchase> purchases = (List<Purchase>) answer.get()[1];
             if (result.getResponseCode() != BillingClient.BillingResponseCode.OK) { failure(result, output); return; }
-            for (Purchase purchase : purchases == null ? Collections.<Purchase>emptyList() : purchases) {
+            // A replacement answers with a new purchase token; the replaced purchase is not the answer of this purchase.
+            String old = replaced == null ? null : replaced.getString("token");
+            List<Purchase> bought = new ArrayList<>();
+            for (Purchase purchase : purchases == null ? Collections.<Purchase>emptyList() : purchases) if (!purchase.getPurchaseToken().equals(old)) bought.add(purchase);
+            for (Purchase purchase : bought) {
                 if (purchase.getProducts().contains(product.getProductId())) { output.put("status", "Success").put("purchase", purchase(purchase)); return; }
+            }
+            // The new purchase of a deferred replacement stays with the old product until the next renewal, when the new one starts.
+            if (replaced != null && "Deferred".equals(replaced.optString("mode"))) {
+                for (Purchase purchase : bought) {
+                    if (purchase.getProducts().contains(replaced.getString("productId"))) { output.put("status", "Success").put("purchase", purchase(purchase).put("renewalProductId", product.getProductId())); return; }
+                }
             }
             output.put("status", "Failed");
         } finally {
@@ -219,7 +248,8 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
         output.put("status", "Success").put("purchases", found);
     }
 
-    // Consuming acknowledges as well; a purchase that is not acknowledged within three days is refunded by Google Play.
+    // Consuming acknowledges as well; a purchase that is not acknowledged within three days, or within half the duration of a
+    // prepaid plan shorter than a week, is refunded by Google Play.
     private static void finish(BillingClient billing, JSONObject input, JSONObject output) throws Exception {
         String token = input.getString("token");
         CountDownLatch answered = new CountDownLatch(1);
@@ -252,6 +282,16 @@ public final class NeoAstraPurchases implements NeoAstraServices.Service {
             case BillingClient.BillingResponseCode.NETWORK_ERROR:
             case BillingClient.BillingResponseCode.SERVICE_UNAVAILABLE: output.put("status", "Failed").put("code", "network"); return;
             default: output.put("status", "Failed").put("code", "billing-" + result.getResponseCode());
+        }
+    }
+
+    private static int replacementMode(String mode) {
+        switch (mode) {
+            case "ChargeProratedPrice": return BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.ReplacementMode.CHARGE_PRORATED_PRICE;
+            case "WithoutProration": return BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.ReplacementMode.WITHOUT_PRORATION;
+            case "ChargeFullPrice": return BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.ReplacementMode.CHARGE_FULL_PRICE;
+            case "Deferred": return BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.ReplacementMode.DEFERRED;
+            default: return BillingFlowParams.ProductDetailsParams.SubscriptionProductReplacementParams.ReplacementMode.WITH_TIME_PRORATION;
         }
     }
 

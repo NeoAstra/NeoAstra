@@ -173,7 +173,7 @@ internal sealed class PurchasesRendererRegistration(INeoPurchases purchases)
     private async ValueTask<PurchasesPurchaseResult> PurchaseAsync(PurchasesPurchaseRequest request, NeoRpcContext context, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var result = await Guard(() => purchases.PurchaseAsync(new(request.Id, request.Type), new NeoPurchaseOptions { OfferId = request.OfferId, AccountToken = request.AccountToken }, token)).ConfigureAwait(false);
+        var result = await Guard(() => purchases.PurchaseAsync(new(request.Id, request.Type), new NeoPurchaseOptions { OfferId = request.OfferId, AccountToken = request.AccountToken, ReplacedPurchase = request.ReplacedPurchase, ReplacementMode = request.ReplacementMode }, token)).ConfigureAwait(false);
         return new(result.Status, result.Value, result.Code);
     }
 
@@ -194,7 +194,7 @@ internal sealed class PurchasesRendererRegistration(INeoPurchases purchases)
 internal sealed record PurchasesEmptyRequest;
 internal sealed record PurchasesProductsRequest(IReadOnlyList<NeoProductRequest>? Products);
 internal sealed record PurchasesProductsResult(NeoDesktopStatus Status, IReadOnlyList<NeoProduct>? Value, string? Code);
-internal sealed record PurchasesPurchaseRequest(string Id, NeoProductType Type, string? OfferId = null, Guid? AccountToken = null);
+internal sealed record PurchasesPurchaseRequest(string Id, NeoProductType Type, string? OfferId = null, Guid? AccountToken = null, NeoPurchase? ReplacedPurchase = null, NeoSubscriptionReplacementMode? ReplacementMode = null);
 internal sealed record PurchasesPurchaseResult(NeoDesktopStatus Status, NeoPurchase? Value, string? Code);
 internal sealed record PurchasesListResult(NeoDesktopStatus Status, IReadOnlyList<NeoPurchase>? Value, string? Code);
 internal sealed record PurchasesFinishRequest(NeoPurchase? Purchase, bool Consume = false);

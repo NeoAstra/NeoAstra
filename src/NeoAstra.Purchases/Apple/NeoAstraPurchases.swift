@@ -38,7 +38,7 @@ public func neoastraPurchasesListen(_ callback: NeoAstraPurchasesCallback, _ con
     let reply = Context(callback: callback, value: context)
     Task.detached {
         for await update in Transaction.updates {
-            reply.answer(["status": "Success", "purchase": purchase(update)])
+            reply.answer(["status": "Success", "purchase": await purchase(update)])
         }
     }
 }
@@ -90,6 +90,9 @@ private func products(_ input: [String: Any]) async throws -> [String: Any] {
         ]
         if let subscription = product.subscription {
             value["period"] = period(subscription.subscriptionPeriod)
+            value["group"] = subscription.subscriptionGroupID
+            // Before iOS 17 the App Store answers 0 for a level that it does not know.
+            if #available(iOS 16.4, *), subscription.groupLevel > 0 { value["groupLevel"] = subscription.groupLevel }
             if let offer = subscription.introductoryOffer, await subscription.isEligibleForIntroOffer {
                 value["offers"] = [["id": "introductory", "displayPrice": offer.displayPrice, "period": period(offer.period), "introductory": true]]
             }
@@ -106,7 +109,7 @@ private func buy(_ input: [String: Any]) async throws -> [String: Any] {
     if let account = (input["accountToken"] as? String).flatMap(UUID.init(uuidString:)) { options.insert(.appAccountToken(account)) }
     switch try await product.purchase(options: options) {
     case .success(let verification):
-        return ["status": "Success", "purchase": purchase(verification)]
+        return ["status": "Success", "purchase": await purchase(verification)]
     case .pending:
         return ["status": "Success", "purchase": ["productId": id, "store": "AppStore", "state": "Pending", "proof": "", "purchaseDate": Int64(Date().timeIntervalSince1970 * 1000)]]
     case .userCancelled:
@@ -121,8 +124,9 @@ private func entitlements() async -> [[String: Any]] {
     var unfinished = Set<UInt64>()
     for await transaction in Transaction.unfinished { unfinished.insert(transaction.unsafePayloadValue.id) }
     var output: [[String: Any]] = []
+    let statuses = Statuses()
     for await entitlement in Transaction.currentEntitlements {
-        var value = purchase(entitlement)
+        var value = await purchase(entitlement, statuses)
         if case .verified(let transaction) = entitlement { value["finished"] = !unfinished.contains(transaction.id) }
         output.append(value)
     }
@@ -141,12 +145,13 @@ private func finish(_ input: [String: Any]) async -> [String: Any] {
 }
 
 // A transaction with the JWS representation that the server verifies; an unverified one keeps its JWS too, so that the server
-// sees why it failed, and is never reported as finished.
-private func purchase(_ verification: VerificationResult<Transaction>) -> [String: Any] {
+// sees why it failed, and is never reported as finished. A subscription that a higher level of its group replaced is no longer
+// the one that the user has.
+private func purchase(_ verification: VerificationResult<Transaction>, _ statuses: Statuses = Statuses()) async -> [String: Any] {
     let transaction = verification.unsafePayloadValue
     var value: [String: Any] = [
         "productId": transaction.productID, "store": "AppStore",
-        "state": transaction.revocationDate == nil ? "Purchased" : "Revoked",
+        "state": transaction.revocationDate != nil ? "Revoked" : transaction.isUpgraded ? "Replaced" : "Purchased",
         "proof": verification.jwsRepresentation,
         "transactionId": String(transaction.id), "originalTransactionId": String(transaction.originalID),
         "purchaseDate": Int64(transaction.purchaseDate.timeIntervalSince1970 * 1000),
@@ -154,7 +159,25 @@ private func purchase(_ verification: VerificationResult<Transaction>) -> [Strin
     ]
     if let expiration = transaction.expirationDate { value["expirationDate"] = Int64(expiration.timeIntervalSince1970 * 1000) }
     if let account = transaction.appAccountToken { value["accountToken"] = account.uuidString }
+    if transaction.revocationDate == nil, !transaction.isUpgraded, let renewal = await statuses.renewalProduct(transaction) { value["renewalProductId"] = renewal }
     return value
+}
+
+// The statuses of the subscription groups, asked once per group for the purchases of one answer.
+private final class Statuses {
+    private var groups: [String: [Product.SubscriptionInfo.Status]] = [:]
+
+    // The product that a subscription renews as, when the user changed it for the next renewal, such as with a downgrade; nil
+    // when the App Store does not tell it. A group has a status per subscription that the user has, through Family Sharing too.
+    func renewalProduct(_ transaction: Transaction) async -> String? {
+        guard let group = transaction.subscriptionGroupID else { return nil }
+        if groups[group] == nil { groups[group] = (try? await Product.SubscriptionInfo.status(for: group)) ?? [] }
+        for status in groups[group] ?? [] where status.transaction.unsafePayloadValue.originalID == transaction.originalID {
+            guard case .verified(let renewal) = status.renewalInfo, let preference = renewal.autoRenewPreference, preference != transaction.productID else { return nil }
+            return preference
+        }
+        return nil
+    }
 }
 
 private func period(_ period: Product.SubscriptionPeriod) -> String {
