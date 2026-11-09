@@ -21,7 +21,12 @@ namespace NeoAstra.Passkeys;
 /// </remarks>
 public interface INeoPasskeys
 {
-    /// <summary>Gets truthful platform support.</summary>
+    /// <summary>Gets truthful support of this device.</summary>
+    /// <remarks>
+    /// On Android it is read at each access and is <see cref="NeoSupportLevel.None"/> on a device without a provider for the
+    /// Credential Manager, such as one without Google Play services before Android 14, so that an application asks it before it
+    /// offers passkeys.
+    /// </remarks>
     NeoCapabilityInfo Support { get; }
 
     /// <summary>Creates a passkey for the relying party and the user of the options.</summary>
@@ -31,7 +36,7 @@ public interface INeoPasskeys
     /// The registration response as JSON; <see cref="NeoDesktopStatus.Canceled"/> when the user closes the sheet;
     /// <see cref="NeoDesktopStatus.Conflict"/> with the code <c>excluded</c> when the device already has a passkey that the
     /// options exclude; <see cref="NeoDesktopStatus.Denied"/> with the code <c>not-associated</c> when the application is
-    /// not associated with the relying party; <see cref="NeoDesktopStatus.Unsupported"/> on a platform without passkeys.
+    /// not associated with the relying party; <see cref="NeoDesktopStatus.Unsupported"/> on a platform or a device without passkeys.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="options"/> are not creation options.</exception>
@@ -44,7 +49,7 @@ public interface INeoPasskeys
     /// The authentication response as JSON; <see cref="NeoDesktopStatus.Canceled"/> when the user closes the sheet;
     /// <see cref="NeoDesktopStatus.NotFound"/> with the code <c>no-credential</c> when the device has no passkey for the
     /// options; <see cref="NeoDesktopStatus.Denied"/> with the code <c>not-associated</c> when the application is not
-    /// associated with the relying party; <see cref="NeoDesktopStatus.Unsupported"/> on a platform without passkeys.
+    /// associated with the relying party; <see cref="NeoDesktopStatus.Unsupported"/> on a platform or a device without passkeys.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="options"/> are not request options.</exception>
