@@ -9,9 +9,9 @@ namespace NeoAstra.Passkeys;
 
 // The Credential Manager of Android through the Java service `neoastra.passkeys` of this package, which the platform services of
 // NeoAstra reach. Java blocks until the user answers the sheet, so every call leaves the calling thread. The Java side is there
-// only when the application references the Credential Manager. The support is the one of the device, read at each access: the
-// Credential Manager needs a provider, the credential service of Android 14 and later or Google Play services, which a Fire tablet
-// or another Android without them lacks.
+// only when the application references the Credential Manager. The support is the one of the device, read at each access:
+// passkeys require Android 9 (API 28) or later and a provider, the credential service of Android 14 and later or Google Play
+// services, which a Fire tablet or another Android without them lacks.
 internal sealed class AndroidPasskeys : INeoPasskeys
 {
     internal const string Service = "neoastra.passkeys";
@@ -40,7 +40,7 @@ internal sealed class AndroidPasskeys : INeoPasskeys
             var provider = root.TryGetProperty("provider", out var name) && name.ValueKind == JsonValueKind.String ? name.GetString() : null;
             return provider switch
             {
-                null => new(NeoSupportLevel.None, 1, 0, "This device has no provider for the Credential Manager: no credential service of Android 14 or later and no Google Play services (Xamarin.AndroidX.Credentials.PlayServicesAuth)."),
+                null => new(NeoSupportLevel.None, 1, 0, "Passkeys require Android 9 (API 28) or later and a provider for the Credential Manager: the credential service of Android 14 or later or Google Play services (Xamarin.AndroidX.Credentials.PlayServicesAuth)."),
                 "system" => new(NeoSupportLevel.Native, 1, 0, "The Credential Manager of Android with the credential service of Android and the passkeys of the password manager of the user (assetlinks.json of the relying party)."),
                 _ => new(NeoSupportLevel.Native, 1, 0, $"The Credential Manager of Android with the provider {provider} and the passkeys of the password manager of the user (assetlinks.json of the relying party)."),
             };

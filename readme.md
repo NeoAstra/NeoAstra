@@ -18,7 +18,7 @@ It bundles no browser engine, connects .NET and JavaScript with typed RPC, and i
 - **Your choice of frontend**: plain HTML/JavaScript, React, Vue, or another web framework.
 - **Typed .NET ↔ JavaScript RPC** with generated bindings, events, and streaming.
 - **One application for desktop and mobile**: the same frontend, RPC services, and capability document on every platform; `NeoApp.Run` runs a desktop application, and `NeoApp.AttachAsync` attaches an iOS or Android one to the run loop of the platform.
-- **Native integration**: windows, menus, dialogs, clipboard, notifications (also scheduled), safe storage, and haptics on phones, with plugins for location, push messages, passkeys, and in-app purchases on iOS and Android.
+- **Native integration**: windows, menus, dialogs, clipboard, notifications (also scheduled), safe storage, and haptics on phones, with plugins for location, push messages, passkeys, and in-app purchases on iOS and Android. Android passkeys require Android 9 (API 28) or later and an available Credential Manager provider.
 - **Capability-based security**: the page reaches only the commands that a capability document grants it, with scopes and per-platform selectors.
 - **Chromeless desktop windows**: web-rendered title bars that keep the native frame, snapping, and window controls.
 - **Controlled local assets** without a localhost server, with explicit security boundaries.

@@ -23,9 +23,9 @@ public interface INeoPasskeys
 {
     /// <summary>Gets truthful support of this device.</summary>
     /// <remarks>
-    /// On Android it is read at each access and is <see cref="NeoSupportLevel.None"/> on a device without a provider for the
-    /// Credential Manager, such as one without Google Play services before Android 14, so that an application asks it before it
-    /// offers passkeys.
+    /// On Android it is read at each access and is <see cref="NeoSupportLevel.None"/> before Android 9 (API 28) or on a device
+    /// without a provider for the Credential Manager, such as one without Google Play services before Android 14, so that an
+    /// application asks it before it offers passkeys.
     /// </remarks>
     NeoCapabilityInfo Support { get; }
 

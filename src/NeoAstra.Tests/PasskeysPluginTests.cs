@@ -130,7 +130,8 @@ public sealed class PasskeysPluginTests
         StringAssert.Contains(playServices.Details, "androidx.credentials.playservices.CredentialProviderPlayServicesImpl");
         var none = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Success"}"""));
         Assert.AreEqual(NeoSupportLevel.None, none.SupportLevel);
-        StringAssert.Contains(none.Details, "no provider");
+        StringAssert.Contains(none.Details, "Android 9 (API 28)");
+        StringAssert.Contains(none.Details, "provider");
         // Without the Credential Manager the application builds without the Java service, which the platform services do not know.
         var missing = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Unsupported"}"""));
         Assert.AreEqual(NeoSupportLevel.None, missing.SupportLevel);
@@ -150,8 +151,13 @@ public sealed class PasskeysPluginTests
         StringAssert.Contains(java, "\"android.hardware.type.automotive\"");
         StringAssert.Contains(java, "\"androidx.credentials.CREDENTIAL_PROVIDER_KEY\"");
         StringAssert.Contains(java, "((CredentialProvider) instance).isAvailableOnDevice()");
-        StringAssert.Contains(java, "if (provider(activity) == null) { output.put(\"status\", \"Unsupported\"); return; }");
-        // The support needs neither an activity nor a wait, so it is answered before both are checked.
+        StringAssert.Contains(java, "NeoAstraPasskeysSupport.provider(Build.VERSION.SDK_INT, systemProvider, () -> availableDeclaredProvider(context))");
+        const string unsupported = "if (provider(context) == null) { output.put(\"status\", \"Unsupported\"); return; }";
+        StringAssert.Contains(java, unsupported);
+        // Unsupported create/get requests, like support reads, need neither an activity nor options nor a wait.
+        Assert.IsTrue(java.IndexOf(unsupported, StringComparison.Ordinal) < java.IndexOf("A passkey cannot wait on the main thread.", StringComparison.Ordinal));
+        Assert.IsTrue(java.IndexOf(unsupported, StringComparison.Ordinal) < java.IndexOf("Activity activity = resumed.get()", StringComparison.Ordinal));
+        Assert.IsTrue(java.IndexOf(unsupported, StringComparison.Ordinal) < java.IndexOf("input.getString(\"options\")", StringComparison.Ordinal));
         Assert.IsTrue(java.IndexOf("\"support\".equals(operation)", StringComparison.Ordinal) < java.IndexOf("A passkey cannot wait on the main thread.", StringComparison.Ordinal));
     }
 
@@ -170,6 +176,7 @@ public sealed class PasskeysPluginTests
         var excluded = AndroidPasskeys.Result(JsonDocument.Parse("""{"status":"Conflict","code":"excluded"}"""));
         Assert.AreEqual(NeoDesktopStatus.Conflict, excluded.Status);
         Assert.AreEqual(NeoPasskeys.ExcludedCode, excluded.Code);
+        Assert.AreEqual(NeoDesktopStatus.Unsupported, AndroidPasskeys.Result(JsonDocument.Parse("""{"status":"Unsupported"}""")).Status);
         Assert.AreEqual(NeoDesktopStatus.Failed, AndroidPasskeys.Result(JsonDocument.Parse("""{"status":"Success"}""")).Status);
         // A desktop backend has no platform services to reach the Java service with.
         DesktopPlatformCall.AssertNotSupported(() => AndroidPasskeys.Call("get", Request));

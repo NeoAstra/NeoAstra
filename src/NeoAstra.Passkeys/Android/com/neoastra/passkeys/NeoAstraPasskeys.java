@@ -64,11 +64,11 @@ public final class NeoAstraPasskeys implements NeoAstraServices.Service {
     @Override public void call(Context context, JSONObject input, JSONObject output) throws Exception {
         String operation = input.getString("operation");
         if ("support".equals(operation)) { output.put("status", "Success").putOpt("provider", provider(context)); return; }
+        // Unsupported devices need neither an activity nor a sheet, including Android before API 28 with Play services.
+        if (provider(context) == null) { output.put("status", "Unsupported"); return; }
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("A passkey cannot wait on the main thread.");
         Activity activity = resumed.get();
         if (activity == null || activity.isFinishing()) { output.put("status", "Failed").put("code", "no-activity"); return; }
-        // Without a provider the Credential Manager fails with a configuration error; the device has no passkeys.
-        if (provider(activity) == null) { output.put("status", "Unsupported"); return; }
         String options = input.getString("options");
         switch (operation) {
             case "create": create(activity, options, output); return;
@@ -78,16 +78,20 @@ public final class NeoAstraPasskeys implements NeoAstraServices.Service {
     }
 
     /**
-     * Names the provider that the Credential Manager of AndroidX chooses on this device, as its {@code CredentialProviderFactory}
-     * (androidx.credentials 1.6) does without its restricted classes: {@code system} for the credential service of Android 14 and
-     * later, except on a TV or in a car, and otherwise the class of the one provider that a library declares in the manifest of the
-     * application (the Play services of credentials-play-services-auth) and that is available on the device; {@code null} without one,
-     * as on a device without Google Play services before Android 14.
+     * Names the provider for passkeys, which require Android 9 (API 28) or later. On supported versions it follows the
+     * {@code CredentialProviderFactory} of AndroidX (androidx.credentials 1.6) without its restricted classes: {@code system} for
+     * the credential service of Android 14 and later, except on a TV or in a car, and otherwise the class of the one available
+     * provider that a library declares in the manifest (the Play services of credentials-play-services-auth); {@code null} before
+     * Android 9 or without a provider, as on a device without Google Play services before Android 14.
      */
     static String provider(Context context) {
         PackageManager packages = context.getPackageManager();
         boolean tvOrCar = packages.hasSystemFeature("android.software.leanback") || packages.hasSystemFeature("android.hardware.type.automotive");
-        if (!tvOrCar && Build.VERSION.SDK_INT >= 34 && context.getSystemService("credential") != null) return "system";
+        boolean systemProvider = !tvOrCar && Build.VERSION.SDK_INT >= 34 && context.getSystemService("credential") != null;
+        return NeoAstraPasskeysSupport.provider(Build.VERSION.SDK_INT, systemProvider, () -> availableDeclaredProvider(context));
+    }
+
+    private static String availableDeclaredProvider(Context context) {
         String found = null;
         for (String name : declaredProviders(context)) {
             try {

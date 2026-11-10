@@ -5,7 +5,7 @@ using System.Diagnostics;
 
 namespace NeoAstra.Tests;
 
-// The Java side of the Android backend that has no Android type runs on the JDK of the machine, which Android builds need too.
+// The Java logic of the Android backend and plugins without Android types runs on the JDK, which Android builds need too.
 [TestClass]
 public sealed class AndroidJavaTests
 {
@@ -23,8 +23,16 @@ public sealed class AndroidJavaTests
         StringAssert.Contains(output, "NeoAstraCaptureRegion: ok");
     }
 
-    // Compiles a class of the backend with its check from src/NeoAstra.Tests/Java and runs the check, whose failure exits with 1.
-    private static async Task<string> RunJavaCheckAsync(string source, string check)
+    [TestMethod]
+    public async Task Passkeys_RequireAndroid9AndAnAvailableProvider()
+    {
+        var source = Path.Combine(RepositoryRoot(), "src", "NeoAstra.Passkeys", "Android", "com", "neoastra", "passkeys", "NeoAstraPasskeysSupport.java");
+        var output = await RunJavaCheckAsync(source, "NeoAstraPasskeysSupportCheck", "com.neoastra.passkeys");
+        StringAssert.Contains(output, "NeoAstraPasskeysSupport: ok");
+    }
+
+    // Compiles a backend/plugin class with its check from src/NeoAstra.Tests/Java and runs it; failure exits with 1.
+    private static async Task<string> RunJavaCheckAsync(string source, string check, string packageName = "com.neoastra.backend")
     {
         var jdk = await FindJdkAsync();
         if (jdk is null) { Assert.Inconclusive("A JDK is needed for the checks of the Java side of the Android backend."); return ""; }
@@ -35,7 +43,7 @@ public sealed class AndroidJavaTests
         {
             var compiled = await RunAsync(javac, ["-d", output, Path.Combine(root, "native", "src", "android", "java", "com", "neoastra", "backend", source), Path.Combine(root, "src", "NeoAstra.Tests", "Java", check + ".java")]);
             Assert.AreEqual(0, compiled.ExitCode, compiled.Output);
-            var ran = await RunAsync(java, ["-cp", output, "com.neoastra.backend." + check]);
+            var ran = await RunAsync(java, ["-cp", output, packageName + "." + check]);
             Assert.AreEqual(0, ran.ExitCode, ran.Output);
             return ran.Output;
         }
