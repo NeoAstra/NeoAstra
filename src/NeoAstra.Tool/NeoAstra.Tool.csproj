@@ -4,6 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>true</IsPackable>
     <PackAsTool>true</PackAsTool>
+    <!-- The targets run the tool as its assembly. An application built for a runtime identifier without an apphost, such as
+         iossimulator-arm64, restores the tool with that identifier, which downloads no apphost of the build machine. -->
+    <UseAppHost>false</UseAppHost>
     <ToolCommandName>neoastra</ToolCommandName>
     <PackageId>NeoAstra.Tool</PackageId>
     <Description>Development and delivery CLI for NeoAstra desktop apps. Run frontend development workflows, validate assets and capabilities, and prepare application bundles and update metadata.</Description>

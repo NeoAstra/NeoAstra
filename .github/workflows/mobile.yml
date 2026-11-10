@@ -38,6 +38,9 @@ jobs:
     name: Mobile samples and template (iOS simulator, Android)
     # The iOS workload of .NET 11 binds the iOS 27 SDK, which only Xcode 27 has; this image is a preview of GitHub.
     runs-on: xcode-27
+    # The image defaults to Xcode 27.1; the iOS workload of .NET 11.0.100 binds the iOS 27.2 SDK of Xcode 27.2.
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: lukka/get-cmake@latest
