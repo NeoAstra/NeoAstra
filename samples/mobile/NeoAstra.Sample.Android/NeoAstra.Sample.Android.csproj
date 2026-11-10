@@ -33,6 +33,10 @@
     <!-- The public key of the Amazon Appstore SDK comes from the Amazon Developer Console of whoever tests the Amazon purchases
          locally (NeoAstraSampleAmazonKey=<path of its AppstoreAuthenticationKey.pem>); it is not part of the sample. -->
     <AndroidAsset Include="$(NeoAstraSampleAmazonKey)" Link="Assets$([System.IO.Path]::DirectorySeparatorChar)AppstoreAuthenticationKey.pem" Condition="'$(NeoAstraSampleAmazonKey)' != '' And Exists('$(NeoAstraSampleAmazonKey)')" />
+    <!-- Amazon Device Messaging needs the API key of the Amazon app of whoever tests it locally (NeoAstraSampleAdmKey=<path of its
+         api_key.txt>) and the stub JAR of the ADM SDK (NeoAstraPushAdmJar=<path of amazon-device-messaging-*.jar>); neither is part of
+         the sample. -->
+    <AndroidAsset Include="$(NeoAstraSampleAdmKey)" Link="Assets$([System.IO.Path]::DirectorySeparatorChar)api_key.txt" Condition="'$(NeoAstraSampleAdmKey)' != '' And Exists('$(NeoAstraSampleAdmKey)')" />
     <!-- The Firebase project of the push messages is local: without its google-services.json, or with NeoAstraSampleFirebase=false
          for an ApplicationId that the file does not have, push answers Unsupported. -->
     <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json') And '$(NeoAstraSampleFirebase)' != 'false'" />

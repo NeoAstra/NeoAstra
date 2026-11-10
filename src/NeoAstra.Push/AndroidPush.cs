@@ -13,7 +13,10 @@ namespace NeoAstra.Push;
 internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncDisposable
 {
     internal const string Service = "neoastra.push";
+    internal const string AdmService = "neoastra.push.adm";
     private readonly CancellationTokenSource _stopping = new();
+    private readonly string _service = Service;
+    private readonly NeoPushService _pushService = NeoPushService.Firebase;
     private NeoDispatcher? _dispatcher;
     private Task? _events;
     private NeoPushMessage? _launch;
@@ -22,12 +25,22 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0,
         "Firebase Cloud Messaging: the registration token, the messages that arrive, shown in the foreground, and the notifications that the user taps (Xamarin.Firebase.Messaging, google-services.json, android.permission.POST_NOTIFICATIONS).");
 
+    internal AndroidPush() { }
+
+    // Amazon Device Messaging on a device that has it, such as a Fire tablet, which never receives Firebase Cloud Messaging.
+    private AndroidPush(string service, NeoPushService pushService, NeoCapabilityInfo support)
+    {
+        _service = service;
+        _pushService = pushService;
+        Support = support;
+    }
+
     public NeoPushMessage? LaunchMessage
     {
         get
         {
             if (_launchRead) return _launch;
-            try { using var response = Call("launch", null); _launch = Status(response.RootElement) == NeoDesktopStatus.Success ? Message(response.RootElement.GetProperty("message")) : null; }
+            try { using var response = Call(_service, "launch", null); _launch = Status(response.RootElement) == NeoDesktopStatus.Success ? Message(response.RootElement.GetProperty("message")) : null; }
             catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { _launch = null; }
             _launchRead = true;
             return _launch;
@@ -45,7 +58,7 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
         set
         {
             _presentation = value;
-            try { using var _ = Call("filter", writer => writer.WriteBoolean("enabled", value is not null)); }
+            try { using var _ = Call(_service, "filter", writer => writer.WriteBoolean("enabled", value is not null)); }
             catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { }
         }
     }
@@ -54,12 +67,25 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     // An application without the plugin binds the dispatcher here: the events of Java are read from then on.
     internal static AndroidPush Create(NeoDispatcher? dispatcher)
     {
-        var push = new AndroidPush();
+        var push = IsAdmAvailable()
+            ? new AndroidPush(AdmService, NeoPushService.Adm, new(NeoSupportLevel.Native, 1, 0, "Amazon Device Messaging on a Fire tablet: the registration ID, the messages that arrive, shown as the meta-data of the manifest names their data, and the notifications that the user taps (NeoAstraPushAdmJar, assets/api_key.txt)."))
+            : new AndroidPush();
         if (dispatcher is not null) ((INeoPushDispatcherBinding)push).Bind(dispatcher);
         return push;
     }
 
     internal bool IsBound => _events is not null;
+
+    internal static bool IsAdmAvailable()
+    {
+        try
+        {
+            using var response = Call(AdmService, "available", null);
+            var root = response.RootElement;
+            return Status(root) == NeoDesktopStatus.Success && root.TryGetProperty("available", out var available) && available.ValueKind == JsonValueKind.True;
+        }
+        catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { return false; }
+    }
 
     void INeoPushDispatcherBinding.Bind(NeoDispatcher dispatcher)
     {
@@ -69,10 +95,10 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     }
 
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterAsync(CancellationToken cancellationToken = default)
-        => new(Task.Run(() => Register(ask: true), cancellationToken).WaitAsync(cancellationToken));
+        => new(Task.Run(() => Register(_service, _pushService, ask: true), cancellationToken).WaitAsync(cancellationToken));
 
     public ValueTask<NeoDesktopResult<NeoPushRegistration>> RegisterWithoutAskingAsync(CancellationToken cancellationToken = default)
-        => new(Task.Run(() => Register(ask: false), cancellationToken).WaitAsync(cancellationToken));
+        => new(Task.Run(() => Register(_service, _pushService, ask: false), cancellationToken).WaitAsync(cancellationToken));
 
     public async ValueTask DisposeAsync()
     {
@@ -84,13 +110,13 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
         _stopping.Dispose();
     }
 
-    private static NeoDesktopResult<NeoPushRegistration> Register(bool ask)
+    private static NeoDesktopResult<NeoPushRegistration> Register(string service, NeoPushService pushService, bool ask)
     {
-        using var response = Call("register", writer => writer.WriteBoolean("ask", ask));
+        using var response = Call(service, "register", writer => writer.WriteBoolean("ask", ask));
         var root = response.RootElement;
         var status = Status(root);
         if (status != NeoDesktopStatus.Success) return NeoPush.Failure(status, root.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String ? code.GetString() : null);
-        return NeoDesktopResult<NeoPushRegistration>.Success(new(root.GetProperty("token").GetString()!, NeoPushService.Firebase, root.TryGetProperty("canDisplay", out var display) && display.ValueKind == JsonValueKind.True));
+        return NeoDesktopResult<NeoPushRegistration>.Success(new(root.GetProperty("token").GetString()!, pushService, root.TryGetProperty("canDisplay", out var display) && display.ValueKind == JsonValueKind.True));
     }
 
     private void ReadEvents()
@@ -100,7 +126,7 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
         {
             try
             {
-                using var response = Call("next", writer => writer.WriteNumber("timeout", 5000));
+                using var response = Call(_service, "next", writer => writer.WriteNumber("timeout", 5000));
                 failures = 0;
                 if (Status(response.RootElement) == NeoDesktopStatus.Success) Dispatch(response.RootElement.GetProperty("event").Clone());
                 else if (Status(response.RootElement) == NeoDesktopStatus.Unsupported) return;
@@ -119,7 +145,7 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     {
         Action? raise = value.GetProperty("kind").GetString() switch
         {
-            "token" when value.GetProperty("token").GetString() is { } token => () => TokenChanged?.Invoke(this, new(token, NeoPushService.Firebase, false)),
+            "token" when value.GetProperty("token").GetString() is { } token => () => TokenChanged?.Invoke(this, new(token, _pushService, false)),
             "received" => () =>
             {
                 var message = Message(value.GetProperty("message"));
@@ -147,7 +173,7 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
             }
         }
         catch { show = true; }
-        try { using var _ = Call("present", writer => { writer.WriteString("id", id); writer.WriteBoolean("show", show); }); }
+        try { using var _ = Call(_service, "present", writer => { writer.WriteString("id", id); writer.WriteBoolean("show", show); }); }
         catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { }
     }
 
@@ -158,7 +184,9 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
     private static NeoDesktopStatus Status(JsonElement root) =>
         root.TryGetProperty("status", out var status) && Enum.TryParse<NeoDesktopStatus>(status.GetString(), out var value) ? value : NeoDesktopStatus.Failed;
 
-    internal static JsonDocument Call(string operation, Action<Utf8JsonWriter>? write)
+    internal static JsonDocument Call(string operation, Action<Utf8JsonWriter>? write) => Call(Service, operation, write);
+
+    internal static JsonDocument Call(string service, string operation, Action<Utf8JsonWriter>? write)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -168,6 +196,6 @@ internal sealed class AndroidPush : INeoPush, INeoPushDispatcherBinding, IAsyncD
             write?.Invoke(writer);
             writer.WriteEndObject();
         }
-        return JsonDocument.Parse(NeoPlatformServices.Call(Service, Encoding.UTF8.GetString(stream.ToArray())));
+        return JsonDocument.Parse(NeoPlatformServices.Call(service, Encoding.UTF8.GetString(stream.ToArray())));
     }
 }

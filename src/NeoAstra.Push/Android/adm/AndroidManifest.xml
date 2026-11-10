@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of an Android application that compiles against the stub of Amazon Device Messaging
+     (NeoAstraPushAdmJar): the provider adds the ADM service to the platform services of NeoAstra, and the receiver hands the
+     registration IDs and the messages of ADM to the handler of the generation of ADM on the device. ADM is a library of Fire OS,
+     optional so that the same APK installs anywhere; only applications signed with the key of the application receive its
+     messages, and the application puts the API key of its app in the Amazon Developer Console in assets/api_key.txt. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <permission
+      android:name="${applicationId}.permission.RECEIVE_ADM_MESSAGE"
+      android:protectionLevel="signature" />
+  <uses-permission android:name="${applicationId}.permission.RECEIVE_ADM_MESSAGE" />
+  <uses-permission android:name="com.amazon.device.messaging.permission.RECEIVE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <application>
+    <uses-library
+        android:name="com.amazon.device.messaging"
+        android:required="false" />
+    <provider
+        android:name="com.neoastra.push.adm.NeoAstraAdmInitializer"
+        android:authorities="${applicationId}.neoastra.push.adm"
+        android:exported="false" />
+    <service
+        android:name="com.neoastra.push.adm.NeoAstraAdmMessageHandler"
+        android:exported="false"
+        android:permission="android.permission.BIND_JOB_SERVICE" />
+    <service
+        android:name="com.neoastra.push.adm.NeoAstraAdmLegacyMessageHandler"
+        android:exported="false" />
+    <receiver
+        android:name="com.neoastra.push.adm.NeoAstraAdmMessageReceiver"
+        android:exported="true"
+        android:permission="com.amazon.device.messaging.permission.SEND">
+      <intent-filter>
+        <action android:name="com.amazon.device.messaging.intent.REGISTRATION" />
+        <action android:name="com.amazon.device.messaging.intent.RECEIVE" />
+        <category android:name="${applicationId}" />
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>
