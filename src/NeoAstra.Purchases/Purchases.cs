@@ -79,13 +79,16 @@ public sealed record NeoProductOffer(string Id, string DisplayPrice, string? Per
 /// <param name="Title">The localized name.</param>
 /// <param name="Description">The localized description.</param>
 /// <param name="DisplayPrice">The price as the store shows it, with its currency; on Google Play the price of the first base plan of a subscription.</param>
-/// <param name="Price">The price as a number in <paramref name="CurrencyCode"/>; on Google Play the price of the first base plan of a subscription.</param>
-/// <param name="CurrencyCode">The ISO 4217 currency code of the price.</param>
+/// <param name="Price">
+/// The price as a number in <paramref name="CurrencyCode"/>; on Google Play the price of the first base plan of a subscription;
+/// <see langword="null"/> when the store gives the price only as text, as the Amazon Appstore does, whose <paramref name="DisplayPrice"/> is then the only price.
+/// </param>
+/// <param name="CurrencyCode">The ISO 4217 currency code of the price, or <see langword="null"/> when the store does not give it, as the Amazon Appstore does not.</param>
 /// <remarks>
 /// A subscription of Google Play with several base plans has a price and a period per base plan, which <see cref="Offers"/>
 /// gives; the price and the period of the product are the ones of its first base plan.
 /// </remarks>
-public sealed record NeoProduct(string Id, NeoProductType Type, string Title, string Description, string DisplayPrice, decimal Price, string CurrencyCode)
+public sealed record NeoProduct(string Id, NeoProductType Type, string Title, string Description, string DisplayPrice, decimal? Price, string? CurrencyCode)
 {
     /// <summary>Gets the billing period of a subscription as an ISO 8601 duration, such as <c>P1M</c>; on Google Play the period of its first base plan.</summary>
     public string? SubscriptionPeriod { get; init; }
@@ -424,7 +427,7 @@ public static class NeoPurchases
     }
 
     internal static NeoProduct Product(JsonElement value) => new(Text(value, "id")!, Enum.Parse<NeoProductType>(Text(value, "type")!), Text(value, "title") ?? string.Empty, Text(value, "description") ?? string.Empty,
-        Text(value, "displayPrice") ?? string.Empty, decimal.TryParse(Text(value, "price"), NumberStyles.Number, CultureInfo.InvariantCulture, out var price) ? price : 0m, Text(value, "currency") ?? string.Empty)
+        Text(value, "displayPrice") ?? string.Empty, decimal.TryParse(Text(value, "price"), NumberStyles.Number, CultureInfo.InvariantCulture, out var price) ? price : null, Text(value, "currency"))
     {
         SubscriptionPeriod = Text(value, "period"),
         SubscriptionGroupId = Text(value, "group"),

@@ -380,6 +380,14 @@ public sealed class PurchasesPluginTests
         Assert.AreEqual("amzn-user", purchase.StoreUserId);
         Assert.AreEqual("premium.annual", purchase.RenewalProductId);
         Assert.IsNull(NeoPurchases.PurchaseOf(JsonDocument.Parse("""{"productId":"p","store":"GooglePlay","state":"Purchased","proof":"t"}""").RootElement).StoreUserId);
+        // The Appstore gives the price only as text: the product has no number and no currency, rather than a price of 0.
+        var text = NeoPurchases.Product(JsonDocument.Parse("""{"id":"coins","type":"InApp","title":"Coins","description":"","displayPrice":"$0,99"}""").RootElement);
+        Assert.AreEqual("$0,99", text.DisplayPrice);
+        Assert.IsNull(text.Price);
+        Assert.IsNull(text.CurrencyCode);
+        var priced = NeoPurchases.Product(JsonDocument.Parse("""{"id":"coins","type":"InApp","title":"Coins","description":"","displayPrice":"0,99 €","price":"0.99","currency":"EUR"}""").RootElement);
+        Assert.AreEqual(0.99m, priced.Price);
+        Assert.AreEqual("EUR", priced.CurrencyCode);
     }
 
     [TestMethod]
