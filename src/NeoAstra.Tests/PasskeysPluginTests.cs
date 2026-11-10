@@ -113,7 +113,53 @@ public sealed class PasskeysPluginTests
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await passkeys.CreateAsync(Creation)).Status);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await passkeys.GetAsync(Request)).Status);
         await Assert.ThrowsAsync<ArgumentException>(async () => await passkeys.GetAsync("{}"));
-        Assert.AreEqual(NeoSupportLevel.Native, new AndroidPasskeys().Support.SupportLevel);
+        // The support of the Android adapter is the one of the device, which a desktop backend cannot tell.
+        DesktopPlatformCall.AssertAnswers(() => new AndroidPasskeys().Support.SupportLevel, NeoSupportLevel.None);
+    }
+
+    [TestMethod]
+    public void Android_SupportIsTheOneOfTheDevice()
+    {
+        // The Java service names the provider that the Credential Manager would use on this device, or none: a Fire tablet
+        // without Google Play services has no provider, and the page must not offer passkeys there.
+        var system = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Success","provider":"system"}"""));
+        Assert.AreEqual(NeoSupportLevel.Native, system.SupportLevel);
+        StringAssert.Contains(system.Details, "credential service of Android");
+        var playServices = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Success","provider":"androidx.credentials.playservices.CredentialProviderPlayServicesImpl"}"""));
+        Assert.AreEqual(NeoSupportLevel.Native, playServices.SupportLevel);
+        StringAssert.Contains(playServices.Details, "androidx.credentials.playservices.CredentialProviderPlayServicesImpl");
+        var none = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Success"}"""));
+        Assert.AreEqual(NeoSupportLevel.None, none.SupportLevel);
+        StringAssert.Contains(none.Details, "no provider");
+        // Without the Credential Manager the application builds without the Java service, which the platform services do not know.
+        var missing = AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Unsupported"}"""));
+        Assert.AreEqual(NeoSupportLevel.None, missing.SupportLevel);
+        StringAssert.Contains(missing.Details, "Xamarin.AndroidX.Credentials");
+        Assert.AreEqual(NeoSupportLevel.None, AndroidPasskeys.Describe(JsonDocument.Parse("""{"status":"Failed"}""")).SupportLevel);
+    }
+
+    [TestMethod]
+    public void Android_FindsTheProviderAsTheCredentialManagerOfAndroidXDoes()
+    {
+        // CredentialProviderFactory of androidx.credentials 1.6: the credential service of the system from Android 14 on, except on
+        // a TV or in a car, and otherwise the one provider that a library declares in the manifest of the application (the Play
+        // services) when it is available on the device. A request on a device without one answers Unsupported before the sheet.
+        var java = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra.Passkeys", "Android", "com", "neoastra", "passkeys", "NeoAstraPasskeys.java"));
+        StringAssert.Contains(java, "Build.VERSION.SDK_INT >= 34 && context.getSystemService(\"credential\") != null");
+        StringAssert.Contains(java, "\"android.software.leanback\"");
+        StringAssert.Contains(java, "\"android.hardware.type.automotive\"");
+        StringAssert.Contains(java, "\"androidx.credentials.CREDENTIAL_PROVIDER_KEY\"");
+        StringAssert.Contains(java, "((CredentialProvider) instance).isAvailableOnDevice()");
+        StringAssert.Contains(java, "if (provider(activity) == null) { output.put(\"status\", \"Unsupported\"); return; }");
+        // The support needs neither an activity nor a wait, so it is answered before both are checked.
+        Assert.IsTrue(java.IndexOf("\"support\".equals(operation)", StringComparison.Ordinal) < java.IndexOf("A passkey cannot wait on the main thread.", StringComparison.Ordinal));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra.slnx"))) return directory.FullName;
+        throw new InvalidOperationException("The repository root was not found.");
     }
 
     [TestMethod]
