@@ -343,6 +343,10 @@ public sealed class PurchasesPluginTests
     {
         var store = NeoPurchases.CreateSystem();
         Assert.AreEqual(NeoSupportLevel.None, store.Support.SupportLevel);
+        // A desktop has no store yet, the fake purchases are those of the App Store, and Android names the store it picked.
+        Assert.IsNull(store.Store);
+        Assert.AreEqual(NeoPurchaseStore.AppStore, new NeoFakePurchases().Store);
+        Assert.AreEqual(NeoPurchaseStore.GooglePlay, new AndroidPurchases(null).Store);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await store.GetProductsAsync([new("credits_100", NeoProductType.InApp)])).Status);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await store.PurchaseAsync(new("credits_100", NeoProductType.InApp))).Status);
         Assert.AreEqual(NeoDesktopStatus.Unsupported, (await store.GetPurchasesAsync()).Status);
@@ -369,6 +373,7 @@ public sealed class PurchasesPluginTests
         DesktopPlatformCall.AssertAnswers(AndroidPurchases.IsAmazonAvailable, false);
         var amazon = new AndroidPurchases(null, AndroidPurchases.AmazonService, NeoPurchaseStore.Amazon);
         Assert.AreEqual(NeoSupportLevel.Native, amazon.Support.SupportLevel);
+        Assert.AreEqual(NeoPurchaseStore.Amazon, amazon.Store);
         StringAssert.Contains(amazon.Support.Details, "Amazon Appstore SDK");
         // The Amazon Appstore changes only a subscription of its own.
         var play = new NeoPurchase("premium_monthly", NeoPurchaseStore.GooglePlay, NeoPurchaseState.Purchased, "token", DateTimeOffset.UtcNow);

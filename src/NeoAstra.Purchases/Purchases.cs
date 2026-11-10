@@ -270,6 +270,14 @@ public interface INeoPurchases
     /// <summary>Gets truthful platform support.</summary>
     NeoCapabilityInfo Support { get; }
 
+    /// <summary>
+    /// Gets the store that sells to this installation, which the adapter picked when it was created: the App Store on iOS, the
+    /// Amazon Appstore or Google Play on Android. An application whose server tells the stores apart, such as for one package on
+    /// Google Play and the Amazon Appstore, reads it before the first purchase.
+    /// </summary>
+    /// <value>The store, or <see langword="null"/> where the platform has none.</value>
+    NeoPurchaseStore? Store { get; }
+
     /// <summary>Occurs on the UI dispatcher when the store completes, renews, or revokes a purchase outside a request of the application.</summary>
     event EventHandler<NeoPurchase>? PurchaseUpdated;
 
@@ -476,6 +484,10 @@ public sealed class NeoFakePurchases : INeoPurchases
     /// <inheritdoc />
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Emulated, 1, 0, "In-memory test store.");
 
+    /// <inheritdoc />
+    /// <value>The App Store, whose purchases the fake store answers.</value>
+    public NeoPurchaseStore? Store => NeoPurchaseStore.AppStore;
+
     /// <summary>Gets or sets the products that the store sells.</summary>
     public IReadOnlyList<NeoProduct> Products { get; set; } = [];
 
@@ -567,6 +579,7 @@ public sealed class NeoFakePurchases : INeoPurchases
 internal sealed class UnsupportedPurchases(string details) : INeoPurchases
 {
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.None, 1, 0, details);
+    public NeoPurchaseStore? Store => null;
     public event EventHandler<NeoPurchase>? PurchaseUpdated { add { } remove { } }
 
     public ValueTask<NeoDesktopResult<IReadOnlyList<NeoProduct>>> GetProductsAsync(IReadOnlyList<NeoProductRequest> products, CancellationToken cancellationToken = default)

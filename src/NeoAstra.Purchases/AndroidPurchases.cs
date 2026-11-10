@@ -55,6 +55,8 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
 
     public NeoCapabilityInfo Support { get; }
 
+    public NeoPurchaseStore? Store => _store;
+
     public event EventHandler<NeoPurchase>? PurchaseUpdated;
 
     void INeoPurchasesDispatcherBinding.Bind(NeoDispatcher dispatcher)
