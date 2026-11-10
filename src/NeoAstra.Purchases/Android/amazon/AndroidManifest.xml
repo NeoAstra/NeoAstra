@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the manifest of an Android application that references the Amazon Appstore SDK (com.amazon.device:amazon-appstore-sdk),
+     whose JAR brings no manifest of its own: the provider adds the Amazon purchases service to the platform services of NeoAstra,
+     the receiver takes the answers of the Appstore, and the queries let the SDK find the Appstore and the Amazon App Tester. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <queries>
+    <package android:name="com.amazon.venezia" />
+    <package android:name="com.amazon.sdktestclient" />
+  </queries>
+  <application>
+    <provider
+        android:name="com.neoastra.purchases.amazon.NeoAstraAmazonPurchasesInitializer"
+        android:authorities="${applicationId}.neoastra.purchases.amazon"
+        android:exported="false" />
+    <receiver
+        android:name="com.amazon.device.iap.ResponseReceiver"
+        android:exported="true"
+        android:permission="com.amazon.inapp.purchasing.Permission.NOTIFY">
+      <intent-filter>
+        <action android:name="com.amazon.inapp.purchasing.NOTIFY" />
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>

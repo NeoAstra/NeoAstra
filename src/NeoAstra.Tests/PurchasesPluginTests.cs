@@ -358,6 +358,66 @@ public sealed class PurchasesPluginTests
         DesktopPlatformCall.AssertNotSupported(() => AndroidPurchases.Call("list", null));
     }
 
+    [TestMethod]
+    public async Task Amazon_SellsToAnInstallationOfTheAmazonAppstoreOrToTheSandboxOfTheAppTester()
+    {
+        // The Java service of the Amazon Appstore answers whether it sells to this installation; without it, or on a desktop,
+        // Google Play is the store of Android.
+        Assert.IsTrue(AndroidPurchases.IsAvailable(JsonDocument.Parse("""{"status":"Success","available":true,"sandbox":true,"mode":"UNKNOWN"}""").RootElement));
+        Assert.IsFalse(AndroidPurchases.IsAvailable(JsonDocument.Parse("""{"status":"Success","available":false}""").RootElement));
+        Assert.IsFalse(AndroidPurchases.IsAvailable(JsonDocument.Parse("""{"status":"Unsupported"}""").RootElement));
+        DesktopPlatformCall.AssertAnswers(AndroidPurchases.IsAmazonAvailable, false);
+        var amazon = new AndroidPurchases(null, AndroidPurchases.AmazonService, NeoPurchaseStore.Amazon);
+        Assert.AreEqual(NeoSupportLevel.Native, amazon.Support.SupportLevel);
+        StringAssert.Contains(amazon.Support.Details, "Amazon Appstore SDK");
+        // The Amazon Appstore changes only a subscription of its own.
+        var play = new NeoPurchase("premium_monthly", NeoPurchaseStore.GooglePlay, NeoPurchaseState.Purchased, "token", DateTimeOffset.UtcNow);
+        await Assert.ThrowsAsync<ArgumentException>(async () => await amazon.PurchaseAsync(new("premium_annual", NeoProductType.Subscription), new() { ReplacedPurchase = play, ReplacementMode = NeoSubscriptionReplacementMode.Deferred }));
+        // The receipt ID is the proof, and the Receipt Verification Service takes the Amazon user ID with it.
+        var purchase = NeoPurchases.PurchaseOf(JsonDocument.Parse("""{"productId":"premium.monthly","store":"Amazon","state":"Purchased","proof":"receipt-1","purchaseDate":1762752650000,"transactionId":"receipt-1","storeUserId":"amzn-user","renewalProductId":"premium.annual"}""").RootElement);
+        Assert.AreEqual(NeoPurchaseStore.Amazon, purchase.Store);
+        Assert.AreEqual("receipt-1", purchase.Proof);
+        Assert.AreEqual("amzn-user", purchase.StoreUserId);
+        Assert.AreEqual("premium.annual", purchase.RenewalProductId);
+        Assert.IsNull(NeoPurchases.PurchaseOf(JsonDocument.Parse("""{"productId":"p","store":"GooglePlay","state":"Purchased","proof":"t"}""").RootElement).StoreUserId);
+    }
+
+    [TestMethod]
+    public void Amazon_JavaSideIsAnOptInOfTheAppstoreSdkFromMaven()
+    {
+        // The JAR of the Appstore SDK brings no manifest: the overlay of the plugin declares its receiver and the queries that find
+        // the Appstore and the App Tester, and the targets compile the Java side only for an application that references the SDK.
+        var root = FindRepositoryRoot();
+        var targets = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Purchases", "Build", "NeoAstra.Purchases.targets"));
+        StringAssert.Contains(targets, "'@(AndroidMavenLibrary->AnyHaveMetadataValue('Identity', 'com.amazon.device:amazon-appstore-sdk'))' == 'true'");
+        StringAssert.Contains(targets, "'$(NeoAstraPurchasesAmazon)' != 'false'");
+        StringAssert.Contains(targets, "amazon/com/neoastra/purchases/amazon/*.java");
+        var android = Path.Combine(root, "src", "NeoAstra.Purchases", "Android");
+        var manifest = File.ReadAllText(Path.Combine(android, "amazon", "AndroidManifest.xml"));
+        StringAssert.Contains(manifest, "com.amazon.device.iap.ResponseReceiver");
+        StringAssert.Contains(manifest, "com.amazon.inapp.purchasing.Permission.NOTIFY");
+        StringAssert.Contains(manifest, "<package android:name=\"com.amazon.sdktestclient\" />");
+        StringAssert.Contains(manifest, "<package android:name=\"com.amazon.venezia\" />");
+        // Google Play's Java side stays out of the Amazon one and the other way round.
+        Assert.IsFalse(File.ReadAllText(Path.Combine(android, "AndroidManifest.xml")).Contains("amazon", StringComparison.OrdinalIgnoreCase));
+        // The sandbox is the one of the SDK: the service reads whether the build is debuggable and debug.amazon.sandboxmode.
+        var java = File.ReadAllText(Path.Combine(android, "amazon", "com", "neoastra", "purchases", "amazon", "NeoAstraAmazonPurchases.java"));
+        StringAssert.Contains(java, "ApplicationInfo.FLAG_DEBUGGABLE");
+        StringAssert.Contains(java, "\"debug.amazon.sandboxmode\"");
+        StringAssert.Contains(java, "PurchasingService.enablePendingPurchases();");
+        // The updates of the Appstore come once the listener is registered, also for an application that only waits for them, and
+        // the history is paged one sequence at a time; the matching of answers and the reports run on the JVM (AndroidJavaTests).
+        Assert.AreEqual(2, java.Split("PAGING.lock();").Length - 1);
+        Assert.IsTrue(java.IndexOf("register(context);", StringComparison.Ordinal) < java.IndexOf("if (\"next\".equals(operation))", StringComparison.Ordinal));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra.slnx"))) return directory.FullName;
+        throw new InvalidOperationException("The repository root was not found.");
+    }
+
     private static NeoRpcSession Session(INeoPurchases store, string[] permissions, out ConcurrentQueue<string> frames)
     {
         var manifest = NeoCapabilityManifest.Resolve(System.Text.Encoding.UTF8.GetBytes($$"""

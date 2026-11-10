@@ -29,6 +29,10 @@
     <PackageReference Include="Xamarin.AndroidX.Credentials" Version="1.6.0.1" />
     <PackageReference Include="Xamarin.AndroidX.Credentials.PlayServicesAuth" Version="1.6.0.2" />
     <PackageReference Include="Xamarin.Android.Google.BillingClient" Version="9.1.0.2" />
+    <AndroidMavenLibrary Include="com.amazon.device:amazon-appstore-sdk" Version="3.0.9" Bind="false" />
+    <!-- The public key of the Amazon Appstore SDK comes from the Amazon Developer Console of whoever tests the Amazon purchases
+         locally (NeoAstraSampleAmazonKey=<path of its AppstoreAuthenticationKey.pem>); it is not part of the sample. -->
+    <AndroidAsset Include="$(NeoAstraSampleAmazonKey)" Link="Assets$([System.IO.Path]::DirectorySeparatorChar)AppstoreAuthenticationKey.pem" Condition="'$(NeoAstraSampleAmazonKey)' != '' And Exists('$(NeoAstraSampleAmazonKey)')" />
     <!-- The Firebase project of the push messages is local: without its google-services.json, or with NeoAstraSampleFirebase=false
          for an ApplicationId that the file does not have, push answers Unsupported. -->
     <GoogleServicesJson Include="google-services.json" Condition="Exists('google-services.json') And '$(NeoAstraSampleFirebase)' != 'false'" />

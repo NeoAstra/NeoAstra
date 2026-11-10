@@ -7,25 +7,53 @@ using NeoAstra.Desktop;
 
 namespace NeoAstra.Purchases;
 
-// The Play Billing Library through the Java service `neoastra.purchases` of this package, which the platform services of
-// NeoAstra reach. Java blocks until the store or the user answers, so every call leaves the calling thread; a thread of this
-// adapter takes the purchases that the store completes outside a request, waiting in Java, and raises them on the UI
-// dispatcher. The Java side is there only when the application references the Play Billing Library.
+// The Play Billing Library through the Java service `neoastra.purchases` of this package, or the Amazon Appstore SDK through
+// `neoastra.purchases.amazon`, which the platform services of NeoAstra reach; both answer in one form. Java blocks until the
+// store or the user answers, so every call leaves the calling thread; a thread of this adapter takes the purchases that the
+// store completes outside a request, waiting in Java, and raises them on the UI dispatcher. The Java side of a store is there
+// only when the application references its library.
 internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherBinding, IAsyncDisposable
 {
     internal const string Service = "neoastra.purchases";
+    internal const string AmazonService = "neoastra.purchases.amazon";
     private readonly CancellationTokenSource _stopping = new();
+    private readonly string _service;
+    private readonly NeoPurchaseStore _store;
     private NeoDispatcher? _dispatcher;
     private Task? _updates;
 
-    internal AndroidPurchases(NeoDispatcher? dispatcher)
+    internal AndroidPurchases(NeoDispatcher? dispatcher) : this(dispatcher, Service, NeoPurchaseStore.GooglePlay) { }
+
+    internal AndroidPurchases(NeoDispatcher? dispatcher, string service, NeoPurchaseStore store)
     {
+        _service = service;
+        _store = store;
+        Support = store == NeoPurchaseStore.Amazon
+            ? new(NeoSupportLevel.Native, 1, 0, "The Amazon Appstore SDK: products, purchases, pending purchases of children, changes of subscription terms, fulfillment, and the receipts that the Appstore reports when the application returns (com.amazon.device:amazon-appstore-sdk).")
+            : new(NeoSupportLevel.Native, 1, 0, "The Play Billing Library: products with their base plans and offers, purchases with offers and plan changes, acknowledgement and consumption, and the purchases that Google Play completes outside a request (Xamarin.Android.Google.BillingClient).");
         _dispatcher = dispatcher;
         if (dispatcher is not null) Start();
     }
 
-    public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0,
-        "The Play Billing Library: products with their base plans and offers, purchases with offers and plan changes, acknowledgement and consumption, and the purchases that Google Play completes outside a request (Xamarin.Android.Google.BillingClient).");
+    // The Amazon Appstore sells to an installation that it made, or to one in the sandbox mode of its SDK, whose purchases the
+    // Amazon App Tester answers; every other installation buys on Google Play.
+    internal static AndroidPurchases Create(NeoDispatcher? dispatcher)
+        => IsAmazonAvailable() ? new(dispatcher, AmazonService, NeoPurchaseStore.Amazon) : new(dispatcher);
+
+    internal static bool IsAmazonAvailable()
+    {
+        try
+        {
+            using var response = Call(AmazonService, "available", null);
+            return IsAvailable(response.RootElement);
+        }
+        catch (Exception exception) when (exception is NotSupportedException or NeoAstraException or JsonException) { return false; }
+    }
+
+    internal static bool IsAvailable(JsonElement root)
+        => NeoPurchases.Status(root) == NeoDesktopStatus.Success && root.TryGetProperty("available", out var available) && available.ValueKind == JsonValueKind.True;
+
+    public NeoCapabilityInfo Support { get; }
 
     public event EventHandler<NeoPurchase>? PurchaseUpdated;
 
@@ -56,7 +84,7 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
         // Google Play asks for the account of the replaced subscription with a change of plan.
         var account = options?.AccountToken ?? replaced?.AccountToken;
         var mode = options?.ReplacementMode;
-        if (replaced is not null && replaced.Store != NeoPurchaseStore.GooglePlay) throw new ArgumentException("Google Play replaces only a purchase of Google Play.", nameof(options));
+        if (replaced is not null && replaced.Store != _store) throw new ArgumentException(_store == NeoPurchaseStore.Amazon ? "The Amazon Appstore replaces only a purchase of the Amazon Appstore." : "Google Play replaces only a purchase of Google Play.", nameof(options));
         return Run(() => Read("purchase", writer =>
         {
             writer.WriteString("id", product.Id);
@@ -112,7 +140,7 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
         {
             try
             {
-                using var response = Call("next", writer => writer.WriteNumber("timeout", 5000));
+                using var response = Call(_service, "next", writer => writer.WriteNumber("timeout", 5000));
                 failures = 0;
                 var status = NeoPurchases.Status(response.RootElement);
                 if (status == NeoDesktopStatus.Unsupported) return;
@@ -135,13 +163,15 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
         catch (Exception exception) when (exception is ObjectDisposedException or InvalidOperationException) { }
     }
 
-    private static T Read<T>(string operation, Action<Utf8JsonWriter>? write, Func<JsonElement, T> read)
+    private T Read<T>(string operation, Action<Utf8JsonWriter>? write, Func<JsonElement, T> read)
     {
-        using var response = Call(operation, write);
+        using var response = Call(_service, operation, write);
         return read(response.RootElement);
     }
 
-    internal static JsonDocument Call(string operation, Action<Utf8JsonWriter>? write)
+    internal static JsonDocument Call(string operation, Action<Utf8JsonWriter>? write) => Call(Service, operation, write);
+
+    internal static JsonDocument Call(string service, string operation, Action<Utf8JsonWriter>? write)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -151,6 +181,6 @@ internal sealed class AndroidPurchases : INeoPurchases, INeoPurchasesDispatcherB
             write?.Invoke(writer);
             writer.WriteEndObject();
         }
-        return JsonDocument.Parse(NeoPlatformServices.Call(Service, Encoding.UTF8.GetString(stream.ToArray())));
+        return JsonDocument.Parse(NeoPlatformServices.Call(service, Encoding.UTF8.GetString(stream.ToArray())));
     }
 }

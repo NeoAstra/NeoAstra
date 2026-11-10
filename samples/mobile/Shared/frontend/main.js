@@ -155,10 +155,15 @@ card("Purchases", (row, run) => {
     return result;
   }));
   button(row, "Buy", () => run(async () => { const result = await invoke("purchases.purchase", { id: id.value, type: type.value, ...(offer.value ? { offerId: offer.value } : {}) }); last = result.value ?? last; return result; }));
-  button(row, "Owned", () => run(async () => { const result = await invoke("purchases.list", {}); last = result.value?.[0] ?? last; return result; }));
+  button(row, "Owned", () => run(async () => { const result = await invoke("purchases.list", {}); last = result.value?.find(item => item.productId === id.value) ?? result.value?.[0] ?? last; return result; }));
   button(row, "Restore", () => run(() => invoke("purchases.restore", {})));
+  // A change of plan replaces the subscription of the last purchase seen with the product of the field: at once, or at the next
+  // renewal of the subscription.
+  const change = mode => run(async () => { const result = last ? await invoke("purchases.purchase", { id: id.value, type: type.value, replacedPurchase: last, replacementMode: mode }) : { status: "NotFound" }; last = result.value ?? last; return result; });
+  button(row, "Change now", () => change("WithTimeProration"));
+  button(row, "Change at renewal", () => change("Deferred"));
   button(row, "Finish", () => run(() => last ? invoke("purchases.finish", { purchase: last, consume: type.value === "InApp" }) : { status: "NotFound" }));
-  rpcClient().then(client => client.subscribe("purchases.updated", purchase => run(async () => ({ status: "Updated", ...purchase }))));
+  rpcClient().then(client => client.subscribe("purchases.updated", purchase => run(async () => { last = purchase; return { status: "Updated", ...purchase }; })));
 });
 // Android reports its back button as a request to close the window: the page steps back out of what it shows first, and
 // only lets the window close when there is nothing left.

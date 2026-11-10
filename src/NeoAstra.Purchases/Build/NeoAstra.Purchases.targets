@@ -19,4 +19,12 @@
     <AndroidJavaSource Include="$(NeoAstraPurchasesJavaDirectory)com/neoastra/purchases/*.java" />
     <AndroidManifestOverlay Include="$(NeoAstraPurchasesJavaDirectory)AndroidManifest.xml" />
   </ItemGroup>
+  <!-- An Android application that references the Amazon Appstore SDK from Maven Central
+       (<AndroidMavenLibrary Include="com.amazon.device:amazon-appstore-sdk" Version="..." Bind="false" />) gets the Java side of
+       the Amazon Appstore as well, which the purchases of an installation from the Amazon Appstore use; NeoAstraPurchasesAmazon=false
+       leaves it out. The application adds the AppstoreAuthenticationKey.pem of the Amazon Developer Console to its assets. -->
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' And '$(NeoAstraPurchasesAmazon)' != 'false' And '@(AndroidMavenLibrary->AnyHaveMetadataValue('Identity', 'com.amazon.device:amazon-appstore-sdk'))' == 'true'">
+    <AndroidJavaSource Include="$(NeoAstraPurchasesJavaDirectory)amazon/com/neoastra/purchases/amazon/*.java" Bind="false" />
+    <AndroidManifestOverlay Include="$(NeoAstraPurchasesJavaDirectory)amazon/AndroidManifest.xml" />
+  </ItemGroup>
 </Project>
