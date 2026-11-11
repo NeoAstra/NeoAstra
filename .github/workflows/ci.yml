@@ -52,6 +52,10 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      - name: Install NuGet publishing SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.303'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

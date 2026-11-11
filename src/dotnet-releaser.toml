@@ -1,6 +1,8 @@
 # configuration file for dotnet-releaser
 # Disable default packs - It will only publish NuGet and the Changelog
 profile = "custom"
+# NuGet push runs here, outside the source-build SDK scope, with the publishing SDK's global.json.
+artifacts_folder = "../eng/publishing/artifacts-dotnet-releaser"
 [msbuild]
 project = "NeoAstra.slnx"
 [github]

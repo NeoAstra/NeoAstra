@@ -29,6 +29,16 @@ dotnet test -c Release
 
 The native ABI is `1.0`. The managed loader and the bundler check its major version only, so the checked-in native assets can be regenerated without blocking local applications.
 
+## Release publishing
+
+Source builds remain on the patched SDK above. NuGet publishing uses SDK 10.0.303 (or a later patch in
+the same feature band), which supports the short-lived `NUGET_API_KEY` and `NUGET_SYMBOL_API_KEY`
+environment variables supplied by dotnet-releaser. Its artifacts live under
+`eng/publishing/artifacts-dotnet-releaser`, where `eng/publishing/global.json` selects that SDK without
+changing the NativeAOT build SDK. The Windows release job installs both SDKs. The engineering tests
+check the key handoff using only a fake key and a loopback HTTP server; no credentials are stored in
+the repository and the check never publishes to a feed.
+
 ## Samples and NativeAOT
 
 From the repository root, run the HelloWorld sample:
