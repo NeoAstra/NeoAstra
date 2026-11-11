@@ -14,6 +14,8 @@ public enum NeoPurchaseStore
     AppStore,
     /// <summary>Google Play, through the Play Billing Library on Android.</summary>
     GooglePlay,
+    /// <summary>The Amazon Appstore, through the Amazon Appstore SDK on Android, for an installation from the Amazon Appstore such as on a Fire tablet.</summary>
+    Amazon,
 }
 
 /// <summary>Identifies what kind of product a store sells, which a request names because Google Play asks for it.</summary>
@@ -77,13 +79,16 @@ public sealed record NeoProductOffer(string Id, string DisplayPrice, string? Per
 /// <param name="Title">The localized name.</param>
 /// <param name="Description">The localized description.</param>
 /// <param name="DisplayPrice">The price as the store shows it, with its currency; on Google Play the price of the first base plan of a subscription.</param>
-/// <param name="Price">The price as a number in <paramref name="CurrencyCode"/>; on Google Play the price of the first base plan of a subscription.</param>
-/// <param name="CurrencyCode">The ISO 4217 currency code of the price.</param>
+/// <param name="Price">
+/// The price as a number in <paramref name="CurrencyCode"/>; on Google Play the price of the first base plan of a subscription;
+/// <see langword="null"/> when the store gives the price only as text, as the Amazon Appstore does, whose <paramref name="DisplayPrice"/> is then the only price.
+/// </param>
+/// <param name="CurrencyCode">The ISO 4217 currency code of the price, or <see langword="null"/> when the store does not give it, as the Amazon Appstore does not.</param>
 /// <remarks>
 /// A subscription of Google Play with several base plans has a price and a period per base plan, which <see cref="Offers"/>
 /// gives; the price and the period of the product are the ones of its first base plan.
 /// </remarks>
-public sealed record NeoProduct(string Id, NeoProductType Type, string Title, string Description, string DisplayPrice, decimal Price, string CurrencyCode)
+public sealed record NeoProduct(string Id, NeoProductType Type, string Title, string Description, string DisplayPrice, decimal? Price, string? CurrencyCode)
 {
     /// <summary>Gets the billing period of a subscription as an ISO 8601 duration, such as <c>P1M</c>; on Google Play the period of its first base plan.</summary>
     public string? SubscriptionPeriod { get; init; }
@@ -159,7 +164,11 @@ public sealed record NeoPurchase(string ProductId, NeoPurchaseStore Store, NeoPu
     /// <summary>Gets the account of the application that the purchase belongs to, as given to <see cref="NeoPurchaseOptions.AccountToken"/>.</summary>
     public Guid? AccountToken { get; init; }
 
-    /// <summary>Gets whether the application finished the purchase: a finished transaction on the App Store, an acknowledged purchase on Google Play.</summary>
+    /// <summary>
+    /// Gets whether the application finished the purchase: a finished transaction on the App Store, an acknowledged purchase on
+    /// Google Play. The Amazon Appstore does not tell whether a receipt is fulfilled, so it is always <see langword="false"/> there,
+    /// and finishing a receipt again does no harm.
+    /// </summary>
     public bool IsFinished { get; init; }
 
     /// <summary>Gets the signed purchase data of Google Play, a JSON document, which <see cref="Signature"/> signs.</summary>
@@ -167,6 +176,13 @@ public sealed record NeoPurchase(string ProductId, NeoPurchaseStore Store, NeoPu
 
     /// <summary>Gets the signature of <see cref="SignedData"/> with the key of the application in the Play Console.</summary>
     public string? Signature { get; init; }
+
+    /// <summary>
+    /// Gets the user of the store that the purchase belongs to, when the server needs it to verify <see cref="Proof"/>: the Amazon
+    /// user ID that the Receipt Verification Service of the Amazon Appstore takes with the receipt ID; <see langword="null"/> on the
+    /// App Store and Google Play.
+    /// </summary>
+    public string? StoreUserId { get; init; }
 }
 
 /// <summary>Describes how Google Play replaces a subscription that the user owns with the one that the user purchases.</summary>
@@ -254,6 +270,14 @@ public interface INeoPurchases
     /// <summary>Gets truthful platform support.</summary>
     NeoCapabilityInfo Support { get; }
 
+    /// <summary>
+    /// Gets the store that sells to this installation, which the adapter picked when it was created: the App Store on iOS, the
+    /// Amazon Appstore or Google Play on Android. An application whose server tells the stores apart, such as for one package on
+    /// Google Play and the Amazon Appstore, reads it before the first purchase.
+    /// </summary>
+    /// <value>The store, or <see langword="null"/> where the platform has none.</value>
+    NeoPurchaseStore? Store { get; }
+
     /// <summary>Occurs on the UI dispatcher when the store completes, renews, or revokes a purchase outside a request of the application.</summary>
     event EventHandler<NeoPurchase>? PurchaseUpdated;
 
@@ -328,13 +352,17 @@ public static class NeoPurchases
     /// <summary>The code of a result for a subscription of several base plans that a purchase does not name an offer of.</summary>
     public const string OfferRequiredCode = "offer-required";
 
-    /// <summary>Creates the adapter of the current operating system: StoreKit 2 on iOS, the Play Billing Library on Android.</summary>
+    /// <summary>
+    /// Creates the adapter of the current operating system: StoreKit 2 on iOS; on Android the Amazon Appstore SDK for an
+    /// installation from the Amazon Appstore, or in the sandbox mode of the Amazon App Tester, of an application that references the
+    /// SDK, and the Play Billing Library otherwise.
+    /// </summary>
     /// <param name="dispatcher">Optional application UI dispatcher, on which the events occur; the plugin binds it otherwise.</param>
     /// <returns>The adapter, which answers <see cref="NeoDesktopStatus.Unsupported"/> on a desktop.</returns>
     public static INeoPurchases CreateSystem(NeoDispatcher? dispatcher = null)
     {
         if (OperatingSystem.IsIOS()) return IosPurchases.Create(dispatcher);
-        if (OperatingSystem.IsAndroid()) return new AndroidPurchases(dispatcher);
+        if (OperatingSystem.IsAndroid()) return AndroidPurchases.Create(dispatcher);
         return new UnsupportedPurchases("The stores of a desktop are not available yet.");
     }
 
@@ -407,7 +435,7 @@ public static class NeoPurchases
     }
 
     internal static NeoProduct Product(JsonElement value) => new(Text(value, "id")!, Enum.Parse<NeoProductType>(Text(value, "type")!), Text(value, "title") ?? string.Empty, Text(value, "description") ?? string.Empty,
-        Text(value, "displayPrice") ?? string.Empty, decimal.TryParse(Text(value, "price"), NumberStyles.Number, CultureInfo.InvariantCulture, out var price) ? price : 0m, Text(value, "currency") ?? string.Empty)
+        Text(value, "displayPrice") ?? string.Empty, decimal.TryParse(Text(value, "price"), NumberStyles.Number, CultureInfo.InvariantCulture, out var price) ? price : null, Text(value, "currency"))
     {
         SubscriptionPeriod = Text(value, "period"),
         SubscriptionGroupId = Text(value, "group"),
@@ -433,6 +461,7 @@ public static class NeoPurchases
         IsFinished = value.TryGetProperty("finished", out var finished) && finished.ValueKind == JsonValueKind.True,
         SignedData = Text(value, "signedData"),
         Signature = Text(value, "signature"),
+        StoreUserId = Text(value, "storeUserId"),
     };
 
     private static IEnumerable<JsonElement> Array(JsonElement parent, string name) => parent.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray() : [];
@@ -454,6 +483,10 @@ public sealed class NeoFakePurchases : INeoPurchases
 
     /// <inheritdoc />
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Emulated, 1, 0, "In-memory test store.");
+
+    /// <inheritdoc />
+    /// <value>The App Store, whose purchases the fake store answers.</value>
+    public NeoPurchaseStore? Store => NeoPurchaseStore.AppStore;
 
     /// <summary>Gets or sets the products that the store sells.</summary>
     public IReadOnlyList<NeoProduct> Products { get; set; } = [];
@@ -546,6 +579,7 @@ public sealed class NeoFakePurchases : INeoPurchases
 internal sealed class UnsupportedPurchases(string details) : INeoPurchases
 {
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.None, 1, 0, details);
+    public NeoPurchaseStore? Store => null;
     public event EventHandler<NeoPurchase>? PurchaseUpdated { add { } remove { } }
 
     public ValueTask<NeoDesktopResult<IReadOnlyList<NeoProduct>>> GetProductsAsync(IReadOnlyList<NeoProductRequest> products, CancellationToken cancellationToken = default)

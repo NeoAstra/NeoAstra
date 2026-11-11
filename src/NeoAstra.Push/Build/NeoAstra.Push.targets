@@ -12,4 +12,14 @@
     <AndroidJavaSource Include="$(NeoAstraPushJavaDirectory)com/neoastra/push/*.java" />
     <AndroidManifestOverlay Include="$(NeoAstraPushJavaDirectory)AndroidManifest.xml" />
   </ItemGroup>
+  <!-- Amazon Device Messaging, which a Fire tablet receives instead of Firebase: an application that names the stub JAR of the ADM
+       SDK, which Amazon distributes only as a download under its Program Materials License
+       (<NeoAstraPushAdmJar>path/amazon-device-messaging-1.2.0.jar</NeoAstraPushAdmJar>), gets its Java side, compiled against the
+       JAR without packaging it: Fire OS provides the library. The application puts the API key of its Amazon app in
+       assets/api_key.txt. -->
+  <ItemGroup Condition="'$(TargetFramework)' != '' And $([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' And '$(NeoAstraPushAdmJar)' != ''">
+    <AndroidExternalJavaLibrary Include="$(NeoAstraPushAdmJar)" />
+    <AndroidJavaSource Include="$(NeoAstraPushJavaDirectory)adm/com/neoastra/push/adm/*.java" Bind="false" />
+    <AndroidManifestOverlay Include="$(NeoAstraPushJavaDirectory)adm/AndroidManifest.xml" />
+  </ItemGroup>
 </Project>

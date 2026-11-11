@@ -14,10 +14,12 @@ public enum NeoPushService
     Apns,
     /// <summary>Firebase Cloud Messaging, on Android.</summary>
     Firebase,
+    /// <summary>Amazon Device Messaging, on a Fire tablet, whose server sends with the client credentials of the security profile of the Amazon app.</summary>
+    Adm,
 }
 
 /// <summary>Contains the address of the device at its push service, which the server of the application sends messages to.</summary>
-/// <param name="Token">The token: the hexadecimal device token of APNs, or the registration token of Firebase Cloud Messaging.</param>
+/// <param name="Token">The token: the hexadecimal device token of APNs, the registration token of Firebase Cloud Messaging, or the registration ID of Amazon Device Messaging.</param>
 /// <param name="Service">The push service of the token.</param>
 /// <param name="CanDisplay">Whether the user lets the application show the notifications of the messages; a message reaches the application without it.</param>
 public sealed record NeoPushRegistration(string Token, NeoPushService Service, bool CanDisplay)
@@ -58,7 +60,9 @@ public sealed record NeoPushMessage(string? MessageId, string? ActionId, string 
 /// iOS gives the device token to the application delegate, which NeoAstra does not own: the application forwards it, and the
 /// notification that launched it, to <see cref="NeoApplePush"/>, and declares the <c>aps-environment</c> entitlement. Android
 /// receives the messages through Firebase Cloud Messaging: the application references <c>Xamarin.Firebase.Messaging</c> and
-/// adds the <c>google-services.json</c> of its Firebase project.
+/// adds the <c>google-services.json</c> of its Firebase project. A Fire tablet receives them through Amazon Device Messaging
+/// instead, for an application that compiles against the stub of the ADM SDK (<c>NeoAstraPushAdmJar</c>) and adds the
+/// <c>api_key.txt</c> of its Amazon app to its assets.
 /// </para>
 /// <para>
 /// A message that arrives while the application is in the foreground is shown and reported by <see cref="MessageReceived"/>; a

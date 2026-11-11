@@ -5,5 +5,10 @@
   <uses-permission android:name="android.permission.VIBRATE" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-  <application android:label="NeoAstra" android:supportsRtl="true" />
+  <application android:label="NeoAstra" android:supportsRtl="true">
+    <!-- A data message (Firebase without a notification, and every message of Amazon Device Messaging) is shown with the title and
+         the body of these keys of its data. -->
+    <meta-data android:name="com.neoastra.push.title" android:value="title" />
+    <meta-data android:name="com.neoastra.push.body" android:value="body" />
+  </application>
 </manifest>

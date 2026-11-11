@@ -143,6 +143,45 @@ public sealed class PushPluginTests
     }
 
     [TestMethod]
+    public void Adm_IsTheTransportOfADeviceWithAmazonDeviceMessaging()
+    {
+        // A desktop backend, like an Android device without ADM, has no ADM service: Firebase stays the transport of Android.
+        DesktopPlatformCall.AssertAnswers(AndroidPush.IsAdmAvailable, false);
+        StringAssert.Contains(new AndroidPush().Support.Details, "Firebase Cloud Messaging");
+        Assert.IsTrue(Enum.IsDefined(NeoPushService.Adm));
+        // The stub JAR of the ADM SDK is compiled against and never packaged: Fire OS provides the library, and the manifest makes it
+        // optional, so that the same APK installs anywhere.
+        var root = FindRepositoryRoot();
+        var targets = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Build", "NeoAstra.Push.targets"));
+        StringAssert.Contains(targets, "'$(NeoAstraPushAdmJar)' != ''");
+        StringAssert.Contains(targets, "<AndroidExternalJavaLibrary Include=\"$(NeoAstraPushAdmJar)\" />");
+        StringAssert.Contains(targets, "adm/com/neoastra/push/adm/*.java");
+        var android = Path.Combine(root, "src", "NeoAstra.Push", "Android");
+        var manifest = File.ReadAllText(Path.Combine(android, "adm", "AndroidManifest.xml")).ReplaceLineEndings("\n");
+        StringAssert.Contains(manifest, "<uses-library\n        android:name=\"com.amazon.device.messaging\"");
+        StringAssert.Contains(manifest, "android:required=\"false\"");
+        StringAssert.Contains(manifest, "${applicationId}.permission.RECEIVE_ADM_MESSAGE");
+        StringAssert.Contains(manifest, "android:protectionLevel=\"signature\"");
+        StringAssert.Contains(manifest, "android:permission=\"com.amazon.device.messaging.permission.SEND\"");
+        StringAssert.Contains(manifest, "<category android:name=\"${applicationId}\" />");
+        Assert.IsFalse(File.ReadAllText(Path.Combine(android, "AndroidManifest.xml")).Contains("amazon", StringComparison.OrdinalIgnoreCase));
+        // The receiver takes the job of ADM 2 where the device has it, and the intent service of ADM 1 otherwise.
+        var receiver = File.ReadAllText(Path.Combine(android, "adm", "com", "neoastra", "push", "adm", "NeoAstraAdmMessageReceiver.java"));
+        StringAssert.Contains(receiver, "Class.forName(\"com.amazon.device.messaging.ADMMessageHandlerJobBase\")");
+        StringAssert.Contains(receiver, "registerJobServiceClass(NeoAstraAdmMessageHandler.class, JOB_ID)");
+        // Registrations made while one is under way join it, which AndroidJavaTests checks on the JVM; only the first starts ADM.
+        var adm = File.ReadAllText(Path.Combine(android, "adm", "com", "neoastra", "push", "adm", "NeoAstraAdmPush.java"));
+        StringAssert.Contains(adm, "if (joined.start) adm.startRegister();");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "src", "NeoAstra.slnx"))) return directory.FullName;
+        throw new InvalidOperationException("The repository root was not found.");
+    }
+
+    [TestMethod]
     public void AppleNotifications_ReportTheNotificationsThatNeoAstraDidNotShow()
     {
         // The presenter of iOS and macOS owns the delegate of the notification center, so it is the one that reports them.
@@ -158,7 +197,9 @@ public sealed class PushPluginTests
         while (!Directory.Exists(Path.Combine(root, "src", "NeoAstra.Push"))) root = Path.GetDirectoryName(root) ?? throw new DirectoryNotFoundException("The repository root was not found.");
         var push = File.ReadAllText(Path.Combine(root, "src", "NeoAstra.Push", "Push.cs"));
         StringAssert.Contains(push, "if (OperatingSystem.IsAndroid()) return AndroidPush.Create(dispatcher);");
-        Assert.IsFalse(AndroidPush.Create(null).IsBound);
+        // Create asks the platform for ADM, which a desktop refuses; where the native library cannot load at all, as on Linux
+        // without GTK, nothing answers.
+        DesktopPlatformCall.AssertAnswers(() => AndroidPush.Create(null).IsBound, false);
     }
 
     [TestMethod]

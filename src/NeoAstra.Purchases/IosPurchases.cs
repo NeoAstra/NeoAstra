@@ -28,6 +28,8 @@ internal sealed partial class IosPurchases : INeoPurchases, INeoPurchasesDispatc
     public NeoCapabilityInfo Support { get; } = new(NeoSupportLevel.Native, 1, 0,
         "StoreKit 2: products, purchases with the JWS of their signed transactions, current entitlements, App Store sync, finished transactions, and the transactions that the App Store completes outside a request.");
 
+    public NeoPurchaseStore? Store => NeoPurchaseStore.AppStore;
+
     public event EventHandler<NeoPurchase>? PurchaseUpdated;
 
     // The bridge is embedded by the targets of the package; an application without it has no purchases.

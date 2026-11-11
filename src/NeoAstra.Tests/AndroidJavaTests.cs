@@ -31,6 +31,22 @@ public sealed class AndroidJavaTests
         StringAssert.Contains(output, "NeoAstraPasskeysSupport: ok");
     }
 
+    [TestMethod]
+    public async Task AmazonPurchases_SelectTheAppstoreMatchAnswersAndReportEachStateOnce()
+    {
+        var source = Path.Combine(RepositoryRoot(), "src", "NeoAstra.Purchases", "Android", "amazon", "com", "neoastra", "purchases", "amazon", "NeoAstraAmazonPurchasesLogic.java");
+        var output = await RunJavaCheckAsync(source, "NeoAstraAmazonPurchasesLogicCheck", "com.neoastra.purchases.amazon");
+        StringAssert.Contains(output, "NeoAstraAmazonPurchasesLogic: ok");
+    }
+
+    [TestMethod]
+    public async Task AmazonDeviceMessaging_JoinsRegistrationsAndKeepsTheDataOfTheServer()
+    {
+        var source = Path.Combine(RepositoryRoot(), "src", "NeoAstra.Push", "Android", "adm", "com", "neoastra", "push", "adm", "NeoAstraAdmLogic.java");
+        var output = await RunJavaCheckAsync(source, "NeoAstraAdmLogicCheck", "com.neoastra.push.adm");
+        StringAssert.Contains(output, "NeoAstraAdmLogic: ok");
+    }
+
     // Compiles a backend/plugin class with its check from src/NeoAstra.Tests/Java and runs it; failure exits with 1.
     private static async Task<string> RunJavaCheckAsync(string source, string check, string packageName = "com.neoastra.backend")
     {
