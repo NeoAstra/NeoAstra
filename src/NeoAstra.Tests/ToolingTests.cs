@@ -434,6 +434,10 @@ public sealed class ToolingTests
         var removed = ((string?)reference.Attribute("GlobalPropertiesToRemove") ?? string.Empty).Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
         CollectionAssert.Contains(removed, "RuntimeIdentifier");
         CollectionAssert.Contains(removed, "SelfContained");
+        // The restore still gives the tool the runtime identifier of the application, so it never downloads the apphost of the
+        // build machine; the targets run the tool as its assembly, so it has none to miss.
+        var tool = System.Xml.Linq.XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "NeoAstra.Tool", "NeoAstra.Tool.csproj"));
+        Assert.AreEqual("false", tool.Descendants("UseAppHost").SingleOrDefault()?.Value);
     }
 
     [TestMethod]
