@@ -36,6 +36,23 @@ public final class NeoAstraAmazonPurchasesLogicCheck {
         expect(null, NeoAstraAmazonPurchasesLogic.period("Daily"), "unknown period");
         expect(null, NeoAstraAmazonPurchasesLogic.period(null), "no period");
 
+        // An immediate change returns both the new receipt and the canceled old one, in either order. The request answers
+        // the new receipt and the other one must reach PurchaseUpdated without waiting for another foreground sync.
+        List<String> modified = new ArrayList<>();
+        expect("new", NeoAstraAmazonPurchasesLogic.modified(List.of("revoked", "new"), "new"::equals, modified::add), "the requested term answers the change");
+        expect("[revoked]", modified.toString(), "the old term is reported when it comes first");
+        modified.clear();
+        expect("new", NeoAstraAmazonPurchasesLogic.modified(List.of("new", "revoked"), "new"::equals, modified::add), "the requested term comes first");
+        expect("[revoked]", modified.toString(), "the old term is reported when it comes last");
+        modified.clear();
+        expect("current", NeoAstraAmazonPurchasesLogic.modified(List.of("current"), "current"::equals, modified::add), "a deferred change answers the current receipt");
+        expect("[]", modified.toString(), "the returned receipt is not also an update");
+        expect("first", NeoAstraAmazonPurchasesLogic.modified(List.of("first", "other"), "unknown"::equals, modified::add), "an unmatched response still answers its first receipt");
+        expect("[other]", modified.toString(), "an unmatched response reports the remaining receipts");
+        modified.clear();
+        expect(null, NeoAstraAmazonPurchasesLogic.modified(List.<String>of(), "new"::equals, modified::add), "an empty modification has no receipt");
+        expect("[]", modified.toString(), "an empty modification has no updates");
+
         // An answer that comes before its request is registered waits for it.
         NeoAstraAmazonPurchasesLogic.Correlation<String> answers = new NeoAstraAmazonPurchasesLogic.Correlation<>();
         answers.answer("early", "first");

@@ -28,7 +28,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -304,15 +303,12 @@ public final class NeoAstraAmazonPurchases implements NeoAstraServices.Service {
         switch (response.getRequestStatus()) {
             case SUCCESSFUL:
                 remember(response.getUserData());
-                List<Receipt> receipts = response.getReceipts();
-                for (Receipt receipt : receipts) {
-                    if (sku.equals(receipt.getTermSku()) || sku.equals(receipt.getSku()) || sku.equals(receipt.getDeferredSku())) {
-                        report(receipt);
-                        output.put("status", "Success").put("purchase", purchase(receipt, response.getUserData(), "Purchased")); return;
-                    }
-                }
-                if (!receipts.isEmpty()) { report(receipts.get(0)); output.put("status", "Success").put("purchase", purchase(receipts.get(0), response.getUserData(), "Purchased")); return; }
-                output.put("status", "Failed");
+                Receipt receipt = NeoAstraAmazonPurchasesLogic.modified(response.getReceipts(),
+                    candidate -> sku.equals(candidate.getTermSku()) || sku.equals(candidate.getSku()) || sku.equals(candidate.getDeferredSku()),
+                    update -> publish(update, response.getUserData()));
+                if (receipt == null) { output.put("status", "Failed"); return; }
+                report(receipt);
+                output.put("status", "Success").put("purchase", purchase(receipt, response.getUserData(), "Purchased"));
                 return;
             case INVALID_SKU: output.put("status", "NotFound").put("code", "unknown-product"); return;
             // A change of a subscription that the user does not hold.

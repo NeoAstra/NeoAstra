@@ -2,6 +2,7 @@ package com.neoastra.purchases.amazon;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -9,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /** The decisions of the Amazon purchases service without Android or Appstore types, so a plain JVM checks them. */
 final class NeoAstraAmazonPurchasesLogic {
@@ -55,6 +57,23 @@ final class NeoAstraAmazonPurchasesLogic {
     }
 
     private static boolean canceled(String state) { return state.startsWith("true|"); }
+
+    /** Selects the receipt that answers a change of term; the other receipts belong to purchase updates. */
+    static <T> T modified(List<T> receipts, Predicate<T> requested, ReceiptUpdate<T> updates) throws Exception {
+        T selected = null;
+        for (T receipt : receipts) {
+            if (requested.test(receipt)) { selected = receipt; break; }
+        }
+        if (selected == null && !receipts.isEmpty()) selected = receipts.get(0);
+        // An immediate change also returns the canceled receipt of the old term; do not wait for a later foreground sync.
+        for (T receipt : receipts) if (receipt != selected) updates.publish(receipt);
+        return selected;
+    }
+
+    @FunctionalInterface
+    interface ReceiptUpdate<T> {
+        void publish(T receipt) throws Exception;
+    }
 
     /**
      * The answers of the Appstore to their requests. The SDK gives the identifier of a request only once it is sent and answers on
