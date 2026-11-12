@@ -49,7 +49,12 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 @property(nonatomic,assign) BOOL contextMenusDisabled;
 @end
 
+// The press of the left button in a web view of a window, kept on that window: a drag region asks for the move of the window
+// through the page, once AppKit has dispatched other events after that press (see neo_platform_window_begin_drag).
+static const char neo_window_press_key=0;
+
 @implementation NeoAstraWebView
+- (void)mouseDown:(NSEvent*)event { if(self.window)objc_setAssociatedObject(self.window,&neo_window_press_key,event,OBJC_ASSOCIATION_RETAIN_NONATOMIC);[super mouseDown:event]; }
 // AppKit shows nothing for an empty menu; page-level contextmenu handlers have already run by now.
 - (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event { if(self.contextMenusDisabled)[menu removeAllItems];else [super willOpenMenu:menu withEvent:event]; }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
@@ -560,9 +565,16 @@ neoastra_result_t neo_platform_window_set_attribute(neoastra_window_t* window,ne
         // A window that joins every Space cannot also move to the active one, which AppKit refuses with an exception.
         auto behavior=state->window.collectionBehavior;if(enabled){behavior|=NSWindowCollectionBehaviorCanJoinAllSpaces;behavior&=~NSWindowCollectionBehaviorMoveToActiveSpace;}else behavior&=~NSWindowCollectionBehaviorCanJoinAllSpaces;
         @try{state->window.collectionBehavior=behavior;}@catch(NSException*){return NEOASTRA_ERROR_NATIVE_FAILURE;}break;}default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}}
-neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;NSEvent* event=NSApp.currentEvent;
-    // A renderer request arrives after the press; the drag is only valid while that press is still held.
-    if(!event||(event.type!=NSEventTypeLeftMouseDown&&event.type!=NSEventTypeLeftMouseDragged)||(NSEvent.pressedMouseButtons&1u)==0)return NEOASTRA_ERROR_INVALID_STATE;
+neoastra_result_t neo_platform_window_begin_drag(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;
+    // A renderer request arrives after the press, through the web content process; the drag is only valid while that press is still held.
+    if((NSEvent.pressedMouseButtons&1u)==0)return NEOASTRA_ERROR_INVALID_STATE;
+    // By then the current event is often another one than the press: the pressure of a Force Touch trackpad, a move of the pointer,
+    // an event of the application. AppKit moves the window from the press the page saw, which every request of the page follows.
+    NSEvent* press=objc_getAssociatedObject(state->window,&neo_window_press_key);
+    objc_setAssociatedObject(state->window,&neo_window_press_key,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSEvent* current=NSApp.currentEvent;
+    NSEvent* event=press&&press.window==state->window?press:current&&(current.type==NSEventTypeLeftMouseDown||current.type==NSEventTypeLeftMouseDragged)?current:nil;
+    if(!event)return NEOASTRA_ERROR_INVALID_STATE;
     [state->window performWindowDragWithEvent:event];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_window_begin_resize(neoastra_window_t*,neoastra_window_resize_edge_t) noexcept {return NEOASTRA_ERROR_NOT_SUPPORTED;}
 neoastra_result_t neo_platform_window_set_title_bar(neoastra_window_t* window) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_window*>(window->platform);if(!state||!state->window)return NEOASTRA_ERROR_DISPOSED;apply_title_bar(window,state);
