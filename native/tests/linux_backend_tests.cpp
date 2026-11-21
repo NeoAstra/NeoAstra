@@ -328,7 +328,8 @@ void test_retained_native_widgets_do_not_keep_freed_view_userdata(neoastra_app_t
         } else g_object_unref(controller);
     }
     g_object_unref(observed);
-    assert(controllers.size() == 2);
+    // The drop target, the key presses, and the releases of the keys that the host took.
+    assert(controllers.size() == 3);
     for (auto* controller : controllers) gtk_widget_remove_controller(GTK_WIDGET(native), controller);
     neoastra_view_release(view);
     assert(g_object_get_data(G_OBJECT(native), "neoastra.native-view") == nullptr);

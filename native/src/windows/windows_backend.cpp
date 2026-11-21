@@ -3533,6 +3533,8 @@ bool handle_key_chord(neoastra_view_t* view, windows_view* state, ICoreWebView2A
         return true;
     }
     if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN) return false;
+    // A new press settles an earlier claim, whose release may have gone to another view when the host moved the focus.
+    std::erase(state->claimed_keys, key);
     // AltGr reports as the left Ctrl with the right Alt, and types a character on many layouts: it is not a chord.
     if (GetKeyState(VK_RMENU) < 0 && GetKeyState(VK_LCONTROL) < 0) return false;
     const auto control = GetKeyState(VK_CONTROL) < 0, alt = GetKeyState(VK_MENU) < 0, shift = GetKeyState(VK_SHIFT) < 0;

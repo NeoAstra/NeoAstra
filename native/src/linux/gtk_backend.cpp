@@ -27,7 +27,7 @@ struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{
 struct gtk_scheme_context { neoastra_environment_t* environment{}; };
 struct gtk_environment { WebKitWebContext* context{}; WebKitNetworkSession* session{}; gulong download_started{}; std::vector<gtk_scheme_context*> schemes; };
 struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{}; };
-struct gtk_view { GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
+struct gtk_view { GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
 
 neoastra_error_t* make_error(neoastra_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neoastra_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
@@ -912,9 +912,32 @@ std::string gtk_key_name(GtkEventControllerKey* controller,GtkWidget* widget,gui
         default:return neo_key_name_for_character(gdk_keyval_to_unicode(plain));
     }
 }
+// The key controller cannot stop a release, which a legacy controller can: the page must not get the release of a key
+// whose press the host took.
+gboolean claimed_key_event(GtkEventControllerLegacy*,GdkEvent* event,void* data){
+    if(gdk_event_get_event_type(event)!=GDK_KEY_RELEASE)return FALSE;
+    auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;
+    auto* state=static_cast<gtk_view*>(view->platform);if(!state)return FALSE;
+    return std::erase(state->claimed_keys,gdk_key_event_get_keycode(event))?TRUE:FALSE;
+}
 gboolean devtools_key_pressed(GtkEventControllerKey* controller,guint keyval,guint keycode,GdkModifierType modifiers,void* data){
     auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;auto* state=static_cast<gtk_view*>(view->platform);
-    if(state&&state->widget&&neo_view_key_chord(view,modifiers&GDK_CONTROL_MASK,modifiers&GDK_ALT_MASK,modifiers&GDK_SHIFT_MASK,modifiers&(GDK_META_MASK|GDK_SUPER_MASK),gtk_key_name(controller,state->widget,keyval,keycode)))return TRUE;
+    if(state&&state->widget){
+        // WebKitGTK sends a key that its page left unhandled through GTK again, with the time of the original event.
+        auto* event=gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+        const auto time=event?gdk_event_get_time(event):0;
+        if(!event||time!=state->offered_key_time||keycode!=state->offered_keycode){
+            state->offered_key_time=time;
+            state->offered_keycode=keycode;
+            // A new press settles an earlier claim, whose release may have gone to another view.
+            std::erase(state->claimed_keys,keycode);
+            const auto handled=neo_view_key_chord(view,modifiers&GDK_CONTROL_MASK,modifiers&GDK_ALT_MASK,modifiers&GDK_SHIFT_MASK,modifiers&(GDK_META_MASK|GDK_SUPER_MASK),gtk_key_name(controller,state->widget,keyval,keycode));
+            if(handled){
+                if(auto* current=static_cast<gtk_view*>(view->platform))current->claimed_keys.push_back(keycode);
+                return TRUE;
+            }
+        }
+    }
     state=static_cast<gtk_view*>(view->platform);
     if(!state||!state->widget||keyval!=GDK_KEY_F12||(modifiers&(GDK_CONTROL_MASK|GDK_SHIFT_MASK|GDK_ALT_MASK))!=0)return FALSE;
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);
@@ -930,6 +953,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     g_object_set_data(G_OBJECT(state->widget),"neoastra.native-view",view);g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->load_changed=g_signal_connect(state->widget,"load-changed",G_CALLBACK(load_changed),view);state->load_failed=g_signal_connect(state->widget,"load-failed",G_CALLBACK(load_failed),view);g_signal_connect(state->widget,"decide-policy",G_CALLBACK(decide_policy),view);g_signal_connect(state->widget,"permission-request",G_CALLBACK(permission_requested),view);g_signal_connect(state->widget,"create",G_CALLBACK(create_web_view),view);g_signal_connect(state->widget,"script-dialog",G_CALLBACK(script_dialog),view);g_signal_connect(state->widget,"run-file-chooser",G_CALLBACK(run_file_chooser),view);g_signal_connect(state->widget,"authenticate",G_CALLBACK(authenticate),view);g_signal_connect(state->widget,"enter-fullscreen",G_CALLBACK(enter_fullscreen),view);state->title_changed=g_signal_connect(state->widget,"notify::title",G_CALLBACK(title_changed),view);state->uri_changed=g_signal_connect(state->widget,"notify::uri",G_CALLBACK(uri_changed),view);state->history_changed=g_signal_connect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),"changed",G_CALLBACK(history_changed),view);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)state->message_received=g_signal_connect(state->content,"script-message-received::_neoastra_transport_v1",G_CALLBACK(message_received),view);state->process_terminated=g_signal_connect(state->widget,"web-process-terminated",G_CALLBACK(web_process_terminated),view);g_signal_connect(state->widget,"context-menu",G_CALLBACK(context_menu),view);
     // Keep our own controller references so that even a host that removes and retains a controller cannot leave stale userdata.
     state->keys=gtk_event_controller_key_new();gtk_event_controller_set_propagation_phase(state->keys,GTK_PHASE_CAPTURE);g_signal_connect(state->keys,"key-pressed",G_CALLBACK(devtools_key_pressed),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->keys)));
+    state->key_releases=gtk_event_controller_legacy_new();gtk_event_controller_set_propagation_phase(state->key_releases,GTK_PHASE_CAPTURE);g_signal_connect(state->key_releases,"event",G_CALLBACK(claimed_key_event),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->key_releases)));
     state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);apply_view_bounds(view,state->widget);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
 // A window keeps its own pointer to its child, which only gtk_window_set_child clears: unparenting a hosted view directly would leave the window a freed child.
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
@@ -940,6 +964,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     if(state->history_list)g_signal_handlers_disconnect_by_data(state->history_list,view);
     if(state->drop_target)g_signal_handlers_disconnect_by_data(state->drop_target,view);
     if(state->keys)g_signal_handlers_disconnect_by_data(state->keys,view);
+    if(state->key_releases)g_signal_handlers_disconnect_by_data(state->key_releases,view);
     if(state->content)g_signal_handlers_disconnect_by_data(state->content,view);
     if(state->widget){
         g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
@@ -947,6 +972,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
         g_signal_handlers_disconnect_by_data(widget.get(),view);
         if(state->drop_target&&gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(state->drop_target))==widget.get())gtk_widget_remove_controller(widget.get(),GTK_EVENT_CONTROLLER(state->drop_target));
         if(state->keys&&gtk_event_controller_get_widget(state->keys)==widget.get())gtk_widget_remove_controller(widget.get(),state->keys);
+        if(state->key_releases&&gtk_event_controller_get_widget(state->key_releases)==widget.get())gtk_widget_remove_controller(widget.get(),state->key_releases);
         g_object_remove_weak_pointer(G_OBJECT(widget.get()),reinterpret_cast<void**>(&state->widget));
         auto* parent=gtk_widget_get_parent(widget.get());
         if(is_view_stack(parent))gtk_overlay_remove_overlay(GTK_OVERLAY(parent),widget.get());
@@ -957,6 +983,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     if(state->history_list)g_object_unref(state->history_list);
     if(state->drop_target)g_object_unref(state->drop_target);
     if(state->keys)g_object_unref(state->keys);
+    if(state->key_releases)g_object_unref(state->key_releases);
     if(state->content){
         if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)webkit_user_content_manager_unregister_script_message_handler(state->content,"_neoastra_transport_v1",bridge_world);
         g_object_unref(state->content);
