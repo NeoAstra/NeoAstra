@@ -92,6 +92,7 @@ struct windows_view {
     EventRegistrationToken lost_focus{};
     bool focus_registered{};
     bool has_focus{};
+    std::vector<UINT> claimed_keys; // Keys whose press the host kept from the page, whose release the page must not get either.
     EventRegistrationToken navigation_starting{};
     EventRegistrationToken frame_navigation_starting{};
     // The main-frame navigation that the host refused last, without its fragment, and when it did.
@@ -3509,6 +3510,42 @@ void register_view_drop_targets(neoastra_view_t* view, windows_view* state) {
 namespace {
 // F12 and Ctrl+Shift+I are browser accelerators, so turning those off would also take the DevTools shortcut away.
 // It stays available for as long as DevTools themselves are enabled.
+std::string windows_key_name(UINT key) {
+    if (key >= VK_F1 && key <= VK_F24) return "F" + std::to_string(key - VK_F1 + 1);
+    switch (key) {
+        case VK_RETURN: return "Enter"; case VK_ESCAPE: return "Escape"; case VK_TAB: return "Tab"; case VK_SPACE: return "Space";
+        case VK_BACK: return "Backspace"; case VK_DELETE: return "Delete"; case VK_INSERT: return "Insert"; case VK_HOME: return "Home";
+        case VK_END: return "End"; case VK_PRIOR: return "PageUp"; case VK_NEXT: return "PageDown"; case VK_LEFT: return "Left";
+        case VK_RIGHT: return "Right"; case VK_UP: return "Up"; case VK_DOWN: return "Down";
+        default: return neo_key_name_for_character(MapVirtualKeyW(key, MAPVK_VK_TO_CHAR) & 0x7FFFFFFF);
+    }
+}
+
+// Offers a key to the host before the page. Returns whether the event is settled, so that nothing else may handle it.
+bool handle_key_chord(neoastra_view_t* view, windows_view* state, ICoreWebView2AcceleratorKeyPressedEventArgs* args, COREWEBVIEW2_KEY_EVENT_KIND kind) {
+    UINT key{};
+    if (FAILED(args->get_VirtualKey(&key))) return false;
+    if (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_UP) {
+        const auto claimed = std::find(state->claimed_keys.begin(), state->claimed_keys.end(), key);
+        if (claimed == state->claimed_keys.end()) return false;
+        state->claimed_keys.erase(claimed);
+        (void)args->put_Handled(TRUE);
+        return true;
+    }
+    if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN) return false;
+    // AltGr reports as the left Ctrl with the right Alt, and types a character on many layouts: it is not a chord.
+    if (GetKeyState(VK_RMENU) < 0 && GetKeyState(VK_LCONTROL) < 0) return false;
+    const auto control = GetKeyState(VK_CONTROL) < 0, alt = GetKeyState(VK_MENU) < 0, shift = GetKeyState(VK_SHIFT) < 0;
+    const auto meta = GetKeyState(VK_LWIN) < 0 || GetKeyState(VK_RWIN) < 0;
+    const auto handled = neo_view_key_chord(view, control, alt, shift, meta, windows_key_name(key));
+    // The host may have released the view from its handler.
+    if (view->platform != state) { if (handled) (void)args->put_Handled(TRUE); return true; }
+    if (!handled) return false;
+    if (std::find(state->claimed_keys.begin(), state->claimed_keys.end(), key) == state->claimed_keys.end()) state->claimed_keys.push_back(key);
+    (void)args->put_Handled(TRUE);
+    return true;
+}
+
 HRESULT register_devtools_shortcut(neoastra_view_t* view, windows_view* state) {
     return state->controller->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
         [view](ICoreWebView2Controller*, ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT {
@@ -3518,7 +3555,9 @@ HRESULT register_devtools_shortcut(neoastra_view_t* view, windows_view* state) {
             COREWEBVIEW2_KEY_EVENT_KIND kind{};
             COREWEBVIEW2_PHYSICAL_KEY_STATUS status{};
             UINT key{};
-            if (!state || !state->core || FAILED(args->get_KeyEventKind(&kind)) || kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN ||
+            if (!state || !state->core || FAILED(args->get_KeyEventKind(&kind))) return S_OK;
+            if (handle_key_chord(view, state, args, kind)) return S_OK;
+            if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN ||
                 FAILED(args->get_VirtualKey(&key)) || FAILED(args->get_PhysicalKeyStatus(&status)) || status.WasKeyDown) return S_OK;
             const auto core = state->core;
             const auto control = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;

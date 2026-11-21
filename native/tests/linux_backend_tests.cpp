@@ -731,6 +731,62 @@ void test_views_share_their_window(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+struct key_chords {
+    int count{};
+    std::string last;
+};
+
+// Takes Ctrl+Shift+P and leaves every other chord to the page.
+uint32_t NEOASTRA_CALL take_chord(void* context, neoastra_string_view_t chord) {
+    auto* state = static_cast<key_chords*>(context);
+    state->count++;
+    state->last.assign(reinterpret_cast<const char*>(chord.data), static_cast<size_t>(chord.length));
+    return state->last == "Ctrl+Shift+P" ? 1 : 0;
+}
+
+// What the key controller of a view answers for a press, which GTK then keeps from the page when it is true.
+gboolean press_key(GtkWidget* widget, guint keyval, GdkModifierType modifiers) {
+    GdkKeymapKey* keys{};
+    int count{};
+    assert(gdk_display_map_keyval(gtk_widget_get_display(widget), keyval, &keys, &count) && count > 0);
+    const auto keycode = keys[0].keycode;
+    g_free(keys);
+    auto* controllers = gtk_widget_observe_controllers(widget);
+    gboolean handled = FALSE;
+    bool found = false;
+    for (guint index = 0; !found && index < g_list_model_get_n_items(controllers); index++) {
+        auto* controller = static_cast<GtkEventController*>(g_list_model_get_item(controllers, index));
+        if (GTK_IS_EVENT_CONTROLLER_KEY(controller) && gtk_event_controller_get_propagation_phase(controller) == GTK_PHASE_CAPTURE) {
+            g_signal_emit_by_name(controller, "key-pressed", keyval, keycode, modifiers, &handled);
+            found = true;
+        }
+        g_object_unref(controller);
+    }
+    g_object_unref(controllers);
+    assert(found);
+    return handled;
+}
+
+// A chord goes to the host before the page, and only one that the host takes stops there. A plain key is not a chord.
+void test_key_chords_reach_the_host(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* widget = GTK_WIDGET(web_view(view));
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    key_chords chords;
+    assert(neoastra_view_set_key_chord_callback(view, take_chord, &chords) == NEOASTRA_OK);
+    const auto control_shift = static_cast<GdkModifierType>(GDK_CONTROL_MASK | GDK_SHIFT_MASK);
+    assert(press_key(widget, GDK_KEY_P, control_shift) && chords.count == 1 && chords.last == "Ctrl+Shift+P");
+    assert(!press_key(widget, GDK_KEY_K, control_shift) && chords.count == 2 && chords.last == "Ctrl+Shift+K");
+    assert(!press_key(widget, GDK_KEY_a, static_cast<GdkModifierType>(0)) && chords.count == 2);
+    assert(neoastra_view_set_key_chord_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+    assert(!press_key(widget, GDK_KEY_P, control_shift) && chords.count == 2);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // A view on explicit bounds sits at its place from the top-left corner of the window, beside a view that fills it, and
 // does not size the window. It fills the window again when it is asked to.
 void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
@@ -1013,6 +1069,7 @@ int main() {
     test_resource_callback_can_release_its_view_and_environment(app);
     test_views_share_their_window(app);
     test_bounded_view_keeps_its_place(app);
+    test_key_chords_reach_the_host(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);

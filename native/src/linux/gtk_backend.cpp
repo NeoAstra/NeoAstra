@@ -899,8 +899,23 @@ namespace {
 // Suppresses WebKit's default menu when the host turned it off; page-level contextmenu handlers have already run.
 gboolean context_menu(WebKitWebView*,WebKitContextMenu*,WebKitHitTestResult*,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return TRUE;auto* state=static_cast<gtk_view*>(view->platform);return state&&state->context_menus_disabled?TRUE:FALSE;}
 // WebKitGTK has no DevTools shortcut of its own, so F12 opens the inspector whenever developer extras are enabled.
-gboolean devtools_key_pressed(GtkEventControllerKey*,guint keyval,guint,GdkModifierType modifiers,void* data){
+std::string gtk_key_name(GtkEventControllerKey* controller,GtkWidget* widget,guint keyval,guint keycode){
+    // The key without Shift, so that Ctrl+Shift+1 is the key 1 and not the character it would type.
+    guint plain=keyval;
+    const int group=gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller))?static_cast<int>(gtk_event_controller_key_get_group(controller)):0;
+    (void)gdk_display_translate_key(gtk_widget_get_display(widget),keycode,static_cast<GdkModifierType>(0),group,&plain,nullptr,nullptr,nullptr);
+    if(plain>=GDK_KEY_F1&&plain<=GDK_KEY_F24)return "F"+std::to_string(plain-GDK_KEY_F1+1);
+    switch(plain){
+        case GDK_KEY_Return:case GDK_KEY_KP_Enter:return "Enter";case GDK_KEY_Escape:return "Escape";case GDK_KEY_Tab:case GDK_KEY_ISO_Left_Tab:return "Tab";case GDK_KEY_space:return "Space";
+        case GDK_KEY_BackSpace:return "Backspace";case GDK_KEY_Delete:return "Delete";case GDK_KEY_Insert:return "Insert";case GDK_KEY_Home:return "Home";case GDK_KEY_End:return "End";
+        case GDK_KEY_Page_Up:return "PageUp";case GDK_KEY_Page_Down:return "PageDown";case GDK_KEY_Left:return "Left";case GDK_KEY_Right:return "Right";case GDK_KEY_Up:return "Up";case GDK_KEY_Down:return "Down";
+        default:return neo_key_name_for_character(gdk_keyval_to_unicode(plain));
+    }
+}
+gboolean devtools_key_pressed(GtkEventControllerKey* controller,guint keyval,guint keycode,GdkModifierType modifiers,void* data){
     auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;auto* state=static_cast<gtk_view*>(view->platform);
+    if(state&&state->widget&&neo_view_key_chord(view,modifiers&GDK_CONTROL_MASK,modifiers&GDK_ALT_MASK,modifiers&GDK_SHIFT_MASK,modifiers&(GDK_META_MASK|GDK_SUPER_MASK),gtk_key_name(controller,state->widget,keyval,keycode)))return TRUE;
+    state=static_cast<gtk_view*>(view->platform);
     if(!state||!state->widget||keyval!=GDK_KEY_F12||(modifiers&(GDK_CONTROL_MASK|GDK_SHIFT_MASK|GDK_ALT_MASK))!=0)return FALSE;
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);
     if(!webkit_settings_get_enable_developer_extras(webkit_web_view_get_settings(web_view)))return FALSE;

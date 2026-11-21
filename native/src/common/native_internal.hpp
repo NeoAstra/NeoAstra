@@ -629,6 +629,7 @@ struct neoastra_view final : neo_ui_ref_counted {
     neoastra_rect_t bounds{};
     bool fill_parent{true};
     bool visible{true}; // What the host asked for; a hidden window hides the view as well, without changing this.
+    neo_callback_slot<neoastra_key_chord_callback_t> key_chords;
     std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
     std::mutex decisions_mutex;
     neoastra_decision_t* decisions{};
@@ -1103,6 +1104,11 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept;
+// The portable name of a key that types a character: A, 7, Comma. Empty for any other character.
+std::string neo_key_name_for_character(uint32_t character);
+// Offers a key press to the host before the page. Only a press with Ctrl, Alt or Meta, or of a function key, is a chord.
+// Returns whether the host keeps it from the page. The host may release the view from the callback.
+bool neo_view_key_chord(neoastra_view_t* view, bool control, bool alt, bool shift, bool meta, const std::string& key) noexcept;
 // The first other view of the window of a view that the host shows, which takes the keyboard when that view is hidden.
 inline neoastra_view_t* neo_visible_sibling(const neoastra_view_t* view) noexcept {
     if (!view->window) return nullptr;

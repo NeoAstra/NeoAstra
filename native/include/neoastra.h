@@ -205,6 +205,8 @@ typedef struct neoastra_capability_info { uint32_t size; uint32_t version; neoas
 
 typedef void (NEOASTRA_CALL *neoastra_dispatch_callback_t)(void* context);
 typedef void (NEOASTRA_CALL *neoastra_event_callback_t)(void* context, const neoastra_event_t* event);
+/* Called on the UI thread before the page gets a key chord such as Ctrl+Shift+P. A nonzero result keeps the chord from the page. */
+typedef uint32_t (NEOASTRA_CALL *neoastra_key_chord_callback_t)(void* context, neoastra_string_view_t chord);
 typedef void (NEOASTRA_CALL *neoastra_log_callback_t)(void* context, neoastra_log_level_t level, neoastra_string_view_t category, neoastra_string_view_t message, uint64_t thread_id, uint64_t timestamp_ns, int64_t native_code, uint64_t object_id);
 
 typedef struct neoastra_app_options { uint32_t size; uint32_t version; neoastra_string_view_t application_name; neoastra_app_shutdown_mode_t shutdown_mode; uint32_t maximum_pending_dispatches; uint32_t reserved; neoastra_log_callback_t log_callback; void* log_context; } neoastra_app_options_t;
@@ -378,6 +380,7 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_event_callback(ne
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t*, neoastra_rect_t, uint32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_visible(neoastra_view_t*, uint32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_focus(neoastra_view_t*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_key_chord_callback(neoastra_view_t*, neoastra_key_chord_callback_t, void*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t*, neoastra_string_view_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_string_view_t, const uint8_t*, uint64_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_error_t**);

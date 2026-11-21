@@ -53,7 +53,60 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 // through the page, once AppKit has dispatched other events after that press (see neo_platform_window_begin_drag).
 static const char neo_window_press_key=0;
 
-@implementation NeoAstraWebView
+static std::string neo_mac_key_name(NSEvent* event) {
+    switch (event.keyCode) {
+        case 36: case 76: return "Enter"; case 53: return "Escape"; case 48: return "Tab"; case 49: return "Space"; case 51: return "Backspace";
+        case 117: return "Delete"; case 115: return "Home"; case 119: return "End"; case 116: return "PageUp"; case 121: return "PageDown";
+        case 123: return "Left"; case 124: return "Right"; case 125: return "Down"; case 126: return "Up";
+        case 122: return "F1"; case 120: return "F2"; case 99: return "F3"; case 118: return "F4"; case 96: return "F5"; case 97: return "F6";
+        case 98: return "F7"; case 100: return "F8"; case 101: return "F9"; case 109: return "F10"; case 103: return "F11"; case 111: return "F12";
+        case 105: return "F13"; case 107: return "F14"; case 113: return "F15"; case 106: return "F16"; case 64: return "F17"; case 79: return "F18";
+        case 80: return "F19"; case 90: return "F20";
+        default: break;
+    }
+    // The key without Shift or Option, so that Cmd+Shift+1 is the key 1 and not the character it would type.
+    NSString* characters = [event charactersByApplyingModifiers:0];
+    return characters.length ? neo_key_name_for_character([characters characterAtIndex:0]) : std::string{};
+}
+
+@implementation NeoAstraWebView {
+    NSMutableIndexSet* _claimedKeys; // Keys whose press the host kept from the page, whose release the page must not get either.
+    NSTimeInterval _offeredTimestamp; // AppKit can pass one press through both performKeyEquivalent: and keyDown:.
+    unsigned short _offeredKey;
+}
+- (BOOL)neoHoldsKeyboard {
+    NSResponder* responder = self.window.firstResponder;
+    return [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:self];
+}
+- (BOOL)neoClaimKeyEvent:(NSEvent*)event {
+    auto* view = self.nativeView;
+    if (!view) return NO;
+    if (event.timestamp == _offeredTimestamp && event.keyCode == _offeredKey) return NO;
+    _offeredTimestamp = event.timestamp;
+    _offeredKey = event.keyCode;
+    const auto flags = event.modifierFlags;
+    const bool handled = neo_view_key_chord(view, flags & NSEventModifierFlagControl, flags & NSEventModifierFlagOption, flags & NSEventModifierFlagShift, flags & NSEventModifierFlagCommand, neo_mac_key_name(event));
+    if (handled) {
+        if (!_claimedKeys) _claimedKeys = [NSMutableIndexSet indexSet];
+        [_claimedKeys addIndex:event.keyCode];
+    } else {
+        [_claimedKeys removeIndex:event.keyCode];
+    }
+    return handled;
+}
+- (BOOL)performKeyEquivalent:(NSEvent*)event {
+    // AppKit asks every view of the window, also those that do not hold the keyboard.
+    if (event.type == NSEventTypeKeyDown && [self neoHoldsKeyboard] && [self neoClaimKeyEvent:event]) return YES;
+    return [super performKeyEquivalent:event];
+}
+- (void)keyDown:(NSEvent*)event {
+    if ([self neoClaimKeyEvent:event]) return;
+    [super keyDown:event];
+}
+- (void)keyUp:(NSEvent*)event {
+    if ([_claimedKeys containsIndex:event.keyCode]) { [_claimedKeys removeIndex:event.keyCode]; return; }
+    [super keyUp:event];
+}
 - (void)mouseDown:(NSEvent*)event { if(self.window)objc_setAssociatedObject(self.window,&neo_window_press_key,event,OBJC_ASSOCIATION_RETAIN_NONATOMIC);[super mouseDown:event]; }
 // AppKit shows nothing for an empty menu; page-level contextmenu handlers have already run by now.
 - (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event { if(self.contextMenusDisabled)[menu removeAllItems];else [super willOpenMenu:menu withEvent:event]; }

@@ -1613,6 +1613,32 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_event_callback_t (delegate*unmanaged[Cdecl]<void*, NativeMethods.neoastra_event_t*, void> from) => new (from);
         }
 
+        /// <summary>
+        /// Called on the UI thread before the page gets a key chord such as Ctrl+Shift+P. A nonzero result keeps the chord from the page.
+        /// </summary>
+        public readonly partial struct neoastra_key_chord_callback_t : IEquatable<neoastra_key_chord_callback_t>
+        {
+            public neoastra_key_chord_callback_t(delegate*unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint> value) => this.Value = value;
+
+            public delegate*unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint> Value { get; }
+
+            public override bool Equals(object obj) => obj is neoastra_key_chord_callback_t other && Equals(other);
+
+            public bool Equals(neoastra_key_chord_callback_t other) => Value == other.Value;
+
+            public override int GetHashCode() => ((nint)(void*)Value).GetHashCode();
+
+            public override string ToString() => ((nint)(void*)Value).ToString();
+
+            public static bool operator ==(neoastra_key_chord_callback_t left, neoastra_key_chord_callback_t right) => left.Equals(right);
+
+            public static bool operator !=(neoastra_key_chord_callback_t left, neoastra_key_chord_callback_t right) => !left.Equals(right);
+
+            public static implicit operator delegate*unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint> (neoastra_key_chord_callback_t from) => from.Value;
+
+            public static implicit operator neoastra_key_chord_callback_t (delegate*unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint> from) => new (from);
+        }
+
         public readonly partial record struct neoastra_app_options_t(NativeMethods.neoastra_app_options Value)
         {
             public static implicit operator NativeMethods.neoastra_app_options (neoastra_app_options_t from) => from.Value;
@@ -2327,6 +2353,10 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_focus")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_focus(NativeMethods.neoastra_view_t arg0);
+
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_set_key_chord_callback")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_set_key_chord_callback(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_key_chord_callback_t arg1, void* arg2);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_navigate")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

@@ -88,6 +88,7 @@
     <ReferenceNativeSymbol Include="neoastra_view_retain" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_bounds" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_event_callback" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_set_key_chord_callback" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_setting" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_visible" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_zoom_factor" SymbolType="Function" />

@@ -6,6 +6,26 @@ using NeoAstra.Interop.Generated;
 
 namespace NeoAstra;
 
+/// <summary>Describes a key chord that a view is about to give to its page.</summary>
+public sealed class NeoKeyChordEventArgs : EventArgs
+{
+    /// <summary>Initializes the arguments of a key chord.</summary>
+    /// <param name="chord">The chord, such as <c>Ctrl+Shift+P</c>.</param>
+    /// <exception cref="ArgumentException"><paramref name="chord"/> is <see langword="null"/>, empty, or white space.</exception>
+    public NeoKeyChordEventArgs(string chord)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(chord);
+        Chord = chord;
+    }
+
+    /// <summary>Gets the chord: its modifiers in the order <c>Ctrl</c>, <c>Alt</c>, <c>Shift</c>, <c>Meta</c>, then the key.</summary>
+    /// <remarks><c>Meta</c> is the Command key on macOS and the Windows key on Windows.</remarks>
+    public string Chord { get; }
+
+    /// <summary>Gets or sets whether the host takes the chord, so that the page gets neither its press nor its release.</summary>
+    public bool Handled { get; set; }
+}
+
 /// <summary>Provides bounded, non-sensitive frontend transport diagnostic information.</summary>
 public sealed class NeoTransportDiagnosticEventArgs : EventArgs
 {

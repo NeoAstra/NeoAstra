@@ -166,9 +166,84 @@ public sealed class ViewWindowTests
         });
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task AChordTheHostTakesNeverReachesThePage_AndOtherKeysDo()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>keys</title>" }, async session =>
+        {
+            const byte Control = 0x11, Shift = 0x10;
+            Assert.AreEqual("0", await session.View.EvaluateScriptAsync("window.keys=[];for(const t of ['keydown','keyup'])addEventListener(t,e=>keys.push(t+':'+e.code+'/'+e.key),true);keys.length"));
+            var parent = session.Window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+            // Windows gives the foreground to a background process only just after it sent input.
+            keybd_event(0x87, 0, 0, 0);
+            keybd_event(0x87, 0, 2, 0);
+            SetForegroundWindow(parent);
+            if (GetForegroundWindow() != parent)
+            {
+                Assert.Inconclusive("This test needs an interactive desktop that gives its window the foreground.");
+                return;
+            }
+
+            session.View.Focus();
+            for (var attempt = 0; attempt < 100 && await session.View.EvaluateScriptAsync("document.hasFocus()") != "true"; attempt++) await Task.Delay(50);
+
+            var chords = new List<string>();
+            session.View.KeyChordPressed += (_, chord) =>
+            {
+                chords.Add(chord.Chord);
+                chord.Handled = chord.Chord == "Ctrl+Shift+K";
+            };
+
+            static void Press(byte first, byte second, byte key)
+            {
+                // The page reads the physical key from the scan code.
+                static byte Scan(byte virtualKey) => (byte)MapVirtualKeyW(virtualKey, 0);
+                keybd_event(first, Scan(first), 0, 0);
+                keybd_event(second, Scan(second), 0, 0);
+                keybd_event(key, Scan(key), 0, 0);
+                keybd_event(key, Scan(key), 2, 0);
+                keybd_event(second, Scan(second), 2, 0);
+                keybd_event(first, Scan(first), 2, 0);
+            }
+
+            session.Stage = "a chord that the host takes";
+            Press(Control, Shift, (byte)'K');
+            for (var attempt = 0; attempt < 100 && !chords.Contains("Ctrl+Shift+K"); attempt++) await Task.Delay(50);
+            CollectionAssert.Contains(chords, "Ctrl+Shift+K");
+
+            session.Stage = "a chord that the host leaves to the page";
+            Press(Control, Shift, (byte)'9');
+            string? keys = null;
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                keys = await session.View.EvaluateScriptAsync("keys.join(' ')");
+                if (keys is not null && keys.Contains("keyup:ControlLeft", StringComparison.Ordinal) && keys.Contains("keyup:Digit9", StringComparison.Ordinal)) break;
+                await Task.Delay(50);
+            }
+
+            CollectionAssert.Contains(chords, "Ctrl+Shift+9");
+            StringAssert.Contains(keys, "keydown:Digit9");
+            Assert.IsFalse(keys!.Contains("KeyK", StringComparison.Ordinal), $"The page got a chord that the host took: {keys}");
+            StringAssert.Contains(keys, "keydown:ControlLeft");
+        });
+    }
+
 #pragma warning disable SYSLIB1054 // Test-only Win32 interop does not need source-generated interop.
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern nint SetFocus(nint window);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int SetForegroundWindow(nint window);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void keybd_event(byte key, byte scan, uint flags, nuint extra);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint MapVirtualKeyW(uint code, uint mapType);
 #pragma warning restore SYSLIB1054
 
     // A view reports its first size before the layout of its window has reached it.

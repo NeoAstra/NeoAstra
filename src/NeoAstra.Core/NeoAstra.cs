@@ -20,6 +20,8 @@ public sealed class NeoAstra : IAsyncDisposable
     private readonly bool _fillsParent;
     private NeoRect _bounds;
     private bool _isVisible = true;
+    private EventHandler<NeoKeyChordEventArgs>? _keyChordPressed;
+    private bool _keyChordsRegistered;
     private readonly TimeSpan _decisionTimeout;
     private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
@@ -179,6 +181,67 @@ public sealed class NeoAstra : IAsyncDisposable
 
             NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
             _isVisible = value;
+        }
+    }
+
+    /// <summary>Occurs on the UI thread before the page gets a key chord, while this view holds the keyboard.</summary>
+    /// <remarks>
+    /// A chord is a key pressed with Ctrl, Alt or Meta, or a function key. Setting <see cref="NeoKeyChordEventArgs.Handled"/> keeps
+    /// its press and its release from the page; any other key reaches the page unchanged. AltGr on Windows is not a chord. The event
+    /// is available on Windows, macOS and Linux. Handlers must return quickly, because the keyboard waits for them.
+    /// </remarks>
+    public event EventHandler<NeoKeyChordEventArgs>? KeyChordPressed
+    {
+        add
+        {
+            ThrowIfDisposed();
+            _keyChordPressed += value;
+            UpdateKeyChordRegistration();
+        }
+        remove
+        {
+            _keyChordPressed -= value;
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                UpdateKeyChordRegistration();
+            }
+        }
+    }
+
+    // Registered only while a handler listens, so that a view without one has no call on each key.
+    private unsafe void UpdateKeyChordRegistration()
+    {
+        var listening = _keyChordPressed is not null;
+        if (listening == _keyChordsRegistered)
+        {
+            return;
+        }
+
+        var result = listening
+            ? NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, new((delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint>)&KeyChord), (void*)GCHandle.ToIntPtr(_eventRoot))
+            : NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, default, null);
+        NativeError.ThrowIfFailed(result, default, "register key chords");
+        _keyChordsRegistered = listening;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe uint KeyChord(void* context, NativeMethods.neoastra_string_view_t chord)
+    {
+        try
+        {
+            if (GCHandle.FromIntPtr((nint)context).Target is not NeoAstra view || view._keyChordPressed is not { } handlers)
+            {
+                return 0;
+            }
+
+            var arguments = new NeoKeyChordEventArgs(Utf8String.Decode(chord));
+            handlers(view, arguments);
+            return arguments.Handled ? 1u : 0u;
+        }
+        catch
+        {
+            // No managed exception may cross the unmanaged callback boundary: a chord that fails goes to the page.
+            return 0;
         }
     }
 
@@ -786,6 +849,13 @@ public sealed class NeoAstra : IAsyncDisposable
         Environment.Application.UnregisterView(this);
         try
         {
+            if (_keyChordsRegistered)
+            {
+                _keyChordPressed = null;
+                _keyChordsRegistered = false;
+                NativeMethods.neoastra_view_set_key_chord_callback(new(_handle.DangerousGetHandle()), default, null);
+            }
+
             NativeMethods.neoastra_view_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
         }
         catch

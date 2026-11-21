@@ -1445,6 +1445,33 @@ neoastra_result_t NEOASTRA_CALL neoastra_profile_clear_data_async(neoastra_profi
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_event_callback(neoastra_view_t* v,neoastra_event_callback_t cb,void* ctx){if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;v->events.set(cb,ctx);return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t* v,neoastra_rect_t bounds,uint32_t fill){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;v->bounds=bounds;v->fill_parent=fill!=0;return neo_platform_view_set_bounds(v);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_visible(neoastra_view_t* v,uint32_t visible){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;v->visible=visible!=0;return neo_platform_view_set_visible(v);}
+// These two are internal C++ helpers among the exported C functions.
+extern "C++" {
+std::string neo_key_name_for_character(uint32_t c){
+    if(c>='a'&&c<='z')c-='a'-'A';
+    if((c>='A'&&c<='Z')||(c>='0'&&c<='9'))return std::string(1,static_cast<char>(c));
+    switch(c){case ',':return "Comma";case '.':return "Period";case '-':return "Minus";case '=':return "Equal";case '/':return "Slash";case ';':return "Semicolon";case '\'':return "Quote";case '[':return "BracketLeft";case ']':return "BracketRight";case '\\':return "Backslash";case '`':return "Backquote";default:return {};}
+}
+bool neo_view_key_chord(neoastra_view_t* view,bool control,bool alt,bool shift,bool meta,const std::string& key) noexcept {
+    neo_retain_guard owner(view);
+    if(!owner||view->ui_destroyed.load(std::memory_order_acquire)||key.empty())return false;
+    const bool function_key=key.size()>=2&&key[0]=='F'&&key[1]>='0'&&key[1]<='9';
+    if(!control&&!alt&&!meta&&!function_key)return false;
+    try {
+        std::string chord;
+        if(control)chord+="Ctrl+";
+        if(alt)chord+="Alt+";
+        if(shift)chord+="Shift+";
+        if(meta)chord+="Meta+";
+        chord+=key;
+        bool handled=false;
+        const neoastra_string_view_t text{reinterpret_cast<const uint8_t*>(chord.data()),chord.size()};
+        view->key_chords.invoke([&](auto callback,void* context){handled=callback(context,text)!=0;});
+        return handled;
+    } catch(...) { return false; }
+}
+}
+neoastra_result_t NEOASTRA_CALL neoastra_view_set_key_chord_callback(neoastra_view_t* v,neoastra_key_chord_callback_t cb,void* ctx){if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;v->key_chords.set(cb,ctx);return NEOASTRA_OK;}
 neoastra_result_t NEOASTRA_CALL neoastra_view_focus(neoastra_view_t* v){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;if(!v->visible)return NEOASTRA_ERROR_INVALID_STATE;return neo_platform_view_focus(v);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid view or URI");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate(v,native_uri,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid URI");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_string_view_t method,neoastra_string_view_t headers,const uint8_t* body,uint64_t length,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri)||!neo_valid_utf8(method)||!neo_valid_utf8(headers)||(length&&!body))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate_request(v,native_uri,neo_string(method),neo_string(headers),body,length,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");}}

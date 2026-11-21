@@ -8,6 +8,7 @@
 #endif
 #include <cassert>
 #include <cstdint>
+#include <string>
 
 namespace {
 
@@ -57,6 +58,24 @@ NSWindow* ns_window(neoastra_window_t* window) {
     handle.version = 1;
     assert(neoastra_window_get_native_handle(window, NEOASTRA_NATIVE_HANDLE_COCOA_NSWINDOW, &handle) == NEOASTRA_OK);
     return (__bridge NSWindow*)handle.value;
+}
+
+struct key_chords {
+    int count{};
+    std::string last;
+};
+
+// Takes Cmd+P and leaves every other chord to the page.
+uint32_t NEOASTRA_CALL take_chord(void* context, neoastra_string_view_t chord) {
+    auto* state = static_cast<key_chords*>(context);
+    state->count++;
+    state->last.assign(reinterpret_cast<const char*>(chord.data), static_cast<size_t>(chord.length));
+    return state->last == "Meta+P" ? 1 : 0;
+}
+
+NSEvent* command_key(NSWindow* window, NSString* characters, unsigned short code, NSTimeInterval timestamp) {
+    return [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:NSEventModifierFlagCommand timestamp:timestamp
+                        windowNumber:window.windowNumber context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:code];
 }
 
 // The distance of a view from the top of its parent, whichever way the parent counts.
@@ -134,6 +153,16 @@ int main() {
         assert(neoastra_view_set_visible(view, 0) == NEOASTRA_OK);
         assert([host.firstResponder isKindOfClass:NSView.class] && [(NSView*)host.firstResponder isDescendantOf:sibling_web]);
         assert(neoastra_view_set_visible(view, 1) == NEOASTRA_OK);
+
+        // A chord goes to the view that holds the keyboard, and only one that the host takes stops there.
+        key_chords chords;
+        assert(neoastra_view_set_key_chord_callback(view, take_chord, &chords) == NEOASTRA_OK);
+        assert(![web performKeyEquivalent:command_key(host, @"p", 35, 1)] && chords.count == 0);
+        assert(neoastra_view_focus(view) == NEOASTRA_OK);
+        assert([web performKeyEquivalent:command_key(host, @"p", 35, 2)] && chords.count == 1 && chords.last == "Meta+P");
+        (void)[web performKeyEquivalent:command_key(host, @"k", 40, 3)];
+        assert(chords.count == 2 && chords.last == "Meta+K");
+        assert(neoastra_view_set_key_chord_callback(view, nullptr, nullptr) == NEOASTRA_OK);
         neoastra_view_release(sibling);
 
         assert(neoastra_view_set_bounds(view, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
