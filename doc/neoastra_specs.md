@@ -1034,6 +1034,8 @@ Multiple views MAY share one window when explicit bounds are used. A typical sta
 
 Explicit bounds MUST count from the top-left corner of the client area of the parent, in the unit of the platform: physical pixels on Windows and Android, points on macOS and iOS, GTK logical pixels on Linux. A view on explicit bounds MUST keep that place when its window resizes, MUST NOT set the size of its window, and MUST be drawn above a view that fills the window. `NeoAstra.SetBounds` moves such a view after its creation.
 
+`NeoAstra.IsVisible` shows or hides one view. A hidden view MUST keep its page and state, and MUST stay hidden when its window is hidden and shown again.
+
 ## 13.6 Window lifetime and popup integration
 
 `NeoApplication` owns the native window registry, while each managed `NeoWindow` owns a safe handle to its native window. Window closure and managed disposal MUST be idempotent and MUST produce one terminal `Closed` notification.
