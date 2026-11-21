@@ -395,8 +395,20 @@ public sealed class NeoMenuService : IAsyncDisposable, INeoApplicationBoundDeskt
         }
         else if (targetId.StartsWith("context:", StringComparison.Ordinal) && _application.TryGetView(targetId[8..], out var view) && view is not null)
         {
-            void Handler() => OwnerDestroyed(targetId); EventHandler windowClosed = (_, _) => OwnerDestroyed(targetId); view.Disposing += Handler; if (view.Window is not null) view.Window.Closed += windowClosed; _ownerDetach[targetId] = () => { view.Disposing -= Handler; if (view.Window is not null) view.Window.Closed -= windowClosed; };
+            void Handler() => OwnerDestroyed(targetId);
+            view.Disposing += Handler;
+            var stopObservingWindow = view.ObserveWindow(() => OwnerDestroyed(targetId), () => RefreshMenu(targetId));
+            _ownerDetach[targetId] = () => { view.Disposing -= Handler; stopObservingWindow(); };
         }
+    }
+
+    // A presenter keeps the native window of a context menu, which is another one after its view moved.
+    private void RefreshMenu(string targetId)
+    {
+        IReadOnlyList<NeoMenuItem>? items;
+        lock (_sync) { if (_disposed || !_menus.TryGetValue(targetId, out items)) return; }
+        try { _presenter?.SetMenu(targetId, items); }
+        catch { OwnerDestroyed(targetId); }
     }
 
     private void DetachOwner(string targetId) { if (_ownerDetach.Remove(targetId, out var detach)) detach(); }

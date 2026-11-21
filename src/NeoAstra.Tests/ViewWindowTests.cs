@@ -223,6 +223,28 @@ public sealed class ViewWindowTests
             Assert.ThrowsExactly<ArgumentException>(() => placed.PlaceOver(placed, 0, 0, 10, 10));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => placed.PlaceOver(session.View, 0, 0, 0, 10));
             Assert.ThrowsExactly<InvalidOperationException>(() => session.View.PlaceOver(otherAnchor, 0, 0, 10, 10));
+
+            session.Stage = "the owners of the view follow its window";
+            var windowsClosed = 0;
+            var moves = 0;
+            var stopObserving = placed.ObserveWindow(() => windowsClosed++, () => moves++);
+            var third = session.Application.CreateWindow(new NeoWindowOptions { Label = "third-anchor", Title = "Third", Width = 500, Height = 400 });
+            third.Show();
+            await using var thirdAnchor = await session.Environment.CreateWebViewAsync(NeoAstraHost.FillWindow(third), new NeoAstraOptions { ViewLabel = "third-anchor-view" });
+            placed.PlaceOver(thirdAnchor, 0, 0, 50, 50);
+            Assert.AreEqual(1, moves);
+            Assert.AreSame(third, placed.Window);
+            var otherClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            other.Closed += (_, _) => otherClosed.TrySetResult();
+            other.Close();
+            await otherClosed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.AreEqual(0, windowsClosed, "The window that the view left must no longer count as its window.");
+            var thirdClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            third.Closed += (_, _) => thirdClosed.TrySetResult();
+            third.Close();
+            await thirdClosed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.AreEqual(1, windowsClosed);
+            stopObserving();
         });
     }
 

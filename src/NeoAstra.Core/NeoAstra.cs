@@ -242,7 +242,52 @@ public sealed class NeoAstra : IAsyncDisposable
         NativeError.ThrowIfFailed(NativeMethods.neoastra_view_place_over(NativeHandle, anchor.NativeHandle, x, y, width, height, &placed), default, "place view");
         var rect = placed.Value;
         _bounds = new NeoRect(rect.x, rect.y, rect.width, rect.height);
+        var previous = _window;
         _window = anchor._window;
+        if (!ReferenceEquals(previous, _window))
+        {
+            WindowMoved?.Invoke(previous, _window);
+        }
+    }
+
+    // Raised on the UI thread after PlaceOver moved the view to another window.
+    private event Action<NeoWindow?, NeoWindow?>? WindowMoved;
+
+    /// <summary>Follows the window that hosts this view, which <see cref="PlaceOver"/> can change.</summary>
+    /// <param name="closed">Called when the window that hosts the view at that moment closes.</param>
+    /// <param name="moved">Called after the view moved to another window, or <see langword="null"/>.</param>
+    /// <returns>An action that ends the observation.</returns>
+    internal Action ObserveWindow(Action closed, Action? moved = null)
+    {
+        var gate = new object();
+        var current = _window;
+        EventHandler handler = (_, _) => closed();
+        if (current is not null)
+        {
+            current.Closed += handler;
+        }
+
+        Action<NeoWindow?, NeoWindow?> follow = (previous, next) =>
+        {
+            lock (gate)
+            {
+                if (previous is not null) previous.Closed -= handler;
+                if (next is not null) next.Closed += handler;
+                current = next;
+            }
+
+            moved?.Invoke();
+        };
+        WindowMoved += follow;
+        return () =>
+        {
+            WindowMoved -= follow;
+            lock (gate)
+            {
+                if (current is not null) current.Closed -= handler;
+                current = null;
+            }
+        };
     }
 
     /// <summary>Occurs on the UI thread before the page gets a key chord, while this view holds the keyboard.</summary>
@@ -907,6 +952,7 @@ public sealed class NeoAstra : IAsyncDisposable
         NativeDropReceived = null;
         NativeNavigationStarted = null;
         Disposing = null;
+        WindowMoved = null;
         Environment.Application.UnregisterView(this);
         try
         {
