@@ -1324,7 +1324,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_view_async(neoastra_
     if(options->popup_request){auto* request=options->popup_request;if(request->kind!=NEOASTRA_DECISION_NEW_WINDOW||request->owner==nullptr||request->owner->environment!=env||options->profile!=request->owner->profile||request->state.load(std::memory_order_acquire)>neo_decision_state::deferred)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup request is no longer valid or opener-compatible");if(request->popup_creation_started.exchange(true,std::memory_order_acq_rel))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup target creation has already started");}
     try{auto* op=make_operation(outop);auto* value=new neoastra_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->maximum_message_size)value->maximum_message_size=options->maximum_message_size;value->bridge_policy=options->bridge_policy;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion(callback,context,op,value,options->popup_request!=nullptr);neoastra_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEOASTRA_OK;}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}}
 neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoastra_environment_t* env,neoastra_capability_t capability,neoastra_capability_info_t* info){
-    if(!env||capability<NEOASTRA_CAPABILITY_CUSTOM_SCHEME||capability>NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if(!env||capability<NEOASTRA_CAPABILITY_CUSTOM_SCHEME||capability>NEOASTRA_CAPABILITY_VIEW_PLACEMENT||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEOASTRA_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoAstra backend";
     static const std::string unavailable="Not exposed by the current portable implementation";
 #if defined(__linux__)
@@ -1416,6 +1416,10 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
         case NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS:
             info->support=NEOASTRA_SUPPORT_NATIVE;break;
 #endif
+#if !defined(__ANDROID__)
+        case NEOASTRA_CAPABILITY_VIEW_PLACEMENT:
+            info->support=NEOASTRA_SUPPORT_NATIVE;break;
+#endif
 #if defined(_WIN32)
         case NEOASTRA_CAPABILITY_PROFILE_NAMED:
         case NEOASTRA_CAPABILITY_CLEAR_DATA_BY_TIME:
@@ -1472,6 +1476,44 @@ bool neo_view_key_chord(neoastra_view_t* view,bool control,bool alt,bool shift,b
 }
 }
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_key_chord_callback(neoastra_view_t* v,neoastra_key_chord_callback_t cb,void* ctx){if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;v->key_chords.set(cb,ctx);return NEOASTRA_OK;}
+neoastra_result_t NEOASTRA_CALL neoastra_view_place_over(neoastra_view_t* v,neoastra_view_t* anchor,double x,double y,double width,double height,neoastra_rect_t* placed){
+    neo_retain_guard owner(v);
+    neo_retain_guard anchor_owner(anchor);
+    if((v&&!owner)||(anchor&&!anchor_owner))return NEOASTRA_ERROR_DISPOSED;
+    if(!v||!anchor||v==anchor||!placed||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(width)||!std::isfinite(height)||width<=0||height<=0||v->environment->app!=anchor->environment->app)return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;
+    if(v->fill_parent||!v->window||!anchor->window||anchor->window->closed.load(std::memory_order_acquire))return NEOASTRA_ERROR_INVALID_STATE;
+    double scale{};
+    auto result=neo_platform_view_css_scale(anchor,&scale);
+    if(result!=NEOASTRA_OK)return result;
+    const double origin_x=anchor->fill_parent?0:anchor->bounds.x,origin_y=anchor->fill_parent?0:anchor->bounds.y;
+    const auto whole=[](double value){return static_cast<int32_t>(std::clamp(std::round(value),-1073741824.0,1073741824.0));};
+    const auto left=whole(origin_x+x*scale),top=whole(origin_y+y*scale);
+    const neoastra_rect_t bounds{left,top,std::max(whole(origin_x+(x+width)*scale)-left,1),std::max(whole(origin_y+(y+height)*scale)-top,1)};
+    if(v->window!=anchor->window){
+        auto* previous=v->window;
+        auto* target=anchor->window;
+        target->retain();
+        auto& views=previous->views;
+        views.erase(std::remove(views.begin(),views.end(),v),views.end());
+        target->views.push_back(v);
+        v->window=target;
+        result=neo_platform_view_set_window(v,previous);
+        if(result!=NEOASTRA_OK){
+            auto& moved=target->views;
+            moved.erase(std::remove(moved.begin(),moved.end(),v),moved.end());
+            previous->views.push_back(v);
+            v->window=previous;
+            target->release();
+            return result;
+        }
+        previous->release();
+    }
+    v->bounds=bounds;
+    result=neo_platform_view_set_bounds(v);
+    if(result==NEOASTRA_OK)*placed=bounds;
+    return result;
+}
 neoastra_result_t NEOASTRA_CALL neoastra_view_focus(neoastra_view_t* v){neo_retain_guard owner(v);if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;if(!v)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;if(!v->visible)return NEOASTRA_ERROR_INVALID_STATE;return neo_platform_view_focus(v);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid view or URI");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate(v,native_uri,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid URI");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t* v,neoastra_string_view_t uri,neoastra_string_view_t method,neoastra_string_view_t headers,const uint8_t* body,uint64_t length,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(uri)||!neo_valid_utf8(method)||!neo_valid_utf8(headers)||(length&&!body))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"navigation must run on the UI thread");try{v->source=neo_string(uri);const auto native_uri=v->source;return neo_platform_view_navigate_request(v,native_uri,neo_string(method),neo_string(headers),body,length,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid navigation request");}}

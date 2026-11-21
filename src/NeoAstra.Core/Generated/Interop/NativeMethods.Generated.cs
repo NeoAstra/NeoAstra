@@ -520,6 +520,8 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_CAPABILITY_TLS_ERROR_DECISIONS = unchecked((uint)31),
 
             NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS = unchecked((uint)32),
+
+            NEOASTRA_CAPABILITY_VIEW_PLACEMENT = unchecked((uint)33),
         }
 
         /// <summary>
@@ -2357,6 +2359,13 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_set_key_chord_callback")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_set_key_chord_callback(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_key_chord_callback_t arg1, void* arg2);
+
+        /// <summary>
+        /// Places a view with explicit bounds over a rectangle of the anchor, given in the CSS pixels of the anchor, moving it to the window of the anchor first, without reloading it. The last argument receives the resulting bounds.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_place_over")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_place_over(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_view_t arg1, double arg2, double arg3, double arg4, double arg5, NativeMethods.neoastra_rect_t* arg6);
 
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_navigate")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]

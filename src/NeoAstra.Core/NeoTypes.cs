@@ -131,6 +131,8 @@ public enum NeoCapability
     TlsErrorDecisions,
     /// <summary>Web-content fullscreen decisions.</summary>
     FullscreenDecisions,
+    /// <summary>Placing a view over a rectangle of another view with <see cref="NeoAstra.PlaceOver"/>, also across windows.</summary>
+    ViewPlacement,
 }
 
 /// <summary>Identifies a backend-specific borrowed native handle.</summary>

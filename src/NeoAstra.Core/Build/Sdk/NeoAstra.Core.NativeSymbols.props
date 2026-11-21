@@ -78,6 +78,7 @@
     <ReferenceNativeSymbol Include="neoastra_view_navigate" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_navigate_request" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_open_devtools" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_place_over" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_point_from_screen" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_point_to_screen" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_post_message" SymbolType="Function" />

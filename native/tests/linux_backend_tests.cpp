@@ -1031,6 +1031,49 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
 
 } // namespace
 
+// A view placed over a view of another window moves there without a reload, on the rectangle of the anchor in its zoom.
+void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* first = create_window(app);
+    auto* second = create_window(app);
+    auto* anchor = create_view(environment, second);
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = first;
+    options.bounds = {0, 0, 100, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    auto* view = static_cast<neoastra_view_t*>(state.value);
+    auto* widget = GTK_WIDGET(web_view(view));
+    assert(neoastra_window_show(first) == NEOASTRA_OK && neoastra_window_show(second) == NEOASTRA_OK);
+    const std::string page = "<!doctype html><title>moved</title><input id=typed>";
+    const std::string base = "http://localhost/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return !webkit_web_view_is_loading(WEBKIT_WEB_VIEW(widget)) && evaluate(view, "document.readyState") == "\"complete\""; });
+    assert(evaluate(view, "window.kept='state';document.getElementById('typed').value='typed';performance.timeOrigin") != "");
+    const auto origin = evaluate(view, "performance.timeOrigin");
+    assert(neoastra_view_set_zoom_factor(anchor, 1.5) == NEOASTRA_OK);
+    neoastra_rect_t placed{};
+    assert(neoastra_view_place_over(view, anchor, 20, 10, 100, 40, &placed) == NEOASTRA_OK);
+    assert(placed.x == 30 && placed.y == 15 && placed.width == 150 && placed.height == 60);
+    assert(GTK_WIDGET(web_view(view)) == widget && gtk_widget_get_root(widget) == GTK_ROOT(gtk_window(second)));
+    wait_until([&] {
+        graphene_rect_t rect{};
+        return gtk_widget_compute_bounds(widget, gtk_widget_get_parent(widget), &rect) && rect.origin.x == 30 && rect.origin.y == 15 &&
+            gtk_widget_get_width(widget) == 150 && gtk_widget_get_height(widget) == 60;
+    });
+    assert(evaluate(view, "window.kept+'/'+document.getElementById('typed').value") == "\"state/typed\"");
+    assert(evaluate(view, "performance.timeOrigin") == origin);
+    neoastra_view_release(view);
+    neoastra_view_release(anchor);
+    neoastra_window_release(first);
+    neoastra_window_release(second);
+    neoastra_environment_release(environment);
+}
+
 int main() {
     // Before anything logs: the renderer test counts the warnings of GTK's renderers.
     g_log_set_writer_func(count_gsk_warnings, nullptr, nullptr);
@@ -1071,6 +1114,7 @@ int main() {
     test_views_share_their_window(app);
     test_bounded_view_keeps_its_place(app);
     test_key_chords_reach_the_host(app);
+    test_view_moves_to_the_window_of_its_anchor(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);

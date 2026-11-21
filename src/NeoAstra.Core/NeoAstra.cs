@@ -18,6 +18,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private readonly SafeViewHandle _handle;
     private readonly NeoAstraHost _host;
     private readonly bool _fillsParent;
+    private NeoWindow? _window;
     private NeoRect _bounds;
     private bool _isVisible = true;
     private EventHandler<NeoKeyChordEventArgs>? _keyChordPressed;
@@ -47,6 +48,7 @@ public sealed class NeoAstra : IAsyncDisposable
         _handle = handle;
         _host = host;
         _fillsParent = host.FillsParent(options);
+        _window = host.Window;
         _bounds = options.Bounds;
         _decisionTimeout = options.DecisionTimeout;
         _viewLabel = options.ViewLabel;
@@ -182,6 +184,65 @@ public sealed class NeoAstra : IAsyncDisposable
             NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
             _isVisible = value;
         }
+    }
+
+    /// <summary>Shows this view over a rectangle of another view, moving it to the window of that view first when needed.</summary>
+    /// <param name="anchor">The view whose page gives the rectangle, in a window of the same application.</param>
+    /// <param name="x">The left of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="y">The top of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="width">The positive width of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="height">The positive height of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <remarks>
+    /// The conversion takes the page zoom, a pinch, and the scale of the display of <paramref name="anchor"/> into account. A move to another
+    /// window does not reload the page: its state and typed text stay. Call this again when the layout or the zoom of the anchor changes.
+    /// <see cref="NeoCapability.ViewPlacement"/> tells whether the backend supports it.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="anchor"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="anchor"/> is this view, or belongs to another application.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A coordinate is not finite, or the size is not positive.</exception>
+    /// <exception cref="InvalidOperationException">This view fills its parent, a view is not in a window, the window of the anchor is closed, or the call is not on the UI thread.</exception>
+    /// <exception cref="NotSupportedException">The backend cannot place views.</exception>
+    /// <exception cref="ObjectDisposedException">This view or <paramref name="anchor"/> has been disposed.</exception>
+    public unsafe void PlaceOver(NeoAstra anchor, double x, double y, double width, double height)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchor);
+        anchor.ThrowIfDisposed();
+        if (ReferenceEquals(anchor, this))
+        {
+            throw new ArgumentException("A view cannot be placed over itself.", nameof(anchor));
+        }
+
+        if (!ReferenceEquals(anchor.Environment.Application, Environment.Application))
+        {
+            throw new ArgumentException("The anchor must belong to the application of this view.", nameof(anchor));
+        }
+
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            throw new ArgumentOutOfRangeException(nameof(x), "The position must be finite.");
+        }
+
+        if (!double.IsFinite(width) || width <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "The width must be positive and finite.");
+        }
+
+        if (!double.IsFinite(height) || height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "The height must be positive and finite.");
+        }
+
+        if (_fillsParent)
+        {
+            throw new InvalidOperationException("A view that fills its parent cannot be placed. Create it with NeoAstraHost.BoundedInWindow.");
+        }
+
+        NativeMethods.neoastra_rect_t placed = default;
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_place_over(NativeHandle, anchor.NativeHandle, x, y, width, height, &placed), default, "place view");
+        var rect = placed.Value;
+        _bounds = new NeoRect(rect.x, rect.y, rect.width, rect.height);
+        _window = anchor._window;
     }
 
     /// <summary>Occurs on the UI thread before the page gets a key chord, while this view holds the keyboard.</summary>
@@ -877,10 +938,10 @@ public sealed class NeoAstra : IAsyncDisposable
 
     /// <summary>Gets the window that hosts this view, or <see langword="null"/> when the view was created in a native parent of the application (<see cref="NeoAstraHost.FromNativeParent"/> and the other <c>From</c> methods of <see cref="NeoAstraHost"/>).</summary>
     /// <remarks>
-    /// A view created with <see cref="NeoAstraHost.FillWindow"/> keeps its window for its whole life, so a view reported by an event,
+    /// A view keeps its window until <see cref="PlaceOver"/> moves it to the window of another view, so a view reported by an event,
     /// such as the <see cref="NeoPageDragEndedEventArgs.TargetView"/> of a page drag dropped on another window, leads to that window.
     /// </remarks>
-    public NeoWindow? Window => _host.Window;
+    public NeoWindow? Window => _window;
 
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
 

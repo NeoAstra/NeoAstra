@@ -1040,6 +1040,8 @@ Explicit bounds MUST count from the top-left corner of the client area of the pa
 
 `NeoAstra.KeyChordPressed` MUST offer a key pressed with Ctrl, Alt or Meta, or a function key, to the host before the page, on Windows, macOS and Linux. The chord is named as a menu accelerator is, such as `Ctrl+Shift+P`. A chord that the host handles MUST reach the page neither as a press nor as a release, and any other key MUST reach the page unchanged.
 
+`NeoAstra.PlaceOver` shows a view with explicit bounds over a rectangle of another view, given in the CSS pixels of that view, with its zoom and display scale. When that view is in another window, the placed view MUST move there without reloading, and MUST keep its page state and typed text.
+
 ## 13.6 Window lifetime and popup integration
 
 `NeoApplication` owns the native window registry, while each managed `NeoWindow` owns a safe handle to its native window. Window closure and managed disposal MUST be idempotent and MUST produce one terminal `Closed` notification.

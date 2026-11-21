@@ -1038,6 +1038,8 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     state->webview.hidden = !view->visible;
     return NEOASTRA_OK;
 }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t*, neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
     auto* state = static_cast<uikit_view*>(view->platform);
     if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;

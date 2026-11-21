@@ -63,6 +63,8 @@ void neo_platform_view_destroy(neoastra_view_t*) noexcept { ++completion_test_ba
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_view_set_visible(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_view_focus(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double* scale) noexcept { *scale = 1.0; return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t*, neoastra_window_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t*, const std::string&, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t*, const std::string&, const std::string&, const std::string&, const uint8_t*, uint64_t, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t*, const std::string&, const std::string&, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }

@@ -168,6 +168,66 @@ public sealed class ViewWindowTests
 
     [TestMethod]
     [Timeout(60000)]
+    public async Task PlaceOverFollowsTheAnchor_AcrossWindowsWithoutReloading()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>anchor</title>" }, async session =>
+        {
+            const string PhysicalSize = "Math.round(innerWidth * devicePixelRatio) + 'x' + Math.round(innerHeight * devicePixelRatio)";
+            Assert.AreEqual(NeoSupportLevel.Native, session.Environment.GetCapability(NeoCapability.ViewPlacement).SupportLevel);
+            var other = session.Application.CreateWindow(new NeoWindowOptions { Label = "other-anchor", Title = "Other", Width = 700, Height = 500 });
+            other.Show();
+            await using var otherAnchor = await session.Environment.CreateWebViewAsync(NeoAstraHost.FillWindow(other), new NeoAstraOptions { ViewLabel = "other-anchor-view" });
+            await otherAnchor.LoadHtmlAsync("<!doctype html><title>other</title>");
+            await using var placed = await session.Environment.CreateWebViewAsync(
+                NeoAstraHost.BoundedInWindow(session.Window),
+                new NeoAstraOptions { ViewLabel = "placed-view", Bounds = new NeoRect(0, 0, 100, 100) });
+            await placed.LoadHtmlAsync("<!doctype html><title>placed</title><input id=typed>");
+            await placed.EvaluateScriptAsync("window.kept = 'state'; document.getElementById('typed').value = 'typed'; 1");
+            var navigations = 0;
+            placed.NavigationCompleted += (_, _) => navigations++;
+
+            static double Ratio(string? value) => double.Parse(value!, System.Globalization.CultureInfo.InvariantCulture);
+            static NeoRect Expected(double ratio, double x, double y, double width, double height)
+            {
+                static int Whole(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
+                var left = Whole(x * ratio);
+                var top = Whole(y * ratio);
+                return new NeoRect(left, top, Whole((x + width) * ratio) - left, Whole((y + height) * ratio) - top);
+            }
+
+            session.Stage = "over a rectangle of the view of its window";
+            var ratio = Ratio(await session.View.EvaluateScriptAsync("devicePixelRatio"));
+            placed.PlaceOver(session.View, 10, 20, 200, 100);
+            Assert.AreSame(session.Window, placed.Window);
+            Assert.AreEqual(Expected(ratio, 10, 20, 200, 100), placed.Bounds);
+
+            session.Stage = "over a view of another window";
+            ratio = Ratio(await otherAnchor.EvaluateScriptAsync("devicePixelRatio"));
+            placed.PlaceOver(otherAnchor, 30, 40, 220, 120);
+            Assert.AreSame(other, placed.Window);
+            var moved = Expected(ratio, 30, 40, 220, 120);
+            Assert.AreEqual(moved, placed.Bounds);
+            Assert.AreEqual($"\"{moved.Width}x{moved.Height}\"", await StableResultAsync(placed, PhysicalSize));
+            Assert.AreEqual("\"state/typed\"", await placed.EvaluateScriptAsync("window.kept + '/' + document.getElementById('typed').value"));
+            Assert.AreEqual(0, navigations);
+
+            session.Stage = "with the zoom of the anchor";
+            otherAnchor.ZoomFactor = 1.5;
+            await StableResultAsync(otherAnchor, "devicePixelRatio");
+            ratio = Ratio(await otherAnchor.EvaluateScriptAsync("devicePixelRatio"));
+            Assert.IsTrue(ratio >= 1.5, $"The anchor is not zoomed: {ratio}.");
+            placed.PlaceOver(otherAnchor, 10, 10, 100, 60);
+            Assert.AreEqual(Expected(ratio, 10, 10, 100, 60), placed.Bounds);
+
+            session.Stage = "calls that are refused";
+            Assert.ThrowsExactly<ArgumentException>(() => placed.PlaceOver(placed, 0, 0, 10, 10));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => placed.PlaceOver(session.View, 0, 0, 0, 10));
+            Assert.ThrowsExactly<InvalidOperationException>(() => session.View.PlaceOver(otherAnchor, 0, 0, 10, 10));
+        });
+    }
+
+    [TestMethod]
+    [Timeout(60000)]
     public async Task AChordTheHostTakesNeverReachesThePage_AndOtherKeysDo()
     {
         await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>keys</title>" }, async session =>

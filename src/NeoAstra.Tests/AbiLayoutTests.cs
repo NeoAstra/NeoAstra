@@ -79,7 +79,7 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_permission_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_process_failure_kind>(0, 3);
         AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 40);
-        AssertEnum<uint, NativeMethods.neoastra_capability>(0, 32);
+        AssertEnum<uint, NativeMethods.neoastra_capability>(0, 33);
         AssertEnum<uint, NativeMethods.neoastra_log_level>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_resource_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_resource_body_kind>(0, 2);

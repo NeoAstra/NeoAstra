@@ -291,6 +291,16 @@ constexpr const char* menu_host_key="neoastra.menu-host";
 
 bool is_view_stack(GtkWidget* widget) noexcept { return widget&&GTK_IS_OVERLAY(widget)&&g_object_get_data(G_OBJECT(widget),view_stack_key); }
 
+// A view on explicit bounds gets exactly its rectangle: left to itself, GTK would give it the natural size of its page.
+// The allocation includes the margins that place the view.
+gboolean view_stack_child_position(GtkOverlay*,GtkWidget* child,GdkRectangle* allocation,void*) noexcept {
+    int width{},height{};
+    gtk_widget_get_size_request(child,&width,&height);
+    if(width<=0||height<=0)return FALSE;
+    *allocation={0,0,gtk_widget_get_margin_start(child)+width,gtk_widget_get_margin_top(child)+height};
+    return TRUE;
+}
+
 // Returns the view stack of a window, which it creates for the first view of the window.
 GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     auto* child=gtk_window_get_child(window);
@@ -299,6 +309,7 @@ GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     if(menu_host){for(auto* item=gtk_widget_get_first_child(child);item;item=gtk_widget_get_next_sibling(item))if(is_view_stack(item))return item;}
     auto* stack=gtk_overlay_new();
     g_object_set_data(G_OBJECT(stack),view_stack_key,stack);
+    g_signal_connect(stack,"get-child-position",G_CALLBACK(view_stack_child_position),nullptr);
     gtk_widget_set_hexpand(stack,TRUE);
     gtk_widget_set_vexpand(stack,TRUE);
     // Anything else that the window holds is replaced, as it was when a view became the child of the window itself.
@@ -310,12 +321,14 @@ GtkWidget* window_view_stack(GtkWindow* window) noexcept {
 // window to the views that fill it. GTK keeps a margin in 16 bits and has no negative one.
 void apply_view_bounds(neoastra_view_t* view,GtkWidget* widget) noexcept {
     const bool fill=view->fill_parent;
-    gtk_widget_set_halign(widget,fill?GTK_ALIGN_FILL:GTK_ALIGN_START);
-    gtk_widget_set_valign(widget,fill?GTK_ALIGN_FILL:GTK_ALIGN_START);
+    auto* parent=gtk_widget_get_parent(widget);
+    // The view stack gives a bounded view its exact rectangle, which the view must fill. Another parent places it by its alignment.
+    const auto align=fill||is_view_stack(parent)?GTK_ALIGN_FILL:GTK_ALIGN_START;
+    gtk_widget_set_halign(widget,align);
+    gtk_widget_set_valign(widget,align);
     gtk_widget_set_margin_start(widget,fill?0:std::clamp(view->bounds.x,0,32767));
     gtk_widget_set_margin_top(widget,fill?0:std::clamp(view->bounds.y,0,32767));
     gtk_widget_set_size_request(widget,fill?-1:std::max(view->bounds.width,1),fill?-1:std::max(view->bounds.height,1));
-    auto* parent=gtk_widget_get_parent(widget);
     if(is_view_stack(parent))gtk_overlay_set_measure_overlay(GTK_OVERLAY(parent),widget,fill);
 }
 
@@ -1004,6 +1017,26 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
         }
     }
     gtk_widget_set_visible(state->widget, view->visible);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    *scale = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(state->widget));
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t*) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    auto* target = view_parent(view);
+    auto* current = gtk_widget_get_parent(state->widget);
+    if (!target || !GTK_IS_WINDOW(target) || !is_view_stack(current)) return NEOASTRA_ERROR_INVALID_STATE;
+    // The stack holds the only reference that a host may not have: the widget and its page must outlive the move.
+    g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
+    gtk_overlay_remove_overlay(GTK_OVERLAY(current), widget.get());
+    gtk_overlay_add_overlay(GTK_OVERLAY(window_view_stack(GTK_WINDOW(target))), widget.get());
+    apply_view_bounds(view, widget.get());
+    gtk_widget_set_visible(widget.get(), view->visible);
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {

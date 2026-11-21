@@ -975,6 +975,8 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     env->CallVoidMethod(state->host, host_set_visible, view->visible ? JNI_TRUE : JNI_FALSE);
     return failed(env, view->environment->app, "Could not show or hide the Android WebView") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
 }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t*, neoastra_window_t*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
     auto* state = view_state(view);
     JNIEnv* env = jni();

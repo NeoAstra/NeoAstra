@@ -1104,6 +1104,10 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept;
+// How many units of its parent one CSS pixel of the view is, with its zoom.
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept;
+// Moves the native view to view->window, already set, from the previous window, keeping its page.
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t* previous) noexcept;
 // The portable name of a key that types a character: A, 7, Comma. Empty for any other character.
 std::string neo_key_name_for_character(uint32_t character);
 // Offers a key press to the host before the page. Only a press with Ctrl, Alt or Meta, or of a function key, is a chord.

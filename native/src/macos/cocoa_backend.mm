@@ -784,6 +784,25 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     state->webview.hidden = !view->visible;
     return NEOASTRA_OK;
 }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    *scale = (state->webview.pageZoom > 0 ? state->webview.pageZoom : 1) * (state->webview.magnification > 0 ? state->webview.magnification : 1);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t*) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    NSView* parent = view_parent(view);
+    if (!parent) return NEOASTRA_ERROR_INVALID_STATE;
+    WKWebView* web = state->webview;
+    [web removeFromSuperview];
+    [parent addSubview:web];
+    web.frame = view_frame(view, parent);
+    web.autoresizingMask = view_autoresizing(view, parent);
+    web.hidden = !view->visible;
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
     auto* state = static_cast<cocoa_view*>(view->platform);
     if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;

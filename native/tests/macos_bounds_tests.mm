@@ -163,7 +163,29 @@ int main() {
         (void)[web performKeyEquivalent:command_key(host, @"k", 40, 3)];
         assert(chords.count == 2 && chords.last == "Meta+K");
         assert(neoastra_view_set_key_chord_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+
+        // A view placed over a view of another window moves there, as the same web view, on the rectangle of the anchor.
+        neoastra_window_t* other = nullptr;
+        assert(neoastra_app_create_window(app, &window_options, &other, nullptr) == NEOASTRA_OK && other != nullptr);
+        neoastra_view_options_t anchor_options{};
+        anchor_options.size = sizeof(anchor_options);
+        anchor_options.version = 1;
+        anchor_options.window = other;
+        anchor_options.fill_parent = 1;
+        completion anchor_state;
+        assert(neoastra_environment_create_view_async(environment, &anchor_options, view_created, &anchor_state, nullptr, nullptr) == NEOASTRA_OK);
+        wait_for(anchor_state);
+        assert(anchor_state.result == NEOASTRA_OK);
+        auto* anchor = static_cast<neoastra_view_t*>(anchor_state.value);
+        neoastra_rect_t placed{};
+        assert(neoastra_view_place_over(sibling, anchor, 20, 30, 150, 90, &placed) == NEOASTRA_OK);
+        assert(placed.x == 20 && placed.y == 30 && placed.width == 150 && placed.height == 90);
+        assert(web_view(sibling) == sibling_web && sibling_web.window == ns_window(other));
+        assert(NSMinX(sibling_web.frame) == 20 && top_of(sibling_web) == 30 && NSWidth(sibling_web.frame) == 150 && NSHeight(sibling_web.frame) == 90);
+        assert(neoastra_view_place_over(anchor, sibling, 0, 0, 10, 10, &placed) == NEOASTRA_ERROR_INVALID_STATE);
         neoastra_view_release(sibling);
+        neoastra_view_release(anchor);
+        neoastra_window_release(other);
 
         assert(neoastra_view_set_bounds(view, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
         assert(NSEqualRects(web.frame, web.superview.bounds));

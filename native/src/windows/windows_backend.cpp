@@ -3681,6 +3681,29 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     const auto shown = view->visible && (!view->window || IsWindowVisible(view_parent(view)));
     return SUCCEEDED(state->controller->put_IsVisible(shown ? TRUE : FALSE)) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
 }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    double zoom = 1.0, rasterization = 1.0;
+    if (FAILED(state->controller->get_ZoomFactor(&zoom)) || !(zoom > 0.0)) zoom = 1.0;
+    ComPtr<ICoreWebView2Controller3> controller3;
+    if (SUCCEEDED(state->controller.As(&controller3)) && (FAILED(controller3->get_RasterizationScale(&rasterization)) || !(rasterization > 0.0))) rasterization = 1.0;
+    *scale = zoom * rasterization;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t* previous) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    const auto parent = view_parent(view);
+    if (!parent) return NEOASTRA_ERROR_INVALID_STATE;
+    if (FAILED(state->controller->put_ParentWindow(parent))) return NEOASTRA_ERROR_NATIVE_FAILURE;
+    if (auto* host = previous ? static_cast<windows_window*>(previous->platform) : nullptr; host && host->focused_view == view) host->focused_view = nullptr;
+    (void)state->controller->NotifyParentWindowPositionChanged();
+    if (state->drop_window) SetWindowPos(state->drop_window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    layout_title_bar(view->window);
+    if (view->platform != state) return NEOASTRA_ERROR_DISPOSED;
+    return SUCCEEDED(state->controller->put_IsVisible(view->visible && IsWindowVisible(parent) ? TRUE : FALSE)) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
+}
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
     auto* state = static_cast<windows_view*>(view->platform);
     if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
