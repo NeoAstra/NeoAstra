@@ -68,6 +68,7 @@
     <ReferenceNativeSymbol Include="neoastra_view_add_script_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_capture_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_evaluate_script_async" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_focus" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_get_native_handle" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_get_zoom_factor" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_go_back" SymbolType="Function" />

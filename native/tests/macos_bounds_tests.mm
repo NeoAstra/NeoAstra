@@ -118,7 +118,23 @@ int main() {
         assert(NSMinX(web.frame) == 60 && top_of(web) == 50 && NSWidth(web.frame) == 300 && NSHeight(web.frame) == 120);
 
         assert(neoastra_view_set_visible(view, 0) == NEOASTRA_OK && web.hidden);
+        assert(neoastra_view_focus(view) == NEOASTRA_ERROR_INVALID_STATE);
         assert(neoastra_view_set_visible(view, 1) == NEOASTRA_OK && !web.hidden);
+
+        // The keyboard goes to a sibling when the view that holds it hides.
+        view_options.bounds = {300, 200, 100, 80};
+        completion sibling_state;
+        assert(neoastra_environment_create_view_async(environment, &view_options, view_created, &sibling_state, nullptr, nullptr) == NEOASTRA_OK);
+        wait_for(sibling_state);
+        assert(sibling_state.result == NEOASTRA_OK);
+        auto* sibling = static_cast<neoastra_view_t*>(sibling_state.value);
+        auto* sibling_web = web_view(sibling);
+        assert(neoastra_view_focus(view) == NEOASTRA_OK);
+        assert([(NSView*)host.firstResponder isDescendantOf:web]);
+        assert(neoastra_view_set_visible(view, 0) == NEOASTRA_OK);
+        assert([host.firstResponder isKindOfClass:NSView.class] && [(NSView*)host.firstResponder isDescendantOf:sibling_web]);
+        assert(neoastra_view_set_visible(view, 1) == NEOASTRA_OK);
+        neoastra_view_release(sibling);
 
         assert(neoastra_view_set_bounds(view, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
         assert(NSEqualRects(web.frame, web.superview.bounds));

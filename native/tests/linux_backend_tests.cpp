@@ -770,7 +770,18 @@ void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
     assert(neoastra_view_set_visible(bounded, 0) == NEOASTRA_OK && !gtk_widget_get_visible(bounded_widget));
     assert(neoastra_window_hide(window) == NEOASTRA_OK && neoastra_window_show(window) == NEOASTRA_OK);
     assert(!gtk_widget_get_visible(bounded_widget) && gtk_widget_get_visible(filling_widget));
+    assert(neoastra_view_focus(bounded) == NEOASTRA_ERROR_INVALID_STATE);
     assert(neoastra_view_set_visible(bounded, 1) == NEOASTRA_OK && gtk_widget_get_visible(bounded_widget));
+    // The keyboard goes to the sibling when the view that holds it hides.
+    const auto holds_keyboard = [&](GtkWidget* widget) {
+        auto* focus = gtk_root_get_focus(GTK_ROOT(host));
+        return focus && (focus == widget || gtk_widget_is_ancestor(focus, widget));
+    };
+    assert(neoastra_view_focus(bounded) == NEOASTRA_OK);
+    wait_until([&] { return holds_keyboard(bounded_widget); });
+    assert(neoastra_view_set_visible(bounded, 0) == NEOASTRA_OK);
+    wait_until([&] { return holds_keyboard(filling_widget); });
+    assert(neoastra_view_set_visible(bounded, 1) == NEOASTRA_OK);
     assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
     wait_until([&] { return gtk_widget_get_width(bounded_widget) == gtk_widget_get_width(stack) && gtk_widget_get_height(bounded_widget) == gtk_widget_get_height(stack); });
     neoastra_view_release(bounded);

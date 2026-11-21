@@ -179,7 +179,7 @@ JavaVM* java_vm{};
 jclass host_class{};
 jclass response_class{};
 jclass string_class{};
-jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_set_visible{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
+jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_set_visible{}, host_focus{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jclass services_class{};
 jmethodID services_call{};
@@ -794,6 +794,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     host_create = env->GetStaticMethodID(host_class, "create", "(Landroid/view/ViewGroup;J[Ljava/lang/String;Ljava/lang/String;)Lcom/neoastra/backend/NeoAstraWebHost;");
     host_set_bounds = env->GetMethodID(host_class, "setBounds", "(IIIIZ)V");
     host_set_visible = env->GetMethodID(host_class, "setVisible", "(Z)V");
+    host_focus = env->GetMethodID(host_class, "focus", "()Z");
     host_navigate = env->GetMethodID(host_class, "navigate", "(Ljava/lang/String;)V");
     host_load_html = env->GetMethodID(host_class, "loadHtml", "(Ljava/lang/String;Ljava/lang/String;)V");
     host_command = env->GetMethodID(host_class, "command", "(I)V");
@@ -973,6 +974,14 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     if (!state || !state->host || !env) return NEOASTRA_ERROR_NOT_INITIALIZED;
     env->CallVoidMethod(state->host, host_set_visible, view->visible ? JNI_TRUE : JNI_FALSE);
     return failed(env, view->environment->app, "Could not show or hide the Android WebView") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = view_state(view);
+    JNIEnv* env = jni();
+    if (!state || !state->host || !env) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    const auto focused = env->CallBooleanMethod(state->host, host_focus);
+    if (failed(env, view->environment->app, "Could not focus the Android WebView")) return NEOASTRA_ERROR_NATIVE_FAILURE;
+    return focused ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
 }
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {
     auto* state = view_state(view);

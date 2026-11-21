@@ -133,9 +133,9 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Moves and resizes a view that has explicit bounds, in the client area of its parent, from the top-left corner.</summary>
     /// <param name="bounds">The new bounds, in the unit that <see cref="Bounds"/> describes, with a positive size.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="bounds"/> does not have a positive size.</exception>
-    /// <exception cref="InvalidOperationException">The view fills its parent.</exception>
+    /// <exception cref="InvalidOperationException">The view fills its parent, or the call is not on the UI thread.</exception>
     /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
-    /// <exception cref="NeoAstraException">The call is not on the UI thread, or the backend refuses the bounds.</exception>
+    /// <exception cref="NeoAstraException">The backend refuses the bounds.</exception>
     public void SetBounds(NeoRect bounds)
     {
         ThrowIfDisposed();
@@ -159,8 +159,9 @@ public sealed class NeoAstra : IAsyncDisposable
     /// A hidden view keeps its page and its state, and its page reports <c>document.visibilityState</c> as <c>hidden</c>.
     /// A view stays hidden when its window is hidden and shown again. A view that is shown is still not on screen while its window is hidden.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">The call is not on the UI thread.</exception>
     /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
-    /// <exception cref="NeoAstraException">The call is not on the UI thread, or the backend refuses the change.</exception>
+    /// <exception cref="NeoAstraException">The backend refuses the change.</exception>
     public bool IsVisible
     {
         get
@@ -179,6 +180,20 @@ public sealed class NeoAstra : IAsyncDisposable
             NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
             _isVisible = value;
         }
+    }
+
+    /// <summary>Gives the keyboard to this view.</summary>
+    /// <remarks>
+    /// A window gives the keyboard back to the view that held it last when it is activated again. When a view that holds the
+    /// keyboard is hidden, the keyboard goes to another visible view of its window.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The view is hidden or cannot take the keyboard, or the call is not on the UI thread.</exception>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend fails to move the keyboard.</exception>
+    public void Focus()
+    {
+        ThrowIfDisposed();
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_focus(NativeHandle), default, "focus view");
     }
 
     /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>

@@ -715,7 +715,28 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     }
 }
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoBack"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoForward"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
-neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;state->webview.hidden=!view->visible;return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    // AppKit would leave the keyboard with the window when the view that holds it hides: it goes to a sibling instead.
+    if (!view->visible) {
+        NSWindow* window = state->webview.window;
+        NSResponder* responder = window.firstResponder;
+        if ([responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:state->webview]) {
+            auto* sibling = neo_visible_sibling(view);
+            auto* sibling_state = sibling ? static_cast<cocoa_view*>(sibling->platform) : nullptr;
+            [window makeFirstResponder:sibling_state ? (NSResponder*)sibling_state->webview : nil];
+        }
+    }
+    state->webview.hidden = !view->visible;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    NSWindow* window = state->webview.window;
+    return window && [window makeFirstResponder:state->webview] ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
+}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view_autoresizing(view,parent);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation URI");[state->webview loadRequest:[NSURLRequest requestWithURL:url]];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url||method.empty()||body_length>NSUIntegerMax)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation request");NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];request.HTTPMethod=ns_string(method);if(body_length)request.HTTPBody=[NSData dataWithBytes:body length:(NSUInteger)body_length];for(NSString* line in [ns_string(headers) componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]){NSRange separator=[line rangeOfString:@":"];if(separator.location==NSNotFound)continue;NSString* name=[[line substringToIndex:separator.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];NSString* value=[[line substringFromIndex:separator.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];if(name.length)[request setValue:value forHTTPHeaderField:name];}[state->webview loadRequest:request];return NEOASTRA_OK;}}

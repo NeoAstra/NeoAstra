@@ -49,6 +49,7 @@ struct windows_app {
 };
 struct windows_window {
     HWND hwnd{};
+    neoastra_view_t* focused_view{}; // UI-thread-only weak reference: the view that last held the keyboard.
     bool fullscreen{};
     bool leaving_fullscreen{}; // The sizes a window passes through on its way out of the fullscreen state are not states of its own.
     DWORD restored_style{};
@@ -87,6 +88,10 @@ struct windows_view {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> core;
     HWND drop_window{};
+    EventRegistrationToken got_focus{};
+    EventRegistrationToken lost_focus{};
+    bool focus_registered{};
+    bool has_focus{};
     EventRegistrationToken navigation_starting{};
     EventRegistrationToken frame_navigation_starting{};
     // The main-frame navigation that the host refused last, without its fragment, and when it did.
@@ -587,6 +592,11 @@ void sync_window_view_visibility(neoastra_window_t* window, bool visible) noexce
 }
 
 void remove_view_events(windows_view* state) noexcept {
+    if (state && state->controller && state->focus_registered) {
+        state->controller->remove_GotFocus(state->got_focus);
+        state->controller->remove_LostFocus(state->lost_focus);
+        state->focus_registered = false;
+    }
     if (!state || !state->core || !state->events_registered) return;
     state->core->remove_NavigationStarting(state->navigation_starting);
     state->core->remove_FrameNavigationStarting(state->frame_navigation_starting);
@@ -861,6 +871,27 @@ void report_history(neoastra_view_t* view, ICoreWebView2* core) noexcept {
     core->get_CanGoBack(&back);
     core->get_CanGoForward(&forward);
     neo_emit_view(view, NEOASTRA_EVENT_HISTORY_CHANGED, 0, nullptr, nullptr, neo_history_directions(view, back, forward));
+}
+
+// Tells which view of a window holds the keyboard, which WebView2 reports from the focus of its own browser window.
+HRESULT register_view_focus(neoastra_view_t* view, windows_view* state) {
+    auto result = state->controller->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>([view](ICoreWebView2Controller*, IUnknown*) -> HRESULT {
+        neo_retain_guard owner(view);
+        auto* current = owner ? static_cast<windows_view*>(view->platform) : nullptr;
+        if (!current) return S_OK;
+        current->has_focus = true;
+        if (view->window) if (auto* host = static_cast<windows_window*>(view->window->platform)) host->focused_view = view;
+        return S_OK;
+    }).Get(), &state->got_focus);
+    if (FAILED(result)) return result;
+    result = state->controller->add_LostFocus(Callback<ICoreWebView2FocusChangedEventHandler>([view](ICoreWebView2Controller*, IUnknown*) -> HRESULT {
+        neo_retain_guard owner(view);
+        if (auto* current = owner ? static_cast<windows_view*>(view->platform) : nullptr) current->has_focus = false;
+        return S_OK;
+    }).Get(), &state->lost_focus);
+    if (SUCCEEDED(result)) state->focus_registered = true;
+    else state->controller->remove_GotFocus(state->got_focus);
+    return result;
 }
 
 HRESULT register_view_events(neoastra_view_t* view, windows_view* state) {
@@ -1943,8 +1974,18 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
             break;
         case WM_SETFOCUS:
             // Activation gives the keyboard to the window itself, which has nothing to type into: hand it to the
-            // browser of its first visible view, which gives it back to the element of the page that had it.
+            // browser of the view that held it last, else of its first visible view, which gives it back to the
+            // element of the page that had it.
             if (!IsWindowVisible(hwnd)) break;
+            if (auto* host = static_cast<windows_window*>(window->platform); host && host->focused_view) {
+                auto* held = host->focused_view;
+                neo_retain_guard held_owner(held);
+                auto* held_state = held_owner ? static_cast<windows_view*>(held->platform) : nullptr;
+                const auto held_controller = held_state ? held_state->controller : ComPtr<ICoreWebView2Controller>{};
+                BOOL held_visible{};
+                if (held_controller && SUCCEEDED(held_controller->get_IsVisible(&held_visible)) && held_visible &&
+                    SUCCEEDED(held_controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC))) break;
+            }
             for (size_t index = 0; index < window->views.size();) {
                 auto* view = window->views[index];
                 {
@@ -3534,6 +3575,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 // The caption overlays stay above every view.
                 layout_title_bar(view->window);
             }
+            if (SUCCEEDED(result)) result = register_view_focus(view, state);
             if (SUCCEEDED(result)) result = register_view_events(view, state);
             if (SUCCEEDED(result)) intercept_page_drags(view, state);
             if (SUCCEEDED(result)) result = register_devtools_shortcut(view, state);
@@ -3579,8 +3621,30 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     if (FAILED(result)) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 controller creation could not be started", result, "webview2"); return false; }
     return true;
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;end_page_drag(state);remove_view_events(state);for(auto& registration:state->drop_registrations){static_cast<view_drop_target*>(registration.target.Get())->detach_view();if(GetPropW(registration.window,L"NeoAstra.DropTarget")==registration.target.Get())RemovePropW(registration.window,L"NeoAstra.DropTarget");(void)RevokeDragDrop(registration.window);}state->drop_registrations.clear();if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
-neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;const auto shown=view->visible&&(!view->window||IsWindowVisible(view_parent(view)));return SUCCEEDED(state->controller->put_IsVisible(shown?TRUE:FALSE))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept { auto* state=static_cast<windows_view*>(view->platform);if(!state)return;if(view->window)if(auto* host=static_cast<windows_window*>(view->window->platform);host&&host->focused_view==view)host->focused_view=nullptr;end_page_drag(state);remove_view_events(state);for(auto& registration:state->drop_registrations){static_cast<view_drop_target*>(registration.target.Get())->detach_view();if(GetPropW(registration.window,L"NeoAstra.DropTarget")==registration.target.Get())RemovePropW(registration.window,L"NeoAstra.DropTarget");(void)RevokeDragDrop(registration.window);}state->drop_registrations.clear();if(state->controller)state->controller->Close();delete state;view->platform=nullptr; }
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    if (!view->visible && view->window) {
+        auto* host = static_cast<windows_window*>(view->window->platform);
+        if (host && host->focused_view == view) host->focused_view = nullptr;
+        // The keyboard goes to a sibling before the view hides: a hidden browser would keep it with nothing to type into.
+        if (state->has_focus) {
+            auto* sibling = neo_visible_sibling(view);
+            auto* sibling_state = sibling ? static_cast<windows_view*>(sibling->platform) : nullptr;
+            if (!sibling_state || !sibling_state->controller || FAILED(sibling_state->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)))
+                SetFocus(view_parent(view));
+            if (view->platform != state) return NEOASTRA_ERROR_DISPOSED;
+        }
+    }
+    const auto shown = view->visible && (!view->window || IsWindowVisible(view_parent(view)));
+    return SUCCEEDED(state->controller->put_IsVisible(shown ? TRUE : FALSE)) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
+}
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<windows_view*>(view->platform);
+    if (!state || !state->controller) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    return SUCCEEDED(state->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)) ? NEOASTRA_OK : NEOASTRA_ERROR_NATIVE_FAILURE;
+}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->controller)return NEOASTRA_ERROR_NOT_INITIALIZED;return SUCCEEDED(state->controller->put_Bounds(view_bounds(view)))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(uri);const auto result=state->core->Navigate(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);auto* environment=static_cast<windows_environment*>(view->environment->platform);if(!state||!state->core||!environment||!environment->value)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");if(method.empty()||body_length>ULONG_MAX)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WebView2 request method or body length");ComPtr<IStream> content;if(body_length){HRESULT result=CreateStreamOnHGlobal(nullptr,TRUE,&content);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WebView2 request body",result,"webview2");ULONG written{};result=content->Write(body,static_cast<ULONG>(body_length),&written);LARGE_INTEGER start{};if(SUCCEEDED(result)&&written==body_length)result=content->Seek(start,STREAM_SEEK_SET,nullptr);if(FAILED(result)||written!=body_length)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not write WebView2 request body",FAILED(result)?result:E_FAIL,"webview2");}ComPtr<ICoreWebView2Environment2> environment2;ComPtr<ICoreWebView2_2> core2;auto result=environment->value.As(&environment2);if(SUCCEEDED(result))result=state->core.As(&core2);if(FAILED(result))return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"This WebView2 runtime does not support request navigation",result,"webview2");ComPtr<ICoreWebView2WebResourceRequest> request;result=environment2->CreateWebResourceRequest(widen(uri).c_str(),widen(method).c_str(),content.Get(),widen(headers).c_str(),&request);if(SUCCEEDED(result))result=core2->NavigateWithWebResourceRequest(request.Get());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 request navigation failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}

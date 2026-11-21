@@ -1102,6 +1102,13 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept;
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept;
+// The first other view of the window of a view that the host shows, which takes the keyboard when that view is hidden.
+inline neoastra_view_t* neo_visible_sibling(const neoastra_view_t* view) noexcept {
+    if (!view->window) return nullptr;
+    for (auto* sibling : view->window->views) if (sibling != view && sibling->visible && sibling->platform) return sibling;
+    return nullptr;
+}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view, const std::string& uri, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view, const std::string& uri, const std::string& method, const std::string& headers, const uint8_t* body, uint64_t body_length, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view, const std::string& html, const std::string& base_uri, neoastra_error_t** error) noexcept;

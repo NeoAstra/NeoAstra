@@ -119,6 +119,58 @@ public sealed class ViewWindowTests
         });
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task TheKeyboardReturnsToTheViewThatHeldIt_AndLeavesAViewThatHides()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>focus</title><input autofocus>" }, async session =>
+        {
+            await using var bounded = await session.Environment.CreateWebViewAsync(
+                NeoAstraHost.BoundedInWindow(session.Window),
+                new NeoAstraOptions { ViewLabel = "focused-view", Bounds = new NeoRect(20, 30, 320, 240) });
+            await bounded.LoadHtmlAsync("<!doctype html><title>bounded</title><input autofocus>");
+
+            async Task ExpectKeyboardAsync(NeoAstra holder, NeoAstra other, string stage)
+            {
+                session.Stage = stage;
+                for (var attempt = 0; attempt < 100; attempt++)
+                {
+                    if (await holder.EvaluateScriptAsync("document.hasFocus()") == "true" &&
+                        await other.EvaluateScriptAsync("document.hasFocus()") == "false")
+                    {
+                        return;
+                    }
+
+                    await Task.Delay(50);
+                }
+
+                Assert.Fail($"The keyboard is not in the expected view: {stage}.");
+            }
+
+            bounded.Focus();
+            await ExpectKeyboardAsync(bounded, session.View, "focus on the bounded view");
+            session.View.Focus();
+            await ExpectKeyboardAsync(session.View, bounded, "focus back on the view that fills the window");
+
+            bounded.Focus();
+            await ExpectKeyboardAsync(bounded, session.View, "focus on the bounded view again");
+            var parent = session.Window.GetNativeHandle(NeoNativeHandleKind.Win32Hwnd).Value;
+            SetFocus(0);
+            SetFocus(parent);
+            await ExpectKeyboardAsync(bounded, session.View, "the window gets the keyboard back");
+
+            bounded.IsVisible = false;
+            await ExpectKeyboardAsync(session.View, bounded, "the view that holds the keyboard hides");
+            session.Stage = "a hidden view cannot take the keyboard";
+            Assert.ThrowsExactly<InvalidOperationException>(bounded.Focus);
+        });
+    }
+
+#pragma warning disable SYSLIB1054 // Test-only Win32 interop does not need source-generated interop.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint SetFocus(nint window);
+#pragma warning restore SYSLIB1054
+
     // A view reports its first size before the layout of its window has reached it.
     private static async Task<string?> StableResultAsync(NeoAstra view, string script)
     {

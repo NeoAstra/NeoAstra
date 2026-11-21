@@ -191,6 +191,8 @@ public final class NeoAstraWebHost {
 
     public void setVisible(boolean visible) { webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE); }
 
+    public boolean focus() { return webView.requestFocus(); }
+
     public void navigate(String url) { reply = null; webView.loadUrl(url); }
 
     public void loadHtml(String html, String baseUrl) { reply = null; webView.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null); }

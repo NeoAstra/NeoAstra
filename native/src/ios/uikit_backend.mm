@@ -1038,6 +1038,11 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     state->webview.hidden = !view->visible;
     return NEOASTRA_OK;
 }
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<uikit_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    return [state->webview becomeFirstResponder] ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
+}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {
     auto* state = static_cast<uikit_view*>(view->platform);
     if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;

@@ -1036,6 +1036,8 @@ Explicit bounds MUST count from the top-left corner of the client area of the pa
 
 `NeoAstra.IsVisible` shows or hides one view. A hidden view MUST keep its page and state, and MUST stay hidden when its window is hidden and shown again.
 
+`NeoAstra.Focus` gives the keyboard to a visible view. When its window is activated again, the keyboard MUST return to the view that held it last. When a view that holds the keyboard hides, the keyboard MUST go to another visible view of its window.
+
 ## 13.6 Window lifetime and popup integration
 
 `NeoApplication` owns the native window registry, while each managed `NeoWindow` owns a safe handle to its native window. Window closure and managed disposal MUST be idempotent and MUST produce one terminal `Closed` notification.
