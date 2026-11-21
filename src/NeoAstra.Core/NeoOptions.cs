@@ -495,6 +495,7 @@ public sealed class NeoAstraOptions
     public NeoRect Bounds { get; set; } = new(0, 0, 800, 600);
 
     /// <summary>Gets or sets whether the view automatically fills its parent.</summary>
+    /// <remarks><see cref="NeoAstraHost.FillWindow"/> always fills its window and <see cref="NeoAstraHost.BoundedInWindow"/> never does; both ignore this property.</remarks>
     public bool FillParent { get; set; } = true;
 
     /// <summary>Gets or sets the maximum web-message size in UTF-8 bytes, including the transport envelope. Defaults to <see cref="int.MaxValue"/>; configure a smaller positive value to bound memory use.</summary>

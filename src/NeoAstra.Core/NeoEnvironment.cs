@@ -92,6 +92,11 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(host);
         cancellationToken.ThrowIfCancellationRequested();
         options.Validate(this);
+        if (host.IsBounded && (options.Bounds.Width <= 0 || options.Bounds.Height <= 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "A bounded view must have bounds with positive dimensions.");
+        }
+
         if (host.Window is not null && !ReferenceEquals(host.Window.Application, Application))
         {
             throw new ArgumentException("The host window must belong to this environment's application.", nameof(host));
@@ -136,7 +141,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
                 width = options.Bounds.Width,
                 height = options.Bounds.Height,
             },
-            fill_parent = host.Window is not null || options.FillParent ? 1u : 0u,
+            fill_parent = !host.IsBounded && (host.Window is not null || options.FillParent) ? 1u : 0u,
             maximum_message_size = options.MaximumMessageSize,
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
             popup_request = new NativeMethods.neoastra_decision_t(popupRequest),

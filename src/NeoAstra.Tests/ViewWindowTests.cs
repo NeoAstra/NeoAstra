@@ -32,4 +32,52 @@ public sealed class ViewWindowTests
             }
         });
     }
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task ABoundedViewKeepsItsBounds_BesideTheViewThatFillsTheWindow()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>bounded view</title>" }, async session =>
+        {
+            const string PhysicalSize = "Math.round(innerWidth * devicePixelRatio) + 'x' + Math.round(innerHeight * devicePixelRatio)";
+            var fillingSize = await StableResultAsync(session.View, PhysicalSize);
+
+            session.Stage = "a bounded view in the window";
+            await using var bounded = await session.Environment.CreateWebViewAsync(
+                NeoAstraHost.BoundedInWindow(session.Window),
+                new NeoAstraOptions { ViewLabel = "bounded-view", Bounds = new NeoRect(20, 30, 320, 240) });
+            await bounded.LoadHtmlAsync("<!doctype html><title>bounded</title>");
+
+            Assert.AreSame(session.Window, bounded.Window);
+            Assert.AreEqual("\"320x240\"", await bounded.EvaluateScriptAsync(PhysicalSize));
+            Assert.AreEqual(fillingSize, await StableResultAsync(session.View, PhysicalSize));
+
+            session.Stage = "a bounded view without a size";
+            await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(async () =>
+                await session.Environment.CreateWebViewAsync(
+                    NeoAstraHost.BoundedInWindow(session.Window),
+                    new NeoAstraOptions { ViewLabel = "empty-view", Bounds = new NeoRect(0, 0, 0, 240) }));
+        });
+    }
+
+    // A view reports its first size before the layout of its window has reached it.
+    private static async Task<string?> StableResultAsync(NeoAstra view, string script)
+    {
+        var last = await view.EvaluateScriptAsync(script);
+        for (var unchanged = 0; unchanged < 3;)
+        {
+            await Task.Delay(150);
+            var current = await view.EvaluateScriptAsync(script);
+            unchanged = current == last ? unchanged + 1 : 0;
+            last = current;
+        }
+
+        return last;
+    }
+
+    [TestMethod]
+    public void ABoundedHostNeedsAWindow()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => NeoAstraHost.BoundedInWindow(null!));
+    }
 }

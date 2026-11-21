@@ -2466,6 +2466,7 @@ public readonly record struct NeoNativeHandle(
 public sealed class NeoAstraHost
 {
     public static NeoAstraHost FillWindow(NeoWindow window);
+    public static NeoAstraHost BoundedInWindow(NeoWindow window);
     public static NeoAstraHost FromWin32Hwnd(nint hwnd);
     public static NeoAstraHost FromCocoaNSView(nint nsView);
     public static NeoAstraHost FromGtkWidget(nint gtkWidget);
