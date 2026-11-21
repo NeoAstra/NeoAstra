@@ -306,6 +306,19 @@ GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     return stack;
 }
 
+// A view on explicit bounds stays at its place from the top-left corner of its parent, and leaves the size of the
+// window to the views that fill it. GTK keeps a margin in 16 bits and has no negative one.
+void apply_view_bounds(neoastra_view_t* view,GtkWidget* widget) noexcept {
+    const bool fill=view->fill_parent;
+    gtk_widget_set_halign(widget,fill?GTK_ALIGN_FILL:GTK_ALIGN_START);
+    gtk_widget_set_valign(widget,fill?GTK_ALIGN_FILL:GTK_ALIGN_START);
+    gtk_widget_set_margin_start(widget,fill?0:std::clamp(view->bounds.x,0,32767));
+    gtk_widget_set_margin_top(widget,fill?0:std::clamp(view->bounds.y,0,32767));
+    gtk_widget_set_size_request(widget,fill?-1:std::max(view->bounds.width,1),fill?-1:std::max(view->bounds.height,1));
+    auto* parent=gtk_widget_get_parent(widget);
+    if(is_view_stack(parent))gtk_overlay_set_measure_overlay(GTK_OVERLAY(parent),widget,fill);
+}
+
 void release_dispatch_app(void* data) { static_cast<neoastra_app_t*>(data)->release(); }
 gboolean dispatch_on_main(void* data) {
     auto* app=static_cast<neoastra_app_t*>(data);
@@ -902,7 +915,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     g_object_set_data(G_OBJECT(state->widget),"neoastra.native-view",view);g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->load_changed=g_signal_connect(state->widget,"load-changed",G_CALLBACK(load_changed),view);state->load_failed=g_signal_connect(state->widget,"load-failed",G_CALLBACK(load_failed),view);g_signal_connect(state->widget,"decide-policy",G_CALLBACK(decide_policy),view);g_signal_connect(state->widget,"permission-request",G_CALLBACK(permission_requested),view);g_signal_connect(state->widget,"create",G_CALLBACK(create_web_view),view);g_signal_connect(state->widget,"script-dialog",G_CALLBACK(script_dialog),view);g_signal_connect(state->widget,"run-file-chooser",G_CALLBACK(run_file_chooser),view);g_signal_connect(state->widget,"authenticate",G_CALLBACK(authenticate),view);g_signal_connect(state->widget,"enter-fullscreen",G_CALLBACK(enter_fullscreen),view);state->title_changed=g_signal_connect(state->widget,"notify::title",G_CALLBACK(title_changed),view);state->uri_changed=g_signal_connect(state->widget,"notify::uri",G_CALLBACK(uri_changed),view);state->history_changed=g_signal_connect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),"changed",G_CALLBACK(history_changed),view);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)state->message_received=g_signal_connect(state->content,"script-message-received::_neoastra_transport_v1",G_CALLBACK(message_received),view);state->process_terminated=g_signal_connect(state->widget,"web-process-terminated",G_CALLBACK(web_process_terminated),view);g_signal_connect(state->widget,"context-menu",G_CALLBACK(context_menu),view);
     // Keep our own controller references so that even a host that removes and retains a controller cannot leave stale userdata.
     state->keys=gtk_event_controller_key_new();gtk_event_controller_set_propagation_phase(state->keys,GTK_PHASE_CAPTURE);g_signal_connect(state->keys,"key-pressed",G_CALLBACK(devtools_key_pressed),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->keys)));
-    state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);gtk_overlay_set_measure_overlay(GTK_OVERLAY(stack),state->widget,TRUE);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
+    state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);apply_view_bounds(view,state->widget);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
 // A window keeps its own pointer to its child, which only gtk_window_set_child clears: unparenting a hosted view directly would leave the window a freed child.
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     auto* state=static_cast<gtk_view*>(view->platform);if(!state)return;
@@ -935,7 +948,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     }
     delete state;
 }
-neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;gtk_widget_set_size_request(state->widget,view->fill_parent?-1:view->bounds.width,view->fill_parent?-1:view->bounds.height);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;apply_view_bounds(view,state->widget);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;webkit_web_view_load_uri(WEBKIT_WEB_VIEW(state->widget),uri.c_str());return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t*,uint64_t body_length,neoastra_error_t** error) noexcept {if(method=="GET"&&headers.empty()&&body_length==0)return neo_platform_view_navigate(view,uri,error);return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK 6.0 does not expose arbitrary-method top-level navigation");}
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view,const std::string& html,const std::string& base,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;webkit_web_view_load_html(WEBKIT_WEB_VIEW(state->widget),html.c_str(),base.empty()?nullptr:base.c_str());return NEOASTRA_OK;}

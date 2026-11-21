@@ -731,6 +731,49 @@ void test_views_share_their_window(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+// A view on explicit bounds sits at its place from the top-left corner of the window, beside a view that fills it, and
+// does not size the window. It fills the window again when it is asked to.
+void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    auto* filling = create_view(environment, window);
+    auto* filling_widget = GTK_WIDGET(web_view(filling));
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = window;
+    options.bounds = {40, 30, 200, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK && state.value != nullptr);
+    auto* bounded = static_cast<neoastra_view_t*>(state.value);
+    auto* bounded_widget = GTK_WIDGET(web_view(bounded));
+    auto* stack = gtk_widget_get_parent(bounded_widget);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    const auto placed = [&](float x, float y, int width, int height) {
+        graphene_rect_t rect{};
+        return gtk_widget_compute_bounds(bounded_widget, stack, &rect) && rect.origin.x == x && rect.origin.y == y &&
+            gtk_widget_get_width(bounded_widget) == width && gtk_widget_get_height(bounded_widget) == height;
+    };
+    wait_until([&] { return placed(40, 30, 200, 100); });
+    wait_until([&] { return gtk_widget_get_width(filling_widget) == gtk_widget_get_width(GTK_WIDGET(host)); });
+    assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 0) == NEOASTRA_OK);
+    wait_until([&] { return placed(60, 50, 300, 120); });
+    // A view on bounds larger than the window does not make the window grow.
+    const auto window_width = gtk_widget_get_width(GTK_WIDGET(host));
+    assert(neoastra_view_set_bounds(bounded, {0, 0, window_width + 200, 100}, 0) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(bounded_widget) == window_width + 200; });
+    assert(gtk_widget_get_width(GTK_WIDGET(host)) == window_width);
+    assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(bounded_widget) == gtk_widget_get_width(stack) && gtk_widget_get_height(bounded_widget) == gtk_widget_get_height(stack); });
+    neoastra_view_release(bounded);
+    neoastra_view_release(filling);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The menu presenter of the managed side (LinuxMenus.cs) puts a box, which it marks, between a window and its content
 // for a menu bar above the content. The views of the window stay together inside that box, whether the box came after
 // the first of them or before it.
@@ -953,6 +996,7 @@ int main() {
     test_retained_closed_window_does_not_write_to_freed_backend_state(app);
     test_resource_callback_can_release_its_view_and_environment(app);
     test_views_share_their_window(app);
+    test_bounded_view_keeps_its_place(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);
