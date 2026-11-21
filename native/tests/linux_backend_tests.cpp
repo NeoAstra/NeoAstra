@@ -766,6 +766,11 @@ void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
     assert(neoastra_view_set_bounds(bounded, {0, 0, window_width + 200, 100}, 0) == NEOASTRA_OK);
     wait_until([&] { return gtk_widget_get_width(bounded_widget) == window_width + 200; });
     assert(gtk_widget_get_width(GTK_WIDGET(host)) == window_width);
+    // A view that the host hid stays hidden when its window hides and comes back.
+    assert(neoastra_view_set_visible(bounded, 0) == NEOASTRA_OK && !gtk_widget_get_visible(bounded_widget));
+    assert(neoastra_window_hide(window) == NEOASTRA_OK && neoastra_window_show(window) == NEOASTRA_OK);
+    assert(!gtk_widget_get_visible(bounded_widget) && gtk_widget_get_visible(filling_widget));
+    assert(neoastra_view_set_visible(bounded, 1) == NEOASTRA_OK && gtk_widget_get_visible(bounded_widget));
     assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
     wait_until([&] { return gtk_widget_get_width(bounded_widget) == gtk_widget_get_width(stack) && gtk_widget_get_height(bounded_widget) == gtk_widget_get_height(stack); });
     neoastra_view_release(bounded);

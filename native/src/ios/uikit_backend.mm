@@ -1032,6 +1032,12 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
         view->platform = nullptr;
     }
 }
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<uikit_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    state->webview.hidden = !view->visible;
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {
     auto* state = static_cast<uikit_view*>(view->platform);
     if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;

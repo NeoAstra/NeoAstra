@@ -19,6 +19,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private readonly NeoAstraHost _host;
     private readonly bool _fillsParent;
     private NeoRect _bounds;
+    private bool _isVisible = true;
     private readonly TimeSpan _decisionTimeout;
     private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
@@ -151,6 +152,33 @@ public sealed class NeoAstra : IAsyncDisposable
         var native = new NativeMethods.neoastra_rect { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
         NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_bounds(NativeHandle, new NativeMethods.neoastra_rect_t(native), 0), default, "set view bounds");
         _bounds = bounds;
+    }
+
+    /// <summary>Gets or sets whether the host shows this view.</summary>
+    /// <remarks>
+    /// A hidden view keeps its page and its state, and its page reports <c>document.visibilityState</c> as <c>hidden</c>.
+    /// A view stays hidden when its window is hidden and shown again. A view that is shown is still not on screen while its window is hidden.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The call is not on the UI thread, or the backend refuses the change.</exception>
+    public bool IsVisible
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _isVisible;
+        }
+        set
+        {
+            ThrowIfDisposed();
+            if (value == _isVisible)
+            {
+                return;
+            }
+
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
+            _isVisible = value;
+        }
     }
 
     /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>

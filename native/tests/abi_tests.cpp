@@ -382,6 +382,7 @@ int main() {
     double zoom{};
     assert(neoastra_view_get_zoom_factor(nullptr, &zoom) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_zoom_factor(nullptr, 1.0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_visible(nullptr, 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     neoastra_app_quit(app, 7);
     neoastra_app_release(app);
     neoastra_window_release(window);

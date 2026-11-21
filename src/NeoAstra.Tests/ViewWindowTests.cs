@@ -85,6 +85,40 @@ public sealed class ViewWindowTests
         });
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task AHiddenViewKeepsItsPage_AndStaysHiddenWhenItsWindowComesBack()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>visibility</title>" }, async session =>
+        {
+            const string State = "document.visibilityState";
+            await using var view = await session.Environment.CreateWebViewAsync(
+                NeoAstraHost.BoundedInWindow(session.Window),
+                new NeoAstraOptions { ViewLabel = "hidden-view", Bounds = new NeoRect(20, 30, 320, 240) });
+            await view.LoadHtmlAsync("<!doctype html><title>hidden</title>");
+            await view.EvaluateScriptAsync("window.kept = 'state'; 1");
+            Assert.IsTrue(view.IsVisible);
+            Assert.AreEqual("\"visible\"", await StableResultAsync(view, State));
+
+            session.Stage = "hidden by the host";
+            view.IsVisible = false;
+            Assert.IsFalse(view.IsVisible);
+            Assert.AreEqual("\"hidden\"", await StableResultAsync(view, State));
+
+            session.Stage = "the window hides and comes back";
+            session.Window.Hide();
+            session.Window.Show();
+            await Task.Delay(300);
+            Assert.AreEqual("\"hidden\"", await StableResultAsync(view, State));
+            Assert.AreEqual("\"visible\"", await StableResultAsync(session.View, State));
+
+            session.Stage = "shown again";
+            view.IsVisible = true;
+            Assert.AreEqual("\"visible\"", await StableResultAsync(view, State));
+            Assert.AreEqual("\"state\"", await view.EvaluateScriptAsync("window.kept"));
+        });
+    }
+
     // A view reports its first size before the layout of its window has reached it.
     private static async Task<string?> StableResultAsync(NeoAstra view, string script)
     {

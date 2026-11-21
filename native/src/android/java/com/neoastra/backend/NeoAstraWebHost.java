@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.provider.MediaStore;
 import android.view.PixelCopy;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.JsPromptResult;
@@ -187,6 +188,8 @@ public final class NeoAstraWebHost {
         }
         webView.setLayoutParams(params);
     }
+
+    public void setVisible(boolean visible) { webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE); }
 
     public void navigate(String url) { reply = null; webView.loadUrl(url); }
 

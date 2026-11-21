@@ -117,6 +117,9 @@ int main() {
         [host setFrame:larger display:NO];
         assert(NSMinX(web.frame) == 60 && top_of(web) == 50 && NSWidth(web.frame) == 300 && NSHeight(web.frame) == 120);
 
+        assert(neoastra_view_set_visible(view, 0) == NEOASTRA_OK && web.hidden);
+        assert(neoastra_view_set_visible(view, 1) == NEOASTRA_OK && !web.hidden);
+
         assert(neoastra_view_set_bounds(view, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
         assert(NSEqualRects(web.frame, web.superview.bounds));
 

@@ -376,6 +376,7 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_profile_clear_data_async(n
 
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_event_callback(neoastra_view_t*, neoastra_event_callback_t, void*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t*, neoastra_rect_t, uint32_t);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_visible(neoastra_view_t*, uint32_t);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t*, neoastra_string_view_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_string_view_t, const uint8_t*, uint64_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_error_t**);

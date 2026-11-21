@@ -628,6 +628,7 @@ struct neoastra_view final : neo_ui_ref_counted {
     neoastra_native_parent_t parent{};
     neoastra_rect_t bounds{};
     bool fill_parent{true};
+    bool visible{true}; // What the host asked for; a hidden window hides the view as well, without changing this.
     std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
     std::mutex decisions_mutex;
     neoastra_decision_t* decisions{};
@@ -1100,6 +1101,7 @@ neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile, n
 bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept;
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept;
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view, const std::string& uri, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view, const std::string& uri, const std::string& method, const std::string& headers, const uint8_t* body, uint64_t body_length, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view, const std::string& html, const std::string& base_uri, neoastra_error_t** error) noexcept;
