@@ -115,6 +115,8 @@ public sealed class NeoAstraHost
 
     internal bool IsBounded { get; }
 
+    internal bool FillsParent(NeoAstraOptions options) => !IsBounded && (Window is not null || options.FillParent);
+
     private static NeoAstraHost FromNonZero(NeoNativeHandle handle, string parameterName)
     {
         if (handle.Value == 0)

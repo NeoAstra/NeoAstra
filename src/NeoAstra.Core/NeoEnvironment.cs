@@ -141,7 +141,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
                 width = options.Bounds.Width,
                 height = options.Bounds.Height,
             },
-            fill_parent = !host.IsBounded && (host.Window is not null || options.FillParent) ? 1u : 0u,
+            fill_parent = host.FillsParent(options) ? 1u : 0u,
             maximum_message_size = options.MaximumMessageSize,
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
             popup_request = new NativeMethods.neoastra_decision_t(popupRequest),

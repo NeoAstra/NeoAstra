@@ -60,6 +60,31 @@ public sealed class ViewWindowTests
         });
     }
 
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task SetBoundsMovesABoundedView_AndIsRefusedForAViewThatFillsItsWindow()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>set bounds</title>" }, async session =>
+        {
+            const string PhysicalSize = "Math.round(innerWidth * devicePixelRatio) + 'x' + Math.round(innerHeight * devicePixelRatio)";
+            await using var bounded = await session.Environment.CreateWebViewAsync(
+                NeoAstraHost.BoundedInWindow(session.Window),
+                new NeoAstraOptions { ViewLabel = "moved-view", Bounds = new NeoRect(20, 30, 320, 240) });
+            await bounded.LoadHtmlAsync("<!doctype html><title>moved</title>");
+            Assert.AreEqual(new NeoRect(20, 30, 320, 240), bounded.Bounds);
+
+            session.Stage = "a new rectangle";
+            bounded.SetBounds(new NeoRect(40, 50, 200, 160));
+            Assert.AreEqual(new NeoRect(40, 50, 200, 160), bounded.Bounds);
+            Assert.AreEqual("\"200x160\"", await StableResultAsync(bounded, PhysicalSize));
+
+            session.Stage = "bounds that are refused";
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => bounded.SetBounds(new NeoRect(0, 0, 0, 10)));
+            Assert.AreEqual(new NeoRect(40, 50, 200, 160), bounded.Bounds);
+            Assert.ThrowsExactly<InvalidOperationException>(() => session.View.SetBounds(new NeoRect(0, 0, 100, 100)));
+        });
+    }
+
     // A view reports its first size before the layout of its window has reached it.
     private static async Task<string?> StableResultAsync(NeoAstra view, string script)
     {

@@ -17,6 +17,8 @@ public sealed class NeoAstra : IAsyncDisposable
 {
     private readonly SafeViewHandle _handle;
     private readonly NeoAstraHost _host;
+    private readonly bool _fillsParent;
+    private NeoRect _bounds;
     private readonly TimeSpan _decisionTimeout;
     private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
@@ -41,6 +43,8 @@ public sealed class NeoAstra : IAsyncDisposable
         Environment = environment;
         _handle = handle;
         _host = host;
+        _fillsParent = host.FillsParent(options);
+        _bounds = options.Bounds;
         _decisionTimeout = options.DecisionTimeout;
         _viewLabel = options.ViewLabel;
         Profile = options.Profile;
@@ -108,6 +112,45 @@ public sealed class NeoAstra : IAsyncDisposable
             ThrowIfDisposed();
             NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_zoom_factor(NativeHandle, value), default, "set zoom factor");
         }
+    }
+
+    /// <summary>Gets the explicit bounds of the view in the client area of its parent, from the top-left corner.</summary>
+    /// <remarks>
+    /// The unit is that of the platform: physical pixels on Windows, points on macOS and iOS, GTK logical pixels on Linux, and
+    /// physical pixels on Android. A view that fills its parent reports the bounds of its options, which it does not use.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    public NeoRect Bounds
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _bounds;
+        }
+    }
+
+    /// <summary>Moves and resizes a view that has explicit bounds, in the client area of its parent, from the top-left corner.</summary>
+    /// <param name="bounds">The new bounds, in the unit that <see cref="Bounds"/> describes, with a positive size.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bounds"/> does not have a positive size.</exception>
+    /// <exception cref="InvalidOperationException">The view fills its parent.</exception>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The call is not on the UI thread, or the backend refuses the bounds.</exception>
+    public void SetBounds(NeoRect bounds)
+    {
+        ThrowIfDisposed();
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bounds), "View bounds must have positive dimensions.");
+        }
+
+        if (_fillsParent)
+        {
+            throw new InvalidOperationException("A view that fills its parent has no explicit bounds. Create it with NeoAstraHost.BoundedInWindow.");
+        }
+
+        var native = new NativeMethods.neoastra_rect { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_bounds(NativeHandle, new NativeMethods.neoastra_rect_t(native), 0), default, "set view bounds");
+        _bounds = bounds;
     }
 
     /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>

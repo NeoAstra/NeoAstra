@@ -1032,6 +1032,8 @@ A view MUST support explicit bounds and automatic fill-parent mode.
 
 Multiple views MAY share one window when explicit bounds are used. A typical standalone window SHOULD use one fill-parent view. Resizing one view MUST NOT change the bounds of sibling views.
 
+Explicit bounds MUST count from the top-left corner of the client area of the parent, in the unit of the platform: physical pixels on Windows and Android, points on macOS and iOS, GTK logical pixels on Linux. A view on explicit bounds MUST keep that place when its window resizes, MUST NOT set the size of its window, and MUST be drawn above a view that fills the window. `NeoAstra.SetBounds` moves such a view after its creation.
+
 ## 13.6 Window lifetime and popup integration
 
 `NeoApplication` owns the native window registry, while each managed `NeoWindow` owns a safe handle to its native window. Window closure and managed disposal MUST be idempotent and MUST produce one terminal `Closed` notification.

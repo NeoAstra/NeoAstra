@@ -3527,7 +3527,10 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 ComPtr<ICoreWebView2Settings> settings;
                 ComPtr<ICoreWebView2Settings9> settings9;
                 if (SUCCEEDED(state->core->get_Settings(&settings)) && SUCCEEDED(settings.As(&settings9))) (void)settings9->put_IsNonClientRegionSupportEnabled(TRUE);
-                // The new controller window is created above the caption overlays.
+                // WebView2 places a new controller window below its siblings, where a view on explicit bounds would be covered
+                // by a view that fills the window.
+                if (!view->fill_parent && state->drop_window) SetWindowPos(state->drop_window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                // The caption overlays stay above every view.
                 layout_title_bar(view->window);
             }
             if (SUCCEEDED(result)) result = register_view_events(view, state);
