@@ -4,11 +4,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * The scripts of isolated worlds of one view and the bindings that only their worlds reach. A binding is a web message listener
  * of its world, added before the script that uses it and removed with it; the host answers a world through the reply channel of
- * the last message of its main frame in the current document, which a navigation forgets. It has no Android type, so that a
+ * the last message of its main frame in the current document, which a navigation forgets, and which a late message of a document
+ * that the main frame left never brings back. It has no Android type, so that a
  * plain JVM tests it: the WebView is behind {@link Engine}. Every call runs on the main thread, which owns the WebView.
  *
  * @param <W> a world of the WebView
@@ -66,6 +68,11 @@ final class NeoAstraScriptChannels<W, H, P> {
     private final Engine<W, H, P> engine;
     private final Sink sink;
     private final Map<Integer, Channel<W, H, P>> scripts = new HashMap<>();
+    // The documents of the main frame, which forgetReplies advances, and the document in which each reply channel posted first.
+    // A channel is the one of a document, so a channel first seen before the last navigation belongs to a document that is gone,
+    // also when the new document has the same origin. The map does not keep a channel that the WebView dropped.
+    private long document;
+    private final Map<P, Long> firstSeen = new WeakHashMap<>();
 
     NeoAstraScriptChannels(Engine<W, H, P> engine, Sink sink) {
         this.engine = engine;
@@ -103,7 +110,7 @@ final class NeoAstraScriptChannels<W, H, P> {
     private void receive(Channel<W, H, P> channel, String message, String origin, boolean isMainFrame, P reply) {
         if (channel.closed || message == null) return;
         // Only the main frame of the current document gives the host its reply channel; the native side drops other frames.
-        if (isMainFrame && engine.isCurrentOrigin(origin)) channel.reply = reply;
+        if (isMainFrame && engine.isCurrentOrigin(origin) && isCurrentDocument(reply)) channel.reply = reply;
         sink.deliver(channel.worldName, channel.binding, message, origin, isMainFrame);
     }
 
@@ -137,8 +144,23 @@ final class NeoAstraScriptChannels<W, H, P> {
         return DELIVERED;
     }
 
+    /**
+     * Whether a reply channel can be the one of the current document: it posted first in this document, or posts for the first
+     * time. A document that the main frame left and that never posted before can still post late through a channel never seen
+     * before; the next message of the current document replaces that channel.
+     */
+    private boolean isCurrentDocument(P reply) {
+        Long seen = firstSeen.get(reply);
+        if (seen == null) {
+            firstSeen.put(reply, document);
+            return true;
+        }
+        return seen == document;
+    }
+
     /** Forgets the reply channels when the main frame navigates: they belong to the document that it leaves. */
     void forgetReplies() {
+        document++;
         for (Channel<W, H, P> channel : scripts.values()) channel.reply = null;
     }
 
@@ -146,6 +168,7 @@ final class NeoAstraScriptChannels<W, H, P> {
     void clear() {
         List<Channel<W, H, P>> all = new ArrayList<>(scripts.values());
         scripts.clear();
+        firstSeen.clear();
         for (Channel<W, H, P> channel : all) {
             try { close(channel); } catch (RuntimeException ignored) { }
         }

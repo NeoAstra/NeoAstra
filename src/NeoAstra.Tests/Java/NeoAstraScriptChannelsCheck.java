@@ -70,6 +70,18 @@ public final class NeoAstraScriptChannelsCheck {
         expect(channels.post(1, "stale") == NeoAstraScriptChannels.NO_REPLY, "a message of another origin than the document does not give its channel");
         listener.onMessage("hello", "https://next.test", true, "proxy-2");
         expect(channels.post(1, "fresh") == NeoAstraScriptChannels.DELIVERED && engine.posted.get(engine.posted.size() - 1).equals("proxy-2 fresh"), "the new document gives the new channel: " + engine.posted);
+
+        // The WebView gives each document a reply channel of its own: after a navigation to the same origin, a late message of the
+        // previous document is still delivered, but its channel does not come back, and the new document's channel replaces it.
+        channels.forgetReplies();
+        int late = delivered.size();
+        listener.onMessage("late", "https://next.test", true, "proxy-2");
+        expect(delivered.size() == late + 1, "a late message of the previous document is still delivered: " + delivered);
+        expect(channels.post(1, "stale") == NeoAstraScriptChannels.NO_REPLY, "the channel of a document of the same origin that the main frame left does not come back");
+        listener.onMessage("hello", "https://next.test", true, "proxy-4");
+        expect(channels.post(1, "same") == NeoAstraScriptChannels.DELIVERED && engine.posted.get(engine.posted.size() - 1).equals("proxy-4 same"), "the new document of the same origin gives its channel: " + engine.posted);
+        listener.onMessage("again", "https://next.test", true, "proxy-4");
+        expect(channels.post(1, "kept") == NeoAstraScriptChannels.DELIVERED && engine.posted.get(engine.posted.size() - 1).equals("proxy-4 kept"), "the current document keeps its channel: " + engine.posted);
         expect(channels.post(42, "x") == NeoAstraScriptChannels.UNKNOWN, "an unknown script has no channel");
 
         // A script that the WebView refuses leaves no listener behind.
