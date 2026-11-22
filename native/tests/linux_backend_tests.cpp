@@ -1077,6 +1077,7 @@ void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
 struct world_messages {
     std::vector<std::string> received;
     std::string world;
+    std::string origin;
 };
 
 void NEOASTRA_CALL record_world_message(void* context, const neoastra_event_t* event) {
@@ -1084,6 +1085,7 @@ void NEOASTRA_CALL record_world_message(void* context, const neoastra_event_t* e
     auto* state = static_cast<world_messages*>(context);
     state->received.emplace_back(reinterpret_cast<const char*>(event->text.data), static_cast<size_t>(event->text.length));
     state->world.assign(reinterpret_cast<const char*>(event->text2.data), static_cast<size_t>(event->text2.length));
+    state->origin.assign(reinterpret_cast<const char*>(event->uri.data), static_cast<size_t>(event->uri.length));
 }
 
 // A binding of an isolated world is reached by that world only: the page finds neither it nor its handler, and cannot post.
@@ -1103,6 +1105,15 @@ void test_script_world_channel(neoastra_app_t* app) {
     options.isolated_world = 1;
     options.world_name = string_view(world);
     options.binding_name = string_view(binding);
+    // A script whose operation is canceled first does not stay, so that its binding is free again.
+    completion canceled;
+    neoastra_operation_t* operation{};
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &canceled, &operation, nullptr) == NEOASTRA_OK);
+    neoastra_operation_cancel(operation);
+    wait_for(canceled);
+    assert(canceled.result == NEOASTRA_ERROR_CANCELED);
+    const auto removed = g_get_monotonic_time() + 100 * 1000;
+    wait_until([&] { return g_get_monotonic_time() > removed; });
     completion added;
     assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &added, nullptr, nullptr) == NEOASTRA_OK);
     wait_for(added);
@@ -1111,7 +1122,7 @@ void test_script_world_channel(neoastra_app_t* app) {
     const std::string base = "http://localhost/";
     assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
     wait_until([&] { return !messages.received.empty(); });
-    assert(messages.received[0] == "ready:undefined" && messages.world == world);
+    assert(messages.received[0] == "ready:undefined" && messages.world == world && messages.origin == "http://localhost");
     assert(evaluate(view, "window.pageSecret='secret';1") == "1");
     for (const char* attack : {"typeof window.exampleToolbar", "new Function('return typeof exampleToolbar')()", "typeof window.webkit?.messageHandlers?._neoastra_channel_1",
                                "typeof document.querySelector('iframe').contentWindow.exampleToolbar"})

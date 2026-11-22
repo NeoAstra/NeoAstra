@@ -671,7 +671,8 @@ inline constexpr std::string_view neo_default_script_world = "neoastra.default";
 // handler of that world, and the message events that neo_script_channel_delivery dispatches. It runs before the script of the
 // binding, in the same world, and does nothing where the world has no such handler (a popup that copied the scripts).
 std::string neo_script_channel_bootstrap(std::string_view binding);
-// The same for a WebKit backend whose script message handler has another name than the binding.
+// The same for a WebKit backend whose handler tells neither the frame nor the origin of a message: the handler has its own name,
+// and each message starts with the origin of the document that posted it and a line feed, which the page cannot change.
 std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view handler);
 // The same over a global function of the world that posts a string, such as a DevTools protocol binding. The function is removed
 // from the world, and the channel exists only in the top-level frame.

@@ -2,6 +2,7 @@
 
 #include "operation_completion.hpp"
 
+#include <functional>
 #include <memory>
 
 // Shared with GUI-free tests so the Windows completion path is exercised on every host.
@@ -11,6 +12,8 @@ struct neo_script_completion final : neo_operation_completion {
     std::string result;
     neoastra_result_t requested{NEOASTRA_ERROR_CANCELED};
     neoastra_error_t* error{};
+    // Undoes what the operation added when its result reached nobody, as after a cancellation that came first.
+    std::function<void()> undelivered;
 
     neo_script_completion(neoastra_app_t* app, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation)
         : neo_operation_completion(app), callback(callback), context(context) { accept(operation); }
@@ -20,7 +23,10 @@ struct neo_script_completion final : neo_operation_completion {
     void invoke(neoastra_operation_t* pending, bool shutdown) override {
         neoastra_result_t actual{};
         const auto desired = shutdown ? NEOASTRA_ERROR_CANCELED : requested;
-        if (pending->try_complete(desired, actual)) {
+        const auto completed = pending->try_complete(desired, actual);
+        if ((!completed || actual != NEOASTRA_OK) && undelivered) undelivered();
+        undelivered = nullptr;
+        if (completed) {
             callback(context, actual, actual == NEOASTRA_OK ? neo_string_view(result) : neoastra_string_view_t{},
                      !shutdown && actual == desired ? error : nullptr);
         }

@@ -753,7 +753,7 @@ void capture_finished(GObject* object,GAsyncResult* result,void* data){
     if(completion->operation->try_complete(requested,actual)){completion->callback(completion->context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();
     if(native_error)native_error->release();completion->operation->release();
 }
-struct add_script_context { neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{};std::string identifier; };
+struct add_script_context { neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{};std::string identifier;neoastra_view_t* view{}; };
 void remove_script_channel(gtk_view* state,gtk_script_channel& channel) noexcept {
     if(channel.signal)g_signal_handler_disconnect(state->content,channel.signal);
     channel.signal=0;
@@ -765,13 +765,26 @@ void script_channel_received(WebKitUserContentManager*,JSCValue* value,void* dat
     if(!jsc_value_is_string(value)){neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"bridge","Blocked a script message that is not a string");return;}
     char* text=jsc_value_to_string(value);
     try{
-        const std::string message=text?text:"";g_free(text);text=nullptr;
-        const char* uri=webkit_web_view_get_uri(WEBKIT_WEB_VIEW(state->widget));
-        const std::string world=channel->world,binding=channel->binding;
-        neo_emit_script_message(view,world,binding,message,uri?uri:"",true);
+        const std::string framed=text?text:"";g_free(text);text=nullptr;
+        // The bootstrap of the world starts each message with the origin of its document.
+        const auto line=framed.find('\n');
+        if(line==std::string::npos){neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"bridge","Blocked a script message without the origin of its document");return;}
+        const auto origin=framed.substr(0,line);
+        const std::string message=framed.substr(line+1),world=channel->world,binding=channel->binding;
+        neo_emit_script_message(view,world,binding,message,origin=="null"?std::string{}:origin,true);
     }catch(...){g_free(text);neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WebKitGTK script-message handling failed");}
 }
-gboolean script_added(void* data){std::unique_ptr<add_script_context> completion(static_cast<add_script_context*>(data));neoastra_result_t actual{};if(completion->operation->try_complete(NEOASTRA_OK,actual))completion->callback(completion->context,actual,actual==NEOASTRA_OK?neo_string_view(completion->identifier):neoastra_string_view_t{},nullptr);completion->operation->release();return G_SOURCE_REMOVE;}
+gboolean script_added(void* data){
+    std::unique_ptr<add_script_context> completion(static_cast<add_script_context*>(data));
+    neoastra_result_t actual{};
+    const bool completed=completion->operation->try_complete(NEOASTRA_OK,actual);
+    // A script whose operation was canceled first is handed to nobody, so it does not stay in the view either.
+    if((!completed||actual!=NEOASTRA_OK)&&completion->view)(void)neo_platform_view_remove_script(completion->view,completion->identifier);
+    if(completed)completion->callback(completion->context,actual,actual==NEOASTRA_OK?neo_string_view(completion->identifier):neoastra_string_view_t{},nullptr);
+    completion->operation->release();
+    if(completion->view)completion->view->release();
+    return G_SOURCE_REMOVE;
+}
 
 void append_json_string(std::string& output,const char* value){output.push_back('"');for(const auto* current=reinterpret_cast<const unsigned char*>(value);current&&*current;++current){switch(*current){case '"':output+="\\\"";break;case '\\':output+="\\\\";break;case '\b':output+="\\b";break;case '\f':output+="\\f";break;case '\n':output+="\\n";break;case '\r':output+="\\r";break;case '\t':output+="\\t";break;default:if(*current<0x20){char escape[7]{};g_snprintf(escape,sizeof(escape),"\\u%04x",*current);output+=escape;}else output.push_back(static_cast<char>(*current));break;}}output.push_back('"');}
 struct cookie_context { neoastra_buffer_callback_t callback{};void* context{};neoastra_operation_t* operation{}; };
@@ -1109,7 +1122,7 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::
         state->scripts.emplace(identifier,user_script);
         if(channel)state->channels.emplace(identifier,std::move(channel));
         webkit_user_content_manager_add_script(state->content,user_script);
-        g_idle_add(script_added,new add_script_context{callback,context,operation,identifier});
+        g_idle_add(script_added,new add_script_context{callback,context,operation,identifier,view->retain()?view:nullptr});
         return NEOASTRA_OK;
     }catch(...){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not add the script",0,"webkitgtk");}
 }

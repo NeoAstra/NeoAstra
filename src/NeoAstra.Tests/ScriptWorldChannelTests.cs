@@ -127,16 +127,34 @@ public sealed class ScriptWorldChannelTests
         await LiveBrowser.RunAsync(pages, async session =>
         {
             var messages = new List<NeoScriptMessageReceivedEventArgs>();
-            await using var script = await session.View.AddScriptAsync(
-                "exampleToolbar.onmessage = event => exampleToolbar.postMessage('echo:' + event.data); exampleToolbar.postMessage('ready:' + typeof window.pageSecret);",
-                new NeoScriptOptions
-                {
-                    IsolatedWorld = true,
-                    WorldName = "example.toolbar",
-                    BindingName = "exampleToolbar",
-                    MainFrameOnly = true,
-                    MessageHandler = (_, message) => messages.Add(message),
-                });
+            const string Source = "exampleToolbar.onmessage = event => exampleToolbar.postMessage('echo:' + event.data); exampleToolbar.postMessage('ready:' + typeof window.pageSecret);";
+            var options = new NeoScriptOptions
+            {
+                IsolatedWorld = true,
+                WorldName = "example.toolbar",
+                BindingName = "exampleToolbar",
+                MainFrameOnly = true,
+                MessageHandler = (_, message) => messages.Add(message),
+            };
+
+            session.Stage = "a script whose operation is canceled first";
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var canceled = session.View.AddScriptAsync(Source, options, cancellation.Token);
+                cancellation.Cancel();
+                await Assert.ThrowsAsync<OperationCanceledException>(async () => await canceled);
+            }
+
+            // The binding is free again once the protocol has answered the canceled request.
+            NeoUserScript? added = null;
+            for (var attempt = 0; attempt < 100 && added is null; attempt++)
+            {
+                try { added = await session.View.AddScriptAsync(Source, options); }
+                catch (InvalidOperationException) { await Task.Delay(25); }
+            }
+
+            Assert.IsNotNull(added, "A canceled script kept its binding.");
+            await using var script = added;
 
             async Task WaitForAsync(Func<NeoScriptMessageReceivedEventArgs, bool> condition)
             {
@@ -153,6 +171,7 @@ public sealed class ScriptWorldChannelTests
             Assert.AreEqual(1, messages.Count, "Only the top-level frame posts: " + string.Join(" | ", messages.Select(static message => message.Message)));
             Assert.AreEqual("ready:undefined", messages[0].Message);
             Assert.AreEqual("example.toolbar", messages[0].WorldName);
+            Assert.AreEqual(LiveBrowser.Origin, messages[0].Origin?.GetLeftPart(UriPartial.Authority));
 
             session.Stage = "what the page tries";
             await session.View.EvaluateScriptAsync("window.pageSecret = 'secret'; 1");

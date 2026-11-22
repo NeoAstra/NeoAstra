@@ -93,7 +93,7 @@ struct windows_world_script {
     std::string function; // The protocol binding that carries the messages of the world, removed from its globals by the bootstrap.
     std::string devtools_identifier;
 };
-struct windows_script_context { std::string world; std::string frame; };
+struct windows_script_context { std::string world; std::string frame; std::string origin; };
 
 struct windows_view {
     std::unordered_map<std::string, windows_world_script> world_scripts;
@@ -3841,13 +3841,10 @@ bool main_frame_of_tree(const std::wstring& json, std::string& frame) {
     return true;
 }
 
-void raise_world_message(neoastra_view_t* view, windows_view* state, const windows_world_script& script, const std::wstring& payload) {
-    std::string uri;
-    LPWSTR source{};
-    if (SUCCEEDED(state->core->get_Source(&source)) && source) uri = narrow(source);
-    CoTaskMemFree(source);
+// The origin is the one of the context that posted, not of what the view shows by now.
+void raise_world_message(neoastra_view_t* view, const windows_world_script& script, const std::string& origin, const std::wstring& payload) {
     const std::string world = script.world, binding = script.binding, message = narrow(payload.c_str());
-    neo_emit_script_message(view, world, binding, message, uri, true);
+    neo_emit_script_message(view, world, binding, message, origin == "null" ? std::string{} : origin, true);
 }
 
 // A message counts only from the world of its binding in the top-level frame. A main frame that the view has not seen yet is
@@ -3868,34 +3865,36 @@ void receive_world_binding(neoastra_view_t* view, windows_view* state, const std
         neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message from outside the world of its binding");
         return;
     }
-    if (context->second.frame == state->main_frame) { raise_world_message(view, state, script->second, payload); return; }
+    if (context->second.frame == state->main_frame) { raise_world_message(view, script->second, context->second.origin, payload); return; }
     const auto frame = context->second.frame;
+    const auto origin = context->second.origin;
     const auto identifier = script->first;
     if (!view->retain()) return;
     const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
-    (void)call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder, frame, identifier, payload](HRESULT result, const std::wstring& tree) {
+    (void)call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder, frame, origin, identifier, payload](HRESULT result, const std::wstring& tree) {
         auto* current = static_cast<windows_view*>(holder->platform);
         if (!current || FAILED(result) || !main_frame_of_tree(tree, current->main_frame) || current->main_frame != frame) {
             if (current) neo_log(holder->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message of a frame that is not the top-level document");
             return;
         }
         const auto found = current->world_scripts.find(identifier);
-        if (found != current->world_scripts.end()) raise_world_message(holder.get(), current, found->second, payload);
+        if (found != current->world_scripts.end()) raise_world_message(holder.get(), found->second, origin, payload);
     });
 }
 
 void receive_world_context(windows_view* state, const std::wstring& json) {
-    std::wstring context, aux, name, frame;
+    std::wstring context, aux, name, frame, origin;
     long long id{};
     bool has_id{};
     if (!json_object_member(json, L"context", context) ||
         !for_each_json_member(context, [&](const std::wstring& key, const std::wstring& raw) {
             if (key == L"id") has_id = json_whole_number(raw, id);
             else if (key == L"name") json_text_value(raw, name);
+            else if (key == L"origin") json_text_value(raw, origin);
             else if (key == L"auxData") aux = raw;
         }) || !has_id || name.empty()) return;
     (void)for_each_json_member(aux, [&](const std::wstring& key, const std::wstring& raw) { if (key == L"frameId") json_text_value(raw, frame); });
-    state->script_contexts[id] = {narrow(name.c_str()), narrow(frame.c_str())};
+    state->script_contexts[id] = {narrow(name.c_str()), narrow(frame.c_str()), narrow(origin.c_str())};
 }
 
 void receive_frame_navigated(windows_view* state, const std::wstring& json) {
@@ -3941,22 +3940,27 @@ HRESULT start_world_protocol(neoastra_view_t* view, windows_view* state) {
     });
     if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Runtime.executionContextsCleared", [](neoastra_view_t*, windows_view* current, const std::wstring&) { current->script_contexts.clear(); });
     if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Page.frameNavigated", [](neoastra_view_t*, windows_view* current, const std::wstring& json) { receive_frame_navigated(current, json); });
+    const auto ignore = [](HRESULT, const std::wstring&) { };
+    if (SUCCEEDED(result)) result = call_devtools(state->core.Get(), L"Page.enable", L"{}", ignore);
+    if (SUCCEEDED(result)) result = call_devtools(state->core.Get(), L"Runtime.enable", L"{}", ignore);
+    if (SUCCEEDED(result)) {
+        if (!view->retain()) result = E_ABORT;
+        else {
+            const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
+            result = call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder](HRESULT completed, const std::wstring& tree) {
+                auto* current = static_cast<windows_view*>(holder->platform);
+                if (current && SUCCEEDED(completed) && current->main_frame.empty()) (void)main_frame_of_tree(tree, current->main_frame);
+            });
+        }
+    }
     if (FAILED(result)) {
+        // Nothing stays half started: the next script of the view starts the protocol again.
         for (auto& event : state->world_events) event.first->remove_DevToolsProtocolEventReceived(event.second);
         state->world_events.clear();
         return result;
     }
     state->world_protocol_started = true;
-    const auto ignore = [](HRESULT, const std::wstring&) { };
-    result = call_devtools(state->core.Get(), L"Page.enable", L"{}", ignore);
-    if (SUCCEEDED(result)) result = call_devtools(state->core.Get(), L"Runtime.enable", L"{}", ignore);
-    if (FAILED(result)) return result;
-    if (!view->retain()) return E_ABORT;
-    const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
-    return call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder](HRESULT completed, const std::wstring& tree) {
-        auto* current = static_cast<windows_view*>(holder->platform);
-        if (current && SUCCEEDED(completed) && current->main_frame.empty()) (void)main_frame_of_tree(tree, current->main_frame);
-    });
+    return S_OK;
 }
 
 neoastra_result_t add_world_script(neoastra_view_t* view, windows_view* state, const std::string& script, const neoastra_script_options_t* options,
@@ -3996,6 +4000,10 @@ neoastra_result_t add_world_script(neoastra_view_t* view, windows_view* state, c
     const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
     state->world_scripts.emplace(identifier, std::move(entry));
     auto source = std::make_shared<neo_script_source>(view->environment->app, callback, context, operation);
+    // A script whose operation was canceled first is handed to nobody, so it does not stay in the view either.
+    source->completion->undelivered = [holder, identifier] {
+        if (holder->platform) (void)neo_platform_view_remove_script(holder.get(), identifier);
+    };
     const auto finish = [holder, source, identifier](HRESULT result, const std::wstring& json) {
         auto* completion = source->completion;
         auto* current = static_cast<windows_view*>(holder->platform);

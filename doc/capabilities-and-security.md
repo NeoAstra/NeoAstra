@@ -142,7 +142,7 @@ Disposing the script removes the binding, also from a document that is still sho
 - The world shares the DOM of the page: an event that the page dispatches has `isTrusted` set to `false`, and a click of the
   user `true`. The page can still restyle or cover the elements of the world, and what the script reports of the document
   comes from the page.
-- A message of the previous document can arrive around a navigation; `Origin` tells which document it comes from.
+- A message of the previous document can arrive around a navigation; `Origin` is the origin of the document that posted it.
 
 | Backend | Script bindings of isolated worlds |
 | --- | --- |

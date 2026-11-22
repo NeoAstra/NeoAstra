@@ -184,11 +184,18 @@ std::string neo_script_channel_bootstrap(std::string_view binding, std::string_v
     script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[\"";
     script.append(handler);
     script += "\"];if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
-              "const post=handler.postMessage.bind(handler);";
+              "const send=handler.postMessage.bind(handler);const place=globalThis.location;const post=message=>send(place.origin+\"\\n\"+message);";
     return script + script_channel_object();
 }
 
-std::string neo_script_channel_bootstrap(std::string_view binding) { return neo_script_channel_bootstrap(binding, binding); }
+std::string neo_script_channel_bootstrap(std::string_view binding) {
+    std::string script = "(()=>{\"use strict\";const name=\"";
+    script.append(binding);
+    script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[name];"
+              "if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
+              "const post=handler.postMessage.bind(handler);";
+    return script + script_channel_object();
+}
 
 std::string neo_script_channel_bootstrap_for_function(std::string_view binding, std::string_view function) {
     std::string script = "(()=>{\"use strict\";const name=\"";
