@@ -27,6 +27,7 @@
     <Project Path="../samples/NeoAstra.Core.Sample/NeoAstra.Core.Sample.csproj" />
     <Project Path="../samples/NeoAstra.Sample/NeoAstra.Sample.csproj" />
     <Project Path="../samples/NeoAstra.Sample.Advanced/NeoAstra.Sample.Advanced.csproj" />
+    <Project Path="../samples/NeoAstra.Sample.EmbeddedView/NeoAstra.Sample.EmbeddedView.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="NeoAstra.Benchmarks/NeoAstra.Benchmarks.csproj" />

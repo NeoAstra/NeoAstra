@@ -82,6 +82,7 @@ The `neoastra-mobile` template sets up one project for both platforms. See
 - [HelloWorld](../samples/NeoAstra.Sample) — a small app with plain JavaScript and generated RPC bindings.
 - [Advanced feature tour](../samples/NeoAstra.Sample.Advanced/readme.md) — React, typed RPC, streaming, lifecycle, and desktop services.
 - [Core sample](../samples/NeoAstra.Core.Sample) — direct use of the low-level window and WebView APIs.
+- [Embedded view](../samples/NeoAstra.Sample.EmbeddedView/readme.md) — an isolated web view placed over a rectangle of the main page.
 - [Mobile samples](../samples/mobile/readme.md) — a Hello application for iOS and Android, and a tour of the services and plugins on a phone.
 
 To try HelloWorld from a source checkout, with the [build prerequisites](building.md#prerequisites)

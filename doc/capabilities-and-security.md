@@ -106,6 +106,17 @@ CustomSchemes =
 - The provider of a scheme only receives the requests of that scheme. What a backend tells of a frame document differs: see [known limitations](known-limitations.md#custom-schemes-and-the-managed-bridge). Tell the requests apart by their URI.
 - A frame can navigate itself to another address, such as an `https:` page, within the limits of its sandbox and of the `frame-src` of the page. Such a page reaches no more of the bridge than the frame did. Navigations of a frame are not reported to the host on Windows: see [links that open outside the web view](#links-that-open-outside-the-web-view).
 
+## An isolated view beside the application
+
+A view that shows content the application does not control, such as a browser pane, is placed over the page with
+`NeoAstraHost.BoundedInWindow` and `NeoAstra.PlaceOver`. See the [embedded view sample](../samples/NeoAstra.Sample.EmbeddedView/readme.md).
+
+- Give it an **environment of its own with its own `UserDataRoot`**, optionally `IsPrivate`. Cookies, storage, and the custom schemes of the application then stay apart. On Windows `IsPrivate` alone is not enough beside an environment with other options on the same data folder: WebView2 refuses the second one.
+- Never isolate with a named profile of the application's environment: it shares that environment's schemes, and on macOS its data.
+- Leave its bridge at `NeoBridgePolicy.Disabled`, the default.
+- Decide its permissions, downloads, file choosers, and popups in the host.
+- It is a native view above the page: a menu, tooltip, dialog, or drag preview of the page that overlaps it is drawn behind it. A host can show a picture of the page from `CaptureAsync` meanwhile. On Windows, capture before hiding the view.
+
 ## Script bindings of isolated worlds
 
 A script of the host can run in an isolated world with a binding that only that world reaches, for content that the
