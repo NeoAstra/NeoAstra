@@ -1031,11 +1031,39 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
 
 } // namespace
 
+// What GTK really draws for the widget, which a snapshot of the web process would not tell: its bottom-right corner, away
+// from the content of the test page, is pure green.
+static bool widget_draws_green(GtkWidget* widget) {
+    const auto width = gtk_widget_get_width(widget), height = gtk_widget_get_height(widget);
+    auto* native = gtk_widget_get_native(widget);
+    if (width <= 0 || height <= 0 || !native || !gtk_widget_get_mapped(widget)) return false;
+    auto* paintable = gtk_widget_paintable_new(widget);
+    auto* snapshot = gtk_snapshot_new();
+    gdk_paintable_snapshot(paintable, snapshot, width, height);
+    auto* node = gtk_snapshot_free_to_node(snapshot);
+    g_object_unref(paintable);
+    if (!node) return false;
+    // The software renderer: reading back must not depend on the graphics memory of the machine that runs the test.
+    auto* renderer = gsk_cairo_renderer_new();
+    assert(gsk_renderer_realize_for_display(renderer, gtk_widget_get_display(widget), nullptr));
+    auto* texture = gsk_renderer_render_texture(renderer, node, nullptr);
+    gsk_renderer_unrealize(renderer);
+    g_object_unref(renderer);
+    gsk_render_node_unref(node);
+    const auto texture_width = gdk_texture_get_width(texture), texture_height = gdk_texture_get_height(texture);
+    std::vector<uint8_t> pixels(static_cast<size_t>(texture_width) * texture_height * 4);
+    gdk_texture_download(texture, pixels.data(), static_cast<size_t>(texture_width) * 4);
+    g_object_unref(texture);
+    const auto* pixel = pixels.data() + (static_cast<size_t>(texture_height - 4) * texture_width + texture_width - 4) * 4;
+    return pixel[0] < 40 && pixel[1] > 200 && pixel[2] < 40;
+}
+
 // A view placed over a view of another window moves there without a reload, on the rectangle of the anchor in its zoom.
 void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
     auto* environment = create_environment(app, "", true);
     auto* first = create_window(app);
     auto* second = create_window(app);
+    auto* home = create_view(environment, first);
     auto* anchor = create_view(environment, second);
     neoastra_view_options_t options{};
     options.size = sizeof(options);
@@ -1049,12 +1077,13 @@ void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
     auto* view = static_cast<neoastra_view_t*>(state.value);
     auto* widget = GTK_WIDGET(web_view(view));
     assert(neoastra_window_show(first) == NEOASTRA_OK && neoastra_window_show(second) == NEOASTRA_OK);
-    const std::string page = "<!doctype html><title>moved</title><input id=typed>";
+    const std::string page = "<!doctype html><title>moved</title><body style='background:#0f0'><input id=typed>";
     const std::string base = "http://localhost/";
     assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
     wait_until([&] { return !webkit_web_view_is_loading(WEBKIT_WEB_VIEW(widget)) && evaluate(view, "document.readyState") == "\"complete\""; });
     assert(evaluate(view, "window.kept='state';document.getElementById('typed').value='typed';performance.timeOrigin") != "");
     const auto origin = evaluate(view, "performance.timeOrigin");
+    wait_until([&] { return widget_draws_green(widget); });
     assert(neoastra_view_set_zoom_factor(anchor, 1.5) == NEOASTRA_OK);
     neoastra_rect_t placed{};
     assert(neoastra_view_place_over(view, anchor, 20, 10, 100, 40, &placed) == NEOASTRA_OK);
@@ -1067,7 +1096,19 @@ void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
     });
     assert(evaluate(view, "window.kept+'/'+document.getElementById('typed').value") == "\"state/typed\"");
     assert(evaluate(view, "performance.timeOrigin") == origin);
+    // Both windows are on the screen: the page is drawn again after each move, there and back. At the same size WebKit has
+    // no reason of its own to present to the new surface, which only a compositor shows: the page must see a resize.
+    wait_until([&] { return widget_draws_green(widget); });
+    wait_until([&] { return evaluate(view, "innerHeight") == "60"; });
+    assert(evaluate(view, "window.resized=0;addEventListener('resize',()=>window.resized++);1") == "1");
+    assert(neoastra_view_set_zoom_factor(home, 1.5) == NEOASTRA_OK);
+    assert(neoastra_view_place_over(view, home, 20, 10, 100, 40, &placed) == NEOASTRA_OK);
+    assert(placed.width == 150 && placed.height == 60 && gtk_widget_get_root(widget) == GTK_ROOT(gtk_window(first)));
+    wait_until([&] { return evaluate(view, "window.resized>0") == "true"; });
+    wait_until([&] { return gtk_widget_get_height(widget) == 60 && evaluate(view, "innerHeight") == "60"; });
+    wait_until([&] { return widget_draws_green(widget); });
     neoastra_view_release(view);
+    neoastra_view_release(home);
     neoastra_view_release(anchor);
     neoastra_window_release(first);
     neoastra_window_release(second);

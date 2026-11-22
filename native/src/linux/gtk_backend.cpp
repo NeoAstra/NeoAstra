@@ -31,7 +31,7 @@ struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{};
 // A binding of an isolated world. WebKitGTK tells a handler neither its world nor its frame, so each binding has a handler name of
 // its own, registered in its world only, and its script runs in the top frame only.
 struct gtk_script_channel { neoastra_view_t* view{}; std::string world; std::string binding; std::string handler; gulong signal{}; };
-struct gtk_view { std::map<std::string,std::unique_ptr<gtk_script_channel>> channels; uint64_t next_channel{}; GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
+struct gtk_view { guint redraw_tick{}; bool redraw_resized{}; std::map<std::string,std::unique_ptr<gtk_script_channel>> channels; uint64_t next_channel{}; GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
 
 neoastra_error_t* make_error(neoastra_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neoastra_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
@@ -1016,6 +1016,7 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     if(state->key_releases)g_signal_handlers_disconnect_by_data(state->key_releases,view);
     if(state->content)g_signal_handlers_disconnect_by_data(state->content,view);
     if(state->widget){
+        if(state->redraw_tick)gtk_widget_remove_tick_callback(state->widget,state->redraw_tick);
         g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
         g_object_set_data(G_OBJECT(widget.get()),"neoastra.native-view",nullptr);
         g_signal_handlers_disconnect_by_data(widget.get(),view);
@@ -1061,6 +1062,22 @@ neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, doubl
     *scale = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(state->widget));
     return NEOASTRA_OK;
 }
+// WebKit presents to a new surface only for a new size: a view moved at the size it had stays empty. Its first frame in the
+// window gives it one pixel less, and the next one its size again.
+static gboolean redraw_moved_view(GtkWidget* widget, GdkFrameClock*, void* data) noexcept {
+    auto* view = static_cast<neoastra_view_t*>(data);
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state->redraw_resized) {
+        state->redraw_resized = true;
+        const auto height = std::max(view->bounds.height, 1);
+        gtk_widget_set_size_request(widget, std::max(view->bounds.width, 1), height > 1 ? height - 1 : height + 1);
+        return G_SOURCE_CONTINUE;
+    }
+    state->redraw_resized = false;
+    state->redraw_tick = 0;
+    apply_view_bounds(view, widget);
+    return G_SOURCE_REMOVE;
+}
 neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t*) noexcept {
     auto* state = static_cast<gtk_view*>(view->platform);
     if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
@@ -1073,6 +1090,7 @@ neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_w
     gtk_overlay_add_overlay(GTK_OVERLAY(window_view_stack(GTK_WINDOW(target))), widget.get());
     apply_view_bounds(view, widget.get());
     gtk_widget_set_visible(widget.get(), view->visible);
+    if (!state->redraw_tick) state->redraw_tick = gtk_widget_add_tick_callback(widget.get(), redraw_moved_view, view, nullptr);
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
