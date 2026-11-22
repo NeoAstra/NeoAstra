@@ -519,6 +519,9 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
 
     // Whether the native library knows NEOASTRA_CAPABILITY_VIEW_PLACEMENT and has the exports of placed views, which came with the channel.
     internal bool HasViewPlacement => HasScriptWorldChannels;
+
+    // Whether the native library has neoastra_view_set_key_chord_callback, which came with the channel too.
+    internal bool HasKeyChords => HasScriptWorldChannels;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

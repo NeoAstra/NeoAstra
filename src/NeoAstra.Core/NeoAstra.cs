@@ -23,6 +23,8 @@ public sealed class NeoAstra : IAsyncDisposable
     private bool _isVisible = true;
     private EventHandler<NeoKeyChordEventArgs>? _keyChordPressed;
     private bool _keyChordsRegistered;
+    // Orders the registration of key chords with disposal, which frees the context that the native callback receives.
+    private readonly Lock _keyChordSync = new();
     private readonly TimeSpan _decisionTimeout;
     private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
@@ -321,41 +323,63 @@ public sealed class NeoAstra : IAsyncDisposable
         add
         {
             ThrowIfDisposed();
-            _keyChordPressed += value;
-            try
+            if (!Environment.RuntimeInfo.HasKeyChords)
             {
-                UpdateKeyChordRegistration();
+                throw new NotSupportedException("The loaded native library has no key chords.");
             }
-            catch (EntryPointNotFoundException exception)
-            {
-                _keyChordPressed -= value;
-                throw new NotSupportedException("The loaded native library has no key chords.", exception);
-            }
+
+            lock (_keyChordSync) _keyChordPressed += value;
+            UpdateKeyChordRegistration();
         }
         remove
         {
-            _keyChordPressed -= value;
-            if (Volatile.Read(ref _disposed) == 0)
-            {
-                UpdateKeyChordRegistration();
-            }
+            lock (_keyChordSync) _keyChordPressed -= value;
+            UpdateKeyChordRegistration();
         }
     }
 
-    // Registered only while a handler listens, so that a view without one has no call on each key.
-    private unsafe void UpdateKeyChordRegistration()
+    // Registered only while a handler listens, so that a view without one has no call on each key. The registration belongs to
+    // the UI thread, where the view raises its chords, while a handler may be added or removed on any thread.
+    private void UpdateKeyChordRegistration()
     {
-        var listening = _keyChordPressed is not null;
-        if (listening == _keyChordsRegistered)
+        if (Volatile.Read(ref _disposed) != 0) return;
+        var dispatcher = Environment.Application.Dispatcher;
+        if (dispatcher.CheckAccess())
         {
+            ApplyKeyChordRegistration();
             return;
         }
 
-        var result = listening
-            ? NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, new((delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint>)&KeyChord), (void*)GCHandle.ToIntPtr(_eventRoot))
-            : NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, default, null);
-        NativeError.ThrowIfFailed(result, default, "register key chords");
-        _keyChordsRegistered = listening;
+        try
+        {
+            dispatcher.Post(() =>
+            {
+                try { ApplyKeyChordRegistration(); }
+                catch (NeoAstraException) { /* Only a view that is being released refuses the registration. */ }
+            });
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
+        {
+            // The application is shutting down; no chord will be raised for this view.
+        }
+    }
+
+    // Runs on the UI thread, under the lock that DisposeAsync takes: a registration either sees the disposal or comes before it,
+    // and disposal then removes it before it frees the context of the callback. The native call does not wait here, because the
+    // chords that it waits for are raised on this thread.
+    private unsafe void ApplyKeyChordRegistration()
+    {
+        lock (_keyChordSync)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            var listening = _keyChordPressed is not null;
+            if (listening == _keyChordsRegistered) return;
+            var result = listening
+                ? NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, new((delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint>)&KeyChord), (void*)GCHandle.ToIntPtr(_eventRoot))
+                : NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, default, null);
+            NativeError.ThrowIfFailed(result, default, "register key chords");
+            _keyChordsRegistered = listening;
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -1046,13 +1070,16 @@ public sealed class NeoAstra : IAsyncDisposable
         Environment.Application.UnregisterView(this);
         try
         {
-            if (_keyChordsRegistered)
+            bool unregisterKeyChords;
+            lock (_keyChordSync)
             {
                 _keyChordPressed = null;
+                unregisterKeyChords = _keyChordsRegistered;
                 _keyChordsRegistered = false;
-                NativeMethods.neoastra_view_set_key_chord_callback(new(_handle.DangerousGetHandle()), default, null);
             }
 
+            // Outside the lock: on another thread, this waits for a chord that the UI thread is raising, whose handler may take it.
+            if (unregisterKeyChords) NativeMethods.neoastra_view_set_key_chord_callback(new(_handle.DangerousGetHandle()), default, null);
             NativeMethods.neoastra_view_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
         }
         catch

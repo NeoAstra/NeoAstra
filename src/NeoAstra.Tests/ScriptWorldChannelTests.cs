@@ -57,6 +57,10 @@ public sealed class ScriptWorldChannelTests
         Assert.IsNotNull(noPlacement);
         Assert.AreEqual(NeoSupportLevel.None, noPlacement.SupportLevel);
         Assert.IsNull(NeoEnvironment.CapabilityUnknownToLibrary(current, NeoCapability.ViewPlacement));
+
+        // So did the key chords, which a handler added on any thread checks before the UI thread registers it.
+        Assert.IsFalse(old.HasKeyChords);
+        Assert.IsTrue(current.HasKeyChords);
     }
 
     [TestMethod]
