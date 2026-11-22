@@ -31,7 +31,7 @@ struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{};
 // A binding of an isolated world. WebKitGTK tells a handler neither its world nor its frame, so each binding has a handler name of
 // its own, registered in its world only, and its script runs in the top frame only.
 struct gtk_script_channel { neoastra_view_t* view{}; std::string world; std::string binding; std::string handler; gulong signal{}; };
-struct gtk_view { guint redraw_tick{}; bool redraw_resized{}; std::map<std::string,std::unique_ptr<gtk_script_channel>> channels; uint64_t next_channel{}; GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
+struct gtk_view { guint redraw_tick{}; bool redraw_resized{}; std::map<std::string,std::unique_ptr<gtk_script_channel>> channels; uint64_t next_channel{}; std::map<std::string,std::string> all_frame_worlds; GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
 
 neoastra_error_t* make_error(neoastra_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neoastra_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
@@ -1121,10 +1121,21 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::
     try{
         std::unique_ptr<gtk_script_channel> channel;
         WebKitUserScript* user_script{};
+        std::string world;
         if(options->isolated_world){
-            const auto world=neo_string(options->world_name);
+            world=neo_string(options->world_name);
             const auto binding=neo_string(options->binding_name);
             std::string source=script;
+            // A handler tells neither the frame nor the world of a message, and it exists in every frame of its world: a world
+            // with a binding takes no script that runs in all frames, which could post through the handler from a frame and be
+            // taken for the main frame.
+            if(!binding.empty()){
+                for(const auto& entry:state->all_frame_worlds)
+                    if(entry.second==world)return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK does not tell the frame of a message: a world that has a script in all frames takes no binding",0,"webkitgtk");
+            } else if(!options->main_frame_only){
+                for(const auto& entry:state->channels)
+                    if(entry.second->world==world)return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK does not tell the frame of a message: a world that has a binding takes no script in all frames",0,"webkitgtk");
+            }
             if(!binding.empty()){
                 for(const auto& entry:state->channels)
                     if(entry.second->world==world&&entry.second->binding==binding)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The world of the view already has a script with this binding",0,"webkitgtk");
@@ -1148,6 +1159,7 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::
         const auto identifier=std::to_string(state->next_script++);
         state->scripts.emplace(identifier,user_script);
         if(channel)state->channels.emplace(identifier,std::move(channel));
+        if(options->isolated_world&&!options->main_frame_only)state->all_frame_worlds.emplace(identifier,world);
         webkit_user_content_manager_add_script(state->content,user_script);
         g_idle_add(script_added,new add_script_context{callback,context,operation,identifier,view->retain()?view:nullptr});
         return NEOASTRA_OK;
@@ -1170,7 +1182,7 @@ neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view,co
     webkit_web_view_call_async_javascript_function(WEBKIT_WEB_VIEW(state->widget),neo_script_channel_delivery,-1,g_variant_builder_end(&arguments),found->second->world.c_str(),nullptr,nullptr,nullptr,nullptr);
     return NEOASTRA_OK;
 }
-neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;if(const auto channel=state->channels.find(identifier);channel!=state->channels.end()){remove_script_channel(state,*channel->second);state->channels.erase(channel);}webkit_user_script_unref(found->second);state->scripts.erase(found);webkit_user_content_manager_remove_all_scripts(state->content);if(state->bridge_relay)webkit_user_content_manager_add_script(state->content,state->bridge_relay);for(const auto& entry:state->scripts)webkit_user_content_manager_add_script(state->content,entry.second);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;if(const auto channel=state->channels.find(identifier);channel!=state->channels.end()){remove_script_channel(state,*channel->second);state->channels.erase(channel);}state->all_frame_worlds.erase(identifier);webkit_user_script_unref(found->second);state->scripts.erase(found);webkit_user_content_manager_remove_all_scripts(state->content);if(state->bridge_relay)webkit_user_content_manager_add_script(state->content,state->bridge_relay);for(const auto& entry:state->scripts)webkit_user_content_manager_add_script(state->content,entry.second);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;std::string script;try{neo_append_post_script(script,message,json);}catch(...){return NEOASTRA_ERROR_NATIVE_FAILURE;}webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(state->widget),script.data(),script.size(),nullptr,nullptr,nullptr,nullptr,nullptr);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t**) noexcept {
     auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;

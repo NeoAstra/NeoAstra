@@ -1206,9 +1206,39 @@ void test_script_world_channel(neoastra_app_t* app) {
     assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_OK);
     wait_until([&] { return messages.received.size() == 2; });
     assert(messages.received[1] == "echo:" + hostile);
+    // WebKitGTK does not tell the frame of a message: a world with a binding takes no script that runs in all frames, and a world
+    // with such a script takes no binding. Another world is not concerned.
+    neoastra_script_options_t all_frames{};
+    all_frames.size = sizeof(all_frames);
+    all_frames.version = 1;
+    all_frames.injection_time = NEOASTRA_SCRIPT_DOCUMENT_START;
+    all_frames.isolated_world = 1;
+    all_frames.world_name = string_view(world);
+    const std::string plain = "window.plain=1;";
+    assert(neoastra_view_add_script_async(view, string_view(plain), &all_frames, script_evaluated, &canceled, nullptr, nullptr) == NEOASTRA_ERROR_NOT_SUPPORTED);
+    const std::string other_world = "example.other";
+    all_frames.world_name = string_view(other_world);
+    completion elsewhere;
+    assert(neoastra_view_add_script_async(view, string_view(plain), &all_frames, script_evaluated, &elsewhere, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(elsewhere);
+    assert(elsewhere.result == NEOASTRA_OK);
     // A removed script has no channel any more.
     assert(neoastra_view_remove_script(view, string_view(added.text)) == NEOASTRA_OK);
     assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    all_frames.world_name = string_view(world);
+    completion everywhere;
+    assert(neoastra_view_add_script_async(view, string_view(plain), &all_frames, script_evaluated, &everywhere, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(everywhere);
+    assert(everywhere.result == NEOASTRA_OK);
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &canceled, nullptr, nullptr) == NEOASTRA_ERROR_NOT_SUPPORTED);
+    // Once that script is gone, the world takes a binding again.
+    assert(neoastra_view_remove_script(view, string_view(everywhere.text)) == NEOASTRA_OK);
+    completion again;
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &again, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(again);
+    assert(again.result == NEOASTRA_OK);
+    assert(neoastra_view_remove_script(view, string_view(again.text)) == NEOASTRA_OK);
+    assert(neoastra_view_remove_script(view, string_view(elsewhere.text)) == NEOASTRA_OK);
     assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
     neoastra_view_release(view);
     neoastra_window_release(window);
