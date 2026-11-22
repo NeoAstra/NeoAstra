@@ -36,6 +36,16 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 @property(nonatomic,assign) neoastra_app_t* nativeApplication;
 @property(nonatomic,strong) id<NSApplicationDelegate> previousDelegate;
 @end
+// The script message handler of a binding, in the content world of its script only: the page and the other worlds do not see it.
+@interface NeoAstraScriptChannel : NSObject<WKScriptMessageHandler> {
+@public
+    std::string worldName;
+    std::string bindingName;
+}
+@property(nonatomic,assign) neoastra_view_t* nativeView;
+@property(nonatomic,strong) WKContentWorld* world API_AVAILABLE(macos(11.0));
+@property(nonatomic,copy) NSString* binding;
+@end
 @interface NeoURLSchemeHandler : NSObject<WKURLSchemeHandler>
 @property(nonatomic,assign) neoastra_environment_t* nativeEnvironment;
 @property(nonatomic,assign) const neo_custom_scheme_registration* registration;
@@ -53,7 +63,60 @@ neoastra_error_t* make_error(neoastra_result_t code,const char* message,int64_t 
 // through the page, once AppKit has dispatched other events after that press (see neo_platform_window_begin_drag).
 static const char neo_window_press_key=0;
 
-@implementation NeoAstraWebView
+static std::string neo_mac_key_name(NSEvent* event) {
+    switch (event.keyCode) {
+        case 36: case 76: return "Enter"; case 53: return "Escape"; case 48: return "Tab"; case 49: return "Space"; case 51: return "Backspace";
+        case 117: return "Delete"; case 115: return "Home"; case 119: return "End"; case 116: return "PageUp"; case 121: return "PageDown";
+        case 123: return "Left"; case 124: return "Right"; case 125: return "Down"; case 126: return "Up";
+        case 122: return "F1"; case 120: return "F2"; case 99: return "F3"; case 118: return "F4"; case 96: return "F5"; case 97: return "F6";
+        case 98: return "F7"; case 100: return "F8"; case 101: return "F9"; case 109: return "F10"; case 103: return "F11"; case 111: return "F12";
+        case 105: return "F13"; case 107: return "F14"; case 113: return "F15"; case 106: return "F16"; case 64: return "F17"; case 79: return "F18";
+        case 80: return "F19"; case 90: return "F20";
+        default: break;
+    }
+    // The key without Shift or Option, so that Cmd+Shift+1 is the key 1 and not the character it would type.
+    NSString* characters = [event charactersByApplyingModifiers:0];
+    return characters.length ? neo_key_name_for_character([characters characterAtIndex:0]) : std::string{};
+}
+
+@implementation NeoAstraWebView {
+    NSMutableIndexSet* _claimedKeys; // Keys whose press the host kept from the page, whose release the page must not get either.
+    NSTimeInterval _offeredTimestamp; // AppKit can pass one press through both performKeyEquivalent: and keyDown:.
+    unsigned short _offeredKey;
+}
+- (BOOL)neoHoldsKeyboard {
+    NSResponder* responder = self.window.firstResponder;
+    return [responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:self];
+}
+- (BOOL)neoClaimKeyEvent:(NSEvent*)event {
+    auto* view = self.nativeView;
+    if (!view) return NO;
+    if (event.timestamp == _offeredTimestamp && event.keyCode == _offeredKey) return NO;
+    _offeredTimestamp = event.timestamp;
+    _offeredKey = event.keyCode;
+    const auto flags = event.modifierFlags;
+    const bool handled = neo_view_key_chord(view, flags & NSEventModifierFlagControl, flags & NSEventModifierFlagOption, flags & NSEventModifierFlagShift, flags & NSEventModifierFlagCommand, neo_mac_key_name(event));
+    if (handled) {
+        if (!_claimedKeys) _claimedKeys = [NSMutableIndexSet indexSet];
+        [_claimedKeys addIndex:event.keyCode];
+    } else {
+        [_claimedKeys removeIndex:event.keyCode];
+    }
+    return handled;
+}
+- (BOOL)performKeyEquivalent:(NSEvent*)event {
+    // AppKit asks every view of the window, also those that do not hold the keyboard.
+    if (event.type == NSEventTypeKeyDown && [self neoHoldsKeyboard] && [self neoClaimKeyEvent:event]) return YES;
+    return [super performKeyEquivalent:event];
+}
+- (void)keyDown:(NSEvent*)event {
+    if ([self neoClaimKeyEvent:event]) return;
+    [super keyDown:event];
+}
+- (void)keyUp:(NSEvent*)event {
+    if ([_claimedKeys containsIndex:event.keyCode]) { [_claimedKeys removeIndex:event.keyCode]; return; }
+    [super keyUp:event];
+}
 - (void)mouseDown:(NSEvent*)event { if(self.window)objc_setAssociatedObject(self.window,&neo_window_press_key,event,OBJC_ASSOCIATION_RETAIN_NONATOMIC);[super mouseDown:event]; }
 // AppKit shows nothing for an empty menu; page-level contextmenu handlers have already run by now.
 - (void)willOpenMenu:(NSMenu*)menu withEvent:(NSEvent*)event { if(self.contextMenusDisabled)[menu removeAllItems];else [super willOpenMenu:menu withEvent:event]; }
@@ -99,8 +162,10 @@ struct cocoa_view {
     NeoAstraDelegate* delegate;
     NSMutableArray<NeoURLSchemeHandler*>* scheme_handlers;
     std::unordered_map<std::string,WKUserScript*> scripts;
+    // The bindings of the scripts that have one, by the identifier of the script.
+    std::unordered_map<std::string,NeoAstraScriptChannel*> channels;
     uint64_t history{};
-    ~cocoa_view() { if (delegate) delegate.nativeView=nullptr; }
+    ~cocoa_view();
 };
 
 std::string request_headers(NSURLRequest* request) {
@@ -431,7 +496,10 @@ void sync_bounds(neoastra_window_t* value,NSWindow* window){if(!window)return;co
 
 namespace {
 NSView* view_parent(neoastra_view_t* view) {if(view->window){auto* state=static_cast<cocoa_window*>(view->window->platform);return state?state->window.contentView:nil;}return view->parent.kind==NEOASTRA_NATIVE_PARENT_COCOA_NSVIEW?(__bridge NSView*)view->parent.handle:nil;}
-NSRect view_frame(neoastra_view_t* view,NSView* parent){if(view->fill_parent)return parent.bounds;return NSMakeRect(view->bounds.x,view->bounds.y,std::max(view->bounds.width,1),std::max(view->bounds.height,1));}
+// Explicit bounds count from the top-left corner of the parent, whose own origin is at the bottom unless it is flipped.
+NSRect view_frame(neoastra_view_t* view,NSView* parent){if(view->fill_parent)return parent.bounds;const CGFloat width=std::max(view->bounds.width,1),height=std::max(view->bounds.height,1);return NSMakeRect(view->bounds.x,parent.isFlipped?view->bounds.y:NSHeight(parent.bounds)-view->bounds.y-height,width,height);}
+// A view on explicit bounds keeps its distance from the top of its parent when the parent resizes.
+NSAutoresizingMaskOptions view_autoresizing(neoastra_view_t* view,NSView* parent){if(view->fill_parent)return NSViewWidthSizable|NSViewHeightSizable;return parent.isFlipped?NSViewMaxYMargin:NSViewMinYMargin;}
 // Extends the content view beneath a transparent title bar. The traffic lights stay in place for the overlay style.
 void apply_title_bar(neoastra_window_t* window,cocoa_window* state) {
     NSWindow* native=state->window;
@@ -692,12 +760,14 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 ((NeoAstraWebView*)state->webview).nativeView=view;
                 state->webview.UIDelegate=state->delegate;
                 state->webview.allowsMagnification=YES;
-                if (view->fill_parent) state->webview.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+                state->webview.autoresizingMask=view_autoresizing(view,parent);
                 [state->webview addObserver:state->delegate forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:nullptr];
-                [parent addSubview:state->webview];
+                if(auto* above=neo_view_above(view,[&](neoastra_view_t* other){return static_cast<cocoa_view*>(other->platform)->webview.superview==parent;}))
+                    [parent addSubview:state->webview positioned:NSWindowBelow relativeTo:static_cast<cocoa_view*>(above->platform)->webview];
+                else [parent addSubview:state->webview];
                 view->platform=state.release();
                 callback(context,nullptr);
                 return true;
@@ -711,8 +781,98 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
         }
     }
 }
-void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoBack"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoForward"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
-neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view->fill_parent?(NSViewWidthSizable|NSViewHeightSizable):NSViewNotSizable;return NEOASTRA_OK;}
+@implementation NeoAstraScriptChannel
+- (void)userContentController:(WKUserContentController*)controller didReceiveScriptMessage:(WKScriptMessage*)message {
+    (void)controller;
+    auto* view=self.nativeView;
+    neo_retain_guard owner(view);
+    if(!owner)return;
+    @try {
+        try {
+            auto* state=static_cast<cocoa_view*>(view->platform);
+            // Only this binding of this world of this view: the handler is registered nowhere else, and is checked all the same.
+            if(@available(macOS 11.0,*)){
+                if(!state||message.webView!=state->webview||message.world!=self.world||![message.name isEqualToString:self.binding])return;
+            } else return;
+            if(![message.body isKindOfClass:[NSString class]]){
+                neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"bridge","Blocked a script message that is not a string");
+                return;
+            }
+            const auto text=utf8((NSString*)message.body);
+            const auto uri=url_origin(message.frameInfo.request.URL);
+            neo_emit_script_message(view,worldName,bindingName,text,uri,message.frameInfo.mainFrame);
+        } catch(...) { neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WKWebView script message handling failed"); }
+    } @catch(NSException*) { neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WKWebView script message handling raised an exception"); }
+}
+@end
+
+namespace {
+// Takes the handler of a binding out of its world, so that no later message of the world reaches the view.
+void remove_script_channel(cocoa_view* state,NeoAstraScriptChannel* channel) noexcept {
+    channel.nativeView=nullptr;
+    if(@available(macOS 11.0,*)){
+        @try{[state->webview.configuration.userContentController removeScriptMessageHandlerForName:channel.binding contentWorld:channel.world];}
+        @catch(NSException*){}
+    }
+}
+void remove_script_channels(cocoa_view* state) noexcept {
+    for(auto& entry:state->channels)remove_script_channel(state,entry.second);
+    state->channels.clear();
+}
+}
+cocoa_view::~cocoa_view() {
+    if (delegate) delegate.nativeView=nullptr;
+    for (auto& entry : channels) entry.second.nativeView=nullptr;
+}
+
+bool neo_platform_script_worlds_supported() noexcept {
+    if(@available(macOS 11.0,*))return true;
+    return false;
+}
+
+void neo_platform_view_destroy(neoastra_view_t* view) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state)return;@try{[state->webview removeObserver:state->delegate forKeyPath:@"title"];[state->webview removeObserver:state->delegate forKeyPath:@"URL"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoBack"];[state->webview removeObserver:state->delegate forKeyPath:@"canGoForward"];}@catch(NSException*){}((NeoAstraWebView*)state->webview).nativeView=nullptr;state->delegate.nativeView=nullptr;state->webview.navigationDelegate=nil;state->webview.UIDelegate=nil;if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)[state->webview.configuration.userContentController removeScriptMessageHandlerForName:@"_neoastra_transport_v1"];remove_script_channels(state);[state->webview removeFromSuperview];delete state;view->platform=nullptr;}}
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    // AppKit would leave the keyboard with the window when the view that holds it hides: it goes to a sibling instead.
+    if (!view->visible) {
+        NSWindow* window = state->webview.window;
+        NSResponder* responder = window.firstResponder;
+        if ([responder isKindOfClass:NSView.class] && [(NSView*)responder isDescendantOf:state->webview]) {
+            auto* sibling = neo_visible_sibling(view);
+            auto* sibling_state = sibling ? static_cast<cocoa_view*>(sibling->platform) : nullptr;
+            [window makeFirstResponder:sibling_state ? (NSResponder*)sibling_state->webview : nil];
+        }
+    }
+    state->webview.hidden = !view->visible;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    *scale = (state->webview.pageZoom > 0 ? state->webview.pageZoom : 1) * (state->webview.magnification > 0 ? state->webview.magnification : 1);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t*) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    NSView* parent = view_parent(view);
+    if (!parent) return NEOASTRA_ERROR_INVALID_STATE;
+    WKWebView* web = state->webview;
+    [web removeFromSuperview];
+    [parent addSubview:web];
+    web.frame = view_frame(view, parent);
+    web.autoresizingMask = view_autoresizing(view, parent);
+    web.hidden = !view->visible;
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<cocoa_view*>(view->platform);
+    if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    NSWindow* window = state->webview.window;
+    return window && [window makeFirstResponder:state->webview] ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
+}
+neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSView* parent=view_parent(view);state->webview.frame=view_frame(view,parent);state->webview.autoresizingMask=view_autoresizing(view,parent);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation URI");[state->webview loadRequest:[NSURLRequest requestWithURL:url]];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t* body,uint64_t body_length,neoastra_error_t** error) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);NSURL* url=[NSURL URLWithString:ns_string(uri)];if(!state||!state->webview||!url||method.empty()||body_length>NSUIntegerMax)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"Invalid WKWebView navigation request");NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];request.HTTPMethod=ns_string(method);if(body_length)request.HTTPBody=[NSData dataWithBytes:body length:(NSUInteger)body_length];for(NSString* line in [ns_string(headers) componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]){NSRange separator=[line rangeOfString:@":"];if(separator.location==NSNotFound)continue;NSString* name=[[line substringToIndex:separator.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];NSString* value=[[line substringFromIndex:separator.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];if(name.length)[request setValue:value forHTTPHeaderField:name];}[state->webview loadRequest:request];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view,const std::string& html,const std::string& base,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;NSURL* url=base.empty()?nil:[NSURL URLWithString:ns_string(base)];[state->webview loadHTMLString:ns_string(html) baseURL:url];return NEOASTRA_OK;}}
@@ -721,8 +881,86 @@ neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view,const std::st
     // NSJSONSerialization raises an exception for a value without a JSON form, such as a date or a number that is not finite.
     if(value){@try{NSData* data=[NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingFragmentsAllowed error:nil];if(data)output.assign((const char*)data.bytes,data.length);}@catch(NSException*){output="null";}}
     if(operation->try_complete(requested,actual))callback(context,actual,actual==NEOASTRA_OK?neo_string_view(output):neoastra_string_view_t{},native_error);if(native_error)native_error->release();operation->release();}];return NEOASTRA_OK;}}
-neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::string& script,const neoastra_script_options_t* options,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;if(options->isolated_world)return NEOASTRA_ERROR_NOT_SUPPORTED;auto time=options->injection_time==NEOASTRA_SCRIPT_DOCUMENT_END?WKUserScriptInjectionTimeAtDocumentEnd:WKUserScriptInjectionTimeAtDocumentStart;WKUserScript* user_script=[[WKUserScript alloc]initWithSource:ns_string(script) injectionTime:time forMainFrameOnly:options->main_frame_only!=0];std::string identifier=utf8([NSUUID UUID].UUIDString);state->scripts.emplace(identifier,user_script);[state->webview.configuration.userContentController addUserScript:user_script];dispatch_async(dispatch_get_main_queue(),^{neoastra_result_t actual{};if(operation->try_complete(NEOASTRA_OK,actual))callback(context,actual,actual==NEOASTRA_OK?neo_string_view(identifier):neoastra_string_view_t{},nullptr);operation->release();});return NEOASTRA_OK;}}
-neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;state->scripts.erase(found);auto* manager=state->webview.configuration.userContentController;[manager removeAllUserScripts];for(const auto& entry:state->scripts)[manager addUserScript:entry.second];return NEOASTRA_OK;}}
+// A script of an isolated world runs in the content world of its name; one with a binding runs after the object of the binding,
+// in the same script, so that no reordering of the scripts of the view separates them, and its handler exists in that world only.
+neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::string& script,const neoastra_script_options_t* options,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);
+    if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    if(options->isolated_world&&!neo_platform_script_worlds_supported())return NEOASTRA_ERROR_NOT_SUPPORTED;
+    auto time=options->injection_time==NEOASTRA_SCRIPT_DOCUMENT_END?WKUserScriptInjectionTimeAtDocumentEnd:WKUserScriptInjectionTimeAtDocumentStart;
+    const std::string identifier=utf8([NSUUID UUID].UUIDString);
+    auto* manager=state->webview.configuration.userContentController;
+    NeoAstraScriptChannel* channel=nil;
+    bool handler_added=false;
+    // Undoes what a failure left behind: the handler of the binding and the entries of the script.
+    const auto undo=[&]{
+        if(channel&&handler_added)remove_script_channel(state,channel);
+        if(channel)channel.nativeView=nullptr;
+        state->channels.erase(identifier);
+        state->scripts.erase(identifier);
+    };
+    @try {
+        try {
+            WKUserScript* user_script=nil;
+            if(options->isolated_world){
+                if(@available(macOS 11.0,*)){
+                    const auto world_name=neo_string(options->world_name);
+                    const auto binding=neo_string(options->binding_name);
+                    WKContentWorld* world=[WKContentWorld worldWithName:ns_string(world_name)];
+                    std::string source=script;
+                    if(!binding.empty()){
+                        for(const auto& entry:state->channels)
+                            if(entry.second->worldName==world_name&&entry.second->bindingName==binding)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The world of the view already has a script with this binding",0,"wkwebview");
+                        channel=[NeoAstraScriptChannel new];
+                        if(!channel)throw std::bad_alloc();
+                        channel->worldName=world_name;
+                        channel->bindingName=binding;
+                        channel.world=world;
+                        channel.binding=ns_string(binding);
+                        source=neo_script_channel_bootstrap(binding)+script;
+                    }
+                    user_script=[[WKUserScript alloc]initWithSource:ns_string(source) injectionTime:time forMainFrameOnly:options->main_frame_only!=0 inContentWorld:world];
+                    if(user_script&&channel){
+                        [manager addScriptMessageHandler:channel contentWorld:world name:channel.binding];
+                        handler_added=true;
+                        channel.nativeView=view;
+                    }
+                } else return NEOASTRA_ERROR_NOT_SUPPORTED;
+            } else user_script=[[WKUserScript alloc]initWithSource:ns_string(script) injectionTime:time forMainFrameOnly:options->main_frame_only!=0];
+            if(!user_script){undo();return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView could not create the script",0,"wkwebview");}
+            state->scripts.emplace(identifier,user_script);
+            if(channel)state->channels.emplace(identifier,channel);
+            [manager addUserScript:user_script];
+        } catch(...) { undo(); return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView could not add the script",0,"wkwebview"); }
+    } @catch(NSException*) { undo(); return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView refused the script or its binding",0,"wkwebview"); }
+    // A script whose operation was canceled first is not handed to anyone, so it does not stay in the view either.
+    const bool retained=view->retain();
+    dispatch_async(dispatch_get_main_queue(),^{
+        neoastra_result_t actual{};
+        const bool completed=operation->try_complete(NEOASTRA_OK,actual);
+        if((!completed||actual!=NEOASTRA_OK)&&retained)neo_platform_view_remove_script(view,identifier);
+        if(completed)callback(context,actual,actual==NEOASTRA_OK?neo_string_view(identifier):neoastra_string_view_t{},nullptr);
+        operation->release();
+        if(retained)view->release();
+    });
+    return NEOASTRA_OK;
+}}
+// Delivers a message to the binding of a script in its world of the current main-frame document.
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view,const std::string& identifier,const std::string& message,neoastra_error_t** error) noexcept {@autoreleasepool{
+    auto* state=static_cast<cocoa_view*>(view->platform);
+    if(!state||!state->webview)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WKWebView view is not initialized",0,"wkwebview");
+    auto found=state->channels.find(identifier);
+    if(found==state->channels.end())return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"No script with a binding has this identifier",0,"wkwebview");
+    if(@available(macOS 11.0,*)){
+        NSString* text=ns_string(message);
+        if(!text)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The script message is not UTF-8",0,"wkwebview");
+        @try{[state->webview callAsyncJavaScript:@(neo_script_channel_delivery) arguments:@{@"name":found->second.binding,@"message":text} inFrame:nil inContentWorld:found->second.world completionHandler:nil];}
+        @catch(NSException*){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView refused the script message",0,"wkwebview");}
+        return NEOASTRA_OK;
+    }
+    return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WKWebView has no content worlds before macOS 11",0,"wkwebview");
+}}
+neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;state->scripts.erase(found);if(auto channel=state->channels.find(identifier);channel!=state->channels.end()){NeoAstraScriptChannel* value=channel->second;state->channels.erase(channel);remove_script_channel(state,value);}auto* manager=state->webview.configuration.userContentController;[manager removeAllUserScripts];for(const auto& entry:state->scripts)[manager addUserScript:entry.second];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t**) noexcept {@autoreleasepool{auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;std::string script;try{neo_append_post_script(script,message,json);}catch(...){return NEOASTRA_ERROR_NATIVE_FAILURE;}[state->webview evaluateJavaScript:ns_string(script) completionHandler:nil];return NEOASTRA_OK;}}
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t**) noexcept {@autoreleasepool{
     auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;

@@ -17,6 +17,12 @@ public sealed class NeoAstra : IAsyncDisposable
 {
     private readonly SafeViewHandle _handle;
     private readonly NeoAstraHost _host;
+    private readonly bool _fillsParent;
+    private NeoWindow? _window;
+    private NeoRect _bounds;
+    private bool _isVisible = true;
+    private EventHandler<NeoKeyChordEventArgs>? _keyChordPressed;
+    private bool _keyChordsRegistered;
     private readonly TimeSpan _decisionTimeout;
     private readonly string? _viewLabel;
     private readonly Dictionary<ulong, NeoDownload> _downloads = [];
@@ -24,6 +30,8 @@ public sealed class NeoAstra : IAsyncDisposable
     private GCHandle _eventRoot;
     private Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? _scriptDialogRequested;
     private NeoUserScript? _transportScript;
+    // The scripts with a binding, by the world and the binding that the native library registered for them.
+    private readonly NeoScriptChannelRegistry<NeoUserScript> _scriptChannels = new();
     private NeoMessagePost? _postMessages;
     private DecodedUri? _lastUri;
     private bool _postsBatches;
@@ -41,6 +49,9 @@ public sealed class NeoAstra : IAsyncDisposable
         Environment = environment;
         _handle = handle;
         _host = host;
+        _fillsParent = host.FillsParent(options);
+        _window = host.Window;
+        _bounds = options.Bounds;
         _decisionTimeout = options.DecisionTimeout;
         _viewLabel = options.ViewLabel;
         Profile = options.Profile;
@@ -107,6 +118,286 @@ public sealed class NeoAstra : IAsyncDisposable
 
             ThrowIfDisposed();
             NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_zoom_factor(NativeHandle, value), default, "set zoom factor");
+        }
+    }
+
+    /// <summary>Gets the explicit bounds of the view in the client area of its parent, from the top-left corner.</summary>
+    /// <remarks>
+    /// The unit is that of the platform: physical pixels on Windows, points on macOS and iOS, GTK logical pixels on Linux, and
+    /// physical pixels on Android. A view that fills its parent reports the bounds of its options, which it does not use.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    public NeoRect Bounds
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _bounds;
+        }
+    }
+
+    /// <summary>Moves and resizes a view that has explicit bounds, in the client area of its parent, from the top-left corner.</summary>
+    /// <param name="bounds">The new bounds, in the unit that <see cref="Bounds"/> describes, with a positive size.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bounds"/> does not have a positive size.</exception>
+    /// <exception cref="InvalidOperationException">The view fills its parent, or the call is not on the UI thread.</exception>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend refuses the bounds.</exception>
+    public void SetBounds(NeoRect bounds)
+    {
+        ThrowIfDisposed();
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bounds), "View bounds must have positive dimensions.");
+        }
+
+        if (_fillsParent)
+        {
+            throw new InvalidOperationException("A view that fills its parent has no explicit bounds. Create it with NeoAstraHost.BoundedInWindow.");
+        }
+
+        var native = new NativeMethods.neoastra_rect { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
+        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_bounds(NativeHandle, new NativeMethods.neoastra_rect_t(native), 0), default, "set view bounds");
+        _bounds = bounds;
+    }
+
+    /// <summary>Gets or sets whether the host shows this view.</summary>
+    /// <remarks>
+    /// A hidden view keeps its page and its state, and its page reports <c>document.visibilityState</c> as <c>hidden</c>.
+    /// A view stays hidden when its window is hidden and shown again. A view that is shown is still not on screen while its window is hidden.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The call is not on the UI thread.</exception>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend refuses the change.</exception>
+    /// <exception cref="NotSupportedException">The loaded native library cannot show or hide a view.</exception>
+    public bool IsVisible
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _isVisible;
+        }
+        set
+        {
+            ThrowIfDisposed();
+            if (value == _isVisible)
+            {
+                return;
+            }
+
+            try
+            {
+                NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                throw new NotSupportedException("The loaded native library cannot show or hide a view.", exception);
+            }
+
+            _isVisible = value;
+        }
+    }
+
+    /// <summary>Shows this view over a rectangle of another view, moving it to the window of that view first when needed.</summary>
+    /// <param name="anchor">The view whose page gives the rectangle, in a window of the same application.</param>
+    /// <param name="x">The left of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="y">The top of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="width">The positive width of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <param name="height">The positive height of the rectangle, in the CSS pixels of <paramref name="anchor"/>.</param>
+    /// <remarks>
+    /// The conversion takes the page zoom, a pinch, and the scale of the display of <paramref name="anchor"/> into account. A move to another
+    /// window does not reload the page: its state and typed text stay. Call this again when the layout or the zoom of the anchor changes.
+    /// <see cref="NeoCapability.ViewPlacement"/> tells whether the backend supports it.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="anchor"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="anchor"/> is this view, or belongs to another application.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A coordinate is not finite, or the size is not positive.</exception>
+    /// <exception cref="InvalidOperationException">This view fills its parent, a view is not in a window, the window of the anchor is closed, or the call is not on the UI thread.</exception>
+    /// <exception cref="NotSupportedException">The backend cannot place views.</exception>
+    /// <exception cref="ObjectDisposedException">This view or <paramref name="anchor"/> has been disposed.</exception>
+    public unsafe void PlaceOver(NeoAstra anchor, double x, double y, double width, double height)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchor);
+        anchor.ThrowIfDisposed();
+        if (ReferenceEquals(anchor, this))
+        {
+            throw new ArgumentException("A view cannot be placed over itself.", nameof(anchor));
+        }
+
+        if (!ReferenceEquals(anchor.Environment.Application, Environment.Application))
+        {
+            throw new ArgumentException("The anchor must belong to the application of this view.", nameof(anchor));
+        }
+
+        if (!double.IsFinite(x) || !double.IsFinite(y))
+        {
+            throw new ArgumentOutOfRangeException(nameof(x), "The position must be finite.");
+        }
+
+        if (!double.IsFinite(width) || width <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "The width must be positive and finite.");
+        }
+
+        if (!double.IsFinite(height) || height <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), "The height must be positive and finite.");
+        }
+
+        if (_fillsParent)
+        {
+            throw new InvalidOperationException("A view that fills its parent cannot be placed. Create it with NeoAstraHost.BoundedInWindow.");
+        }
+
+        NativeMethods.neoastra_rect_t placed = default;
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_place_over(NativeHandle, anchor.NativeHandle, x, y, width, height, &placed), default, "place view");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library cannot place views.", exception);
+        }
+
+        var rect = placed.Value;
+        _bounds = new NeoRect(rect.x, rect.y, rect.width, rect.height);
+        var previous = _window;
+        _window = anchor._window;
+        if (!ReferenceEquals(previous, _window))
+        {
+            WindowMoved?.Invoke(previous, _window);
+        }
+    }
+
+    // Raised on the UI thread after PlaceOver moved the view to another window.
+    private event Action<NeoWindow?, NeoWindow?>? WindowMoved;
+
+    /// <summary>Follows the window that hosts this view, which <see cref="PlaceOver"/> can change.</summary>
+    /// <param name="closed">Called when the window that hosts the view at that moment closes.</param>
+    /// <param name="moved">Called after the view moved to another window, or <see langword="null"/>.</param>
+    /// <returns>An action that ends the observation.</returns>
+    internal Action ObserveWindow(Action closed, Action? moved = null)
+    {
+        var gate = new object();
+        var current = _window;
+        EventHandler handler = (_, _) => closed();
+        if (current is not null)
+        {
+            current.Closed += handler;
+        }
+
+        Action<NeoWindow?, NeoWindow?> follow = (previous, next) =>
+        {
+            lock (gate)
+            {
+                if (previous is not null) previous.Closed -= handler;
+                if (next is not null) next.Closed += handler;
+                current = next;
+            }
+
+            moved?.Invoke();
+        };
+        WindowMoved += follow;
+        return () =>
+        {
+            WindowMoved -= follow;
+            lock (gate)
+            {
+                if (current is not null) current.Closed -= handler;
+                current = null;
+            }
+        };
+    }
+
+    /// <summary>Occurs on the UI thread before the page gets a key chord, while this view holds the keyboard.</summary>
+    /// <remarks>
+    /// A chord is a key pressed with Ctrl, Alt or Meta, or a function key. Setting <see cref="NeoKeyChordEventArgs.Handled"/> keeps
+    /// its press and its release from the page; any other key reaches the page unchanged. AltGr on Windows is not a chord. The event
+    /// is available on Windows, macOS and Linux. Handlers must return quickly, because the keyboard waits for them.
+    /// </remarks>
+    /// <exception cref="NotSupportedException">A handler is added and the loaded native library has no key chords.</exception>
+    public event EventHandler<NeoKeyChordEventArgs>? KeyChordPressed
+    {
+        add
+        {
+            ThrowIfDisposed();
+            _keyChordPressed += value;
+            try
+            {
+                UpdateKeyChordRegistration();
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                _keyChordPressed -= value;
+                throw new NotSupportedException("The loaded native library has no key chords.", exception);
+            }
+        }
+        remove
+        {
+            _keyChordPressed -= value;
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                UpdateKeyChordRegistration();
+            }
+        }
+    }
+
+    // Registered only while a handler listens, so that a view without one has no call on each key.
+    private unsafe void UpdateKeyChordRegistration()
+    {
+        var listening = _keyChordPressed is not null;
+        if (listening == _keyChordsRegistered)
+        {
+            return;
+        }
+
+        var result = listening
+            ? NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, new((delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_string_view_t, uint>)&KeyChord), (void*)GCHandle.ToIntPtr(_eventRoot))
+            : NativeMethods.neoastra_view_set_key_chord_callback(NativeHandle, default, null);
+        NativeError.ThrowIfFailed(result, default, "register key chords");
+        _keyChordsRegistered = listening;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe uint KeyChord(void* context, NativeMethods.neoastra_string_view_t chord)
+    {
+        try
+        {
+            if (GCHandle.FromIntPtr((nint)context).Target is not NeoAstra view || view._keyChordPressed is not { } handlers)
+            {
+                return 0;
+            }
+
+            var arguments = new NeoKeyChordEventArgs(Utf8String.Decode(chord));
+            handlers(view, arguments);
+            return arguments.Handled ? 1u : 0u;
+        }
+        catch
+        {
+            // No managed exception may cross the unmanaged callback boundary: a chord that fails goes to the page.
+            return 0;
+        }
+    }
+
+    /// <summary>Gives the keyboard to this view.</summary>
+    /// <remarks>
+    /// A window gives the keyboard back to the view that held it last when it is activated again. When a view that holds the
+    /// keyboard is hidden, the keyboard goes to another visible view of its window.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The view is hidden or cannot take the keyboard, or the call is not on the UI thread.</exception>
+    /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
+    /// <exception cref="NeoAstraException">The backend fails to move the keyboard.</exception>
+    /// <exception cref="NotSupportedException">The loaded native library cannot give the keyboard to a view.</exception>
+    public void Focus()
+    {
+        ThrowIfDisposed();
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_focus(NativeHandle), default, "focus view");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library cannot give the keyboard to a view.", exception);
         }
     }
 
@@ -369,21 +660,26 @@ public sealed class NeoAstra : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         options ??= new NeoScriptOptions();
         options.Validate();
+        if (CheckScriptChannelSupport(Environment.RuntimeInfo, options) is { } unsupported) return ValueTask.FromException<NeoUserScript>(unsupported);
         using var nativeScript = new Utf8String(script);
         using var worldName = new Utf8String(options.WorldName);
+        using var bindingName = new Utf8String(options.BindingName);
         var raw = new NativeMethods.neoastra_script_options
         {
             size = (uint)sizeof(NativeMethods.neoastra_script_options),
-            version = 1,
+            // Version 2 only for a binding: a library from before it reads version 1 of any size and refuses version 2.
+            version = options.BindingName is null ? 1u : 2u,
             injection_time = options.InjectAtDocumentEnd
                 ? NativeMethods.neoastra_script_injection_time.NEOASTRA_SCRIPT_DOCUMENT_END
                 : NativeMethods.neoastra_script_injection_time.NEOASTRA_SCRIPT_DOCUMENT_START,
             main_frame_only = options.MainFrameOnly ? 1u : 0u,
             isolated_world = options.IsolatedWorld ? 1u : 0u,
             world_name = worldName.View,
+            binding_name = bindingName.View,
         };
         var nativeOptions = new NativeMethods.neoastra_script_options_t(raw);
-        var operation = new NativeOperation<NeoUserScript>(cancellationToken, this);
+        var world = options.IsolatedWorld ? (string.IsNullOrEmpty(options.WorldName) ? DefaultScriptWorld : options.WorldName) : null;
+        var operation = new NativeOperation<NeoUserScript>(cancellationToken, new ScriptRequest(this, world, options.BindingName, options.MessageHandler));
         NativeMethods.neoastra_operation_t nativeOperation = default;
         NativeMethods.neoastra_error_t error = default;
         NativeMethods.neoastra_result_t result;
@@ -416,6 +712,54 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         return operation.ValueTask;
+    }
+
+    // The world of an isolated script whose options name none (neo_default_script_world of the native library).
+    private const string DefaultScriptWorld = "neoastra.default";
+
+    private sealed record ScriptRequest(NeoAstra View, string? WorldName, string? BindingName,
+        EventHandler<NeoScriptMessageReceivedEventArgs>? MessageHandler);
+
+    // A binding needs a native library that reads it: an older one would refuse its options as invalid, and must never be
+    // asked to run the script without it.
+    internal static NotSupportedException? CheckScriptChannelSupport(NeoRuntimeInfo runtime, NeoScriptOptions options) =>
+        options.BindingName is not null && !runtime.HasScriptWorldChannels
+            ? new NotSupportedException("The loaded native library has no script bindings of isolated worlds (NeoCapability.ScriptWorldChannel).")
+            : null;
+
+    internal void UnregisterScriptChannel(NeoUserScript script)
+    {
+        if (script.WorldName is { } world && script.BindingName is { } binding) _scriptChannels.Remove(world, binding, script);
+    }
+
+    // Must run on the UI thread.
+    internal unsafe void PostScriptMessage(string identifier, string message)
+    {
+        ThrowIfDisposed();
+        using var nativeIdentifier = new Utf8String(identifier);
+        using var nativeMessage = new Utf8String(message);
+        NativeMethods.neoastra_error_t error = default;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_view_post_script_message(NativeHandle, nativeIdentifier.View, nativeMessage.View, &error);
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library has no script bindings of isolated worlds.", exception);
+        }
+
+        NativeError.ThrowIfFailed(result, error, "post script message", CancellationToken.None);
+    }
+
+    private void DispatchScriptMessage(NativeMethods.neoastra_event value, Uri? origin)
+    {
+        // The world and the binding are those of the native registration, which names the one script that owns them.
+        var world = Utf8String.Decode(value.text2);
+        var binding = Utf8String.Decode(value.text3);
+        if (string.IsNullOrEmpty(world) || string.IsNullOrEmpty(binding) || (value.value & 1) == 0) return;
+        if (_scriptChannels.Find(world, binding) is not { } script) return;
+        script.RaiseMessageReceived(new NeoScriptMessageReceivedEventArgs(Utf8String.Decode(value.text), origin, world, binding));
     }
 
     /// <summary>Posts a JSON value to web content.</summary>
@@ -693,13 +1037,22 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         _transport?.Close("view_disposed");
+        _scriptChannels.Clear();
         try { Disposing?.Invoke(); } catch { }
         NativeDropReceived = null;
         NativeNavigationStarted = null;
         Disposing = null;
+        WindowMoved = null;
         Environment.Application.UnregisterView(this);
         try
         {
+            if (_keyChordsRegistered)
+            {
+                _keyChordPressed = null;
+                _keyChordsRegistered = false;
+                NativeMethods.neoastra_view_set_key_chord_callback(new(_handle.DangerousGetHandle()), default, null);
+            }
+
             NativeMethods.neoastra_view_set_event_callback(new(_handle.DangerousGetHandle()), default, null);
         }
         catch
@@ -721,10 +1074,10 @@ public sealed class NeoAstra : IAsyncDisposable
 
     /// <summary>Gets the window that hosts this view, or <see langword="null"/> when the view was created in a native parent of the application (<see cref="NeoAstraHost.FromNativeParent"/> and the other <c>From</c> methods of <see cref="NeoAstraHost"/>).</summary>
     /// <remarks>
-    /// A view created with <see cref="NeoAstraHost.FillWindow"/> keeps its window for its whole life, so a view reported by an event,
+    /// A view keeps its window until <see cref="PlaceOver"/> moves it to the window of another view, so a view reported by an event,
     /// such as the <see cref="NeoPageDragEndedEventArgs.TargetView"/> of a page drag dropped on another window, leads to that window.
     /// </remarks>
-    public NeoWindow? Window => _host.Window;
+    public NeoWindow? Window => _window;
 
     internal NeoTransportSessionSnapshot? TransportSession => _transport?.CurrentSession;
 
@@ -941,6 +1294,9 @@ public sealed class NeoAstra : IAsyncDisposable
                     DispatchNativeDrop((int)((value.value >> 56) & 0x7f), nativePaths, new NeoPoint(value.bounds.Value.x, value.bounds.Value.y));
                 }
                 else DispatchWebMessage(Utf8String.Bytes(value.text), uri, (value.value & 1) != 0);
+                break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED:
+                DispatchScriptMessage(value, uri);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED:
                 try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
@@ -1606,7 +1962,20 @@ public sealed class NeoAstra : IAsyncDisposable
             {
                 var identifier = Utf8String.Decode(value);
                 if (string.IsNullOrEmpty(identifier)) throw new InvalidDataException("The native backend returned an empty script identifier.");
-                operation.Complete(new NeoUserScript((NeoAstra)operation.Owner!, identifier));
+                var request = (ScriptRequest)operation.Owner!;
+                var script = new NeoUserScript(request.View, identifier, request.WorldName, request.BindingName, request.MessageHandler);
+                // The native library allows one script per binding of a world, so its names are free here; the script owns them
+                // before the caller gets it, and a script that the caller no longer waits for is removed with its binding.
+                if (request.BindingName is { } binding && !request.View._scriptChannels.TryAdd(request.WorldName!, binding, script))
+                {
+                    try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
+                    operation.Fail(new InvalidOperationException("The world of the view already has a script with this binding."));
+                }
+                else if (!operation.TryComplete(script))
+                {
+                    request.View.UnregisterScriptChannel(script);
+                    try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
+                }
             }
             else
             {

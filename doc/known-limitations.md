@@ -18,6 +18,8 @@ assuming that every browser engine supports every portable event.
 | Fullscreen decisions | Available | Not exposed | Available |
 | Download pause/resume | Available when reported by the runtime | Not exposed | Not exposed |
 | Trusted message origins | Exact trusted-origin policy available | Exact trusted-origin policy available | Unavailable; sender-origin data is not trustworthy |
+| Views placed in a window (`BoundedInWindow`, `SetBounds`, `IsVisible`, `Focus`, `PlaceOver`, `KeyChordPressed`) | Available; bounds in physical pixels | Available; bounds in points | Available; bounds in GTK logical pixels. Verified on X11 and on GNOME Wayland |
+| Scripts of isolated worlds and their bindings (`NeoCapability.ScriptWorldChannel`) | Available, through the DevTools protocol of the view | Available from macOS 11 | Available |
 | Arbitrary-method top-level navigation | Available | Available | Not exposed; only a plain `GET` without extra headers/body uses portable navigation |
 | Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Available |
 | Kind of a navigation request (`NeoNavigationRequest.Kind`) | Reported from the WebView2 Runtime 115 on | Reported; unknown for a reload or a history navigation after a form submission | Reported; unknown for a reload or a history navigation after a form submission |

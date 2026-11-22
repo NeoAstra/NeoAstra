@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'">
+  <title>NeoAstra embedded view</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <button id="toggle" type="button">Hide or show</button>
+    <button id="focus" type="button">Focus the view</button>
+    <button id="move" type="button">Move to the other window</button>
+    <input id="application" aria-label="Application text" placeholder="Application page">
+    <output id="status">Connecting to NeoAstra.</output>
+  </header>
+  <main id="placeholder"></main>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

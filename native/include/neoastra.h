@@ -107,9 +107,18 @@ typedef enum neoastra_event_type : uint32_t {
     /* An application event, without an object, when the displays, their bounds, work areas, scales, names, or the primary one changed. */
     NEOASTRA_EVENT_DISPLAYS_CHANGED,
     /* A window event when the display that holds most of the window became another one, as neoastra_window_get_display tells. */
-    NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED
+    NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED,
+    /* A view event with a message that a script of an isolated world posted through its binding (neoastra_script_options_t
+       binding_name), never one of the page: the text is the message, the uri the origin of the main frame that posted it, text2
+       the name of the world, text3 the name of the binding, and the value 1 for the main frame, the only one whose messages are
+       raised. Only the script of that world reaches the binding; the page and the other worlds do not see it. */
+    NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED
 } neoastra_event_type_t;
-typedef enum neoastra_capability : uint32_t { NEOASTRA_CAPABILITY_CUSTOM_SCHEME = 0, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_END, NEOASTRA_CAPABILITY_SCRIPT_ISOLATED_WORLD, NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES, NEOASTRA_CAPABILITY_MESSAGE_ORIGIN, NEOASTRA_CAPABILITY_MESSAGE_SUBFRAMES, NEOASTRA_CAPABILITY_PROFILE_NAMED, NEOASTRA_CAPABILITY_PROFILE_EPHEMERAL, NEOASTRA_CAPABILITY_COOKIES, NEOASTRA_CAPABILITY_CLEAR_DATA_BY_TIME, NEOASTRA_CAPABILITY_DOWNLOADS, NEOASTRA_CAPABILITY_DOWNLOAD_PAUSE, NEOASTRA_CAPABILITY_PERMISSIONS, NEOASTRA_CAPABILITY_PERMISSION_PERSISTENCE, NEOASTRA_CAPABILITY_NETWORK_OBSERVATION, NEOASTRA_CAPABILITY_NETWORK_INTERCEPTION, NEOASTRA_CAPABILITY_PRINT_DIALOG, NEOASTRA_CAPABILITY_PRINT_PDF, NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT, NEOASTRA_CAPABILITY_CAPTURE_FULL_PAGE, NEOASTRA_CAPABILITY_DEVTOOLS, NEOASTRA_CAPABILITY_FIND, NEOASTRA_CAPABILITY_TRANSPARENT_BACKGROUND, NEOASTRA_CAPABILITY_COMPOSITION, NEOASTRA_CAPABILITY_ZOOM, NEOASTRA_CAPABILITY_TRACKED_POPUPS, NEOASTRA_CAPABILITY_SCRIPT_DIALOGS, NEOASTRA_CAPABILITY_FILE_CHOOSER, NEOASTRA_CAPABILITY_HTTP_AUTHENTICATION, NEOASTRA_CAPABILITY_CLIENT_CERTIFICATES, NEOASTRA_CAPABILITY_TLS_ERROR_DECISIONS, NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS } neoastra_capability_t;
+typedef enum neoastra_capability : uint32_t { NEOASTRA_CAPABILITY_CUSTOM_SCHEME = 0, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_START, NEOASTRA_CAPABILITY_SCRIPT_DOCUMENT_END, NEOASTRA_CAPABILITY_SCRIPT_ISOLATED_WORLD, NEOASTRA_CAPABILITY_SCRIPT_ALL_FRAMES, NEOASTRA_CAPABILITY_MESSAGE_ORIGIN, NEOASTRA_CAPABILITY_MESSAGE_SUBFRAMES, NEOASTRA_CAPABILITY_PROFILE_NAMED, NEOASTRA_CAPABILITY_PROFILE_EPHEMERAL, NEOASTRA_CAPABILITY_COOKIES, NEOASTRA_CAPABILITY_CLEAR_DATA_BY_TIME, NEOASTRA_CAPABILITY_DOWNLOADS, NEOASTRA_CAPABILITY_DOWNLOAD_PAUSE, NEOASTRA_CAPABILITY_PERMISSIONS, NEOASTRA_CAPABILITY_PERMISSION_PERSISTENCE, NEOASTRA_CAPABILITY_NETWORK_OBSERVATION, NEOASTRA_CAPABILITY_NETWORK_INTERCEPTION, NEOASTRA_CAPABILITY_PRINT_DIALOG, NEOASTRA_CAPABILITY_PRINT_PDF, NEOASTRA_CAPABILITY_CAPTURE_VIEWPORT, NEOASTRA_CAPABILITY_CAPTURE_FULL_PAGE, NEOASTRA_CAPABILITY_DEVTOOLS, NEOASTRA_CAPABILITY_FIND, NEOASTRA_CAPABILITY_TRANSPARENT_BACKGROUND, NEOASTRA_CAPABILITY_COMPOSITION, NEOASTRA_CAPABILITY_ZOOM, NEOASTRA_CAPABILITY_TRACKED_POPUPS, NEOASTRA_CAPABILITY_SCRIPT_DIALOGS, NEOASTRA_CAPABILITY_FILE_CHOOSER, NEOASTRA_CAPABILITY_HTTP_AUTHENTICATION, NEOASTRA_CAPABILITY_CLIENT_CERTIFICATES, NEOASTRA_CAPABILITY_TLS_ERROR_DECISIONS, NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS, NEOASTRA_CAPABILITY_VIEW_PLACEMENT,
+    /* A script of an isolated world with a binding that only that world reaches (neoastra_script_options_t binding_name),
+       NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED, and neoastra_view_post_script_message. A backend without it refuses such a
+       script with NEOASTRA_ERROR_NOT_SUPPORTED: it never gives the binding to the page instead. */
+    NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL } neoastra_capability_t;
 /** What a backend can do with displays and the placement of windows, which neoastra_app_get_window_capability tells. DISPLAYS: the displays and the display of a window; PLACEMENT: a position given to a window is where it goes; VIRTUAL_DESKTOPS: whether a window is on the current virtual desktop, and its identifier; VIRTUAL_DESKTOP_MOVE: neoastra_window_move_to_virtual_desktop; ALL_VIRTUAL_DESKTOPS: NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS. */
 typedef enum neoastra_window_capability : uint32_t { NEOASTRA_WINDOW_CAPABILITY_DISPLAYS = 0, NEOASTRA_WINDOW_CAPABILITY_PLACEMENT = 1, NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOPS = 2, NEOASTRA_WINDOW_CAPABILITY_VIRTUAL_DESKTOP_MOVE = 3, NEOASTRA_WINDOW_CAPABILITY_ALL_VIRTUAL_DESKTOPS = 4 } neoastra_window_capability_t;
 typedef enum neoastra_log_level : uint32_t { NEOASTRA_LOG_TRACE = 0, NEOASTRA_LOG_DEBUG, NEOASTRA_LOG_INFORMATION, NEOASTRA_LOG_WARNING, NEOASTRA_LOG_ERROR, NEOASTRA_LOG_CRITICAL } neoastra_log_level_t;
@@ -173,12 +182,16 @@ typedef uint64_t neoastra_data_kind_t;
    in place (a download, an answer without content, a stopped or superseded navigation, or a same-document navigation).
    MESSAGE_BATCH says that this library has neoastra_view_post_messages.
    DISPLAYS says that this library has the display and virtual-desktop functions, NEOASTRA_WINDOW_ALL_VIRTUAL_DESKTOPS, and raises
-   NEOASTRA_EVENT_DISPLAYS_CHANGED and NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED. */
+   NEOASTRA_EVENT_DISPLAYS_CHANGED and NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED.
+   SCRIPT_WORLD_CHANNEL says that this library reads version 2 of neoastra_script_options_t, has neoastra_view_post_script_message,
+   and raises NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED where NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL is supported; a library
+   without it refuses version 2 as an invalid argument. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
 #define NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH (UINT64_C(1) << 3)
 #define NEOASTRA_BUILD_FEATURE_DISPLAYS (UINT64_C(1) << 4)
+#define NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL (UINT64_C(1) << 5)
 /* Bits of neoastra_display_info_t.flags. PRIMARY marks the one primary display. WORK_AREA_REPORTED says that the platform told
    the part of the display that the menu bar, the taskbar, the Dock, or the panels leave to windows; without it the work area is
    the bounds (GTK on Wayland). ID_PERSISTENT says that the identifier comes from the monitor and its connection and is the same
@@ -205,6 +218,8 @@ typedef struct neoastra_capability_info { uint32_t size; uint32_t version; neoas
 
 typedef void (NEOASTRA_CALL *neoastra_dispatch_callback_t)(void* context);
 typedef void (NEOASTRA_CALL *neoastra_event_callback_t)(void* context, const neoastra_event_t* event);
+/* Called on the UI thread before the page gets a key chord such as Ctrl+Shift+P. A nonzero result keeps the chord from the page. */
+typedef uint32_t (NEOASTRA_CALL *neoastra_key_chord_callback_t)(void* context, neoastra_string_view_t chord);
 typedef void (NEOASTRA_CALL *neoastra_log_callback_t)(void* context, neoastra_log_level_t level, neoastra_string_view_t category, neoastra_string_view_t message, uint64_t thread_id, uint64_t timestamp_ns, int64_t native_code, uint64_t object_id);
 
 typedef struct neoastra_app_options { uint32_t size; uint32_t version; neoastra_string_view_t application_name; neoastra_app_shutdown_mode_t shutdown_mode; uint32_t maximum_pending_dispatches; uint32_t reserved; neoastra_log_callback_t log_callback; void* log_context; } neoastra_app_options_t;
@@ -214,7 +229,14 @@ typedef struct neoastra_window_options { uint32_t size; uint32_t version; neoast
 /** Title-bar configuration and layout in logical units. A zero height selects the platform default, a zero-alpha symbol color follows the system theme, and a zero-alpha background is transparent. The insets are outputs describing space reserved for native window controls. */
 typedef struct neoastra_title_bar { uint32_t size; uint32_t version; neoastra_title_bar_style_t style; int32_t height; neoastra_color_t symbol_color; neoastra_color_t background_color; int32_t left_inset; int32_t right_inset; } neoastra_title_bar_t;
 typedef struct neoastra_view_options { uint32_t size; uint32_t version; neoastra_profile_t* profile; neoastra_native_parent_t parent; neoastra_window_t* window; neoastra_rect_t bounds; uint32_t fill_parent; uint32_t maximum_message_size; uint64_t decision_timeout_ms; neoastra_decision_t* popup_request; uint32_t bridge_origin_count; neoastra_bridge_policy_t bridge_policy; const neoastra_string_view_t* bridge_origins; } neoastra_view_options_t;
-typedef struct neoastra_script_options { uint32_t size; uint32_t version; neoastra_script_injection_time_t injection_time; uint32_t main_frame_only; uint32_t isolated_world; neoastra_string_view_t world_name; } neoastra_script_options_t;
+/* A persistent script. Version 1 ends with world_name; a caller of version 1 passes the size it knows, which ends before
+   binding_name. With isolated_world, the script runs in the world named world_name, or in the world "neoastra.default" when the
+   name is empty; a name has 1 to 128 ASCII letters, digits, '.', '_' or '-'. Version 2 adds binding_name: the name of a binding,
+   an identifier of 1 to 64 ASCII characters that does not begin with "_neoastra", which the script finds as a global of its
+   world with postMessage(string), onmessage, and addEventListener("message"). A binding needs isolated_world, a world_name,
+   and main_frame_only, since only the main frame can post through it; one binding name is used once per world of a view. The
+   identifier of the script names its channel to neoastra_view_post_script_message, and removing the script removes the binding. */
+typedef struct neoastra_script_options { uint32_t size; uint32_t version; neoastra_script_injection_time_t injection_time; uint32_t main_frame_only; uint32_t isolated_world; neoastra_string_view_t world_name; neoastra_string_view_t binding_name; } neoastra_script_options_t;
 /** View capture request. The region is in CSS pixels of the top-level document, measured from the top-left corner of the visible viewport, and is clipped to that viewport; a region without area selects the whole viewport. A nonzero full_page captures the whole document instead and ignores the region. The quality, from 1 through 100, applies to JPEG only; zero selects the backend default. */
 typedef struct neoastra_capture_options { uint32_t size; uint32_t version; neoastra_capture_format_t format; uint32_t quality; uint32_t full_page; uint32_t reserved; neoastra_rect_t region; } neoastra_capture_options_t;
 typedef struct neoastra_decision_response { uint32_t size; uint32_t version; neoastra_decision_action_t action; neoastra_string_view_t text; const neoastra_string_view_t* paths; uint32_t path_count; uint32_t persist; neoastra_string_view_t secondary_text; neoastra_view_t* target_view; uint32_t selected_index; uint32_t reserved; } neoastra_decision_response_t;
@@ -376,6 +398,11 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_profile_clear_data_async(n
 
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_event_callback(neoastra_view_t*, neoastra_event_callback_t, void*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_bounds(neoastra_view_t*, neoastra_rect_t, uint32_t);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_visible(neoastra_view_t*, uint32_t);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_focus(neoastra_view_t*);
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_set_key_chord_callback(neoastra_view_t*, neoastra_key_chord_callback_t, void*);
+/* Places a view with explicit bounds over a rectangle of the anchor, given in the CSS pixels of the anchor, moving it to the window of the anchor first, without reloading it. The last argument receives the resulting bounds. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_place_over(neoastra_view_t*, neoastra_view_t*, double, double, double, double, neoastra_rect_t*);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate(neoastra_view_t*, neoastra_string_view_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_navigate_request(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_string_view_t, const uint8_t*, uint64_t, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_load_html(neoastra_view_t*, neoastra_string_view_t, neoastra_string_view_t, neoastra_error_t**);
@@ -387,6 +414,13 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_v
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t*, neoastra_string_view_t, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t*, neoastra_string_view_t, const neoastra_script_options_t*, neoastra_string_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t*, neoastra_string_view_t);
+/* Delivers a string to the binding of a script added with binding_name, in its world of the current main-frame document, as a
+   message event with that string as data. The message is at most the maximum message size of the view. Where the engine reaches
+   a world only through its last message (Android), the world has to have posted in the current document first, otherwise the
+   result is NEOASTRA_ERROR_INVALID_STATE; a navigation of the main frame forgets that reply channel. An identifier that names no
+   script with a binding is NEOASTRA_ERROR_INVALID_ARGUMENT, and a backend without NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL
+   answers NEOASTRA_ERROR_NOT_SUPPORTED. The bridge policy of the view does not apply: the binding is not the page's. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_view_post_script_message(neoastra_view_t*, neoastra_string_view_t script_identifier, neoastra_string_view_t message, neoastra_error_t**);
 /* Posts a message to the page. With a nonzero json, the message must be one JSON value (RFC 8259), which the page receives parsed;
    anything else is refused with NEOASTRA_ERROR_INVALID_ARGUMENT. With a zero json, the page receives the message as a string. The
    WebKit backends give the message to the page as a string literal of their script, parsed by JSON.parse: it is never script. */

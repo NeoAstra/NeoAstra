@@ -9,6 +9,9 @@
 #endif
 #include <cassert>
 #include <chrono>
+#include <cwchar>
+#include <filesystem>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -471,6 +474,96 @@ void test_window_api_callback_detach(window_change change) {
     neoastra_app_release(app);
 }
 
+struct created_value {
+    bool done{};
+    neoastra_result_t result{NEOASTRA_ERROR_UNKNOWN};
+    void* value{};
+};
+
+void NEOASTRA_CALL environment_created(void* pointer, neoastra_result_t result, neoastra_environment_t* value, const neoastra_error_t*) {
+    auto* state = static_cast<created_value*>(pointer);
+    *state = {true, result, value};
+}
+
+void NEOASTRA_CALL view_created(void* pointer, neoastra_result_t result, neoastra_view_t* value, const neoastra_error_t*) {
+    auto* state = static_cast<created_value*>(pointer);
+    *state = {true, result, value};
+}
+
+template<typename TCondition> void pump_until(TCondition&& condition) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!condition()) {
+        assert(std::chrono::steady_clock::now() < deadline);
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
+neoastra_view_t* create_view_in(neoastra_environment_t* environment, neoastra_window_t* window, bool fill, neoastra_rect_t bounds) {
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = window;
+    options.fill_parent = fill ? 1 : 0;
+    options.bounds = bounds;
+    created_value state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    pump_until([&] { return state.done; });
+    assert(state.result == NEOASTRA_OK && state.value);
+    return static_cast<neoastra_view_t*>(state.value);
+}
+
+// The size of the topmost browser window among the children of a window.
+SIZE topmost_browser_size(HWND parent) {
+    for (auto child = GetWindow(parent, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+        wchar_t name[32]{};
+        GetClassNameW(child, name, 32);
+        if (wcscmp(name, L"Chrome_WidgetWin_0") != 0) continue;
+        RECT rect{};
+        GetWindowRect(child, &rect);
+        return {rect.right - rect.left, rect.bottom - rect.top};
+    }
+    return {};
+}
+
+// WebView2 places a new controller window below its siblings: a view on explicit bounds must still be drawn above the
+// view that fills the window, also after it moves.
+void test_bounded_view_is_above_the_view_that_fills_its_window() {
+    auto* app = create_app();
+    auto* window = create_window(app);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    wchar_t temp[MAX_PATH]{};
+    assert(GetTempPathW(MAX_PATH, temp) != 0);
+    const auto root = std::filesystem::path(temp) / ("neoastra-bounded-view-" + std::to_string(GetCurrentProcessId()));
+    const auto root_text = root.u8string();
+    neoastra_environment_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.user_data_root = {reinterpret_cast<const uint8_t*>(root_text.data()), root_text.size()};
+    created_value environment_state;
+    assert(neoastra_environment_create_async(app, &options, environment_created, &environment_state, nullptr, nullptr) == NEOASTRA_OK);
+    pump_until([&] { return environment_state.done; });
+    assert(environment_state.result == NEOASTRA_OK);
+    auto* environment = static_cast<neoastra_environment_t*>(environment_state.value);
+    auto* filling = create_view_in(environment, window, true, {});
+    auto* bounded = create_view_in(environment, window, false, {20, 30, 200, 100});
+    const auto hwnd = window_handle(window);
+    auto size = topmost_browser_size(hwnd);
+    assert(size.cx == 200 && size.cy == 100);
+    assert(neoastra_view_set_bounds(bounded, {40, 50, 260, 140}, 0) == NEOASTRA_OK);
+    pump_until([&] { size = topmost_browser_size(hwnd); return size.cx == 260 && size.cy == 140; });
+    neoastra_view_release(bounded);
+    neoastra_view_release(filling);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+    assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+    neoastra_app_release(app);
+}
+
 void test_window_creation_callback_detach() {
     auto* app = create_app();
     detaching_window_context context{app};
@@ -510,5 +603,6 @@ int main() {
     test_window_api_callback_detach(window_change::show_minimized);
     test_window_api_callback_detach(window_change::leave_fullscreen);
     test_window_creation_callback_detach();
+    test_bounded_view_is_above_the_view_that_fills_its_window();
     return 0;
 }

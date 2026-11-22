@@ -6,6 +6,26 @@ using NeoAstra.Interop.Generated;
 
 namespace NeoAstra;
 
+/// <summary>Describes a key chord that a view is about to give to its page.</summary>
+public sealed class NeoKeyChordEventArgs : EventArgs
+{
+    /// <summary>Initializes the arguments of a key chord.</summary>
+    /// <param name="chord">The chord, such as <c>Ctrl+Shift+P</c>.</param>
+    /// <exception cref="ArgumentException"><paramref name="chord"/> is <see langword="null"/>, empty, or white space.</exception>
+    public NeoKeyChordEventArgs(string chord)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(chord);
+        Chord = chord;
+    }
+
+    /// <summary>Gets the chord: its modifiers in the order <c>Ctrl</c>, <c>Alt</c>, <c>Shift</c>, <c>Meta</c>, then the key.</summary>
+    /// <remarks><c>Meta</c> is the Command key on macOS and the Windows key on Windows.</remarks>
+    public string Chord { get; }
+
+    /// <summary>Gets or sets whether the host takes the chord, so that the page gets neither its press nor its release.</summary>
+    public bool Handled { get; set; }
+}
+
 /// <summary>Provides bounded, non-sensitive frontend transport diagnostic information.</summary>
 public sealed class NeoTransportDiagnosticEventArgs : EventArgs
 {
@@ -732,6 +752,46 @@ public sealed class NeoPageDragEndedEventArgs(NeoPageDragOutcome outcome, NeoDro
     public NeoPoint ScreenPosition { get; } = screenPosition;
     /// <summary>Gets the data of the drag, in the order the page set it.</summary>
     public IReadOnlyList<NeoPageDragItem> Items { get; } = items ?? throw new ArgumentNullException(nameof(items));
+}
+
+/// <summary>
+/// Provides a message that a script of an isolated world posted through its binding (<see cref="NeoScriptOptions.BindingName"/>).
+/// The page cannot post one: the binding exists only in the world of the script, and its identity is the one that the native
+/// library registered, never one that a message names.
+/// </summary>
+public sealed class NeoScriptMessageReceivedEventArgs : EventArgs
+{
+    /// <summary>Initializes the data of a message that a script posted through its binding.</summary>
+    /// <param name="message">The message.</param>
+    /// <param name="origin">The origin of the main-frame document that the script ran in, when known.</param>
+    /// <param name="worldName">The name of the isolated world of the script.</param>
+    /// <param name="bindingName">The name of the binding.</param>
+    public NeoScriptMessageReceivedEventArgs(string message, Uri? origin, string worldName, string bindingName)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(worldName);
+        ArgumentNullException.ThrowIfNull(bindingName);
+        Message = message;
+        Origin = origin;
+        WorldName = worldName;
+        BindingName = bindingName;
+    }
+
+    /// <summary>Gets the string that the script posted.</summary>
+    /// <remarks>The script is the application's, but what it reports of the document, such as text or markup, comes from the page.</remarks>
+    public string Message { get; }
+
+    /// <summary>
+    /// Gets the origin of the main-frame document that the script ran in, when known. Around a navigation, a message of the
+    /// document that the view left can still arrive.
+    /// </summary>
+    public Uri? Origin { get; }
+
+    /// <summary>Gets the name of the isolated world of the script, as the native library registered it.</summary>
+    public string WorldName { get; }
+
+    /// <summary>Gets the name of the binding, as the native library registered it.</summary>
+    public string BindingName { get; }
 }
 
 /// <summary>Provides a message sent by web content.</summary>

@@ -74,6 +74,14 @@ internal sealed class NativeOperation<T>
 
     internal void Complete(T value) => FinishNative(() => _completion.TrySetResult(value));
 
+    // Completes with a value, and answers whether the caller gets it: not when its wait was already canceled.
+    internal bool TryComplete(T value)
+    {
+        var delivered = false;
+        FinishNative(() => delivered = _completion.TrySetResult(value));
+        return delivered;
+    }
+
     internal void Fail(Exception exception) => FinishNative(() => _completion.TrySetException(exception));
 
     internal void FailStart(Exception exception) => FinishNative(() => _completion.TrySetException(exception));

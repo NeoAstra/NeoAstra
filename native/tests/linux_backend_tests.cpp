@@ -328,7 +328,8 @@ void test_retained_native_widgets_do_not_keep_freed_view_userdata(neoastra_app_t
         } else g_object_unref(controller);
     }
     g_object_unref(observed);
-    assert(controllers.size() == 2);
+    // The drop target, the key presses, and the releases of the keys that the host took.
+    assert(controllers.size() == 3);
     for (auto* controller : controllers) gtk_widget_remove_controller(GTK_WIDGET(native), controller);
     neoastra_view_release(view);
     assert(g_object_get_data(G_OBJECT(native), "neoastra.native-view") == nullptr);
@@ -731,6 +732,151 @@ void test_views_share_their_window(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+struct key_chords {
+    int count{};
+    std::string last;
+};
+
+// Takes Ctrl+Shift+P and leaves every other chord to the page.
+uint32_t NEOASTRA_CALL take_chord(void* context, neoastra_string_view_t chord) {
+    auto* state = static_cast<key_chords*>(context);
+    state->count++;
+    state->last.assign(reinterpret_cast<const char*>(chord.data), static_cast<size_t>(chord.length));
+    return state->last == "Ctrl+Shift+P" ? 1 : 0;
+}
+
+// What the key controller of a view answers for a press, which GTK then keeps from the page when it is true.
+gboolean press_key(GtkWidget* widget, guint keyval, GdkModifierType modifiers) {
+    GdkKeymapKey* keys{};
+    int count{};
+    assert(gdk_display_map_keyval(gtk_widget_get_display(widget), keyval, &keys, &count) && count > 0);
+    const auto keycode = keys[0].keycode;
+    g_free(keys);
+    auto* controllers = gtk_widget_observe_controllers(widget);
+    gboolean handled = FALSE;
+    bool found = false;
+    for (guint index = 0; !found && index < g_list_model_get_n_items(controllers); index++) {
+        auto* controller = static_cast<GtkEventController*>(g_list_model_get_item(controllers, index));
+        if (GTK_IS_EVENT_CONTROLLER_KEY(controller) && gtk_event_controller_get_propagation_phase(controller) == GTK_PHASE_CAPTURE) {
+            g_signal_emit_by_name(controller, "key-pressed", keyval, keycode, modifiers, &handled);
+            found = true;
+        }
+        g_object_unref(controller);
+    }
+    g_object_unref(controllers);
+    assert(found);
+    return handled;
+}
+
+// A chord goes to the host before the page, and only one that the host takes stops there. A plain key is not a chord.
+void test_key_chords_reach_the_host(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* widget = GTK_WIDGET(web_view(view));
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    key_chords chords;
+    assert(neoastra_view_set_key_chord_callback(view, take_chord, &chords) == NEOASTRA_OK);
+    const auto control_shift = static_cast<GdkModifierType>(GDK_CONTROL_MASK | GDK_SHIFT_MASK);
+    assert(press_key(widget, GDK_KEY_P, control_shift) && chords.count == 1 && chords.last == "Ctrl+Shift+P");
+    assert(!press_key(widget, GDK_KEY_K, control_shift) && chords.count == 2 && chords.last == "Ctrl+Shift+K");
+    assert(!press_key(widget, GDK_KEY_a, static_cast<GdkModifierType>(0)) && chords.count == 2);
+    assert(neoastra_view_set_key_chord_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+    assert(!press_key(widget, GDK_KEY_P, control_shift) && chords.count == 2);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+// A view on explicit bounds sits at its place from the top-left corner of the window, beside a view that fills it, and
+// does not size the window. It fills the window again when it is asked to.
+// A view on explicit bounds stays above a view that fills the window, also when the filling view comes second.
+void test_filling_view_goes_below_a_bounded_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = window;
+    options.bounds = {10, 10, 100, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    auto* bounded = static_cast<neoastra_view_t*>(state.value);
+    auto* filling = create_view(environment, window);
+    auto* second_filling = create_view(environment, window);
+    auto* stack = gtk_widget_get_parent(GTK_WIDGET(web_view(bounded)));
+    assert(gtk_widget_get_first_child(stack) == GTK_WIDGET(web_view(filling)));
+    assert(gtk_widget_get_next_sibling(GTK_WIDGET(web_view(filling))) == GTK_WIDGET(web_view(second_filling)));
+    assert(gtk_widget_get_last_child(stack) == GTK_WIDGET(web_view(bounded)));
+    neoastra_view_release(second_filling);
+    neoastra_view_release(filling);
+    neoastra_view_release(bounded);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
+void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* host = gtk_window(window);
+    auto* filling = create_view(environment, window);
+    auto* filling_widget = GTK_WIDGET(web_view(filling));
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = window;
+    options.bounds = {40, 30, 200, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK && state.value != nullptr);
+    auto* bounded = static_cast<neoastra_view_t*>(state.value);
+    auto* bounded_widget = GTK_WIDGET(web_view(bounded));
+    auto* stack = gtk_widget_get_parent(bounded_widget);
+    assert(neoastra_window_show(window) == NEOASTRA_OK);
+    const auto placed = [&](float x, float y, int width, int height) {
+        graphene_rect_t rect{};
+        return gtk_widget_compute_bounds(bounded_widget, stack, &rect) && rect.origin.x == x && rect.origin.y == y &&
+            gtk_widget_get_width(bounded_widget) == width && gtk_widget_get_height(bounded_widget) == height;
+    };
+    wait_until([&] { return placed(40, 30, 200, 100); });
+    wait_until([&] { return gtk_widget_get_width(filling_widget) == gtk_widget_get_width(GTK_WIDGET(host)); });
+    assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 0) == NEOASTRA_OK);
+    wait_until([&] { return placed(60, 50, 300, 120); });
+    // A view partly left of and above its window keeps that place, as over a part of a page scrolled away.
+    assert(neoastra_view_set_bounds(bounded, {-30, -20, 300, 120}, 0) == NEOASTRA_OK);
+    wait_until([&] { return placed(-30, -20, 300, 120); });
+    // A view on bounds larger than the window does not make the window grow.
+    const auto window_width = gtk_widget_get_width(GTK_WIDGET(host));
+    assert(neoastra_view_set_bounds(bounded, {0, 0, window_width + 200, 100}, 0) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(bounded_widget) == window_width + 200; });
+    assert(gtk_widget_get_width(GTK_WIDGET(host)) == window_width);
+    // A view that the host hid stays hidden when its window hides and comes back.
+    assert(neoastra_view_set_visible(bounded, 0) == NEOASTRA_OK && !gtk_widget_get_visible(bounded_widget));
+    assert(neoastra_window_hide(window) == NEOASTRA_OK && neoastra_window_show(window) == NEOASTRA_OK);
+    assert(!gtk_widget_get_visible(bounded_widget) && gtk_widget_get_visible(filling_widget));
+    assert(neoastra_view_focus(bounded) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(neoastra_view_set_visible(bounded, 1) == NEOASTRA_OK && gtk_widget_get_visible(bounded_widget));
+    // The keyboard goes to the sibling when the view that holds it hides.
+    const auto holds_keyboard = [&](GtkWidget* widget) {
+        auto* focus = gtk_root_get_focus(GTK_ROOT(host));
+        return focus && (focus == widget || gtk_widget_is_ancestor(focus, widget));
+    };
+    assert(neoastra_view_focus(bounded) == NEOASTRA_OK);
+    wait_until([&] { return holds_keyboard(bounded_widget); });
+    assert(neoastra_view_set_visible(bounded, 0) == NEOASTRA_OK);
+    wait_until([&] { return holds_keyboard(filling_widget); });
+    assert(neoastra_view_set_visible(bounded, 1) == NEOASTRA_OK);
+    assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
+    wait_until([&] { return gtk_widget_get_width(bounded_widget) == gtk_widget_get_width(stack) && gtk_widget_get_height(bounded_widget) == gtk_widget_get_height(stack); });
+    neoastra_view_release(bounded);
+    neoastra_view_release(filling);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The menu presenter of the managed side (LinuxMenus.cs) puts a box, which it marks, between a window and its content
 // for a menu bar above the content. The views of the window stay together inside that box, whether the box came after
 // the first of them or before it.
@@ -915,6 +1061,160 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
 
 } // namespace
 
+// What GTK really draws for the widget, which a snapshot of the web process would not tell: its bottom-right corner, away
+// from the content of the test page, is pure green.
+static bool widget_draws_green(GtkWidget* widget) {
+    const auto width = gtk_widget_get_width(widget), height = gtk_widget_get_height(widget);
+    auto* native = gtk_widget_get_native(widget);
+    if (width <= 0 || height <= 0 || !native || !gtk_widget_get_mapped(widget)) return false;
+    auto* paintable = gtk_widget_paintable_new(widget);
+    auto* snapshot = gtk_snapshot_new();
+    gdk_paintable_snapshot(paintable, snapshot, width, height);
+    auto* node = gtk_snapshot_free_to_node(snapshot);
+    g_object_unref(paintable);
+    if (!node) return false;
+    // The software renderer: reading back must not depend on the graphics memory of the machine that runs the test.
+    auto* renderer = gsk_cairo_renderer_new();
+    assert(gsk_renderer_realize_for_display(renderer, gtk_widget_get_display(widget), nullptr));
+    auto* texture = gsk_renderer_render_texture(renderer, node, nullptr);
+    gsk_renderer_unrealize(renderer);
+    g_object_unref(renderer);
+    gsk_render_node_unref(node);
+    const auto texture_width = gdk_texture_get_width(texture), texture_height = gdk_texture_get_height(texture);
+    std::vector<uint8_t> pixels(static_cast<size_t>(texture_width) * texture_height * 4);
+    gdk_texture_download(texture, pixels.data(), static_cast<size_t>(texture_width) * 4);
+    g_object_unref(texture);
+    const auto* pixel = pixels.data() + (static_cast<size_t>(texture_height - 4) * texture_width + texture_width - 4) * 4;
+    return pixel[0] < 40 && pixel[1] > 200 && pixel[2] < 40;
+}
+
+// A view placed over a view of another window moves there without a reload, on the rectangle of the anchor in its zoom.
+void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* first = create_window(app);
+    auto* second = create_window(app);
+    auto* home = create_view(environment, first);
+    auto* anchor = create_view(environment, second);
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = first;
+    options.bounds = {0, 0, 100, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    auto* view = static_cast<neoastra_view_t*>(state.value);
+    auto* widget = GTK_WIDGET(web_view(view));
+    assert(neoastra_window_show(first) == NEOASTRA_OK && neoastra_window_show(second) == NEOASTRA_OK);
+    const std::string page = "<!doctype html><title>moved</title><body style='background:#0f0'><input id=typed>";
+    const std::string base = "http://localhost/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return !webkit_web_view_is_loading(WEBKIT_WEB_VIEW(widget)) && evaluate(view, "document.readyState") == "\"complete\""; });
+    assert(evaluate(view, "window.kept='state';document.getElementById('typed').value='typed';performance.timeOrigin") != "");
+    const auto origin = evaluate(view, "performance.timeOrigin");
+    wait_until([&] { return widget_draws_green(widget); });
+    assert(neoastra_view_set_zoom_factor(anchor, 1.5) == NEOASTRA_OK);
+    neoastra_rect_t placed{};
+    assert(neoastra_view_place_over(view, anchor, 20, 10, 100, 40, &placed) == NEOASTRA_OK);
+    assert(placed.x == 30 && placed.y == 15 && placed.width == 150 && placed.height == 60);
+    assert(GTK_WIDGET(web_view(view)) == widget && gtk_widget_get_root(widget) == GTK_ROOT(gtk_window(second)));
+    wait_until([&] {
+        graphene_rect_t rect{};
+        return gtk_widget_compute_bounds(widget, gtk_widget_get_parent(widget), &rect) && rect.origin.x == 30 && rect.origin.y == 15 &&
+            gtk_widget_get_width(widget) == 150 && gtk_widget_get_height(widget) == 60;
+    });
+    assert(evaluate(view, "window.kept+'/'+document.getElementById('typed').value") == "\"state/typed\"");
+    assert(evaluate(view, "performance.timeOrigin") == origin);
+    // Both windows are on the screen: the page is drawn again after each move, there and back. At the same size WebKit has
+    // no reason of its own to present to the new surface, which only a compositor shows: the page must see a resize.
+    wait_until([&] { return widget_draws_green(widget); });
+    wait_until([&] { return evaluate(view, "innerHeight") == "60"; });
+    assert(evaluate(view, "window.resized=0;addEventListener('resize',()=>window.resized++);1") == "1");
+    assert(neoastra_view_set_zoom_factor(home, 1.5) == NEOASTRA_OK);
+    assert(neoastra_view_place_over(view, home, 20, 10, 100, 40, &placed) == NEOASTRA_OK);
+    assert(placed.width == 150 && placed.height == 60 && gtk_widget_get_root(widget) == GTK_ROOT(gtk_window(first)));
+    wait_until([&] { return evaluate(view, "window.resized>0") == "true"; });
+    wait_until([&] { return gtk_widget_get_height(widget) == 60 && evaluate(view, "innerHeight") == "60"; });
+    wait_until([&] { return widget_draws_green(widget); });
+    neoastra_view_release(view);
+    neoastra_view_release(home);
+    neoastra_view_release(anchor);
+    neoastra_window_release(first);
+    neoastra_window_release(second);
+    neoastra_environment_release(environment);
+}
+
+struct world_messages {
+    std::vector<std::string> received;
+    std::string world;
+    std::string origin;
+};
+
+void NEOASTRA_CALL record_world_message(void* context, const neoastra_event_t* event) {
+    if (event->header.type != NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED) return;
+    auto* state = static_cast<world_messages*>(context);
+    state->received.emplace_back(reinterpret_cast<const char*>(event->text.data), static_cast<size_t>(event->text.length));
+    state->world.assign(reinterpret_cast<const char*>(event->text2.data), static_cast<size_t>(event->text2.length));
+    state->origin.assign(reinterpret_cast<const char*>(event->uri.data), static_cast<size_t>(event->uri.length));
+}
+
+// A binding of an isolated world is reached by that world only: the page finds neither it nor its handler, and cannot post.
+void test_script_world_channel(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    world_messages messages;
+    assert(neoastra_view_set_event_callback(view, record_world_message, &messages) == NEOASTRA_OK);
+    const std::string source = "exampleToolbar.onmessage=e=>exampleToolbar.postMessage('echo:'+e.data);exampleToolbar.postMessage('ready:'+typeof window.pageSecret);";
+    const std::string world = "example.toolbar", binding = "exampleToolbar";
+    neoastra_script_options_t options{};
+    options.size = sizeof(options);
+    options.version = 2;
+    options.injection_time = NEOASTRA_SCRIPT_DOCUMENT_END;
+    options.main_frame_only = 1;
+    options.isolated_world = 1;
+    options.world_name = string_view(world);
+    options.binding_name = string_view(binding);
+    // A script whose operation is canceled first does not stay, so that its binding is free again.
+    completion canceled;
+    neoastra_operation_t* operation{};
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &canceled, &operation, nullptr) == NEOASTRA_OK);
+    neoastra_operation_cancel(operation);
+    wait_for(canceled);
+    assert(canceled.result == NEOASTRA_ERROR_CANCELED);
+    const auto removed = g_get_monotonic_time() + 100 * 1000;
+    wait_until([&] { return g_get_monotonic_time() > removed; });
+    completion added;
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &added, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(added);
+    assert(added.result == NEOASTRA_OK && !added.text.empty());
+    const std::string page = "<!doctype html><title>hostile</title><iframe srcdoc='<title>frame</title>'></iframe>";
+    const std::string base = "http://localhost/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return !messages.received.empty(); });
+    assert(messages.received[0] == "ready:undefined" && messages.world == world && messages.origin == "http://localhost");
+    assert(evaluate(view, "window.pageSecret='secret';1") == "1");
+    for (const char* attack : {"typeof window.exampleToolbar", "new Function('return typeof exampleToolbar')()", "typeof window.webkit?.messageHandlers?._neoastra_channel_1",
+                               "typeof document.querySelector('iframe').contentWindow.exampleToolbar"})
+        assert(evaluate(view, attack) == "\"undefined\"");
+    (void)evaluate(view, "(()=>{try{exampleToolbar.postMessage('forged')}catch{}try{webkit.messageHandlers._neoastra_channel_1.postMessage('forged')}catch{}return 1})()");
+    const auto settle = g_get_monotonic_time() + 300 * 1000;
+    wait_until([&] { return g_get_monotonic_time() > settle; });
+    assert(messages.received.size() == 1);
+    const std::string hostile = "quote' \" \\ </script> ${1+1} \xe2\x98\x83";
+    assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return messages.received.size() == 2; });
+    assert(messages.received[1] == "echo:" + hostile);
+    // A removed script has no channel any more.
+    assert(neoastra_view_remove_script(view, string_view(added.text)) == NEOASTRA_OK);
+    assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 int main() {
     // Before anything logs: the renderer test counts the warnings of GTK's renderers.
     g_log_set_writer_func(count_gsk_warnings, nullptr, nullptr);
@@ -953,6 +1253,11 @@ int main() {
     test_retained_closed_window_does_not_write_to_freed_backend_state(app);
     test_resource_callback_can_release_its_view_and_environment(app);
     test_views_share_their_window(app);
+    test_bounded_view_keeps_its_place(app);
+    test_filling_view_goes_below_a_bounded_view(app);
+    test_key_chords_reach_the_host(app);
+    test_view_moves_to_the_window_of_its_anchor(app);
+    test_script_world_channel(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);

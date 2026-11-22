@@ -24,6 +24,13 @@ public sealed class AndroidJavaTests
     }
 
     [TestMethod]
+    public async Task ScriptChannels_KeepTheBindingOfAWorldToItsMainFrameAndRemoveItWithItsScript()
+    {
+        var output = await RunJavaCheckAsync("NeoAstraScriptChannels.java", "NeoAstraScriptChannelsCheck");
+        StringAssert.Contains(output, "NeoAstraScriptChannels: ok");
+    }
+
+    [TestMethod]
     public async Task Passkeys_RequireAndroid9AndAnAvailableProvider()
     {
         var source = Path.Combine(RepositoryRoot(), "src", "NeoAstra.Passkeys", "Android", "com", "neoastra", "passkeys", "NeoAstraPasskeysSupport.java");

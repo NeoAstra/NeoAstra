@@ -8,6 +8,15 @@ neo_platform_created_callback_t view_callback{};
 void* view_context{};
 uint32_t environments_destroyed{};
 uint32_t views_destroyed{};
+// What the last persistent script asked for, as the common layer passed it on, and what was posted to a script.
+uint32_t script_calls{};
+neoastra_script_options_t last_script_options{};
+std::string last_script_world;
+std::string last_script_binding;
+uint32_t script_message_calls{};
+std::string last_script_message_identifier;
+std::string last_script_message;
+bool script_worlds_supported{};
 }
 
 bool neo_platform_initialize(neoastra_app_t*, neoastra_error_t**) noexcept { return true; }
@@ -61,12 +70,29 @@ bool neo_platform_view_create_async(neoastra_view_t*, const neoastra_view_option
 }
 void neo_platform_view_destroy(neoastra_view_t*) noexcept { ++completion_test_backend::views_destroyed; }
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_focus(neoastra_view_t*) noexcept { return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double* scale) noexcept { *scale = 1.0; return NEOASTRA_OK; }
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t*, neoastra_window_t*) noexcept { return NEOASTRA_OK; }
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t*, const std::string&, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t*, const std::string&, const std::string&, const std::string&, const uint8_t*, uint64_t, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t*, const std::string&, const std::string&, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_command(neoastra_view_t*, uint32_t) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_evaluate(neoastra_view_t*, const std::string&, neoastra_string_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
-neoastra_result_t neo_platform_view_add_script(neoastra_view_t*, const std::string&, const neoastra_script_options_t*, neoastra_string_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_view_add_script(neoastra_view_t*, const std::string&, const neoastra_script_options_t* options, neoastra_string_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept {
+    ++completion_test_backend::script_calls;
+    completion_test_backend::last_script_options = *options;
+    completion_test_backend::last_script_world = neo_string(options->world_name);
+    completion_test_backend::last_script_binding = neo_string(options->binding_name);
+    return NEOASTRA_ERROR_NOT_SUPPORTED;
+}
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t*, const std::string& identifier, const std::string& message, neoastra_error_t**) noexcept {
+    ++completion_test_backend::script_message_calls;
+    completion_test_backend::last_script_message_identifier = identifier;
+    completion_test_backend::last_script_message = message;
+    return NEOASTRA_OK;
+}
+bool neo_platform_script_worlds_supported() noexcept { return completion_test_backend::script_worlds_supported; }
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t*, const std::string&) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t*, const std::string&, bool, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t*, const neoastra_string_view_t*, uint32_t, bool, uint32_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }

@@ -1,0 +1,5 @@
+html, body { height: 100%; margin: 0; }
+body { color-scheme: light dark; display: flex; flex-direction: column; font: 14px system-ui; }
+header { align-items: center; display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem; }
+output { flex: 1; min-width: 12rem; opacity: .75; }
+main { border-top: 1px solid #8888; flex: 1; margin: 0 .5rem .5rem; min-height: 0; }

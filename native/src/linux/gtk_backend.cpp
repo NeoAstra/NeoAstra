@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <new>
 #include <string>
@@ -27,7 +28,10 @@ struct gtk_window { GtkWidget* widget{}; neoastra_window_state_t reported_state{
 struct gtk_scheme_context { neoastra_environment_t* environment{}; };
 struct gtk_environment { WebKitWebContext* context{}; WebKitNetworkSession* session{}; gulong download_started{}; std::vector<gtk_scheme_context*> schemes; };
 struct gtk_profile { WebKitNetworkSession* session{}; gulong download_started{}; };
-struct gtk_view { GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
+// A binding of an isolated world. WebKitGTK tells a handler neither its world nor its frame, so each binding has a handler name of
+// its own, registered in its world only, and its script runs in the top frame only.
+struct gtk_script_channel { neoastra_view_t* view{}; std::string world; std::string binding; std::string handler; gulong signal{}; };
+struct gtk_view { guint redraw_tick{}; bool redraw_resized{}; std::map<std::string,std::unique_ptr<gtk_script_channel>> channels; uint64_t next_channel{}; GtkEventController* key_releases{}; std::vector<guint> claimed_keys; guint32 offered_key_time{}; guint offered_keycode{}; GtkWidget* widget{}; WebKitUserContentManager* content{}; WebKitBackForwardList* history_list{}; GtkDropTarget* drop_target{}; GtkEventController* keys{}; gulong load_changed{}; gulong load_failed{}; gulong title_changed{}; gulong uri_changed{}; gulong message_received{}; gulong process_terminated{}; gulong drop_received{}; gulong history_changed{}; uint64_t history{}; bool context_menus_disabled{}; bool default_script_dialogs{}; uint64_t next_script{1}; std::unordered_map<std::string,WebKitUserScript*> scripts; WebKitUserScript* bridge_relay{}; };
 
 neoastra_error_t* make_error(neoastra_result_t code, const char* message, int64_t native_code = 0, const char* domain = "webkitgtk") noexcept { neoastra_error_t* error{}; neo_fail(&error, code, message, native_code, domain); return error; }
 
@@ -291,6 +295,19 @@ constexpr const char* menu_host_key="neoastra.menu-host";
 
 bool is_view_stack(GtkWidget* widget) noexcept { return widget&&GTK_IS_OVERLAY(widget)&&g_object_get_data(G_OBJECT(widget),view_stack_key); }
 
+// A view on explicit bounds gets exactly its rectangle: left to itself, GTK would give it the natural size of its page.
+// The allocation includes the margins that place the view.
+// Where the view stack places a view on explicit bounds. A margin could not hold a position left of or above the stack.
+constexpr const char* view_x_key="neoastra.view-x";
+constexpr const char* view_y_key="neoastra.view-y";
+gboolean view_stack_child_position(GtkOverlay*,GtkWidget* child,GdkRectangle* allocation,void*) noexcept {
+    int width{},height{};
+    gtk_widget_get_size_request(child,&width,&height);
+    if(width<=0||height<=0)return FALSE;
+    *allocation={GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child),view_x_key)),GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child),view_y_key)),width,height};
+    return TRUE;
+}
+
 // Returns the view stack of a window, which it creates for the first view of the window.
 GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     auto* child=gtk_window_get_child(window);
@@ -299,11 +316,33 @@ GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     if(menu_host){for(auto* item=gtk_widget_get_first_child(child);item;item=gtk_widget_get_next_sibling(item))if(is_view_stack(item))return item;}
     auto* stack=gtk_overlay_new();
     g_object_set_data(G_OBJECT(stack),view_stack_key,stack);
+    g_signal_connect(stack,"get-child-position",G_CALLBACK(view_stack_child_position),nullptr);
+    gtk_widget_set_overflow(stack,GTK_OVERFLOW_HIDDEN);
     gtk_widget_set_hexpand(stack,TRUE);
     gtk_widget_set_vexpand(stack,TRUE);
     // Anything else that the window holds is replaced, as it was when a view became the child of the window itself.
     if(menu_host)gtk_box_append(GTK_BOX(child),stack);else gtk_window_set_child(window,stack);
     return stack;
+}
+
+// A view on explicit bounds stays at its place from the top-left corner of its parent, and leaves the size of the
+// window to the views that fill it. GTK keeps a margin in 16 bits and has no negative one.
+void apply_view_bounds(neoastra_view_t* view,GtkWidget* widget) noexcept {
+    const bool fill=view->fill_parent;
+    auto* parent=gtk_widget_get_parent(widget);
+    // The view stack gives a bounded view its exact rectangle, which the view must fill. Another parent places it by its alignment.
+    const auto align=fill||is_view_stack(parent)?GTK_ALIGN_FILL:GTK_ALIGN_START;
+    gtk_widget_set_halign(widget,align);
+    gtk_widget_set_valign(widget,align);
+    const bool stacked=is_view_stack(parent);
+    gtk_widget_set_margin_start(widget,fill||stacked?0:std::clamp(view->bounds.x,0,32767));
+    gtk_widget_set_margin_top(widget,fill||stacked?0:std::clamp(view->bounds.y,0,32767));
+    g_object_set_data(G_OBJECT(widget),view_x_key,GINT_TO_POINTER(fill?0:view->bounds.x));
+    g_object_set_data(G_OBJECT(widget),view_y_key,GINT_TO_POINTER(fill?0:view->bounds.y));
+    // A new position at the same size changes nothing that GTK measures, so it would not lay the stack out again.
+    if(stacked)gtk_widget_queue_allocate(parent);
+    gtk_widget_set_size_request(widget,fill?-1:std::max(view->bounds.width,1),fill?-1:std::max(view->bounds.height,1));
+    if(is_view_stack(parent))gtk_overlay_set_measure_overlay(GTK_OVERLAY(parent),widget,fill);
 }
 
 void release_dispatch_app(void* data) { static_cast<neoastra_app_t*>(data)->release(); }
@@ -723,8 +762,38 @@ void capture_finished(GObject* object,GAsyncResult* result,void* data){
     if(completion->operation->try_complete(requested,actual)){completion->callback(completion->context,actual,actual==NEOASTRA_OK?buffer:nullptr,actual==requested?native_error:nullptr);if(actual!=NEOASTRA_OK&&buffer)buffer->release();}else if(buffer)buffer->release();
     if(native_error)native_error->release();completion->operation->release();
 }
-struct add_script_context { neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{};std::string identifier; };
-gboolean script_added(void* data){std::unique_ptr<add_script_context> completion(static_cast<add_script_context*>(data));neoastra_result_t actual{};if(completion->operation->try_complete(NEOASTRA_OK,actual))completion->callback(completion->context,actual,actual==NEOASTRA_OK?neo_string_view(completion->identifier):neoastra_string_view_t{},nullptr);completion->operation->release();return G_SOURCE_REMOVE;}
+struct add_script_context { neoastra_string_callback_t callback{};void* context{};neoastra_operation_t* operation{};std::string identifier;neoastra_view_t* view{}; };
+void remove_script_channel(gtk_view* state,gtk_script_channel& channel) noexcept {
+    if(channel.signal)g_signal_handler_disconnect(state->content,channel.signal);
+    channel.signal=0;
+    webkit_user_content_manager_unregister_script_message_handler(state->content,channel.handler.c_str(),channel.world.c_str());
+}
+void script_channel_received(WebKitUserContentManager*,JSCValue* value,void* data) noexcept {
+    auto* channel=static_cast<gtk_script_channel*>(data);auto* view=channel->view;neo_retain_guard owner(view);if(!owner)return;
+    auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return;
+    if(!jsc_value_is_string(value)){neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"bridge","Blocked a script message that is not a string");return;}
+    char* text=jsc_value_to_string(value);
+    try{
+        const std::string framed=text?text:"";g_free(text);text=nullptr;
+        // The bootstrap of the world starts each message with the origin of its document.
+        const auto line=framed.find('\n');
+        if(line==std::string::npos){neo_log(view->environment->app,NEOASTRA_LOG_WARNING,"bridge","Blocked a script message without the origin of its document");return;}
+        const auto origin=framed.substr(0,line);
+        const std::string message=framed.substr(line+1),world=channel->world,binding=channel->binding;
+        neo_emit_script_message(view,world,binding,message,origin=="null"?std::string{}:origin,true);
+    }catch(...){g_free(text);neo_log(view->environment->app,NEOASTRA_LOG_ERROR,"bridge","WebKitGTK script-message handling failed");}
+}
+gboolean script_added(void* data){
+    std::unique_ptr<add_script_context> completion(static_cast<add_script_context*>(data));
+    neoastra_result_t actual{};
+    const bool completed=completion->operation->try_complete(NEOASTRA_OK,actual);
+    // A script whose operation was canceled first is handed to nobody, so it does not stay in the view either.
+    if((!completed||actual!=NEOASTRA_OK)&&completion->view)(void)neo_platform_view_remove_script(completion->view,completion->identifier);
+    if(completed)completion->callback(completion->context,actual,actual==NEOASTRA_OK?neo_string_view(completion->identifier):neoastra_string_view_t{},nullptr);
+    completion->operation->release();
+    if(completion->view)completion->view->release();
+    return G_SOURCE_REMOVE;
+}
 
 void append_json_string(std::string& output,const char* value){output.push_back('"');for(const auto* current=reinterpret_cast<const unsigned char*>(value);current&&*current;++current){switch(*current){case '"':output+="\\\"";break;case '\\':output+="\\\\";break;case '\b':output+="\\b";break;case '\f':output+="\\f";break;case '\n':output+="\\n";break;case '\r':output+="\\r";break;case '\t':output+="\\t";break;default:if(*current<0x20){char escape[7]{};g_snprintf(escape,sizeof(escape),"\\u%04x",*current);output+=escape;}else output.push_back(static_cast<char>(*current));break;}}output.push_back('"');}
 struct cookie_context { neoastra_buffer_callback_t callback{};void* context{};neoastra_operation_t* operation{}; };
@@ -886,8 +955,46 @@ namespace {
 // Suppresses WebKit's default menu when the host turned it off; page-level contextmenu handlers have already run.
 gboolean context_menu(WebKitWebView*,WebKitContextMenu*,WebKitHitTestResult*,void* data){auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return TRUE;auto* state=static_cast<gtk_view*>(view->platform);return state&&state->context_menus_disabled?TRUE:FALSE;}
 // WebKitGTK has no DevTools shortcut of its own, so F12 opens the inspector whenever developer extras are enabled.
-gboolean devtools_key_pressed(GtkEventControllerKey*,guint keyval,guint,GdkModifierType modifiers,void* data){
+std::string gtk_key_name(GtkEventControllerKey* controller,GtkWidget* widget,guint keyval,guint keycode){
+    // The key without Shift, so that Ctrl+Shift+1 is the key 1 and not the character it would type.
+    guint plain=keyval;
+    const int group=gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller))?static_cast<int>(gtk_event_controller_key_get_group(controller)):0;
+    (void)gdk_display_translate_key(gtk_widget_get_display(widget),keycode,static_cast<GdkModifierType>(0),group,&plain,nullptr,nullptr,nullptr);
+    if(plain>=GDK_KEY_F1&&plain<=GDK_KEY_F24)return "F"+std::to_string(plain-GDK_KEY_F1+1);
+    switch(plain){
+        case GDK_KEY_Return:case GDK_KEY_KP_Enter:return "Enter";case GDK_KEY_Escape:return "Escape";case GDK_KEY_Tab:case GDK_KEY_ISO_Left_Tab:return "Tab";case GDK_KEY_space:return "Space";
+        case GDK_KEY_BackSpace:return "Backspace";case GDK_KEY_Delete:return "Delete";case GDK_KEY_Insert:return "Insert";case GDK_KEY_Home:return "Home";case GDK_KEY_End:return "End";
+        case GDK_KEY_Page_Up:return "PageUp";case GDK_KEY_Page_Down:return "PageDown";case GDK_KEY_Left:return "Left";case GDK_KEY_Right:return "Right";case GDK_KEY_Up:return "Up";case GDK_KEY_Down:return "Down";
+        default:return neo_key_name_for_character(gdk_keyval_to_unicode(plain));
+    }
+}
+// The key controller cannot stop a release, which a legacy controller can: the page must not get the release of a key
+// whose press the host took.
+gboolean claimed_key_event(GtkEventControllerLegacy*,GdkEvent* event,void* data){
+    if(gdk_event_get_event_type(event)!=GDK_KEY_RELEASE)return FALSE;
+    auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;
+    auto* state=static_cast<gtk_view*>(view->platform);if(!state)return FALSE;
+    return std::erase(state->claimed_keys,gdk_key_event_get_keycode(event))?TRUE:FALSE;
+}
+gboolean devtools_key_pressed(GtkEventControllerKey* controller,guint keyval,guint keycode,GdkModifierType modifiers,void* data){
     auto* view=static_cast<neoastra_view_t*>(data);neo_retain_guard owner(view);if(!owner)return FALSE;auto* state=static_cast<gtk_view*>(view->platform);
+    if(state&&state->widget){
+        // WebKitGTK sends a key that its page left unhandled through GTK again, with the time of the original event.
+        auto* event=gtk_event_controller_get_current_event(GTK_EVENT_CONTROLLER(controller));
+        const auto time=event?gdk_event_get_time(event):0;
+        if(!event||time!=state->offered_key_time||keycode!=state->offered_keycode){
+            state->offered_key_time=time;
+            state->offered_keycode=keycode;
+            // A new press settles an earlier claim, whose release may have gone to another view.
+            std::erase(state->claimed_keys,keycode);
+            const auto handled=neo_view_key_chord(view,modifiers&GDK_CONTROL_MASK,modifiers&GDK_ALT_MASK,modifiers&GDK_SHIFT_MASK,modifiers&(GDK_META_MASK|GDK_SUPER_MASK),gtk_key_name(controller,state->widget,keyval,keycode));
+            if(handled){
+                if(auto* current=static_cast<gtk_view*>(view->platform))current->claimed_keys.push_back(keycode);
+                return TRUE;
+            }
+        }
+    }
+    state=static_cast<gtk_view*>(view->platform);
     if(!state||!state->widget||keyval!=GDK_KEY_F12||(modifiers&(GDK_CONTROL_MASK|GDK_SHIFT_MASK|GDK_ALT_MASK))!=0)return FALSE;
     auto* web_view=WEBKIT_WEB_VIEW(state->widget);
     if(!webkit_settings_get_enable_developer_extras(webkit_web_view_get_settings(web_view)))return FALSE;
@@ -902,23 +1009,29 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
     g_object_set_data(G_OBJECT(state->widget),"neoastra.native-view",view);g_object_add_weak_pointer(G_OBJECT(state->widget),reinterpret_cast<void**>(&state->widget));state->load_changed=g_signal_connect(state->widget,"load-changed",G_CALLBACK(load_changed),view);state->load_failed=g_signal_connect(state->widget,"load-failed",G_CALLBACK(load_failed),view);g_signal_connect(state->widget,"decide-policy",G_CALLBACK(decide_policy),view);g_signal_connect(state->widget,"permission-request",G_CALLBACK(permission_requested),view);g_signal_connect(state->widget,"create",G_CALLBACK(create_web_view),view);g_signal_connect(state->widget,"script-dialog",G_CALLBACK(script_dialog),view);g_signal_connect(state->widget,"run-file-chooser",G_CALLBACK(run_file_chooser),view);g_signal_connect(state->widget,"authenticate",G_CALLBACK(authenticate),view);g_signal_connect(state->widget,"enter-fullscreen",G_CALLBACK(enter_fullscreen),view);state->title_changed=g_signal_connect(state->widget,"notify::title",G_CALLBACK(title_changed),view);state->uri_changed=g_signal_connect(state->widget,"notify::uri",G_CALLBACK(uri_changed),view);state->history_changed=g_signal_connect(webkit_web_view_get_back_forward_list(WEBKIT_WEB_VIEW(state->widget)),"changed",G_CALLBACK(history_changed),view);if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)state->message_received=g_signal_connect(state->content,"script-message-received::_neoastra_transport_v1",G_CALLBACK(message_received),view);state->process_terminated=g_signal_connect(state->widget,"web-process-terminated",G_CALLBACK(web_process_terminated),view);g_signal_connect(state->widget,"context-menu",G_CALLBACK(context_menu),view);
     // Keep our own controller references so that even a host that removes and retains a controller cannot leave stale userdata.
     state->keys=gtk_event_controller_key_new();gtk_event_controller_set_propagation_phase(state->keys,GTK_PHASE_CAPTURE);g_signal_connect(state->keys,"key-pressed",G_CALLBACK(devtools_key_pressed),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->keys)));
-    state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);gtk_overlay_set_measure_overlay(GTK_OVERLAY(stack),state->widget,TRUE);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
+    state->key_releases=gtk_event_controller_legacy_new();gtk_event_controller_set_propagation_phase(state->key_releases,GTK_PHASE_CAPTURE);g_signal_connect(state->key_releases,"event",G_CALLBACK(claimed_key_event),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->key_releases)));
+    state->drop_target=GTK_DROP_TARGET(gtk_drop_target_new(G_TYPE_INVALID,GDK_ACTION_COPY));GType drop_types[]={G_TYPE_STRING,GDK_TYPE_FILE_LIST};gtk_drop_target_set_gtypes(state->drop_target,drop_types,2);g_signal_connect(state->drop_target,"accept",G_CALLBACK(drop_accept),nullptr);state->drop_received=g_signal_connect(state->drop_target,"drop",G_CALLBACK(drop_received),view);gtk_widget_add_controller(state->widget,GTK_EVENT_CONTROLLER(g_object_ref(state->drop_target)));apply_view_background(view);if(GTK_IS_WINDOW(parent)){auto* stack=window_view_stack(GTK_WINDOW(parent));gtk_overlay_add_overlay(GTK_OVERLAY(stack),state->widget);if(auto* above=neo_view_above(view,[&](neoastra_view_t* other){auto* sibling=static_cast<gtk_view*>(other->platform)->widget;return sibling&&gtk_widget_get_parent(sibling)==stack;}))gtk_widget_insert_before(state->widget,stack,static_cast<gtk_view*>(above->platform)->widget);}else if(GTK_IS_BOX(parent))gtk_box_append(GTK_BOX(parent),state->widget);else gtk_widget_set_parent(state->widget,parent);apply_view_bounds(view,state->widget);gtk_widget_set_visible(state->widget,TRUE);callback(context,nullptr);return true;}
 // A window keeps its own pointer to its child, which only gtk_window_set_child clears: unparenting a hosted view directly would leave the window a freed child.
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     auto* state=static_cast<gtk_view*>(view->platform);if(!state)return;
     view->platform=nullptr;
+    if(state->content)for(const auto& entry:state->channels)remove_script_channel(state,*entry.second);
+    state->channels.clear();
     for(auto& entry:state->scripts)webkit_user_script_unref(entry.second);
     if(state->bridge_relay)webkit_user_script_unref(state->bridge_relay);
     if(state->history_list)g_signal_handlers_disconnect_by_data(state->history_list,view);
     if(state->drop_target)g_signal_handlers_disconnect_by_data(state->drop_target,view);
     if(state->keys)g_signal_handlers_disconnect_by_data(state->keys,view);
+    if(state->key_releases)g_signal_handlers_disconnect_by_data(state->key_releases,view);
     if(state->content)g_signal_handlers_disconnect_by_data(state->content,view);
     if(state->widget){
+        if(state->redraw_tick)gtk_widget_remove_tick_callback(state->widget,state->redraw_tick);
         g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
         g_object_set_data(G_OBJECT(widget.get()),"neoastra.native-view",nullptr);
         g_signal_handlers_disconnect_by_data(widget.get(),view);
         if(state->drop_target&&gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(state->drop_target))==widget.get())gtk_widget_remove_controller(widget.get(),GTK_EVENT_CONTROLLER(state->drop_target));
         if(state->keys&&gtk_event_controller_get_widget(state->keys)==widget.get())gtk_widget_remove_controller(widget.get(),state->keys);
+        if(state->key_releases&&gtk_event_controller_get_widget(state->key_releases)==widget.get())gtk_widget_remove_controller(widget.get(),state->key_releases);
         g_object_remove_weak_pointer(G_OBJECT(widget.get()),reinterpret_cast<void**>(&state->widget));
         auto* parent=gtk_widget_get_parent(widget.get());
         if(is_view_stack(parent))gtk_overlay_remove_overlay(GTK_OVERLAY(parent),widget.get());
@@ -929,20 +1042,133 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
     if(state->history_list)g_object_unref(state->history_list);
     if(state->drop_target)g_object_unref(state->drop_target);
     if(state->keys)g_object_unref(state->keys);
+    if(state->key_releases)g_object_unref(state->key_releases);
     if(state->content){
         if(view->bridge_policy!=NEOASTRA_BRIDGE_DISABLED)webkit_user_content_manager_unregister_script_message_handler(state->content,"_neoastra_transport_v1",bridge_world);
         g_object_unref(state->content);
     }
     delete state;
 }
-neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;gtk_widget_set_size_request(state->widget,view->fill_parent?-1:view->bounds.width,view->fill_parent?-1:view->bounds.height);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    // The keyboard goes to a sibling before the view that holds it hides.
+    if (!view->visible) {
+        auto* root = gtk_widget_get_root(state->widget);
+        auto* focus = root ? gtk_root_get_focus(root) : nullptr;
+        if (focus && (focus == state->widget || gtk_widget_is_ancestor(focus, state->widget))) {
+            auto* sibling = neo_visible_sibling(view);
+            auto* sibling_state = sibling ? static_cast<gtk_view*>(sibling->platform) : nullptr;
+            if (sibling_state && sibling_state->widget) gtk_widget_grab_focus(sibling_state->widget);
+        }
+    }
+    gtk_widget_set_visible(state->widget, view->visible);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    *scale = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(state->widget));
+    return NEOASTRA_OK;
+}
+// WebKit presents to a new surface only for a new size: a view moved at the size it had stays empty. Its first frame in the
+// window gives it one pixel less, and the next one its size again.
+static gboolean redraw_moved_view(GtkWidget* widget, GdkFrameClock*, void* data) noexcept {
+    auto* view = static_cast<neoastra_view_t*>(data);
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state->redraw_resized) {
+        state->redraw_resized = true;
+        const auto height = std::max(view->bounds.height, 1);
+        gtk_widget_set_size_request(widget, std::max(view->bounds.width, 1), height > 1 ? height - 1 : height + 1);
+        return G_SOURCE_CONTINUE;
+    }
+    state->redraw_resized = false;
+    state->redraw_tick = 0;
+    apply_view_bounds(view, widget);
+    return G_SOURCE_REMOVE;
+}
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t*) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    auto* target = view_parent(view);
+    auto* current = gtk_widget_get_parent(state->widget);
+    if (!target || !GTK_IS_WINDOW(target) || !is_view_stack(current)) return NEOASTRA_ERROR_INVALID_STATE;
+    // The stack holds the only reference that a host may not have: the widget and its page must outlive the move.
+    g_object_ptr<GtkWidget> widget(GTK_WIDGET(g_object_ref(state->widget)));
+    gtk_overlay_remove_overlay(GTK_OVERLAY(current), widget.get());
+    gtk_overlay_add_overlay(GTK_OVERLAY(window_view_stack(GTK_WINDOW(target))), widget.get());
+    apply_view_bounds(view, widget.get());
+    gtk_widget_set_visible(widget.get(), view->visible);
+    if (!state->redraw_tick) state->redraw_tick = gtk_widget_add_tick_callback(widget.get(), redraw_moved_view, view, nullptr);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept {
+    auto* state = static_cast<gtk_view*>(view->platform);
+    if (!state || !state->widget) return NEOASTRA_ERROR_NOT_INITIALIZED;
+    return gtk_widget_grab_focus(state->widget) ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_STATE;
+}
+neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;apply_view_bounds(view,state->widget);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view,const std::string& uri,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;webkit_web_view_load_uri(WEBKIT_WEB_VIEW(state->widget),uri.c_str());return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view,const std::string& uri,const std::string& method,const std::string& headers,const uint8_t*,uint64_t body_length,neoastra_error_t** error) noexcept {if(method=="GET"&&headers.empty()&&body_length==0)return neo_platform_view_navigate(view,uri,error);return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WebKitGTK 6.0 does not expose arbitrary-method top-level navigation");}
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view,const std::string& html,const std::string& base,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;webkit_web_view_load_html(WEBKIT_WEB_VIEW(state->widget),html.c_str(),base.empty()?nullptr:base.c_str());return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_command(neoastra_view_t* view,uint32_t command) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;auto* web=WEBKIT_WEB_VIEW(state->widget);switch(command){case 0:webkit_web_view_stop_loading(web);break;case 1:webkit_web_view_reload(web);break;case 2:webkit_web_view_reload_bypass_cache(web);break;case 3:webkit_web_view_go_back(web);break;case 4:webkit_web_view_go_forward(web);break;default:return NEOASTRA_ERROR_INVALID_ARGUMENT;}return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view,const std::string& script,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;auto* completion=new(std::nothrow) script_context{view,callback,context,operation};if(!completion)return NEOASTRA_ERROR_NATIVE_FAILURE;webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(state->widget),script.data(),script.size(),nullptr,nullptr,nullptr,script_finished,completion);return NEOASTRA_OK;}
-neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::string& script,const neoastra_script_options_t* options,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;if(options->isolated_world)return NEOASTRA_ERROR_NOT_SUPPORTED;const auto frames=options->main_frame_only?WEBKIT_USER_CONTENT_INJECT_TOP_FRAME:WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES;const auto time=options->injection_time==NEOASTRA_SCRIPT_DOCUMENT_END?WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END:WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START;auto* user_script=webkit_user_script_new(script.c_str(),frames,time,nullptr,nullptr);if(!user_script)return NEOASTRA_ERROR_NATIVE_FAILURE;const auto identifier=std::to_string(state->next_script++);state->scripts.emplace(identifier,user_script);webkit_user_content_manager_add_script(state->content,user_script);g_idle_add(script_added,new add_script_context{callback,context,operation,identifier});return NEOASTRA_OK;}
-neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;webkit_user_script_unref(found->second);state->scripts.erase(found);webkit_user_content_manager_remove_all_scripts(state->content);if(state->bridge_relay)webkit_user_content_manager_add_script(state->content,state->bridge_relay);for(const auto& entry:state->scripts)webkit_user_content_manager_add_script(state->content,entry.second);return NEOASTRA_OK;}
+neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::string& script,const neoastra_script_options_t* options,neoastra_string_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {
+    auto* state=static_cast<gtk_view*>(view->platform);
+    if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;
+    const auto frames=options->main_frame_only?WEBKIT_USER_CONTENT_INJECT_TOP_FRAME:WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES;
+    const auto time=options->injection_time==NEOASTRA_SCRIPT_DOCUMENT_END?WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_END:WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START;
+    try{
+        std::unique_ptr<gtk_script_channel> channel;
+        WebKitUserScript* user_script{};
+        if(options->isolated_world){
+            const auto world=neo_string(options->world_name);
+            const auto binding=neo_string(options->binding_name);
+            std::string source=script;
+            if(!binding.empty()){
+                for(const auto& entry:state->channels)
+                    if(entry.second->world==world&&entry.second->binding==binding)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The world of the view already has a script with this binding",0,"webkitgtk");
+                channel=std::make_unique<gtk_script_channel>();
+                channel->view=view;channel->world=world;channel->binding=binding;
+                channel->handler="_neoastra_channel_"+std::to_string(++state->next_channel);
+                source=neo_script_channel_bootstrap(binding,channel->handler)+script;
+            }
+            user_script=webkit_user_script_new_for_world(source.c_str(),frames,time,world.c_str(),nullptr,nullptr);
+            if(user_script&&channel){
+                const auto signal="script-message-received::"+channel->handler;
+                channel->signal=g_signal_connect(state->content,signal.c_str(),G_CALLBACK(script_channel_received),channel.get());
+                if(!webkit_user_content_manager_register_script_message_handler(state->content,channel->handler.c_str(),world.c_str())){
+                    g_signal_handler_disconnect(state->content,channel->signal);
+                    webkit_user_script_unref(user_script);
+                    return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK refused the binding of the script",0,"webkitgtk");
+                }
+            }
+        } else user_script=webkit_user_script_new(script.c_str(),frames,time,nullptr,nullptr);
+        if(!user_script)return NEOASTRA_ERROR_NATIVE_FAILURE;
+        const auto identifier=std::to_string(state->next_script++);
+        state->scripts.emplace(identifier,user_script);
+        if(channel)state->channels.emplace(identifier,std::move(channel));
+        webkit_user_content_manager_add_script(state->content,user_script);
+        g_idle_add(script_added,new add_script_context{callback,context,operation,identifier,view->retain()?view:nullptr});
+        return NEOASTRA_OK;
+    }catch(...){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not add the script",0,"webkitgtk");}
+}
+bool neo_platform_script_worlds_supported() noexcept { return true; }
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view,const std::string& identifier,const std::string& message,neoastra_error_t** error) noexcept {
+    auto* state=static_cast<gtk_view*>(view->platform);
+    if(!state||!state->widget)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebKitGTK view is not initialized",0,"webkitgtk");
+    const auto found=state->channels.find(identifier);
+    if(found==state->channels.end())return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"No script with a binding has this identifier",0,"webkitgtk");
+    // A GVariant string ends at its first NUL.
+    if(message.find('\0')!=std::string::npos||!g_utf8_validate(message.data(),static_cast<gssize>(message.size()),nullptr))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The script message is not UTF-8 text",0,"webkitgtk");
+    GVariantBuilder arguments;
+    g_variant_builder_init(&arguments,G_VARIANT_TYPE_VARDICT);
+    g_variant_builder_add(&arguments,"{sv}","name",g_variant_new_string(found->second->binding.c_str()));
+    g_variant_builder_add(&arguments,"{sv}","message",g_variant_new_string(message.c_str()));
+    webkit_web_view_call_async_javascript_function(WEBKIT_WEB_VIEW(state->widget),neo_script_channel_delivery,-1,g_variant_builder_end(&arguments),found->second->world.c_str(),nullptr,nullptr,nullptr,nullptr);
+    return NEOASTRA_OK;
+}
+neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->content)return NEOASTRA_ERROR_NOT_INITIALIZED;auto found=state->scripts.find(identifier);if(found==state->scripts.end())return NEOASTRA_ERROR_INVALID_ARGUMENT;if(const auto channel=state->channels.find(identifier);channel!=state->channels.end()){remove_script_channel(state,*channel->second);state->channels.erase(channel);}webkit_user_script_unref(found->second);state->scripts.erase(found);webkit_user_content_manager_remove_all_scripts(state->content);if(state->bridge_relay)webkit_user_content_manager_add_script(state->content,state->bridge_relay);for(const auto& entry:state->scripts)webkit_user_content_manager_add_script(state->content,entry.second);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t**) noexcept {auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;std::string script;try{neo_append_post_script(script,message,json);}catch(...){return NEOASTRA_ERROR_NATIVE_FAILURE;}webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(state->widget),script.data(),script.size(),nullptr,nullptr,nullptr,nullptr,nullptr);return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t**) noexcept {
     auto* state=static_cast<gtk_view*>(view->platform);if(!state||!state->widget)return NEOASTRA_ERROR_NOT_INITIALIZED;

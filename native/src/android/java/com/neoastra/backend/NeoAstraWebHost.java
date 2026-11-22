@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.provider.MediaStore;
 import android.view.PixelCopy;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.JsPromptResult;
@@ -35,6 +36,7 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.NonNull;
 import androidx.core.content.FileProvider;
+import androidx.webkit.JavaScriptExecutionWorld;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.ScriptHandler;
 import androidx.webkit.WebMessageCompat;
@@ -49,6 +51,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -89,6 +92,8 @@ public final class NeoAstraWebHost {
     }
 
     public static native void nativeMessage(long view, String data, String origin, boolean isMainFrame);
+    /** A message that a script of an isolated world posted through its binding, which the page does not reach. */
+    public static native void nativeScriptMessage(long view, String world, String binding, String data, String origin, boolean isMainFrame);
     public static native Response nativeResource(long view, String url, String method, String headers, boolean isMainFrame);
     public static native void nativeEvent(long view, int kind, String url, String text, int value);
     public static native void nativeEvaluated(long token, String json);
@@ -128,6 +133,8 @@ public final class NeoAstraWebHost {
     // so that a view which outlives a change of the density counts in the pixels the display has now.
     private volatile float pageZoom = 1f;
     private final NeoAstraKeyboard keyboard;
+    // The scripts of isolated worlds and their bindings; the scripts of the page are in `scripts`. Both share `nextScript`.
+    private final NeoAstraScriptChannels<JavaScriptExecutionWorld, ScriptHandler, JavaScriptReplyProxy> channels;
 
     /** Loads the class, and with it the native library, which registers its native methods in JNI_OnLoad. */
     public static void load() { }
@@ -137,6 +144,17 @@ public final class NeoAstraWebHost {
         return WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
             && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT);
     }
+
+    /**
+     * Whether the WebView of this device runs scripts in isolated worlds, with web message listeners that only their world
+     * reaches. Without it a script of an isolated world is refused, and never runs in the page instead.
+     */
+    public static boolean supportsScriptWorlds() {
+        return isSupported() && WebViewFeature.isFeatureSupported(WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD);
+    }
+
+    /** What {@link #addWorldScript} answers when it adds nothing. */
+    public static final int WORLD_SCRIPT_UNSUPPORTED = -1, WORLD_SCRIPT_BINDING_TAKEN = -2;
 
     /**
      * Creates the WebView of a view inside a parent of the application.
@@ -173,8 +191,38 @@ public final class NeoAstraWebHost {
                 }
             });
         }
+        channels = new NeoAstraScriptChannels<>(new WorldEngine(), (world, binding, data, origin, isMainFrame) -> {
+            long current = view;
+            if (current != 0) nativeScriptMessage(current, world, binding, data, origin, isMainFrame);
+        });
         parent.addView(webView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         keyboard = NeoAstraKeyboard.attach(webView, parent);
+    }
+
+    /** The isolated worlds of the WebView, for {@link NeoAstraScriptChannels}. */
+    private final class WorldEngine implements NeoAstraScriptChannels.Engine<JavaScriptExecutionWorld, ScriptHandler, JavaScriptReplyProxy> {
+        @Override public JavaScriptExecutionWorld world(String name) { return WebViewCompat.getExecutionWorld(webView, name); }
+
+        @Override public void addListener(JavaScriptExecutionWorld world, String binding, NeoAstraScriptChannels.Listener<JavaScriptReplyProxy> listener) {
+            WebViewCompat.addWebMessageListener(webView, binding, Collections.singleton("*"), world, (source, message, origin, isMainFrame, proxy) ->
+                listener.onMessage(message.getType() == WebMessageCompat.TYPE_STRING ? message.getData() : null, origin.toString(), isMainFrame, proxy));
+        }
+
+        @Override public void removeListener(JavaScriptExecutionWorld world, String binding) { WebViewCompat.removeWebMessageListener(webView, world, binding); }
+
+        @Override public ScriptHandler addScript(String script, boolean documentEnd, JavaScriptExecutionWorld world) {
+            int event = documentEnd ? WebViewCompat.INJECTION_EVENT_DOCUMENT_END : WebViewCompat.INJECTION_EVENT_DOCUMENT_START;
+            return WebViewCompat.addJavaScriptOnEvent(webView, script, event, Collections.singleton("*"), world);
+        }
+
+        @Override public void removeScript(ScriptHandler handler) { handler.remove(); }
+
+        @Override public void post(JavaScriptReplyProxy reply, String message) { reply.postMessage(message); }
+
+        @Override public boolean isCurrentOrigin(String origin) {
+            String current = documentOrigin;
+            return current != null && current.equals(originOf(Uri.parse(origin)));
+        }
     }
 
     public void setBounds(int x, int y, int width, int height, boolean fill) {
@@ -188,9 +236,26 @@ public final class NeoAstraWebHost {
         webView.setLayoutParams(params);
     }
 
-    public void navigate(String url) { reply = null; webView.loadUrl(url); }
+    /** Draws this view below another view of its parent, where a view that fills the window goes below one on explicit bounds. */
+    public void placeBelow(NeoAstraWebHost above) {
+        int index = parent.indexOfChild(above.webView);
+        if (index < 0 || parent.indexOfChild(webView) < index) return;
+        ViewGroup.LayoutParams params = webView.getLayoutParams();
+        parent.removeView(webView);
+        parent.addView(webView, index, params);
+    }
 
-    public void loadHtml(String html, String baseUrl) { reply = null; webView.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null); }
+    /** Shows or hides the view. A hidden WebView is also paused: its visibility alone does not tell the page that it is hidden. */
+    public void setVisible(boolean visible) {
+        webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        if (visible) webView.onResume(); else webView.onPause();
+    }
+
+    public boolean focus() { return webView.requestFocus(); }
+
+    public void navigate(String url) { reply = null; channels.forgetReplies(); webView.loadUrl(url); }
+
+    public void loadHtml(String html, String baseUrl) { reply = null; channels.forgetReplies(); webView.loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null); }
 
     public void command(int command) {
         switch (command) {
@@ -296,7 +361,25 @@ public final class NeoAstraWebHost {
         return identifier;
     }
 
+    /**
+     * Adds a script that runs in the isolated world of the name, at document start or end, in the frames that it guards itself
+     * against, with the web message listener of its binding when it has one. Answers its identifier, or
+     * {@link #WORLD_SCRIPT_UNSUPPORTED} where the WebView has no isolated worlds and {@link #WORLD_SCRIPT_BINDING_TAKEN} where the
+     * world already has the binding.
+     */
+    public int addWorldScript(String script, String world, String binding, boolean documentEnd) {
+        if (!supportsScriptWorlds()) return WORLD_SCRIPT_UNSUPPORTED;
+        int identifier = nextScript++;
+        try { channels.add(identifier, script, world, binding, documentEnd); }
+        catch (NeoAstraScriptChannels.BindingTakenException taken) { return WORLD_SCRIPT_BINDING_TAKEN; }
+        return identifier;
+    }
+
+    /** Delivers a message to the binding of a script; answers one of the results of {@link NeoAstraScriptChannels#post}. */
+    public int postScriptMessage(int identifier, String message) { return channels.post(identifier, message); }
+
     public boolean removeScript(int identifier) {
+        if (channels.remove(identifier)) return true;
         ScriptHandler handler = scripts.remove(identifier);
         if (handler == null) return false;
         handler.remove();
@@ -507,6 +590,7 @@ public final class NeoAstraWebHost {
         }
         view = 0;
         reply = null;
+        channels.clear();
         for (ScriptHandler handler : scripts.values()) handler.remove();
         scripts.clear();
         if (keyboard != null) keyboard.detach();
@@ -580,6 +664,7 @@ public final class NeoAstraWebHost {
 
         @Override public void onPageStarted(WebView source, String url, Bitmap favicon) {
             reply = null;
+            channels.forgetReplies();
             documentOrigin = url == null ? null : originOf(Uri.parse(url));
             if (!keepsHistory) source.clearHistory();
             long current = view;

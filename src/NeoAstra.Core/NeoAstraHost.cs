@@ -6,10 +6,11 @@ namespace NeoAstra;
 /// <summary>Describes the borrowed native parent or owned window that hosts a browser view.</summary>
 public sealed class NeoAstraHost
 {
-    private NeoAstraHost(NeoWindow? window, NeoNativeHandle? parent)
+    private NeoAstraHost(NeoWindow? window, NeoNativeHandle? parent, bool isBounded = false)
     {
         Window = window;
         Parent = parent;
+        IsBounded = isBounded;
     }
 
     /// <summary>Creates a host that keeps a view fitted to a NeoAstra-owned window.</summary>
@@ -20,6 +21,17 @@ public sealed class NeoAstraHost
     {
         ArgumentNullException.ThrowIfNull(window);
         return new NeoAstraHost(window, null);
+    }
+
+    /// <summary>Creates a host that places a view on explicit bounds in a NeoAstra-owned window, beside the other views of that window.</summary>
+    /// <param name="window">The owning window.</param>
+    /// <returns>A window host descriptor.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="window"/> is <see langword="null"/>.</exception>
+    /// <remarks>The view takes its rectangle from <see cref="NeoAstraOptions.Bounds"/>, which must have a positive size, and ignores <see cref="NeoAstraOptions.FillParent"/>.</remarks>
+    public static NeoAstraHost BoundedInWindow(NeoWindow window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        return new NeoAstraHost(window, null, isBounded: true);
     }
 
     /// <summary>Creates a Windows host from a borrowed Win32 <c>HWND</c>.</summary>
@@ -100,6 +112,10 @@ public sealed class NeoAstraHost
     internal NeoWindow? Window { get; }
 
     internal NeoNativeHandle? Parent { get; }
+
+    internal bool IsBounded { get; }
+
+    internal bool FillsParent(NeoAstraOptions options) => !IsBounded && (Window is not null || options.FillParent);
 
     private static NeoAstraHost FromNonZero(NeoNativeHandle handle, string parameterName)
     {

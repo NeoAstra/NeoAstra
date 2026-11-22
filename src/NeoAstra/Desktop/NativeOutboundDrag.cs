@@ -47,7 +47,7 @@ internal sealed class NativeOutboundDragPresenter : INeoOutboundDragPresenter, I
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         lock(_activeLock){if(!ReferenceEquals(_application,application))return NeoDesktopStatus.Canceled;_active.Add(lifetime);}
         void Cancel() { try { lifetime.Cancel(); } catch (ObjectDisposedException) { } }
-        EventHandler windowClosed = (_, _) => Cancel(); view.NativeNavigationStarted += Cancel; view.Disposing += Cancel; if(view.Window is not null)view.Window.Closed += windowClosed;
+        view.NativeNavigationStarted += Cancel; view.Disposing += Cancel; var stopObservingWindow = view.ObserveWindow(Cancel);
         try
         {
             if (OperatingSystem.IsWindows()) return await application.Dispatcher.InvokeAsync(() => MatchesSession(view, documentSessionId) ? WindowsOutboundDrag.Start(view, items, lifetime.Token) : NeoDesktopStatus.Denied, lifetime.Token).ConfigureAwait(false);
@@ -63,7 +63,7 @@ internal sealed class NativeOutboundDragPresenter : INeoOutboundDragPresenter, I
             }
             return NeoDesktopStatus.Unsupported;
         }
-        finally { lock(_activeLock)_active.Remove(lifetime);view.NativeNavigationStarted -= Cancel; view.Disposing -= Cancel; if(view.Window is not null)view.Window.Closed -= windowClosed; }
+        finally { lock(_activeLock)_active.Remove(lifetime);view.NativeNavigationStarted -= Cancel; view.Disposing -= Cancel; stopObservingWindow(); }
     }
 
     private static bool MatchesSession(NeoAstra view, string? documentSessionId)
@@ -88,12 +88,12 @@ internal sealed class NativeOutboundDragPresenter : INeoOutboundDragPresenter, I
         if (_invalidators.ContainsKey(view)) return;
         void Invalidate() { if (OperatingSystem.IsWindows()) WindowsOutboundDrag.Invalidate(); else if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Invalidate(view); }
         void Disposing() { Invalidate(); if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Unobserve(view); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
-        void WindowClosed(object? sender, EventArgs args) { if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Forget(view); else Invalidate(); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
-        var value=new ViewGestureHandlers(Invalidate,Disposing,WindowClosed);_invalidators.Add(view,value); view.NativeNavigationStarted += Invalidate; view.Disposing += Disposing; if (view.Window is not null) view.Window.Closed += WindowClosed;
+        void WindowClosed() { if (OperatingSystem.IsLinux()) LinuxOutboundDrag.Forget(view); else Invalidate(); if(_invalidators.Remove(view,out var handlers))DetachView(view,handlers); }
+        var value=new ViewGestureHandlers(Invalidate,Disposing,view.ObserveWindow(WindowClosed));_invalidators.Add(view,value); view.NativeNavigationStarted += Invalidate; view.Disposing += Disposing;
     }
 
-    private static void DetachView(NeoAstra view,ViewGestureHandlers handlers){view.NativeNavigationStarted-=handlers.Navigation;view.Disposing-=handlers.Disposing;if(view.Window is not null)view.Window.Closed-=handlers.WindowClosed;}
-    private sealed record ViewGestureHandlers(Action Navigation,Action Disposing, EventHandler WindowClosed);
+    private static void DetachView(NeoAstra view,ViewGestureHandlers handlers){view.NativeNavigationStarted-=handlers.Navigation;view.Disposing-=handlers.Disposing;handlers.StopObservingWindow();}
+    private sealed record ViewGestureHandlers(Action Navigation,Action Disposing, Action StopObservingWindow);
 }
 
 internal static unsafe partial class WindowsOutboundDrag

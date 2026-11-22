@@ -303,13 +303,21 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
         Action navigation = () => ReleaseOwner(NeoPluginOwner.View(view.ViewLabel));
         Action<NeoTransportSessionSnapshot?> sessionChanged = session => UpdateViewSession(view, session?.DocumentSessionId);
         Action disposing = () => DetachView(view);
-        EventHandler? windowClosed = view.Window is null ? null : (_, _) => DetachView(view);
-        lock (_sync) { if (_disposed || _attachedViews.ContainsKey(view)) return; _attachedViews.Add(view, new(drop, navigation, sessionChanged, disposing, windowClosed, view.TransportSession?.DocumentSessionId)); }
+        var stopObservingWindow = view.ObserveWindow(() => DetachView(view));
+        lock (_sync)
+        {
+            if (_disposed || _attachedViews.ContainsKey(view))
+            {
+                stopObservingWindow();
+                return;
+            }
+
+            _attachedViews.Add(view, new(drop, navigation, sessionChanged, disposing, stopObservingWindow, view.TransportSession?.DocumentSessionId));
+        }
         view.NativeDropReceived += drop;
         view.NativeNavigationStarted += navigation;
         view.TransportSessionChanged += sessionChanged;
         view.Disposing += disposing;
-        if (windowClosed is not null) view.Window!.Closed += windowClosed;
         UpdateViewSession(view, view.TransportSession?.DocumentSessionId);
     }
 
@@ -317,7 +325,7 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
     {
         ViewHandlers? handlers; lock (_sync) { if (!_attachedViews.Remove(view, out handlers)) return; }
         view.NativeDropReceived -= handlers.Drop; view.NativeNavigationStarted -= handlers.Navigation; view.TransportSessionChanged -= handlers.SessionChanged; view.Disposing -= handlers.Disposing;
-        if (handlers.WindowClosed is not null && view.Window is not null) view.Window.Closed -= handlers.WindowClosed;
+        handlers.StopObservingWindow();
         if (handlers.DocumentSessionId is { } session) ReleaseOwner(NeoPluginOwner.DocumentSession(session));
         if (view.ViewLabel is not null) ReleaseOwner(NeoPluginOwner.View(view.ViewLabel));
     }
@@ -353,13 +361,13 @@ public sealed class NeoDragDropBroker : IAsyncDisposable, INeoApplicationBoundDe
         }
     }
 
-    private sealed class ViewHandlers(Action<int, IReadOnlyList<string>, NeoPoint> drop, Action navigation, Action<NeoTransportSessionSnapshot?> sessionChanged, Action disposing, EventHandler? windowClosed, string? documentSessionId)
+    private sealed class ViewHandlers(Action<int, IReadOnlyList<string>, NeoPoint> drop, Action navigation, Action<NeoTransportSessionSnapshot?> sessionChanged, Action disposing, Action stopObservingWindow, string? documentSessionId)
     {
         internal Action<int, IReadOnlyList<string>, NeoPoint> Drop { get; } = drop;
         internal Action Navigation { get; } = navigation;
         internal Action<NeoTransportSessionSnapshot?> SessionChanged { get; } = sessionChanged;
         internal Action Disposing { get; } = disposing;
-        internal EventHandler? WindowClosed { get; } = windowClosed;
+        internal Action StopObservingWindow { get; } = stopObservingWindow;
         internal string? DocumentSessionId { get; set; } = documentSessionId;
     }
 

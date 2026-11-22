@@ -68,6 +68,7 @@
     <ReferenceNativeSymbol Include="neoastra_view_add_script_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_capture_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_evaluate_script_async" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_focus" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_get_native_handle" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_get_zoom_factor" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_go_back" SymbolType="Function" />
@@ -77,17 +78,21 @@
     <ReferenceNativeSymbol Include="neoastra_view_navigate" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_navigate_request" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_open_devtools" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_place_over" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_point_from_screen" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_point_to_screen" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_post_message" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_post_messages" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_post_script_message" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_release" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_reload" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_remove_script" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_retain" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_bounds" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_event_callback" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_set_key_chord_callback" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_setting" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_set_visible" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_set_zoom_factor" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_stop" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_window_activate" SymbolType="Function" />

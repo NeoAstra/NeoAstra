@@ -92,6 +92,11 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(host);
         cancellationToken.ThrowIfCancellationRequested();
         options.Validate(this);
+        if (host.IsBounded && (options.Bounds.Width <= 0 || options.Bounds.Height <= 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "A bounded view must have bounds with positive dimensions.");
+        }
+
         if (host.Window is not null && !ReferenceEquals(host.Window.Application, Application))
         {
             throw new ArgumentException("The host window must belong to this environment's application.", nameof(host));
@@ -136,7 +141,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
                 width = options.Bounds.Width,
                 height = options.Bounds.Height,
             },
-            fill_parent = host.Window is not null || options.FillParent ? 1u : 0u,
+            fill_parent = host.FillsParent(options) ? 1u : 0u,
             maximum_message_size = options.MaximumMessageSize,
             decision_timeout_ms = checked((ulong)options.DecisionTimeout.TotalMilliseconds),
             popup_request = new NativeMethods.neoastra_decision_t(popupRequest),
@@ -186,6 +191,11 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(capability));
         }
 
+        if (CapabilityUnknownToLibrary(RuntimeInfo, capability) is { } unknown)
+        {
+            return unknown;
+        }
+
         var raw = new NativeMethods.neoastra_capability_info
         {
             size = (uint)sizeof(NativeMethods.neoastra_capability_info),
@@ -198,6 +208,16 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
         var details = Utf8String.Decode(raw.details);
         return new NeoCapabilityInfo((NeoSupportLevel)raw.support.Value, raw.capability_version, raw.flags, string.IsNullOrEmpty(details) ? null : details);
     }
+
+    // A capability that the loaded native library predates is not supported, rather than an argument it refuses.
+    internal static NeoCapabilityInfo? CapabilityUnknownToLibrary(NeoRuntimeInfo runtime, NeoCapability capability) => capability switch
+    {
+        NeoCapability.ScriptWorldChannel when !runtime.HasScriptWorldChannels =>
+            new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library has no script bindings of isolated worlds."),
+        NeoCapability.ViewPlacement when !runtime.HasViewPlacement =>
+            new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library cannot place views."),
+        _ => null,
+    };
 
     /// <summary>Releases the native environment reference.</summary>
     /// <returns>A completed value task.</returns>

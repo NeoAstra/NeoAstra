@@ -628,6 +628,8 @@ struct neoastra_view final : neo_ui_ref_counted {
     neoastra_native_parent_t parent{};
     neoastra_rect_t bounds{};
     bool fill_parent{true};
+    bool visible{true}; // What the host asked for; a hidden window hides the view as well, without changing this.
+    neo_callback_slot<neoastra_key_chord_callback_t> key_chords;
     std::chrono::milliseconds decision_timeout{std::chrono::seconds(30)};
     std::mutex decisions_mutex;
     neoastra_decision_t* decisions{};
@@ -659,6 +661,24 @@ inline uint64_t neo_history_directions(const neoastra_view_t* view, bool back, b
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
 bool neo_bridge_access_allowed(const neoastra_view_t* view, std::string_view uri) noexcept;
 bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept;
+// Raises NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED for a message that the binding of a script posted in its isolated world. Only a
+// message of the main frame within the maximum message size of the view is raised; the backend checks that the message comes
+// through that binding of that world before it calls this.
+bool neo_emit_script_message(neoastra_view_t* view, const std::string& world, const std::string& binding, const std::string& message, const std::string& uri, bool main_frame) noexcept;
+// The world of an isolated script whose options name none.
+inline constexpr std::string_view neo_default_script_world = "neoastra.default";
+// The script that gives a WebKit content world the object of its binding: postMessage(string) through the script message
+// handler of that world, and the message events that neo_script_channel_delivery dispatches. It runs before the script of the
+// binding, in the same world, and does nothing where the world has no such handler (a popup that copied the scripts).
+std::string neo_script_channel_bootstrap(std::string_view binding);
+// The same for a WebKit backend whose handler tells neither the frame nor the origin of a message: the handler has its own name,
+// and each message starts with the origin of the document that posted it and a line feed, which the page cannot change.
+std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view handler);
+// The same over a global function of the world that posts a string, such as a DevTools protocol binding. The function is removed
+// from the world, and the channel exists only in the top-level frame.
+std::string neo_script_channel_bootstrap_for_function(std::string_view binding, std::string_view function);
+// The body of the function that a WebKit backend calls in the world of a binding, with the arguments "name" and "message".
+extern const char* const neo_script_channel_delivery;
 
 struct neoastra_download final : neo_ui_ref_counted {
     neoastra_view_t* view{};
@@ -1100,6 +1120,33 @@ neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t* profile, n
 bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept;
 void neo_platform_view_destroy(neoastra_view_t* view) noexcept;
 neoastra_result_t neo_platform_view_set_bounds(neoastra_view_t* view) noexcept;
+neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept;
+neoastra_result_t neo_platform_view_focus(neoastra_view_t* view) noexcept;
+// How many units of its parent one CSS pixel of the view is, with its zoom.
+neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t* view, double* scale) noexcept;
+// Moves the native view to view->window, already set, from the previous window, keeping its page.
+neoastra_result_t neo_platform_view_set_window(neoastra_view_t* view, neoastra_window_t* previous) noexcept;
+// The portable name of a key that types a character: A, 7, Comma. Empty for any other character.
+std::string neo_key_name_for_character(uint32_t character);
+// Offers a key press to the host before the page. Only a press with Ctrl, Alt or Meta, or of a function key, is a chord.
+// Returns whether the host keeps it from the page. The host may release the view from the callback.
+bool neo_view_key_chord(neoastra_view_t* view, bool control, bool alt, bool shift, bool meta, const std::string& key) noexcept;
+// The first other view of the window of a view that the host shows, which takes the keyboard when that view is hidden.
+inline neoastra_view_t* neo_visible_sibling(const neoastra_view_t* view) noexcept {
+    if (!view->window) return nullptr;
+    for (auto* sibling : view->window->views) if (sibling != view && sibling->visible && sibling->platform) return sibling;
+    return nullptr;
+}
+// The next view of the window in drawing order that the backend has in place, which a view being added goes below. The views of
+// a window are in the order that they are drawn: those that fill it first, those on explicit bounds above them.
+template<typename TInPlace> neoastra_view_t* neo_view_above(const neoastra_view_t* view, TInPlace&& in_place) noexcept {
+    if (!view->window) return nullptr;
+    const auto& views = view->window->views;
+    auto next = std::find(views.begin(), views.end(), view);
+    if (next == views.end()) return nullptr;
+    while (++next != views.end()) if ((*next)->platform && in_place(*next)) return *next;
+    return nullptr;
+}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view, const std::string& uri, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view, const std::string& uri, const std::string& method, const std::string& headers, const uint8_t* body, uint64_t body_length, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view, const std::string& html, const std::string& base_uri, neoastra_error_t** error) noexcept;
@@ -1107,6 +1154,10 @@ neoastra_result_t neo_platform_view_command(neoastra_view_t* view, uint32_t comm
 neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::string& script, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view, const std::string& identifier) noexcept;
+// Delivers a message to the binding of a script; the caller checked the view, the thread, and the size of the message.
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, const std::string& identifier, const std::string& message, neoastra_error_t** error) noexcept;
+// Whether the backend has isolated worlds with bindings that only they reach: Android asks the WebView of the device.
+bool neo_platform_script_worlds_supported() noexcept;
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const std::string& message, bool json, neoastra_error_t** error) noexcept;
 // Posts the messages in order, which the caller validated, and counts in *posted (when not null) those it posted.
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const neoastra_string_view_t* messages, uint32_t count, bool json, uint32_t* posted, neoastra_error_t** error) noexcept;

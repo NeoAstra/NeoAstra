@@ -194,6 +194,20 @@ if(NEOASTRA_BUILD_TESTS)
   find_package(Threads REQUIRED)
   target_link_libraries(neoastra_completion_tests PRIVATE neoastra_sanitizers Threads::Threads)
   add_test(NAME neoastra_completion_tests COMMAND neoastra_completion_tests)
+  # The protected channel of an isolated-world script through the common layer, with the same recording backend.
+  add_executable(neoastra_script_world_tests
+    native/tests/script_world_tests.cpp
+    native/tests/completion_test_backend.cpp
+    native/src/common/neoastra.cpp)
+  target_include_directories(neoastra_script_world_tests PRIVATE native/include native/src/common)
+  target_compile_definitions(neoastra_script_world_tests PRIVATE NEOASTRA_BUILD=1)
+  if(MSVC)
+    target_compile_options(neoastra_script_world_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+  else()
+    target_compile_options(neoastra_script_world_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_link_libraries(neoastra_script_world_tests PRIVATE neoastra_sanitizers Threads::Threads)
+  add_test(NAME neoastra_script_world_tests COMMAND neoastra_script_world_tests)
   add_executable(neoastra_stress_tests native/tests/stress_tests.cpp)
   target_include_directories(neoastra_stress_tests PRIVATE native/include native/src/common)
   target_link_libraries(neoastra_stress_tests PRIVATE neoastra_native neoastra_sanitizers)
@@ -238,12 +252,23 @@ if(NEOASTRA_BUILD_TESTS)
     target_link_libraries(neoastra_macos_zoom_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa")
     add_test(NAME neoastra_macos_zoom_tests COMMAND neoastra_macos_zoom_tests)
+    add_executable(neoastra_macos_bounds_tests native/tests/macos_bounds_tests.mm)
+    target_compile_options(neoastra_macos_bounds_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_bounds_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_bounds_tests COMMAND neoastra_macos_bounds_tests)
     add_executable(neoastra_macos_devtools_tests native/tests/macos_devtools_tests.mm)
     target_compile_options(neoastra_macos_devtools_tests PRIVATE -fobjc-arc)
     target_link_libraries(neoastra_macos_devtools_tests PRIVATE
       neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
     add_test(NAME neoastra_macos_devtools_tests COMMAND neoastra_macos_devtools_tests)
     set_tests_properties(neoastra_macos_devtools_tests PROPERTIES TIMEOUT 90)
+    add_executable(neoastra_macos_script_world_tests native/tests/macos_script_world_tests.mm)
+    target_compile_options(neoastra_macos_script_world_tests PRIVATE -fobjc-arc)
+    target_link_libraries(neoastra_macos_script_world_tests PRIVATE
+      neoastra_native neoastra_sanitizers "-framework Cocoa" "-framework WebKit")
+    add_test(NAME neoastra_macos_script_world_tests COMMAND neoastra_macos_script_world_tests)
+    set_tests_properties(neoastra_macos_script_world_tests PROPERTIES TIMEOUT 120)
   elseif(UNIX)
     add_executable(neoastra_linux_backend_tests native/tests/linux_backend_tests.cpp)
     target_link_libraries(neoastra_linux_backend_tests PRIVATE
