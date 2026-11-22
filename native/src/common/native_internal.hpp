@@ -1137,6 +1137,16 @@ inline neoastra_view_t* neo_visible_sibling(const neoastra_view_t* view) noexcep
     for (auto* sibling : view->window->views) if (sibling != view && sibling->visible && sibling->platform) return sibling;
     return nullptr;
 }
+// The next view of the window in drawing order that the backend has in place, which a view being added goes below. The views of
+// a window are in the order that they are drawn: those that fill it first, those on explicit bounds above them.
+template<typename TInPlace> neoastra_view_t* neo_view_above(const neoastra_view_t* view, TInPlace&& in_place) noexcept {
+    if (!view->window) return nullptr;
+    const auto& views = view->window->views;
+    auto next = std::find(views.begin(), views.end(), view);
+    if (next == views.end()) return nullptr;
+    while (++next != views.end()) if ((*next)->platform && in_place(*next)) return *next;
+    return nullptr;
+}
 neoastra_result_t neo_platform_view_navigate(neoastra_view_t* view, const std::string& uri, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_navigate_request(neoastra_view_t* view, const std::string& uri, const std::string& method, const std::string& headers, const uint8_t* body, uint64_t body_length, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_load_html(neoastra_view_t* view, const std::string& html, const std::string& base_uri, neoastra_error_t** error) noexcept;

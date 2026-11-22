@@ -765,7 +765,9 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                 [state->webview addObserver:state->delegate forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoBack" options:NSKeyValueObservingOptionNew context:nullptr];
                 [state->webview addObserver:state->delegate forKeyPath:@"canGoForward" options:NSKeyValueObservingOptionNew context:nullptr];
-                [parent addSubview:state->webview];
+                if(auto* above=neo_view_above(view,[&](neoastra_view_t* other){return static_cast<cocoa_view*>(other->platform)->webview.superview==parent;}))
+                    [parent addSubview:state->webview positioned:NSWindowBelow relativeTo:static_cast<cocoa_view*>(above->platform)->webview];
+                else [parent addSubview:state->webview];
                 view->platform=state.release();
                 callback(context,nullptr);
                 return true;

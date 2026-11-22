@@ -187,6 +187,16 @@ int main() {
         neoastra_view_release(anchor);
         neoastra_window_release(other);
 
+        // A view that fills the window goes below a view on explicit bounds, also when it comes second.
+        anchor_options.window = window;
+        completion filling_state;
+        assert(neoastra_environment_create_view_async(environment, &anchor_options, view_created, &filling_state, nullptr, nullptr) == NEOASTRA_OK);
+        wait_for(filling_state);
+        assert(filling_state.result == NEOASTRA_OK);
+        auto* filling = static_cast<neoastra_view_t*>(filling_state.value);
+        assert([web.superview.subviews indexOfObject:web_view(filling)] < [web.superview.subviews indexOfObject:web]);
+        neoastra_view_release(filling);
+
         assert(neoastra_view_set_bounds(view, {60, 50, 300, 120}, 1) == NEOASTRA_OK);
         assert(NSEqualRects(web.frame, web.superview.bounds));
 

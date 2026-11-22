@@ -236,6 +236,15 @@ public final class NeoAstraWebHost {
         webView.setLayoutParams(params);
     }
 
+    /** Draws this view below another view of its parent, where a view that fills the window goes below one on explicit bounds. */
+    public void placeBelow(NeoAstraWebHost above) {
+        int index = parent.indexOfChild(above.webView);
+        if (index < 0 || parent.indexOfChild(webView) < index) return;
+        ViewGroup.LayoutParams params = webView.getLayoutParams();
+        parent.removeView(webView);
+        parent.addView(webView, index, params);
+    }
+
     /** Shows or hides the view. A hidden WebView is also paused: its visibility alone does not tell the page that it is hidden. */
     public void setVisible(boolean visible) {
         webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);

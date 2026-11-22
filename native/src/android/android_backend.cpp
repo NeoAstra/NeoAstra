@@ -180,7 +180,7 @@ JavaVM* java_vm{};
 jclass host_class{};
 jclass response_class{};
 jclass string_class{};
-jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_set_visible{}, host_focus{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
+jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_place_below{}, host_set_visible{}, host_focus{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
 jmethodID host_supports_script_worlds{}, host_add_world_script{}, host_post_script_message{};
 jclass services_class{};
@@ -811,6 +811,7 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     host_is_supported = env->GetStaticMethodID(host_class, "isSupported", "()Z");
     host_create = env->GetStaticMethodID(host_class, "create", "(Landroid/view/ViewGroup;J[Ljava/lang/String;Ljava/lang/String;)Lcom/neoastra/backend/NeoAstraWebHost;");
     host_set_bounds = env->GetMethodID(host_class, "setBounds", "(IIIIZ)V");
+    host_place_below = env->GetMethodID(host_class, "placeBelow", "(Lcom/neoastra/backend/NeoAstraWebHost;)V");
     host_set_visible = env->GetMethodID(host_class, "setVisible", "(Z)V");
     host_focus = env->GetMethodID(host_class, "focus", "()Z");
     host_navigate = env->GetMethodID(host_class, "navigate", "(Ljava/lang/String;)V");
@@ -959,6 +960,8 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
             env->DeleteLocalRef(web_view);
         }
         if (!view->fill_parent) env->CallVoidMethod(state->host, host_set_bounds, view->bounds.x, view->bounds.y, view->bounds.width, view->bounds.height, JNI_FALSE);
+        if (auto* above = neo_view_above(view, [](neoastra_view_t* other) { return static_cast<android_view*>(other->platform)->host != nullptr; }))
+            env->CallVoidMethod(state->host, host_place_below, static_cast<android_view*>(above->platform)->host);
         failed(env, view->environment->app, "Could not place the Android WebView");
         view->platform = state.release();
         {

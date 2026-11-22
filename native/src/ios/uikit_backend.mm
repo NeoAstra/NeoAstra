@@ -290,6 +290,13 @@ UIView* view_parent(neoastra_view_t* view) {
     return view->parent.kind == NEOASTRA_NATIVE_PARENT_UIKIT_UIVIEW ? (__bridge UIView*)view->parent.handle : nil;
 }
 
+// Puts the web view at its place among the views of its window; a hidden view is out of the window and is skipped.
+void add_in_drawing_order(neoastra_view_t* view, WKWebView* webview, UIView* parent) {
+    if (auto* above = neo_view_above(view, [&](neoastra_view_t* other) { return static_cast<uikit_view*>(other->platform)->webview.superview == parent; }))
+        [parent insertSubview:webview belowSubview:static_cast<uikit_view*>(above->platform)->webview];
+    else [parent addSubview:webview];
+}
+
 // The scene in the foreground takes a new window; while an application starts, its scene is still inactive.
 UIWindowScene* active_window_scene() {
     UIWindowScene* fallback = nil;
@@ -1013,7 +1020,7 @@ bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_o
                     stop_webkit_keyboard_avoidance(state->webview);
                     [NSNotificationCenter.defaultCenter addObserver:state->delegate selector:@selector(keyboardWillChangeFrame:) name:UIKeyboardWillChangeFrameNotification object:nil];
                 }
-                [parent addSubview:state->webview];
+                add_in_drawing_order(view, state->webview, parent);
                 view->platform = state.release();
                 callback(context, nullptr);
                 return true;
@@ -1097,17 +1104,7 @@ neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept 
     UIView* parent = view_parent(view);
     if (!parent) return NEOASTRA_ERROR_INVALID_STATE;
     state->webview.frame = view_frame(view, parent);
-    // It returns to its place among the views of the window, which are in the order that they are drawn.
-    UIView* above = nil;
-    if (view->window) {
-        const auto& views = view->window->views;
-        for (auto next = std::find(views.begin(), views.end(), view); !above && next != views.end(); ++next) {
-            auto* other = *next == view ? nullptr : static_cast<uikit_view*>((*next)->platform);
-            if (other && other->webview.superview == parent) above = other->webview;
-        }
-    }
-    if (above) [parent insertSubview:state->webview belowSubview:above];
-    else [parent addSubview:state->webview];
+    add_in_drawing_order(view, state->webview, parent);
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }

@@ -790,6 +790,33 @@ void test_key_chords_reach_the_host(neoastra_app_t* app) {
 
 // A view on explicit bounds sits at its place from the top-left corner of the window, beside a view that fills it, and
 // does not size the window. It fills the window again when it is asked to.
+// A view on explicit bounds stays above a view that fills the window, also when the filling view comes second.
+void test_filling_view_goes_below_a_bounded_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    neoastra_view_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.window = window;
+    options.bounds = {10, 10, 100, 100};
+    completion state;
+    assert(neoastra_environment_create_view_async(environment, &options, view_created, &state, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(state);
+    assert(state.result == NEOASTRA_OK);
+    auto* bounded = static_cast<neoastra_view_t*>(state.value);
+    auto* filling = create_view(environment, window);
+    auto* second_filling = create_view(environment, window);
+    auto* stack = gtk_widget_get_parent(GTK_WIDGET(web_view(bounded)));
+    assert(gtk_widget_get_first_child(stack) == GTK_WIDGET(web_view(filling)));
+    assert(gtk_widget_get_next_sibling(GTK_WIDGET(web_view(filling))) == GTK_WIDGET(web_view(second_filling)));
+    assert(gtk_widget_get_last_child(stack) == GTK_WIDGET(web_view(bounded)));
+    neoastra_view_release(second_filling);
+    neoastra_view_release(filling);
+    neoastra_view_release(bounded);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
     auto* environment = create_environment(app, "", true);
     auto* window = create_window(app);
@@ -1227,6 +1254,7 @@ int main() {
     test_resource_callback_can_release_its_view_and_environment(app);
     test_views_share_their_window(app);
     test_bounded_view_keeps_its_place(app);
+    test_filling_view_goes_below_a_bounded_view(app);
     test_key_chords_reach_the_host(app);
     test_view_moves_to_the_window_of_its_anchor(app);
     test_script_world_channel(app);
