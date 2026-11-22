@@ -1,0 +1,14 @@
+name: Set up Clang on Windows
+description: Installs the Clang that the Visual C++ standard library of the runner image accepts.
+
+runs:
+  using: composite
+  steps:
+    # The standard library of the image can require a newer Clang than the image brings (error STL1000), so the version is pinned here.
+    - shell: pwsh
+      run: |
+        choco install llvm --version=22.1.8 --allow-downgrade --yes --no-progress
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $bin = 'C:\Program Files\LLVM\bin'
+        $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        & "$bin\clang++.exe" --version

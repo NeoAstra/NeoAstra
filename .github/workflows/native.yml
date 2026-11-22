@@ -121,6 +121,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: lukka/get-cmake@latest
+      - name: Set up Clang
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-windows-clang
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

@@ -34,6 +34,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# The sources use no C++ modules. With scanning on, CMake 4.5 builds the standard module of the host for an Android target.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # The Windows library carries its C and C++ runtime, so that an application does not need the Visual C++ Redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
