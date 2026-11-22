@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace completion_test_backend {
@@ -52,14 +53,16 @@ neoastra_result_t add(neoastra_view_t* view, const neoastra_script_options_t& op
     return result;
 }
 
-neoastra_script_options_t channel_options(const std::string& world, const std::string& binding) {
+// The options only point at the names: a literal outlives them, and a std::string of the caller must too.
+neoastra_script_options_t channel_options(std::string_view world, std::string_view binding) {
+    const auto name_of = [](std::string_view value) { return neoastra_string_view_t{reinterpret_cast<const uint8_t*>(value.data()), value.size()}; };
     neoastra_script_options_t options{};
     options.size = sizeof(options);
     options.version = 2;
     options.main_frame_only = 1;
     options.isolated_world = 1;
-    options.world_name = view_of(world);
-    options.binding_name = view_of(binding);
+    options.world_name = name_of(world);
+    options.binding_name = name_of(binding);
     return options;
 }
 
