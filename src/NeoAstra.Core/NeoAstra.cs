@@ -168,6 +168,7 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <exception cref="InvalidOperationException">The call is not on the UI thread.</exception>
     /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
     /// <exception cref="NeoAstraException">The backend refuses the change.</exception>
+    /// <exception cref="NotSupportedException">The loaded native library cannot show or hide a view.</exception>
     public bool IsVisible
     {
         get
@@ -183,7 +184,15 @@ public sealed class NeoAstra : IAsyncDisposable
                 return;
             }
 
-            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
+            try
+            {
+                NativeError.ThrowIfFailed(NativeMethods.neoastra_view_set_visible(NativeHandle, value ? 1u : 0u), default, "set view visibility");
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                throw new NotSupportedException("The loaded native library cannot show or hide a view.", exception);
+            }
+
             _isVisible = value;
         }
     }
@@ -241,7 +250,15 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         NativeMethods.neoastra_rect_t placed = default;
-        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_place_over(NativeHandle, anchor.NativeHandle, x, y, width, height, &placed), default, "place view");
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_place_over(NativeHandle, anchor.NativeHandle, x, y, width, height, &placed), default, "place view");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library cannot place views.", exception);
+        }
+
         var rect = placed.Value;
         _bounds = new NeoRect(rect.x, rect.y, rect.width, rect.height);
         var previous = _window;
@@ -298,13 +315,22 @@ public sealed class NeoAstra : IAsyncDisposable
     /// its press and its release from the page; any other key reaches the page unchanged. AltGr on Windows is not a chord. The event
     /// is available on Windows, macOS and Linux. Handlers must return quickly, because the keyboard waits for them.
     /// </remarks>
+    /// <exception cref="NotSupportedException">A handler is added and the loaded native library has no key chords.</exception>
     public event EventHandler<NeoKeyChordEventArgs>? KeyChordPressed
     {
         add
         {
             ThrowIfDisposed();
             _keyChordPressed += value;
-            UpdateKeyChordRegistration();
+            try
+            {
+                UpdateKeyChordRegistration();
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                _keyChordPressed -= value;
+                throw new NotSupportedException("The loaded native library has no key chords.", exception);
+            }
         }
         remove
         {
@@ -361,10 +387,18 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <exception cref="InvalidOperationException">The view is hidden or cannot take the keyboard, or the call is not on the UI thread.</exception>
     /// <exception cref="ObjectDisposedException">The view has been disposed.</exception>
     /// <exception cref="NeoAstraException">The backend fails to move the keyboard.</exception>
+    /// <exception cref="NotSupportedException">The loaded native library cannot give the keyboard to a view.</exception>
     public void Focus()
     {
         ThrowIfDisposed();
-        NativeError.ThrowIfFailed(NativeMethods.neoastra_view_focus(NativeHandle), default, "focus view");
+        try
+        {
+            NativeError.ThrowIfFailed(NativeMethods.neoastra_view_focus(NativeHandle), default, "focus view");
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library cannot give the keyboard to a view.", exception);
+        }
     }
 
     /// <summary>Converts a point of the view, in CSS pixels as a page reports <c>clientX</c> and <c>clientY</c>, to the coordinates and units of <see cref="NeoWindow.Position"/>.</summary>

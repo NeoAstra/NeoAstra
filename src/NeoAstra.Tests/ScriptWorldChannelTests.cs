@@ -51,6 +51,12 @@ public sealed class ScriptWorldChannelTests
         Assert.AreEqual(NeoSupportLevel.None, unknown.SupportLevel);
         Assert.IsNull(NeoEnvironment.CapabilityUnknownToLibrary(current, NeoCapability.ScriptWorldChannel));
         Assert.IsNull(NeoEnvironment.CapabilityUnknownToLibrary(old, NeoCapability.ScriptIsolatedWorld));
+
+        // The placed views came with the channel: an older library answers that it has none, instead of refusing the question.
+        var noPlacement = NeoEnvironment.CapabilityUnknownToLibrary(old, NeoCapability.ViewPlacement);
+        Assert.IsNotNull(noPlacement);
+        Assert.AreEqual(NeoSupportLevel.None, noPlacement.SupportLevel);
+        Assert.IsNull(NeoEnvironment.CapabilityUnknownToLibrary(current, NeoCapability.ViewPlacement));
     }
 
     [TestMethod]

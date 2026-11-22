@@ -210,10 +210,14 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     }
 
     // A capability that the loaded native library predates is not supported, rather than an argument it refuses.
-    internal static NeoCapabilityInfo? CapabilityUnknownToLibrary(NeoRuntimeInfo runtime, NeoCapability capability) =>
-        capability == NeoCapability.ScriptWorldChannel && !runtime.HasScriptWorldChannels
-            ? new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library has no script bindings of isolated worlds.")
-            : null;
+    internal static NeoCapabilityInfo? CapabilityUnknownToLibrary(NeoRuntimeInfo runtime, NeoCapability capability) => capability switch
+    {
+        NeoCapability.ScriptWorldChannel when !runtime.HasScriptWorldChannels =>
+            new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library has no script bindings of isolated worlds."),
+        NeoCapability.ViewPlacement when !runtime.HasViewPlacement =>
+            new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library cannot place views."),
+        _ => null,
+    };
 
     /// <summary>Releases the native environment reference.</summary>
     /// <returns>A completed value task.</returns>
