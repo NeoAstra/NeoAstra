@@ -703,7 +703,14 @@ public sealed class NeoAstra : IAsyncDisposable
         };
         var nativeOptions = new NativeMethods.neoastra_script_options_t(raw);
         var world = options.IsolatedWorld ? (string.IsNullOrEmpty(options.WorldName) ? DefaultScriptWorld : options.WorldName) : null;
-        var operation = new NativeOperation<NeoUserScript>(cancellationToken, new ScriptRequest(this, world, options.BindingName, options.MessageHandler));
+        // The binding is reserved before the native library can run the script, which may post before it is added.
+        object? reservation = null;
+        if (options.BindingName is { } binding && (reservation = _scriptChannels.Reserve(world!, binding)) is null)
+        {
+            return ValueTask.FromException<NeoUserScript>(new InvalidOperationException("The world of the view already has a script with this binding."));
+        }
+
+        var operation = new NativeOperation<NeoUserScript>(cancellationToken, new ScriptRequest(this, world, options.BindingName, options.MessageHandler, reservation));
         NativeMethods.neoastra_operation_t nativeOperation = default;
         NativeMethods.neoastra_error_t error = default;
         NativeMethods.neoastra_result_t result;
@@ -720,12 +727,14 @@ public sealed class NeoAstra : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            if (reservation is not null) _scriptChannels.Cancel(reservation);
             operation.FailStart(ex);
             return operation.ValueTask;
         }
 
         if (NativeError.Code(result) != NeoErrorCode.Success)
         {
+            if (reservation is not null) _scriptChannels.Cancel(reservation);
             var info = NativeError.Read(NativeError.Code(result), error.Handle);
             if (error.Handle != 0) new SafeErrorHandle(error.Handle).Dispose();
             operation.FailStart(NativeError.CreateException(info, "add persistent script", cancellationToken));
@@ -741,8 +750,9 @@ public sealed class NeoAstra : IAsyncDisposable
     // The world of an isolated script whose options name none (neo_default_script_world of the native library).
     private const string DefaultScriptWorld = "neoastra.default";
 
+    // Reservation is the binding that NeoScriptChannelRegistry reserved for the script, when it has one.
     private sealed record ScriptRequest(NeoAstra View, string? WorldName, string? BindingName,
-        EventHandler<NeoScriptMessageReceivedEventArgs>? MessageHandler);
+        EventHandler<NeoScriptMessageReceivedEventArgs>? MessageHandler, object? Reservation);
 
     // A binding needs a native library that reads it: an older one would refuse its options as invalid, and must never be
     // asked to run the script without it.
@@ -782,8 +792,8 @@ public sealed class NeoAstra : IAsyncDisposable
         var world = Utf8String.Decode(value.text2);
         var binding = Utf8String.Decode(value.text3);
         if (string.IsNullOrEmpty(world) || string.IsNullOrEmpty(binding) || (value.value & 1) == 0) return;
-        if (_scriptChannels.Find(world, binding) is not { } script) return;
-        script.RaiseMessageReceived(new NeoScriptMessageReceivedEventArgs(Utf8String.Decode(value.text), origin, world, binding));
+        var message = new NeoScriptMessageReceivedEventArgs(Utf8String.Decode(value.text), origin, world, binding);
+        if (_scriptChannels.Route(world, binding, message) is { } script) script.RaiseMessageReceived(message);
     }
 
     /// <summary>Posts a JSON value to web content.</summary>
@@ -1991,27 +2001,41 @@ public sealed class NeoAstra : IAsyncDisposable
                 if (string.IsNullOrEmpty(identifier)) throw new InvalidDataException("The native backend returned an empty script identifier.");
                 var request = (ScriptRequest)operation.Owner!;
                 var script = new NeoUserScript(request.View, identifier, request.WorldName, request.BindingName, request.MessageHandler);
-                // The native library allows one script per binding of a world, so its names are free here; the script owns them
-                // before the caller gets it, and a script that the caller no longer waits for is removed with its binding.
-                if (request.BindingName is { } binding && !request.View._scriptChannels.TryAdd(request.WorldName!, binding, script))
+                // The script owns its binding before the caller gets it, and a script that the caller no longer waits for is
+                // removed with its binding. A reservation is gone only when the view was disposed meanwhile.
+                IReadOnlyList<NeoScriptMessageReceivedEventArgs>? waiting = request.Reservation is { } reservation ? request.View._scriptChannels.Complete(reservation, script) : [];
+                if (waiting is null)
                 {
                     try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
-                    operation.Fail(new InvalidOperationException("The world of the view already has a script with this binding."));
+                    operation.Fail(new ObjectDisposedException(nameof(NeoAstra)));
                 }
                 else if (!operation.TryComplete(script))
                 {
                     request.View.UnregisterScriptChannel(script);
                     try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
                 }
+                else
+                {
+                    // What the script posted before it was added, as soon as the handlers of the caller listen.
+                    foreach (var message in waiting) script.RaiseMessageReceived(message);
+                }
             }
             else
             {
+                CancelReservation(operation);
                 operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "add persistent script"));
             }
         }
         catch (Exception ex)
         {
-            NativeOperation.Get<NeoUserScript>(context)?.Fail(ex);
+            var operation = NativeOperation.Get<NeoUserScript>(context);
+            if (operation is not null) CancelReservation(operation);
+            operation?.Fail(ex);
+        }
+
+        static void CancelReservation(NativeOperation<NeoUserScript> operation)
+        {
+            if (operation.Owner is ScriptRequest { Reservation: { } reservation } request) request.View._scriptChannels.Cancel(reservation);
         }
     }
 

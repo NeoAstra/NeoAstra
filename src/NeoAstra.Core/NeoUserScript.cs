@@ -110,16 +110,63 @@ public sealed class NeoUserScript : IAsyncDisposable
 /// message of a binding reaches only the script that owns it. The native library refuses a second script with the same binding in
 /// a world, so a name pair belongs to one script at a time.
 /// </summary>
+/// <remarks>
+/// A binding is reserved before the native library can run its script, which can post before the native library has told the
+/// view the identifier of the script: those messages wait for the owner, in their order, and reach it once it is added.
+/// </remarks>
 /// <typeparam name="T">The owner of a binding.</typeparam>
 internal sealed class NeoScriptChannelRegistry<T>
     where T : class
 {
-    private readonly Lock _sync = new();
-    private readonly Dictionary<(string World, string Binding), T> _channels = [];
+    // How many messages wait for the owner of a binding that is being added; the script normally posts once, to say it is ready.
+    internal const int MaximumWaitingMessages = 64;
 
-    internal bool TryAdd(string world, string binding, T owner)
+    private readonly Lock _sync = new();
+    private readonly Dictionary<(string World, string Binding), Channel> _channels = [];
+
+    // A binding that a script is being added for, with the messages that wait for it, or that a script owns.
+    private sealed class Channel(string world, string binding)
     {
-        lock (_sync) return _channels.TryAdd((world, binding), owner);
+        internal (string World, string Binding) Key { get; } = (world, binding);
+        internal T? Owner { get; set; }
+        internal List<NeoScriptMessageReceivedEventArgs>? Waiting { get; set; } = [];
+    }
+
+    // Reserves a binding for a script that is being added; null when the world has a script with this binding already.
+    internal object? Reserve(string world, string binding)
+    {
+        lock (_sync)
+        {
+            if (_channels.ContainsKey((world, binding))) return null;
+            var channel = new Channel(world, binding);
+            _channels.Add(channel.Key, channel);
+            return channel;
+        }
+    }
+
+    // Gives a reserved binding its owner, and returns the messages that waited for it in their order; null when the reservation
+    // was canceled or cleared meanwhile.
+    internal IReadOnlyList<NeoScriptMessageReceivedEventArgs>? Complete(object reservation, T owner)
+    {
+        var channel = (Channel)reservation;
+        lock (_sync)
+        {
+            if (!_channels.TryGetValue(channel.Key, out var current) || !ReferenceEquals(current, channel) || channel.Owner is not null) return null;
+            channel.Owner = owner;
+            var waiting = channel.Waiting ?? [];
+            channel.Waiting = null;
+            return waiting;
+        }
+    }
+
+    // Gives up a binding whose script was not added, with the messages that waited for it.
+    internal void Cancel(object reservation)
+    {
+        var channel = (Channel)reservation;
+        lock (_sync)
+        {
+            if (_channels.TryGetValue(channel.Key, out var current) && ReferenceEquals(current, channel) && channel.Owner is null) _channels.Remove(channel.Key);
+        }
     }
 
     // Removes the binding only for its owner, so that a later script with the same names keeps its own.
@@ -127,13 +174,20 @@ internal sealed class NeoScriptChannelRegistry<T>
     {
         lock (_sync)
         {
-            if (_channels.TryGetValue((world, binding), out var current) && ReferenceEquals(current, owner)) _channels.Remove((world, binding));
+            if (_channels.TryGetValue((world, binding), out var current) && ReferenceEquals(current.Owner, owner)) _channels.Remove((world, binding));
         }
     }
 
-    internal T? Find(string world, string binding)
+    // The owner of the binding that a message names; a message of a binding that is being added waits for its owner instead.
+    internal T? Route(string world, string binding, NeoScriptMessageReceivedEventArgs message)
     {
-        lock (_sync) return _channels.GetValueOrDefault((world, binding));
+        lock (_sync)
+        {
+            if (!_channels.TryGetValue((world, binding), out var channel)) return null;
+            if (channel.Owner is { } owner) return owner;
+            if (channel.Waiting is { Count: < MaximumWaitingMessages } waiting) waiting.Add(message);
+            return null;
+        }
     }
 
     internal void Clear()

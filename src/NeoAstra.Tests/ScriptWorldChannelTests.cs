@@ -67,27 +67,67 @@ public sealed class ScriptWorldChannelTests
     public void Messages_ReachOnlyTheScriptThatOwnsTheWorldAndBinding()
     {
         var channels = new NeoScriptChannelRegistry<string>();
-        Assert.IsTrue(channels.TryAdd("codealta.annotations", "codeAltaAnnotations", "toolbar"));
-        Assert.IsTrue(channels.TryAdd("codealta.other", "codeAltaAnnotations", "other"));
-        Assert.IsFalse(channels.TryAdd("codealta.annotations", "codeAltaAnnotations", "impostor"));
+        string? Route(string world, string binding) => channels.Route(world, binding, Message("hello", world, binding));
+        void Own(string world, string binding, string owner) => Assert.IsNotNull(channels.Complete(channels.Reserve(world, binding)!, owner));
+        Own("codealta.annotations", "codeAltaAnnotations", "toolbar");
+        Own("codealta.other", "codeAltaAnnotations", "other");
+        Assert.IsNull(channels.Reserve("codealta.annotations", "codeAltaAnnotations"), "a world has one script with a binding at a time");
 
-        Assert.AreEqual("toolbar", channels.Find("codealta.annotations", "codeAltaAnnotations"));
-        Assert.AreEqual("other", channels.Find("codealta.other", "codeAltaAnnotations"));
+        Assert.AreEqual("toolbar", Route("codealta.annotations", "codeAltaAnnotations"));
+        Assert.AreEqual("other", Route("codealta.other", "codeAltaAnnotations"));
         // The names come from the native registration, never from the message: a binding of another world or name finds nothing.
-        Assert.IsNull(channels.Find("codealta.annotations", "otherBinding"));
-        Assert.IsNull(channels.Find("neoastra.default", "codeAltaAnnotations"));
+        Assert.IsNull(Route("codealta.annotations", "otherBinding"));
+        Assert.IsNull(Route("neoastra.default", "codeAltaAnnotations"));
 
         // A removed script receives nothing more, and only its own registration is removed.
         channels.Remove("codealta.annotations", "codeAltaAnnotations", "impostor");
-        Assert.AreEqual("toolbar", channels.Find("codealta.annotations", "codeAltaAnnotations"));
+        Assert.AreEqual("toolbar", Route("codealta.annotations", "codeAltaAnnotations"));
         channels.Remove("codealta.annotations", "codeAltaAnnotations", "toolbar");
-        Assert.IsNull(channels.Find("codealta.annotations", "codeAltaAnnotations"));
-        Assert.IsTrue(channels.TryAdd("codealta.annotations", "codeAltaAnnotations", "again"));
+        Assert.IsNull(Route("codealta.annotations", "codeAltaAnnotations"));
+        Own("codealta.annotations", "codeAltaAnnotations", "again");
 
         channels.Clear();
-        Assert.IsNull(channels.Find("codealta.annotations", "codeAltaAnnotations"));
-        Assert.IsNull(channels.Find("codealta.other", "codeAltaAnnotations"));
+        Assert.IsNull(Route("codealta.annotations", "codeAltaAnnotations"));
+        Assert.IsNull(Route("codealta.other", "codeAltaAnnotations"));
     }
+
+    // The native library can run a script, which posts at once, before it tells the view the identifier of that script.
+    [TestMethod]
+    public void MessagesPostedWhileTheScriptIsAdded_WaitForItAndReachItInOrder()
+    {
+        const string World = "codealta.annotations", Binding = "codeAltaAnnotations";
+        var channels = new NeoScriptChannelRegistry<string>();
+        var reservation = channels.Reserve(World, Binding)!;
+        Assert.IsNull(channels.Route(World, Binding, Message("ready", World, Binding)), "no owner yet");
+        Assert.IsNull(channels.Route(World, Binding, Message("second", World, Binding)));
+        Assert.IsNull(channels.Reserve(World, Binding), "the binding is taken while its script is added");
+
+        var waiting = channels.Complete(reservation, "toolbar");
+        CollectionAssert.AreEqual(new[] { "ready", "second" }, waiting!.Select(static message => message.Message).ToArray());
+        Assert.AreEqual("toolbar", channels.Route(World, Binding, Message("later", World, Binding)), "once added, the script gets its messages directly");
+        Assert.IsNull(channels.Complete(reservation, "twice"), "a reservation is completed once");
+
+        // A script that is not added gives its binding up, with what waited for it.
+        channels.Remove(World, Binding, "toolbar");
+        var refused = channels.Reserve(World, Binding)!;
+        channels.Route(World, Binding, Message("lost", World, Binding));
+        channels.Cancel(refused);
+        Assert.IsNull(channels.Complete(refused, "late"), "a canceled reservation has no owner");
+        var next = channels.Reserve(World, Binding)!;
+        Assert.AreEqual(0, channels.Complete(next, "next")!.Count, "the messages of a canceled reservation are dropped");
+
+        // A view that goes away clears its reservations too, and the waiting is bounded.
+        channels.Remove(World, Binding, "next");
+        var pending = channels.Reserve(World, Binding)!;
+        for (var index = 0; index < NeoScriptChannelRegistry<string>.MaximumWaitingMessages + 10; index++) channels.Route(World, Binding, Message($"m{index}", World, Binding));
+        var bounded = channels.Reserve("codealta.bounded", Binding)!;
+        for (var index = 0; index < NeoScriptChannelRegistry<string>.MaximumWaitingMessages + 10; index++) channels.Route("codealta.bounded", Binding, Message($"m{index}", "codealta.bounded", Binding));
+        Assert.AreEqual(NeoScriptChannelRegistry<string>.MaximumWaitingMessages, channels.Complete(bounded, "bounded")!.Count);
+        channels.Clear();
+        Assert.IsNull(channels.Complete(pending, "after"), "a cleared reservation has no owner");
+    }
+
+    private static NeoScriptMessageReceivedEventArgs Message(string text, string world, string binding) => new(text, null, world, binding);
 
     [TestMethod]
     public void MessageEventArgs_CarryTheIdentityOfTheScriptApartFromThePage()
