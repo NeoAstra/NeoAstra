@@ -111,8 +111,8 @@ CustomSchemes =
 A view that shows content the application does not control, such as a browser pane, is placed over the page with
 `NeoAstraHost.BoundedInWindow` and `NeoAstra.PlaceOver`. See the [embedded view sample](../samples/NeoAstra.Sample.EmbeddedView/readme.md).
 
-- Give it an **environment of its own with its own `UserDataRoot`**, optionally `IsPrivate`. Cookies, storage, and the custom schemes of the application then stay apart. On Windows `IsPrivate` alone is not enough beside an environment with other options on the same data folder: WebView2 refuses the second one.
-- Never isolate with a named profile of the application's environment: it shares that environment's schemes, and on macOS its data.
+- Give it an **environment of its own with both its own `UserDataRoot` and `IsPrivate`**. Cookies, storage, and the custom schemes of the application then stay apart. Each is needed: before macOS 14 a root is not used, so an environment that is not private shares the default store of the application, and on Windows `IsPrivate` alone is refused beside an environment with other options on the same data folder.
+- Never isolate with a profile of the application's environment: it shares that environment's schemes, and on macOS and Linux a profile that is not ephemeral is that environment's store.
 - Leave its bridge at `NeoBridgePolicy.Disabled`, the default.
 - Decide its permissions, downloads, file choosers, and popups in the host.
 - It is a native view above the page: a menu, tooltip, dialog, or drag preview of the page that overlaps it is drawn behind it. A host can show a picture of the page from `CaptureAsync` meanwhile. On Windows, capture before hiding the view.
