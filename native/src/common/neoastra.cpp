@@ -167,12 +167,8 @@ bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, 
     return false;
 }
 
-std::string neo_script_channel_bootstrap(std::string_view binding) {
-    std::string script = "(()=>{\"use strict\";const name=\"";
-    script.append(binding);
-    script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[name];"
-              "if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
-              "const post=handler.postMessage.bind(handler);const target=new EventTarget();let onmessage=null;"
+static std::string script_channel_object() {
+    return "const target=new EventTarget();let onmessage=null;"
               "const channel={postMessage(message){if(typeof message!==\"string\")throw new TypeError(\"A script channel message must be a string.\");post(message);},"
               "addEventListener(type,listener,options){target.addEventListener(type,listener,options);},"
               "removeEventListener(type,listener,options){target.removeEventListener(type,listener,options);},"
@@ -180,7 +176,29 @@ std::string neo_script_channel_bootstrap(std::string_view binding) {
               "Object.defineProperty(channel,Symbol.for(\"neoastra.scriptChannel.deliver\"),{value(data){const event=new MessageEvent(\"message\",{data});"
               "if(onmessage){try{onmessage.call(channel,event);}catch(error){setTimeout(()=>{throw error;});}}target.dispatchEvent(event);}});"
               "Object.defineProperty(globalThis,name,{value:Object.freeze(channel),enumerable:false,configurable:false,writable:false});})();\n";
-    return script;
+}
+
+std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view handler) {
+    std::string script = "(()=>{\"use strict\";const name=\"";
+    script.append(binding);
+    script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[\"";
+    script.append(handler);
+    script += "\"];if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
+              "const post=handler.postMessage.bind(handler);";
+    return script + script_channel_object();
+}
+
+std::string neo_script_channel_bootstrap(std::string_view binding) { return neo_script_channel_bootstrap(binding, binding); }
+
+std::string neo_script_channel_bootstrap_for_function(std::string_view binding, std::string_view function) {
+    std::string script = "(()=>{\"use strict\";const name=\"";
+    script.append(binding);
+    script += "\";const source=\"";
+    script.append(function);
+    script += "\";const raw=globalThis[source];try{delete globalThis[source];}catch(_){}"
+              "if(window!==window.top||typeof raw!==\"function\"||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
+              "const post=message=>raw(message);";
+    return script + script_channel_object();
 }
 
 const char* const neo_script_channel_delivery =

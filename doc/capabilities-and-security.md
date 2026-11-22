@@ -149,7 +149,8 @@ Disposing the script removes the binding, also from a document that is still sho
 | macOS / WKWebView | Available from macOS 11, with a content world (`WKContentWorld`) of each name |
 | iOS / WKWebView | Available |
 | Android / System WebView | Available where the WebView reports `JS_INJECTION_IN_FRAME_AND_WORLD` (AndroidX WebKit 1.16 or later in the application). The host answers a world only through the last message of its main frame in the current document, so the script posts first in each document |
-| Windows / WebView2, Linux / WebKitGTK | Not exposed |
+| Windows / WebView2 | Available, through the DevTools protocol of the view: a named world and a binding scoped to it. The host accepts a message only from that world in the top-level frame. A view starts the `Page` and `Runtime` domains with its first such script, and a script that runs at document end runs inside a function, so its top-level `var` and function declarations are not globals of the world |
+| Linux / WebKitGTK | Available, with a script world of each name and a message handler registered in that world only. WebKitGTK does not tell the frame of a message, so the script is injected into the top-level frame only |
 
 Where the capability is not supported, `AddScriptAsync` with a `BindingName`, or with `IsolatedWorld`, fails with
 `NotSupportedException`: the script never runs in the page instead.

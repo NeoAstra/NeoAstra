@@ -15,6 +15,8 @@
 #include <WebView2EnvironmentOptions.h>
 
 #include <algorithm>
+#include <functional>
+#include <unordered_map>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -84,7 +86,22 @@ struct windows_window {
 struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; bool private_mode{}; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
 struct windows_drop_registration { HWND window{}; ComPtr<IDropTarget> target; };
+// A script of an isolated world, which WebView2 offers only through the DevTools protocol.
+struct windows_world_script {
+    std::string world;
+    std::string binding;
+    std::string function; // The protocol binding that carries the messages of the world, removed from its globals by the bootstrap.
+    std::string devtools_identifier;
+};
+struct windows_script_context { std::string world; std::string frame; };
+
 struct windows_view {
+    std::unordered_map<std::string, windows_world_script> world_scripts;
+    std::unordered_map<long long, windows_script_context> script_contexts; // The contexts of named worlds, by protocol id.
+    std::string main_frame;
+    std::vector<std::pair<ComPtr<ICoreWebView2DevToolsProtocolEventReceiver>, EventRegistrationToken>> world_events;
+    bool world_protocol_started{};
+    uint64_t next_world_script{};
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> core;
     HWND drop_window{};
@@ -619,6 +636,8 @@ void remove_view_events(windows_view* state) noexcept {
     ComPtr<ICoreWebView2_5> core5;if(SUCCEEDED(state->core.As(&core5)))core5->remove_ClientCertificateRequested(state->client_certificate);
     ComPtr<ICoreWebView2_14> core14;if(SUCCEEDED(state->core.As(&core14)))core14->remove_ServerCertificateErrorDetected(state->server_certificate_error);
     if (state->drag_intercepted) { state->drag_intercepted->remove_DevToolsProtocolEventReceived(state->drag_intercepted_token); state->drag_intercepted.Reset(); }
+    for (auto& event : state->world_events) event.first->remove_DevToolsProtocolEventReceived(event.second);
+    state->world_events.clear();
     state->events_registered = false;
 }
 
@@ -3741,6 +3760,277 @@ neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::s
         return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 script evaluation could not be started", result, "webview2");
     } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
 }
+namespace {
+
+// Calls `member` with the name and the raw JSON text of each member of a JSON object.
+template<typename TMember> bool for_each_json_member(const std::wstring& json, TMember&& member) {
+    size_t index{};
+    const auto skip = [&] { while (index < json.size() && (json[index] == L' ' || json[index] == L'\t' || json[index] == L'\r' || json[index] == L'\n')) ++index; };
+    skip();
+    if (index >= json.size() || json[index] != L'{') return false;
+    ++index;
+    skip();
+    if (index < json.size() && json[index] == L'}') return true;
+    while (index < json.size()) {
+        std::wstring key, ignored;
+        if (!read_json_string(json, index, key)) return false;
+        skip();
+        if (index >= json.size() || json[index] != L':') return false;
+        ++index;
+        skip();
+        const auto start = index;
+        if (index >= json.size()) return false;
+        if (json[index] == L'"') { if (!read_json_string(json, index, ignored)) return false; }
+        else if (json[index] == L'{' || json[index] == L'[') {
+            int depth{};
+            bool quoted{};
+            for (; index < json.size(); ++index) {
+                const auto character = json[index];
+                if (quoted) { if (character == L'\\') ++index; else if (character == L'"') quoted = false; continue; }
+                if (character == L'"') quoted = true;
+                else if (character == L'{' || character == L'[') ++depth;
+                else if ((character == L'}' || character == L']') && --depth == 0) { ++index; break; }
+            }
+            if (depth != 0) return false;
+        } else {
+            while (index < json.size() && json[index] != L',' && json[index] != L'}' && json[index] != L' ' && json[index] != L'\r' && json[index] != L'\n' && json[index] != L'\t') ++index;
+        }
+        member(key, json.substr(start, index - start));
+        skip();
+        if (index >= json.size()) return false;
+        if (json[index] == L'}') return true;
+        if (json[index] != L',') return false;
+        ++index;
+        skip();
+    }
+    return false;
+}
+
+bool json_text_value(const std::wstring& raw, std::wstring& value) {
+    size_t index{};
+    return read_json_string(raw, index, value);
+}
+
+bool json_whole_number(const std::wstring& raw, long long& value) noexcept {
+    if (raw.empty() || raw.size() > 18) return false;
+    long long number{};
+    for (const auto digit : raw) {
+        if (digit < L'0' || digit > L'9') return false;
+        number = number * 10 + (digit - L'0');
+    }
+    value = number;
+    return true;
+}
+
+using devtools_completed = std::function<void(HRESULT, const std::wstring&)>;
+
+HRESULT call_devtools(ICoreWebView2* core, const wchar_t* method, const std::wstring& parameters, devtools_completed completed) {
+    return core->CallDevToolsProtocolMethod(method, parameters.c_str(),
+        Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>([completed = std::move(completed)](HRESULT result, LPCWSTR json) -> HRESULT {
+            try { completed(result, json ? json : L""); } catch (...) { }
+            return S_OK;
+        }).Get());
+}
+
+// The id of the top-level frame in the result of Page.getFrameTree.
+bool main_frame_of_tree(const std::wstring& json, std::string& frame) {
+    std::wstring tree, node, id;
+    if (!json_object_member(json, L"frameTree", tree) || !json_object_member(tree, L"frame", node)) return false;
+    if (!for_each_json_member(node, [&](const std::wstring& key, const std::wstring& raw) { if (key == L"id") json_text_value(raw, id); }) || id.empty()) return false;
+    frame = narrow(id.c_str());
+    return true;
+}
+
+void raise_world_message(neoastra_view_t* view, windows_view* state, const windows_world_script& script, const std::wstring& payload) {
+    std::string uri;
+    LPWSTR source{};
+    if (SUCCEEDED(state->core->get_Source(&source)) && source) uri = narrow(source);
+    CoTaskMemFree(source);
+    const std::string world = script.world, binding = script.binding, message = narrow(payload.c_str());
+    neo_emit_script_message(view, world, binding, message, uri, true);
+}
+
+// A message counts only from the world of its binding in the top-level frame. A main frame that the view has not seen yet is
+// asked for once, since the protocol can report a new document before its navigation.
+void receive_world_binding(neoastra_view_t* view, windows_view* state, const std::wstring& json) {
+    std::wstring name, payload;
+    long long context_id{};
+    bool has_context{};
+    if (!for_each_json_member(json, [&](const std::wstring& key, const std::wstring& raw) {
+            if (key == L"name") json_text_value(raw, name);
+            else if (key == L"payload") json_text_value(raw, payload);
+            else if (key == L"executionContextId") has_context = json_whole_number(raw, context_id);
+        }) || !has_context) return;
+    const auto function = narrow(name.c_str());
+    const auto script = std::find_if(state->world_scripts.begin(), state->world_scripts.end(), [&](const auto& entry) { return entry.second.function == function; });
+    const auto context = state->script_contexts.find(context_id);
+    if (script == state->world_scripts.end() || context == state->script_contexts.end() || context->second.world != script->second.world) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message from outside the world of its binding");
+        return;
+    }
+    if (context->second.frame == state->main_frame) { raise_world_message(view, state, script->second, payload); return; }
+    const auto frame = context->second.frame;
+    const auto identifier = script->first;
+    if (!view->retain()) return;
+    const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
+    (void)call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder, frame, identifier, payload](HRESULT result, const std::wstring& tree) {
+        auto* current = static_cast<windows_view*>(holder->platform);
+        if (!current || FAILED(result) || !main_frame_of_tree(tree, current->main_frame) || current->main_frame != frame) {
+            if (current) neo_log(holder->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message of a frame that is not the top-level document");
+            return;
+        }
+        const auto found = current->world_scripts.find(identifier);
+        if (found != current->world_scripts.end()) raise_world_message(holder.get(), current, found->second, payload);
+    });
+}
+
+void receive_world_context(windows_view* state, const std::wstring& json) {
+    std::wstring context, aux, name, frame;
+    long long id{};
+    bool has_id{};
+    if (!json_object_member(json, L"context", context) ||
+        !for_each_json_member(context, [&](const std::wstring& key, const std::wstring& raw) {
+            if (key == L"id") has_id = json_whole_number(raw, id);
+            else if (key == L"name") json_text_value(raw, name);
+            else if (key == L"auxData") aux = raw;
+        }) || !has_id || name.empty()) return;
+    (void)for_each_json_member(aux, [&](const std::wstring& key, const std::wstring& raw) { if (key == L"frameId") json_text_value(raw, frame); });
+    state->script_contexts[id] = {narrow(name.c_str()), narrow(frame.c_str())};
+}
+
+void receive_frame_navigated(windows_view* state, const std::wstring& json) {
+    std::wstring frame, id;
+    bool has_parent{};
+    if (!json_object_member(json, L"frame", frame) ||
+        !for_each_json_member(frame, [&](const std::wstring& key, const std::wstring& raw) {
+            if (key == L"id") json_text_value(raw, id);
+            else if (key == L"parentId") has_parent = true;
+        }) || has_parent || id.empty()) return;
+    state->main_frame = narrow(id.c_str());
+}
+
+template<typename THandler> HRESULT subscribe_world_event(neoastra_view_t* view, windows_view* state, const wchar_t* name, THandler handler) {
+    ComPtr<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    EventRegistrationToken token{};
+    auto result = state->core->GetDevToolsProtocolEventReceiver(name, &receiver);
+    if (SUCCEEDED(result)) result = receiver->add_DevToolsProtocolEventReceived(Callback<ICoreWebView2DevToolsProtocolEventReceivedEventHandler>(
+        [view, handler = std::move(handler)](ICoreWebView2*, ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args) -> HRESULT {
+            neo_retain_guard owner(view);
+            if (!owner || view->ui_destroyed.load(std::memory_order_acquire)) return S_OK;
+            auto* current = static_cast<windows_view*>(view->platform);
+            LPWSTR json{};
+            if (!current || FAILED(args->get_ParameterObjectAsJson(&json)) || !json) return S_OK;
+            try { handler(view, current, std::wstring(json)); } catch (...) { }
+            CoTaskMemFree(json);
+            return S_OK;
+        }).Get(), &token);
+    if (SUCCEEDED(result)) state->world_events.emplace_back(receiver, token);
+    return result;
+}
+
+// Starts what the isolated worlds of a view need of the DevTools protocol, once per view: only a view with such a script pays for it.
+HRESULT start_world_protocol(neoastra_view_t* view, windows_view* state) {
+    if (state->world_protocol_started) return S_OK;
+    auto result = subscribe_world_event(view, state, L"Runtime.bindingCalled", [](neoastra_view_t* value, windows_view* current, const std::wstring& json) { receive_world_binding(value, current, json); });
+    if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Runtime.executionContextCreated", [](neoastra_view_t*, windows_view* current, const std::wstring& json) { receive_world_context(current, json); });
+    if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Runtime.executionContextDestroyed", [](neoastra_view_t*, windows_view* current, const std::wstring& json) {
+        (void)for_each_json_member(json, [&](const std::wstring& key, const std::wstring& raw) {
+            long long id{};
+            if (key == L"executionContextId" && json_whole_number(raw, id)) current->script_contexts.erase(id);
+        });
+    });
+    if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Runtime.executionContextsCleared", [](neoastra_view_t*, windows_view* current, const std::wstring&) { current->script_contexts.clear(); });
+    if (SUCCEEDED(result)) result = subscribe_world_event(view, state, L"Page.frameNavigated", [](neoastra_view_t*, windows_view* current, const std::wstring& json) { receive_frame_navigated(current, json); });
+    if (FAILED(result)) {
+        for (auto& event : state->world_events) event.first->remove_DevToolsProtocolEventReceived(event.second);
+        state->world_events.clear();
+        return result;
+    }
+    state->world_protocol_started = true;
+    const auto ignore = [](HRESULT, const std::wstring&) { };
+    result = call_devtools(state->core.Get(), L"Page.enable", L"{}", ignore);
+    if (SUCCEEDED(result)) result = call_devtools(state->core.Get(), L"Runtime.enable", L"{}", ignore);
+    if (FAILED(result)) return result;
+    if (!view->retain()) return E_ABORT;
+    const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
+    return call_devtools(state->core.Get(), L"Page.getFrameTree", L"{}", [holder](HRESULT completed, const std::wstring& tree) {
+        auto* current = static_cast<windows_view*>(holder->platform);
+        if (current && SUCCEEDED(completed) && current->main_frame.empty()) (void)main_frame_of_tree(tree, current->main_frame);
+    });
+}
+
+neoastra_result_t add_world_script(neoastra_view_t* view, windows_view* state, const std::string& script, const neoastra_script_options_t* options,
+                                   neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) {
+    const auto world = neo_string(options->world_name);
+    const auto binding = neo_string(options->binding_name);
+    if (!binding.empty())
+        for (const auto& entry : state->world_scripts)
+            if (entry.second.world == world && entry.second.binding == binding)
+                return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The world of the view already has a script with this binding", 0, "webview2");
+    auto started = start_world_protocol(view, state);
+    if (FAILED(started)) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 could not start isolated script worlds", started, "webview2");
+
+    const auto number = ++state->next_world_script;
+    const auto identifier = "world-script-" + std::to_string(number);
+    windows_world_script entry{world, binding, binding.empty() ? std::string{} : "_neoastraChannel" + std::to_string(number), {}};
+    std::string body = binding.empty() ? script : neo_script_channel_bootstrap_for_function(binding, entry.function) + script;
+    // The protocol runs a new-document script in every frame at its start, so the other choices are made in the script.
+    if (options->injection_time == NEOASTRA_SCRIPT_DOCUMENT_END)
+        body = "{const neoastraRun=()=>{\n" + body + "\n};if(document.readyState===\"loading\")addEventListener(\"DOMContentLoaded\",neoastraRun,{once:true});else neoastraRun();}";
+    if (options->main_frame_only) body = "if(window===window.top){\n" + body + "\n}";
+
+    std::string script_parameters = "{\"source\":";
+    append_json_string(script_parameters, body);
+    script_parameters += ",\"worldName\":";
+    append_json_string(script_parameters, world);
+    script_parameters += "}";
+    std::string binding_parameters;
+    if (!binding.empty()) {
+        binding_parameters = "{\"name\":";
+        append_json_string(binding_parameters, entry.function);
+        binding_parameters += ",\"executionContextName\":";
+        append_json_string(binding_parameters, world);
+        binding_parameters += "}";
+    }
+    if (!view->retain()) return neo_fail(error, NEOASTRA_ERROR_DISPOSED, "The view is being released");
+    const std::shared_ptr<neoastra_view_t> holder(view, [](neoastra_view_t* value) { value->release(); });
+    state->world_scripts.emplace(identifier, std::move(entry));
+    auto source = std::make_shared<neo_script_source>(view->environment->app, callback, context, operation);
+    const auto finish = [holder, source, identifier](HRESULT result, const std::wstring& json) {
+        auto* completion = source->completion;
+        auto* current = static_cast<windows_view*>(holder->platform);
+        std::wstring devtools_identifier;
+        if (SUCCEEDED(result)) (void)for_each_json_member(json, [&](const std::wstring& key, const std::wstring& raw) { if (key == L"identifier") json_text_value(raw, devtools_identifier); });
+        const auto found = current ? current->world_scripts.find(identifier) : decltype(current->world_scripts.end()){};
+        if (SUCCEEDED(result) && current && found != current->world_scripts.end() && !devtools_identifier.empty()) {
+            found->second.devtools_identifier = narrow(devtools_identifier.c_str());
+            completion->result = identifier;
+            completion->requested = NEOASTRA_OK;
+        } else {
+            if (current) current->world_scripts.erase(identifier);
+            completion->requested = NEOASTRA_ERROR_NATIVE_FAILURE;
+            completion->error = make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 could not add the script to its isolated world", FAILED(result) ? result : E_FAIL);
+        }
+        completion->submit();
+    };
+    const auto add_script = [core = state->core, parameters = widen(script_parameters), finish](HRESULT result, const std::wstring& json) {
+        if (FAILED(result)) { finish(result, json); return; }
+        const auto started_script = call_devtools(core.Get(), L"Page.addScriptToEvaluateOnNewDocument", parameters, finish);
+        if (FAILED(started_script)) finish(started_script, L"");
+    };
+    const auto request = binding_parameters.empty()
+        ? call_devtools(state->core.Get(), L"Page.addScriptToEvaluateOnNewDocument", widen(script_parameters), finish)
+        : call_devtools(state->core.Get(), L"Runtime.addBinding", widen(binding_parameters), add_script);
+    source->accepted = SUCCEEDED(request);
+    if (FAILED(request)) {
+        state->world_scripts.erase(identifier);
+        return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 could not start adding the script", request, "webview2");
+    }
+    return NEOASTRA_OK;
+}
+
+} // namespace
+
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options,
                                              neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation,
                                              neoastra_error_t** error) noexcept {
@@ -3748,7 +4038,8 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
         auto* state = static_cast<windows_view*>(view->platform);
         if (!state || !state->core) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "WebView2 view is not initialized");
         if (view->environment->app->stopping.load(std::memory_order_acquire)) return neo_fail(error, NEOASTRA_ERROR_DISPOSED, "Application shutdown has begun");
-        if (options->injection_time != NEOASTRA_SCRIPT_DOCUMENT_START || options->main_frame_only || options->isolated_world)
+        if (options->isolated_world) return add_world_script(view, state, script, options, callback, context, operation, error);
+        if (options->injection_time != NEOASTRA_SCRIPT_DOCUMENT_START || options->main_frame_only)
             return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "WebView2 supports document-start scripts in the default world for all frames");
         const auto value = widen(script);
         auto source = std::make_shared<neo_script_source>(view->environment->app, callback, context, operation);
@@ -3767,13 +4058,31 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
         return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 persistent script registration could not be started", result, "webview2");
     } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
 }
-// WebView2 has no content world in which a script and a binding would be hidden from the page: a script with a binding is
-// refused as one in an isolated world, and nothing is ever given to the page in its place.
-bool neo_platform_script_worlds_supported() noexcept { return false; }
-neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t*, const std::string&, const std::string&, neoastra_error_t** error) noexcept {
-    return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "WebView2 has no isolated script worlds");
+// WebView2 has no API for content worlds: its isolated worlds and their bindings come from the DevTools protocol of the view.
+bool neo_platform_script_worlds_supported() noexcept { return true; }
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, const std::string& identifier, const std::string& message, neoastra_error_t** error) noexcept {
+    try {
+        auto* state = static_cast<windows_view*>(view->platform);
+        if (!state || !state->core) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "WebView2 view is not initialized");
+        const auto script = state->world_scripts.find(identifier);
+        if (script == state->world_scripts.end() || script->second.binding.empty()) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "No script with a binding has this identifier", 0, "webview2");
+        long long target{};
+        bool found{};
+        for (const auto& entry : state->script_contexts)
+            if (entry.second.world == script->second.world && entry.second.frame == state->main_frame && (!found || entry.first > target)) { target = entry.first; found = true; }
+        if (!found) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The world of the script has no current document", 0, "webview2");
+        std::string parameters = "{\"functionDeclaration\":";
+        append_json_string(parameters, std::string("function(name,message){") + neo_script_channel_delivery + "}");
+        parameters += ",\"executionContextId\":" + std::to_string(target) + ",\"arguments\":[{\"value\":";
+        append_json_string(parameters, script->second.binding);
+        parameters += "},{\"value\":";
+        append_json_string(parameters, message);
+        parameters += "}]}";
+        const auto result = call_devtools(state->core.Get(), L"Runtime.callFunctionOn", widen(parameters), [](HRESULT, const std::wstring&) { });
+        return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 could not deliver the script message", result, "webview2");
+    } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
 }
-neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
+neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;if(const auto world=state->world_scripts.find(identifier);world!=state->world_scripts.end()){const auto ignore=[](HRESULT,const std::wstring&){};std::string parameters="{\"identifier\":";append_json_string(parameters,world->second.devtools_identifier);parameters+="}";const auto removed=world->second.devtools_identifier.empty()?S_OK:call_devtools(state->core.Get(),L"Page.removeScriptToEvaluateOnNewDocument",widen(parameters),ignore);if(!world->second.function.empty()){std::string binding="{\"name\":";append_json_string(binding,world->second.function);binding+="}";(void)call_devtools(state->core.Get(),L"Runtime.removeBinding",widen(binding),ignore);}state->world_scripts.erase(world);return SUCCEEDED(removed)?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t** error) noexcept {
     try {

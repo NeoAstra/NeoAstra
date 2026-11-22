@@ -1074,6 +1074,65 @@ void test_view_moves_to_the_window_of_its_anchor(neoastra_app_t* app) {
     neoastra_environment_release(environment);
 }
 
+struct world_messages {
+    std::vector<std::string> received;
+    std::string world;
+};
+
+void NEOASTRA_CALL record_world_message(void* context, const neoastra_event_t* event) {
+    if (event->header.type != NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED) return;
+    auto* state = static_cast<world_messages*>(context);
+    state->received.emplace_back(reinterpret_cast<const char*>(event->text.data), static_cast<size_t>(event->text.length));
+    state->world.assign(reinterpret_cast<const char*>(event->text2.data), static_cast<size_t>(event->text2.length));
+}
+
+// A binding of an isolated world is reached by that world only: the page finds neither it nor its handler, and cannot post.
+void test_script_world_channel(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    world_messages messages;
+    assert(neoastra_view_set_event_callback(view, record_world_message, &messages) == NEOASTRA_OK);
+    const std::string source = "exampleToolbar.onmessage=e=>exampleToolbar.postMessage('echo:'+e.data);exampleToolbar.postMessage('ready:'+typeof window.pageSecret);";
+    const std::string world = "example.toolbar", binding = "exampleToolbar";
+    neoastra_script_options_t options{};
+    options.size = sizeof(options);
+    options.version = 2;
+    options.injection_time = NEOASTRA_SCRIPT_DOCUMENT_END;
+    options.main_frame_only = 1;
+    options.isolated_world = 1;
+    options.world_name = string_view(world);
+    options.binding_name = string_view(binding);
+    completion added;
+    assert(neoastra_view_add_script_async(view, string_view(source), &options, script_evaluated, &added, nullptr, nullptr) == NEOASTRA_OK);
+    wait_for(added);
+    assert(added.result == NEOASTRA_OK && !added.text.empty());
+    const std::string page = "<!doctype html><title>hostile</title><iframe srcdoc='<title>frame</title>'></iframe>";
+    const std::string base = "http://localhost/";
+    assert(neoastra_view_load_html(view, string_view(page), string_view(base), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return !messages.received.empty(); });
+    assert(messages.received[0] == "ready:undefined" && messages.world == world);
+    assert(evaluate(view, "window.pageSecret='secret';1") == "1");
+    for (const char* attack : {"typeof window.exampleToolbar", "new Function('return typeof exampleToolbar')()", "typeof window.webkit?.messageHandlers?._neoastra_channel_1",
+                               "typeof document.querySelector('iframe').contentWindow.exampleToolbar"})
+        assert(evaluate(view, attack) == "\"undefined\"");
+    (void)evaluate(view, "(()=>{try{exampleToolbar.postMessage('forged')}catch{}try{webkit.messageHandlers._neoastra_channel_1.postMessage('forged')}catch{}return 1})()");
+    const auto settle = g_get_monotonic_time() + 300 * 1000;
+    wait_until([&] { return g_get_monotonic_time() > settle; });
+    assert(messages.received.size() == 1);
+    const std::string hostile = "quote' \" \\ </script> ${1+1} \xe2\x98\x83";
+    assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_OK);
+    wait_until([&] { return messages.received.size() == 2; });
+    assert(messages.received[1] == "echo:" + hostile);
+    // A removed script has no channel any more.
+    assert(neoastra_view_remove_script(view, string_view(added.text)) == NEOASTRA_OK);
+    assert(neoastra_view_post_script_message(view, string_view(added.text), string_view(hostile), nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_event_callback(view, nullptr, nullptr) == NEOASTRA_OK);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 int main() {
     // Before anything logs: the renderer test counts the warnings of GTK's renderers.
     g_log_set_writer_func(count_gsk_warnings, nullptr, nullptr);
@@ -1115,6 +1174,7 @@ int main() {
     test_bounded_view_keeps_its_place(app);
     test_key_chords_reach_the_host(app);
     test_view_moves_to_the_window_of_its_anchor(app);
+    test_script_world_channel(app);
     test_views_follow_the_menu_host(app);
     test_tab_key_setting_reaches_the_view(app);
     test_media_capture_is_available_to_the_view(app);

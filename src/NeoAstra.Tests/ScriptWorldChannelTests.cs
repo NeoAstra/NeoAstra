@@ -114,4 +114,78 @@ public sealed class ScriptWorldChannelTests
     };
 
     private static NeoRuntimeInfo Runtime(ulong buildFeatures) => new("test", "1", "1", "test", "arm64", buildFeatures, false);
+
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task ThePageCannotReachTheBindingOfAWorld_OnWebView2()
+    {
+        var pages = new Dictionary<string, string>
+        {
+            // A srcdoc frame has the origin of its parent, so that the page can really look into it.
+            ["index.html"] = "<!doctype html><title>hostile</title><iframe id=same srcdoc=\"<title>frame</title>\"></iframe>",
+        };
+        await LiveBrowser.RunAsync(pages, async session =>
+        {
+            var messages = new List<NeoScriptMessageReceivedEventArgs>();
+            await using var script = await session.View.AddScriptAsync(
+                "exampleToolbar.onmessage = event => exampleToolbar.postMessage('echo:' + event.data); exampleToolbar.postMessage('ready:' + typeof window.pageSecret);",
+                new NeoScriptOptions
+                {
+                    IsolatedWorld = true,
+                    WorldName = "example.toolbar",
+                    BindingName = "exampleToolbar",
+                    MainFrameOnly = true,
+                    MessageHandler = (_, message) => messages.Add(message),
+                });
+
+            async Task WaitForAsync(Func<NeoScriptMessageReceivedEventArgs, bool> condition)
+            {
+                for (var attempt = 0; attempt < 200 && !messages.Any(condition); attempt++) await Task.Delay(25);
+                Assert.IsTrue(messages.Any(condition), "The expected message of the world did not arrive: " + string.Join(" | ", messages.Select(static message => message.Message)));
+            }
+
+            session.Stage = "the first document with the script";
+            await session.NavigateAsync("index.html");
+            await WaitForAsync(static message => message.Message.StartsWith("ready:", StringComparison.Ordinal));
+            for (var attempt = 0; attempt < 200 && await session.View.EvaluateScriptAsync("document.readyState === 'complete' && !!document.getElementById('same')") != "true"; attempt++) await Task.Delay(25);
+            Assert.AreEqual("true", await session.View.EvaluateScriptAsync("!!document.getElementById('same')"));
+            await Task.Delay(300);
+            Assert.AreEqual(1, messages.Count, "Only the top-level frame posts: " + string.Join(" | ", messages.Select(static message => message.Message)));
+            Assert.AreEqual("ready:undefined", messages[0].Message);
+            Assert.AreEqual("example.toolbar", messages[0].WorldName);
+
+            session.Stage = "what the page tries";
+            await session.View.EvaluateScriptAsync("window.pageSecret = 'secret'; 1");
+            foreach (var attack in new[]
+            {
+                "typeof window.exampleToolbar",
+                "Object.getOwnPropertyNames(window).some(name => name === 'exampleToolbar' || name.startsWith('_neoastraChannel')) ? 'found' : 'undefined'",
+                "new Function('return typeof exampleToolbar')()",
+                "typeof document.getElementById('same').contentWindow.exampleToolbar",
+                "typeof window._neoastraChannel1",
+                "(() => { const frame = document.createElement('iframe'); document.body.append(frame); const type = typeof frame.contentWindow.exampleToolbar; frame.remove(); return type; })()",
+            })
+            {
+                // A script that throws evaluates to null: the failure then says why.
+                var result = await session.View.EvaluateScriptAsync($"(() => {{ try {{ return {attack}; }} catch (error) {{ return 'threw ' + error.name + ': ' + error.message + ' frame=' + !!document.getElementById('same') + ' html=' + document.documentElement.outerHTML.slice(0, 160); }} }})()");
+                Assert.AreEqual("\"undefined\"", result, attack);
+            }
+
+            await session.View.EvaluateScriptAsync("(() => { try { exampleToolbar.postMessage('forged'); } catch { } try { _neoastraChannel1('forged'); } catch { } return 1; })()");
+            await Task.Delay(300);
+            Assert.AreEqual(1, messages.Count, "The page raised a message: " + string.Join(" | ", messages.Select(static message => message.Message)));
+
+            session.Stage = "the host answers the world";
+            const string Hostile = "quote' \" \\ </script> ${1+1} \u2603";
+            await script.PostMessageAsync(Hostile);
+            await WaitForAsync(static message => message.Message.StartsWith("echo:", StringComparison.Ordinal));
+            Assert.AreEqual("echo:" + Hostile, messages[^1].Message);
+
+            session.Stage = "a new document";
+            var before = messages.Count;
+            await session.NavigateAsync("index.html?again");
+            for (var attempt = 0; attempt < 200 && messages.Count == before; attempt++) await Task.Delay(25);
+            Assert.AreEqual("ready:undefined", messages[before].Message);
+        });
+    }
 }
