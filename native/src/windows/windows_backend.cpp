@@ -4015,7 +4015,8 @@ neoastra_result_t add_world_script(neoastra_view_t* view, windows_view* state, c
             completion->result = identifier;
             completion->requested = NEOASTRA_OK;
         } else {
-            if (current) current->world_scripts.erase(identifier);
+            // The binding may already be registered: removing the script takes it out of the world too.
+            if (current && found != current->world_scripts.end()) (void)neo_platform_view_remove_script(holder.get(), identifier);
             completion->requested = NEOASTRA_ERROR_NATIVE_FAILURE;
             completion->error = make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 could not add the script to its isolated world", FAILED(result) ? result : E_FAIL);
         }
