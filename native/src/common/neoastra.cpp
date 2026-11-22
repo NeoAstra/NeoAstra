@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <new>
 #include <stdexcept>
@@ -166,6 +167,26 @@ bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, 
     return false;
 }
 
+std::string neo_script_channel_bootstrap(std::string_view binding) {
+    std::string script = "(()=>{\"use strict\";const name=\"";
+    script.append(binding);
+    script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[name];"
+              "if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
+              "const post=handler.postMessage.bind(handler);const target=new EventTarget();let onmessage=null;"
+              "const channel={postMessage(message){if(typeof message!==\"string\")throw new TypeError(\"A script channel message must be a string.\");post(message);},"
+              "addEventListener(type,listener,options){target.addEventListener(type,listener,options);},"
+              "removeEventListener(type,listener,options){target.removeEventListener(type,listener,options);},"
+              "get onmessage(){return onmessage;},set onmessage(value){onmessage=typeof value===\"function\"?value:null;}};"
+              "Object.defineProperty(channel,Symbol.for(\"neoastra.scriptChannel.deliver\"),{value(data){const event=new MessageEvent(\"message\",{data});"
+              "if(onmessage){try{onmessage.call(channel,event);}catch(error){setTimeout(()=>{throw error;});}}target.dispatchEvent(event);}});"
+              "Object.defineProperty(globalThis,name,{value:Object.freeze(channel),enumerable:false,configurable:false,writable:false});})();\n";
+    return script;
+}
+
+const char* const neo_script_channel_delivery =
+    "const channel=globalThis[name];const deliver=channel&&channel[Symbol.for(\"neoastra.scriptChannel.deliver\")];"
+    "if(typeof deliver===\"function\")deliver(message);";
+
 neoastra_app::~neoastra_app() {
     events.clear();
     logs.clear();
@@ -318,6 +339,44 @@ bool valid_struct(const void* value, uint32_t supplied, size_t required, uint32_
     uint32_t actual_version{};
     std::memcpy(&actual_version, static_cast<const uint8_t*>(value) + sizeof(uint32_t), sizeof(actual_version));
     return actual_version >= 1 && actual_version <= version;
+}
+
+// Version 1 of neoastra_script_options_t ends before binding_name.
+constexpr uint32_t script_options_v1_size = static_cast<uint32_t>(offsetof(neoastra_script_options_t, binding_name));
+
+bool valid_world_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 128) return false;
+    return std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'; });
+}
+
+// A binding is a global of its world: an identifier, not one of NeoAstra, and none that the world already has.
+bool valid_binding_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 64 || name.substr(0, 9) == "_neoastra") return false;
+    const auto start = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$'; };
+    if (!start(name.front()) || !std::all_of(name.begin() + 1, name.end(), [&](char c) { return start(c) || (c >= '0' && c <= '9'); })) return false;
+    for (const std::string_view reserved : {"webkit", "chrome", "window", "self", "globalThis", "document", "top", "parent", "frames", "location", "opener", "navigator", "console"})
+        if (name == reserved) return false;
+    return true;
+}
+
+// Copies the options of any known version into the latest one, which the backends read: a caller of version 1 has no
+// binding, whatever lies after its structure, and an isolated world without a name gets the default one.
+bool normalize_script_options(const neoastra_script_options_t* options, neoastra_script_options_t& normalized) noexcept {
+    if (!options || options->size < script_options_v1_size || options->version < 1 || options->version > 2) return false;
+    if (options->version >= 2 && options->size < sizeof(neoastra_script_options_t)) return false;
+    std::memcpy(&normalized, options, script_options_v1_size);
+    normalized.size = sizeof(normalized);
+    normalized.version = 2;
+    normalized.binding_name = options->version >= 2 ? options->binding_name : neoastra_string_view_t{};
+    if (!neo_valid_utf8(normalized.world_name) || !neo_valid_utf8(normalized.binding_name)) return false;
+    const auto world = neo_view_text(normalized.world_name);
+    const auto binding = neo_view_text(normalized.binding_name);
+    if (!normalized.isolated_world) return world.empty() && binding.empty();
+    if (world.empty()) {
+        if (!binding.empty()) return false;
+        normalized.world_name = {reinterpret_cast<const uint8_t*>(neo_default_script_world.data()), neo_default_script_world.size()};
+    } else if (!valid_world_name(world)) return false;
+    return binding.empty() || (valid_binding_name(binding) && normalized.main_frame_only != 0);
 }
 
 bool valid_native_parent(const neoastra_native_parent_t& parent) noexcept {
@@ -546,6 +605,31 @@ void neo_emit_view_message(neoastra_view_t* view, const std::string& message, co
         event.text = neo_string_view(message);
         view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
     } catch (...) { /* Allocation failure must not cross a platform callback. */ }
+}
+
+bool neo_emit_script_message(neoastra_view_t* view, const std::string& world, const std::string& binding, const std::string& message, const std::string& uri, bool main_frame) noexcept {
+    if (!view || view->ui_destroyed.load(std::memory_order_acquire) || view->destroying) return false;
+    if (!main_frame) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message of a frame that is not the top-level document");
+        return false;
+    }
+    if (message.size() > view->maximum_message_size || !neo_valid_utf8(neo_string_view(message))) {
+        neo_log(view->environment->app, NEOASTRA_LOG_WARNING, "bridge", "Blocked a script message that exceeded the configured size limit or was not UTF-8");
+        return false;
+    }
+    neo_retain_guard owner(view);
+    if (!owner) return false;
+    try {
+        neoastra_event_t event{};
+        event_strings strings;
+        initialize_event(view->environment->app, event, strings, NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED, 0, nullptr, &uri, 1, 0, nullptr);
+        // The message, the world, and the binding are locals of the backend callback, which no handler can reach.
+        event.text = neo_string_view(message);
+        event.text2 = neo_string_view(world);
+        event.text3 = neo_string_view(binding);
+        view->events.invoke([&](auto callback, void* context) { callback(context, &event); });
+    } catch (...) { /* Allocation failure must not cross a platform callback. */ }
+    return true;
 }
 
 void neo_emit_view_detailed(neoastra_view_t* view, neoastra_event_type_t type, uint64_t object_id, const std::string* text,
@@ -987,7 +1071,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -1324,7 +1408,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_view_async(neoastra_
     if(options->popup_request){auto* request=options->popup_request;if(request->kind!=NEOASTRA_DECISION_NEW_WINDOW||request->owner==nullptr||request->owner->environment!=env||options->profile!=request->owner->profile||request->state.load(std::memory_order_acquire)>neo_decision_state::deferred)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup request is no longer valid or opener-compatible");if(request->popup_creation_started.exchange(true,std::memory_order_acq_rel))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"popup target creation has already started");}
     try{auto* op=make_operation(outop);auto* value=new neoastra_view(env);value->profile=options->profile;if(value->profile)value->profile->retain();value->window=options->window;if(value->window){value->window->retain();value->window->views.push_back(value);}value->parent=options->parent;value->bounds=options->bounds;value->fill_parent=options->fill_parent!=0;if(options->maximum_message_size)value->maximum_message_size=options->maximum_message_size;value->bridge_policy=options->bridge_policy;if(options->decision_timeout_ms)value->decision_timeout=std::chrono::milliseconds(options->decision_timeout_ms);value->bridge_origins.reserve(options->bridge_origin_count);for(uint32_t index=0;index<options->bridge_origin_count;++index)value->bridge_origins.push_back(neo_string(options->bridge_origins[index]));auto* state=new view_completion(callback,context,op,value,options->popup_request!=nullptr);neoastra_error_t* start_error=nullptr;if(!neo_platform_view_create_async(value,options,platform_view_created,state,&start_error))platform_view_created(state,start_error);return NEOASTRA_OK;}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());}}
 neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoastra_environment_t* env,neoastra_capability_t capability,neoastra_capability_info_t* info){
-    if(!env||capability<NEOASTRA_CAPABILITY_CUSTOM_SCHEME||capability>NEOASTRA_CAPABILITY_VIEW_PLACEMENT||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEOASTRA_ERROR_INVALID_ARGUMENT;
+    if(!env||capability<NEOASTRA_CAPABILITY_CUSTOM_SCHEME||capability>NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL||!valid_struct(info,info?info->size:0,sizeof(*info)))return NEOASTRA_ERROR_INVALID_ARGUMENT;
     static const std::string available="Implemented by the active NeoAstra backend";
     static const std::string unavailable="Not exposed by the current portable implementation";
 #if defined(__linux__)
@@ -1332,6 +1416,12 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoast
     static const std::string linux_message_origin="WebKitGTK 6.0 script messages do not expose trustworthy source-origin data";
 #endif
     info->support=NEOASTRA_SUPPORT_NONE;info->capability_version=1;info->flags=0;
+    // An isolated world and its binding come together or not at all; a backend without them never falls back to the page.
+    if(capability==NEOASTRA_CAPABILITY_SCRIPT_ISOLATED_WORLD||capability==NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL){
+        info->support=neo_platform_script_worlds_supported()?NEOASTRA_SUPPORT_NATIVE:NEOASTRA_SUPPORT_NONE;
+        info->details=neo_string_view(info->support==NEOASTRA_SUPPORT_NONE?unavailable:available);
+        return NEOASTRA_OK;
+    }
 #if defined(__APPLE__) && TARGET_OS_IOS
     // The iOS backend reports what it implements; the list for the other platforms promises more than it offers so far.
     switch(capability){
@@ -1523,8 +1613,16 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_reload(neoastra_view_t* v,uint32_t
 neoastra_result_t NEOASTRA_CALL neoastra_view_go_back(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,3);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_go_forward(neoastra_view_t* v){neo_retain_guard owner(v);return !v?NEOASTRA_ERROR_INVALID_ARGUMENT:!owner?NEOASTRA_ERROR_DISPOSED:!check_ui(v->environment->app)?NEOASTRA_ERROR_WRONG_THREAD:v->history_navigation_disabled?NEOASTRA_ERROR_INVALID_STATE:neo_platform_view_command(v,4);}
 neoastra_result_t NEOASTRA_CALL neoastra_view_evaluate_script_async(neoastra_view_t* v,neoastra_string_view_t script,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script evaluation must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_evaluate(v,neo_string(script),cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script");}}
-neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t* v,neoastra_string_view_t script,const neoastra_script_options_t* options,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;if(!v||!cb||!neo_valid_utf8(script)||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->world_name))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script injection must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_add_script(v,neo_string(script),options,cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script");}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_add_script_async(neoastra_view_t* v,neoastra_string_view_t script,const neoastra_script_options_t* options,neoastra_string_callback_t cb,void* ctx,neoastra_operation_t** outop,neoastra_error_t** e){if(outop)*outop=nullptr;neoastra_script_options_t normalized{};if(!v||!cb||!neo_valid_utf8(script)||!normalize_script_options(options,normalized))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script arguments");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script injection must begin on the UI thread");try{auto* op=make_operation(outop);auto r=neo_platform_view_add_script(v,neo_string(script),&normalized,cb,ctx,op,e);if(r!=NEOASTRA_OK)op->release();return r;}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid persistent script");}}
 neoastra_result_t NEOASTRA_CALL neoastra_view_remove_script(neoastra_view_t* v,neoastra_string_view_t identifier){if(!v||!neo_valid_utf8(identifier))return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;try{return neo_platform_view_remove_script(v,neo_string(identifier));}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
+neoastra_result_t NEOASTRA_CALL neoastra_view_post_script_message(neoastra_view_t* v,neoastra_string_view_t identifier,neoastra_string_view_t message,neoastra_error_t** e){
+    neo_retain_guard owner(v);
+    if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");
+    if(!v||identifier.length==0||!neo_valid_utf8(identifier)||!neo_valid_utf8(message))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script message");
+    if(message.length>v->maximum_message_size)return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"the script message exceeds the maximum message size of the view");
+    if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"script messages must be posted on the UI thread");
+    try{return neo_platform_view_post_script_message(v,neo_string(identifier),neo_string(message),e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid script message");}
+}
 neoastra_result_t NEOASTRA_CALL neoastra_view_post_message(neoastra_view_t* v,neoastra_string_view_t msg,uint32_t json,neoastra_error_t** e){neo_retain_guard owner(v);if(v&&!owner)return neo_fail(e,NEOASTRA_ERROR_DISPOSED,"view is disposed");if(!v||!neo_valid_utf8(msg))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");if(json&&!neo_valid_json(neo_view_text(msg)))return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"the message is not JSON");if(!check_ui(v->environment->app))return neo_fail(e,NEOASTRA_ERROR_WRONG_THREAD,"message posting must run on the UI thread");if(!neo_bridge_access_allowed(v,v->source))return neo_fail(e,NEOASTRA_ERROR_SECURITY,"Web messaging is blocked by the configured bridge policy",0,"bridge");try{return neo_platform_view_post_message(v,neo_string(msg),json!=0,e);}catch(...){return neo_fail(e,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid message");}}
 // Every message is checked before the first is posted: an invalid batch posts nothing.
 neoastra_result_t NEOASTRA_CALL neoastra_view_post_messages(neoastra_view_t* v,const neoastra_string_view_t* messages,uint32_t count,uint32_t json,uint32_t* posted,neoastra_error_t** e){

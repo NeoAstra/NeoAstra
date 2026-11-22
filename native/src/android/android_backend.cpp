@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -181,6 +182,7 @@ jclass response_class{};
 jclass string_class{};
 jmethodID host_is_supported{}, host_create{}, host_set_bounds{}, host_set_visible{}, host_focus{}, host_navigate{}, host_load_html{}, host_command{}, host_evaluate{}, host_capture{};
 jmethodID host_add_script{}, host_remove_script{}, host_post_message{}, host_web_view{}, host_destroy{}, response_new{};
+jmethodID host_supports_script_worlds{}, host_add_world_script{}, host_post_script_message{};
 jclass services_class{};
 jmethodID services_call{};
 jmethodID host_set_engine_dialogs{}, host_set_keeps_history{}, host_set_debugging{}, host_deliver_files{}, host_choose_with_system{}, host_answer_permission{};
@@ -379,13 +381,18 @@ struct capture_request { neoastra_buffer_callback_t callback; void* context; neo
 // NeoAstraWebHost.capture answers 0 for a capture that began, this for a view that is not laid out yet, and 2 (CAPTURE_OUTSIDE)
 // for a rectangle outside the view.
 constexpr jint capture_no_size = 1;
-struct script_added { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; std::string identifier; };
+// The view is retained while the completion waits: a script whose operation was canceled first is not handed to anyone, so it
+// does not stay in the view either.
+struct script_added { neoastra_string_callback_t callback; void* context; neoastra_operation_t* operation; std::string identifier; neoastra_view_t* view{}; };
 
 void complete_script_added(void* pointer) {
     std::unique_ptr<script_added> added(static_cast<script_added*>(pointer));
     neoastra_result_t actual{};
-    if (added->operation->try_complete(NEOASTRA_OK, actual)) added->callback(added->context, actual, actual == NEOASTRA_OK ? neo_string_view(added->identifier) : neoastra_string_view_t{}, nullptr);
+    const bool completed = added->operation->try_complete(NEOASTRA_OK, actual);
+    if ((!completed || actual != NEOASTRA_OK) && added->view) neo_platform_view_remove_script(added->view, added->identifier);
+    if (completed) added->callback(added->context, actual, actual == NEOASTRA_OK ? neo_string_view(added->identifier) : neoastra_string_view_t{}, nullptr);
     added->operation->release();
+    if (added->view) added->view->release();
 }
 
 void JNICALL on_message(JNIEnv* env, jclass, jlong pointer, jstring data, jstring origin, jboolean main_frame) {
@@ -397,6 +404,17 @@ void JNICALL on_message(JNIEnv* env, jclass, jlong pointer, jstring data, jstrin
         const auto uri = origin_of(unproject(view->environment, to_utf8(env, origin)));
         neo_emit_bridge_message(view, text, uri, main_frame == JNI_TRUE);
     } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "bridge", "Android web-message handling failed"); }
+}
+
+// A message of a binding: NeoAstraScriptChannels reports it only for the listener of that binding in that world.
+void JNICALL on_script_message(JNIEnv* env, jclass, jlong pointer, jstring world, jstring binding, jstring data, jstring origin, jboolean main_frame) {
+    auto* view = reinterpret_cast<neoastra_view_t*>(pointer);
+    live_view owner(view);
+    if (!owner) return;
+    try {
+        const auto uri = origin_of(unproject(view->environment, to_utf8(env, origin)));
+        neo_emit_script_message(view, to_utf8(env, world), to_utf8(env, binding), to_utf8(env, data), uri, main_frame == JNI_TRUE);
+    } catch (...) { neo_log(view->environment->app, NEOASTRA_LOG_ERROR, "bridge", "Android script message handling failed"); }
 }
 
 jobject JNICALL on_resource(JNIEnv* env, jclass, jlong pointer, jstring url, jstring method_value, jstring headers_value, jboolean main_frame) {
@@ -805,9 +823,13 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     host_post_message = env->GetMethodID(host_class, "postMessage", "(Ljava/lang/String;)Z");
     host_web_view = env->GetMethodID(host_class, "webView", "()Landroid/webkit/WebView;");
     host_destroy = env->GetMethodID(host_class, "destroy", "()V");
+    host_supports_script_worlds = env->GetStaticMethodID(host_class, "supportsScriptWorlds", "()Z");
+    host_add_world_script = env->GetMethodID(host_class, "addWorldScript", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)I");
+    host_post_script_message = env->GetMethodID(host_class, "postScriptMessage", "(ILjava/lang/String;)I");
     response_new = env->GetMethodID(response_class, "<init>", "(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;)V");
     const JNINativeMethod methods[] = {
         {const_cast<char*>("nativeMessage"), const_cast<char*>("(JLjava/lang/String;Ljava/lang/String;Z)V"), reinterpret_cast<void*>(on_message)},
+        {const_cast<char*>("nativeScriptMessage"), const_cast<char*>("(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V"), reinterpret_cast<void*>(on_script_message)},
         {const_cast<char*>("nativeResource"), const_cast<char*>("(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Lcom/neoastra/backend/NeoAstraWebHost$Response;"), reinterpret_cast<void*>(on_resource)},
         {const_cast<char*>("nativeEvent"), const_cast<char*>("(JILjava/lang/String;Ljava/lang/String;I)V"), reinterpret_cast<void*>(on_event)},
         {const_cast<char*>("nativeEvaluated"), const_cast<char*>("(JLjava/lang/String;)V"), reinterpret_cast<void*>(on_evaluated)},
@@ -1043,12 +1065,46 @@ neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::s
     if (failed(env, view->environment->app, "Android script evaluation failed")) { delete pending; return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Android script evaluation failed", 0, android_domain); }
     return NEOASTRA_OK;
 }
-// Document-start scripts run in every frame whose origin matches; a main-frame script is guarded so that subframes skip it.
+namespace {
+neoastra_result_t add_world_script(neoastra_view_t* view, JNIEnv* env, android_view* state, const std::string& script, const neoastra_script_options_t* options, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
+    jint identifier{};
+    try {
+        const std::string source = options->main_frame_only ? "if (globalThis === globalThis.top) {\n" + script + "\n}" : script;
+        const auto binding = neo_string(options->binding_name);
+        jstring value = to_java(env, source);
+        jstring world = to_java(env, neo_string(options->world_name));
+        jstring name = binding.empty() ? nullptr : to_java(env, binding);
+        identifier = env->CallIntMethod(state->host, host_add_world_script, value, world, name, options->injection_time == NEOASTRA_SCRIPT_DOCUMENT_END ? JNI_TRUE : JNI_FALSE);
+        env->DeleteLocalRef(value);
+        env->DeleteLocalRef(world);
+        if (name) env->DeleteLocalRef(name);
+    } catch (...) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Adding an Android isolated-world script failed", 0, android_domain); }
+    // The Java side removed what it had added before it threw.
+    if (failed(env, view->environment->app, "Adding an Android isolated-world script failed")) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Adding an Android isolated-world script failed", 0, android_domain);
+    if (identifier == -1) return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "The Android System WebView of this device has no isolated script worlds", 0, android_domain);
+    if (identifier == -2) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The world of the view already has a script with this binding", 0, android_domain);
+    if (identifier < 0) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Adding an Android isolated-world script failed", 0, android_domain);
+    auto* added = new (std::nothrow) script_added{callback, context, operation, std::to_string(identifier)};
+    if (added && view->retain()) added->view = view;
+    if (!added || neoastra_app_dispatch(view->environment->app, complete_script_added, added) != NEOASTRA_OK) {
+        if (added && added->view) added->view->release();
+        delete added;
+        env->CallBooleanMethod(state->host, host_remove_script, identifier);
+        failed(env, view->environment->app, "Removing an Android isolated-world script failed");
+        return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The application no longer accepts work", 0, android_domain);
+    }
+    return NEOASTRA_OK;
+}
+} // namespace
+// Document-start scripts run in every frame whose origin matches; a main-frame script is guarded so that subframes skip it. A
+// script of an isolated world runs at document start or end in that world, with the listener of its binding, where the WebView
+// of the device has isolated worlds; elsewhere it is refused, and never runs in the page instead.
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
     auto* state = view_state(view);
     JNIEnv* env = jni();
     if (!state || !state->host || !env) return NEOASTRA_ERROR_NOT_INITIALIZED;
-    if (options->isolated_world || options->injection_time == NEOASTRA_SCRIPT_DOCUMENT_END) return NEOASTRA_ERROR_NOT_SUPPORTED;
+    if (options->isolated_world) return add_world_script(view, env, state, script, options, callback, context, operation, error);
+    if (options->injection_time == NEOASTRA_SCRIPT_DOCUMENT_END) return NEOASTRA_ERROR_NOT_SUPPORTED;
     try {
         const std::string source = options->main_frame_only ? "if (globalThis === globalThis.top) {\n" + script + "\n}" : script;
         jstring value = to_java(env, source);
@@ -1058,7 +1114,9 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
         env->DeleteLocalRef(rules);
         if (failed(env, view->environment->app, "Adding an Android document script failed")) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Adding an Android document script failed", 0, android_domain);
         auto* added = new script_added{callback, context, operation, std::to_string(identifier)};
+        if (view->retain()) added->view = view;
         if (neoastra_app_dispatch(view->environment->app, complete_script_added, added) != NEOASTRA_OK) {
+            if (added->view) added->view->release();
             delete added;
             return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The application no longer accepts work", 0, android_domain);
         }
@@ -1074,6 +1132,35 @@ neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view, const s
     const bool removed = env->CallBooleanMethod(state->host, host_remove_script, static_cast<jint>(value)) == JNI_TRUE;
     if (failed(env, view->environment->app, "Removing an Android document script failed")) return NEOASTRA_ERROR_NATIVE_FAILURE;
     return removed ? NEOASTRA_OK : NEOASTRA_ERROR_INVALID_ARGUMENT;
+}
+// A world is reached through the reply proxy of the last message of its main frame in the current document.
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, const std::string& identifier, const std::string& message, neoastra_error_t** error) noexcept {
+    auto* state = view_state(view);
+    JNIEnv* env = jni();
+    if (!state || !state->host || !env) return neo_fail(error, NEOASTRA_ERROR_NOT_INITIALIZED, "The Android view is not initialized", 0, android_domain);
+    int value{};
+    try {
+        size_t used{};
+        value = std::stoi(identifier, &used);
+        if (used != identifier.size()) throw std::invalid_argument("identifier");
+    } catch (...) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "No script with a binding has this identifier", 0, android_domain); }
+    jint result{};
+    try {
+        jstring text = to_java(env, message);
+        result = env->CallIntMethod(state->host, host_post_script_message, static_cast<jint>(value), text);
+        env->DeleteLocalRef(text);
+    } catch (...) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Posting to the Android script failed", 0, android_domain); }
+    if (failed(env, view->environment->app, "Posting to the Android script failed")) return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Posting to the Android script failed", 0, android_domain);
+    if (result == 1) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "No script with a binding has this identifier", 0, android_domain);
+    if (result == 2) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The world has not posted a message in the current document yet", 0, android_domain);
+    return NEOASTRA_OK;
+}
+bool neo_platform_script_worlds_supported() noexcept {
+    JNIEnv* env = jni();
+    if (!env || !host_class || !host_supports_script_worlds) return false;
+    const bool supported = env->CallStaticBooleanMethod(host_class, host_supports_script_worlds) == JNI_TRUE;
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+    return supported;
 }
 // Host messages reach the page through the reply proxy of the last message of its main frame, as JSON text for the bootstrap.
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const std::string& message, bool json, neoastra_error_t** error) noexcept {

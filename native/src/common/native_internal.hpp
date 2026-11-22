@@ -661,6 +661,18 @@ inline uint64_t neo_history_directions(const neoastra_view_t* view, bool back, b
 void neo_download_emit(neoastra_download_t* download, neoastra_event_type_t type) noexcept;
 bool neo_bridge_access_allowed(const neoastra_view_t* view, std::string_view uri) noexcept;
 bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, const std::string& uri, bool main_frame) noexcept;
+// Raises NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED for a message that the binding of a script posted in its isolated world. Only a
+// message of the main frame within the maximum message size of the view is raised; the backend checks that the message comes
+// through that binding of that world before it calls this.
+bool neo_emit_script_message(neoastra_view_t* view, const std::string& world, const std::string& binding, const std::string& message, const std::string& uri, bool main_frame) noexcept;
+// The world of an isolated script whose options name none.
+inline constexpr std::string_view neo_default_script_world = "neoastra.default";
+// The script that gives a WebKit content world the object of its binding: postMessage(string) through the script message
+// handler of that world, and the message events that neo_script_channel_delivery dispatches. It runs before the script of the
+// binding, in the same world, and does nothing where the world has no such handler (a popup that copied the scripts).
+std::string neo_script_channel_bootstrap(std::string_view binding);
+// The body of the function that a WebKit backend calls in the world of a binding, with the arguments "name" and "message".
+extern const char* const neo_script_channel_delivery;
 
 struct neoastra_download final : neo_ui_ref_counted {
     neoastra_view_t* view{};
@@ -1126,6 +1138,10 @@ neoastra_result_t neo_platform_view_command(neoastra_view_t* view, uint32_t comm
 neoastra_result_t neo_platform_view_evaluate(neoastra_view_t* view, const std::string& script, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std::string& script, const neoastra_script_options_t* options, neoastra_string_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view, const std::string& identifier) noexcept;
+// Delivers a message to the binding of a script; the caller checked the view, the thread, and the size of the message.
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, const std::string& identifier, const std::string& message, neoastra_error_t** error) noexcept;
+// Whether the backend has isolated worlds with bindings that only they reach: Android asks the WebView of the device.
+bool neo_platform_script_worlds_supported() noexcept;
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view, const std::string& message, bool json, neoastra_error_t** error) noexcept;
 // Posts the messages in order, which the caller validated, and counts in *posted (when not null) those it posted.
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const neoastra_string_view_t* messages, uint32_t count, bool json, uint32_t* posted, neoastra_error_t** error) noexcept;

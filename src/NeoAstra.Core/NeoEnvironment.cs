@@ -191,6 +191,11 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(capability));
         }
 
+        if (CapabilityUnknownToLibrary(RuntimeInfo, capability) is { } unknown)
+        {
+            return unknown;
+        }
+
         var raw = new NativeMethods.neoastra_capability_info
         {
             size = (uint)sizeof(NativeMethods.neoastra_capability_info),
@@ -203,6 +208,12 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
         var details = Utf8String.Decode(raw.details);
         return new NeoCapabilityInfo((NeoSupportLevel)raw.support.Value, raw.capability_version, raw.flags, string.IsNullOrEmpty(details) ? null : details);
     }
+
+    // A capability that the loaded native library predates is not supported, rather than an argument it refuses.
+    internal static NeoCapabilityInfo? CapabilityUnknownToLibrary(NeoRuntimeInfo runtime, NeoCapability capability) =>
+        capability == NeoCapability.ScriptWorldChannel && !runtime.HasScriptWorldChannels
+            ? new NeoCapabilityInfo(NeoSupportLevel.None, 1, 0, "The loaded native library has no script bindings of isolated worlds.")
+            : null;
 
     /// <summary>Releases the native environment reference.</summary>
     /// <returns>A completed value task.</returns>

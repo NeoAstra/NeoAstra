@@ -106,6 +106,54 @@ CustomSchemes =
 - The provider of a scheme only receives the requests of that scheme. What a backend tells of a frame document differs: see [known limitations](known-limitations.md#custom-schemes-and-the-managed-bridge). Tell the requests apart by their URI.
 - A frame can navigate itself to another address, such as an `https:` page, within the limits of its sandbox and of the `frame-src` of the page. Such a page reaches no more of the bridge than the frame did. Navigations of a frame are not reported to the host on Windows: see [links that open outside the web view](#links-that-open-outside-the-web-view).
 
+## Script bindings of isolated worlds
+
+A script of the host can run in an isolated world with a binding that only that world reaches, for content that the
+application does not control, such as a toolbar over any page. The page and the world share the document but not their
+globals: the page sees neither the binding nor the script, and cannot post through it.
+
+```csharp
+if (environment.GetCapability(NeoCapability.ScriptWorldChannel).IsSupported)
+{
+    var toolbar = await view.AddScriptAsync(source, new NeoScriptOptions
+    {
+        IsolatedWorld = true,
+        WorldName = "example.toolbar",
+        BindingName = "exampleToolbar",
+        MainFrameOnly = true,
+        InjectAtDocumentEnd = true,
+    });
+    // The script posts first in each document; the host answers it there.
+    toolbar.MessageReceived += async (_, message) =>
+    {
+        if (Handle(message.Message, message.Origin)) await toolbar.PostMessageAsync("sent");
+    };
+}
+```
+
+The script finds `exampleToolbar` as a global of its world, with `postMessage(string)`, `onmessage`, and
+`addEventListener("message", ...)`. What it posts raises `MessageReceived` of the `NeoUserScript`, never
+`NeoAstra.MessageReceived`, and names the world and the binding that the native library registered for the script, not
+anything that the message says. `PostMessageAsync` delivers a string as the data of a `message` event, never as script.
+Disposing the script removes the binding, also from a document that is still shown.
+
+- A binding needs `IsolatedWorld`, a `WorldName`, and `MainFrameOnly`: only the main frame posts through it, and a world of a
+  view has one script with a given binding at a time. The bridge policy of the view does not apply to it.
+- The world shares the DOM of the page: an event that the page dispatches has `isTrusted` set to `false`, and a click of the
+  user `true`. The page can still restyle or cover the elements of the world, and what the script reports of the document
+  comes from the page.
+- A message of the previous document can arrive around a navigation; `Origin` tells which document it comes from.
+
+| Backend | Script bindings of isolated worlds |
+| --- | --- |
+| macOS / WKWebView | Available from macOS 11, with a content world (`WKContentWorld`) of each name |
+| iOS / WKWebView | Available |
+| Android / System WebView | Available where the WebView reports `JS_INJECTION_IN_FRAME_AND_WORLD` (AndroidX WebKit 1.16 or later in the application). The host answers a world only through the last message of its main frame in the current document, so the script posts first in each document |
+| Windows / WebView2, Linux / WebKitGTK | Not exposed |
+
+Where the capability is not supported, `AddScriptAsync` with a `BindingName`, or with `IsolatedWorld`, fails with
+`NotSupportedException`: the script never runs in the page instead.
+
 ## Scope families
 
 Scopes are immutable normalized records. Unknown fields fail validation. Runtime matching parses bounded typed command arguments and never consults ambient process state.

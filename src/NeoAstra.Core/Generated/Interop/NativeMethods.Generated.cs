@@ -451,6 +451,14 @@ namespace NeoAstra.Interop.Generated
             /// A window event when the display that holds most of the window became another one, as neoastra_window_get_display tells.
             /// </summary>
             NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED = unchecked((uint)40),
+
+            /// <summary>
+            /// A view event with a message that a script of an isolated world posted through its binding (neoastra_script_options_t
+            /// binding_name), never one of the page: the text is the message, the uri the origin of the main frame that posted it, text2
+            /// the name of the world, text3 the name of the binding, and the value 1 for the main frame, the only one whose messages are
+            /// raised. Only the script of that world reaches the binding; the page and the other worlds do not see it.
+            /// </summary>
+            NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED = unchecked((uint)41),
         }
 
         public enum neoastra_capability : uint
@@ -522,6 +530,13 @@ namespace NeoAstra.Interop.Generated
             NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS = unchecked((uint)32),
 
             NEOASTRA_CAPABILITY_VIEW_PLACEMENT = unchecked((uint)33),
+
+            /// <summary>
+            /// A script of an isolated world with a binding that only that world reaches (neoastra_script_options_t binding_name),
+            /// NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED, and neoastra_view_post_script_message. A backend without it refuses such a
+            /// script with NEOASTRA_ERROR_NOT_SUPPORTED: it never gives the binding to the page instead.
+            /// </summary>
+            NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL = unchecked((uint)34),
         }
 
         /// <summary>
@@ -1217,6 +1232,15 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_bridge_policy_t (NativeMethods.neoastra_bridge_policy from) => new (from);
         }
 
+        /// <summary>
+        /// A persistent script. Version 1 ends with world_name; a caller of version 1 passes the size it knows, which ends before
+        /// binding_name. With isolated_world, the script runs in the world named world_name, or in the world "neoastra.default" when the
+        /// name is empty; a name has 1 to 128 ASCII letters, digits, '.', '_' or '-'. Version 2 adds binding_name: the name of a binding,
+        /// an identifier of 1 to 64 ASCII characters that does not begin with "_neoastra", which the script finds as a global of its
+        /// world with postMessage(string), onmessage, and addEventListener("message"). A binding needs isolated_world, a world_name,
+        /// and main_frame_only, since only the main frame can post through it; one binding name is used once per world of a view. The
+        /// identifier of the script names its channel to neoastra_view_post_script_message, and removing the script removes the binding.
+        /// </summary>
         public partial struct neoastra_script_options
         {
             public uint size;
@@ -1230,6 +1254,8 @@ namespace NeoAstra.Interop.Generated
             public uint isolated_world;
 
             public NativeMethods.neoastra_string_view_t world_name;
+
+            public NativeMethods.neoastra_string_view_t binding_name;
         }
 
         public readonly partial record struct neoastra_script_injection_time_t(NativeMethods.neoastra_script_injection_time Value)
@@ -1686,6 +1712,15 @@ namespace NeoAstra.Interop.Generated
             public static implicit operator neoastra_view_options_t (NativeMethods.neoastra_view_options from) => new (from);
         }
 
+        /// <summary>
+        /// A persistent script. Version 1 ends with world_name; a caller of version 1 passes the size it knows, which ends before
+        /// binding_name. With isolated_world, the script runs in the world named world_name, or in the world "neoastra.default" when the
+        /// name is empty; a name has 1 to 128 ASCII letters, digits, '.', '_' or '-'. Version 2 adds binding_name: the name of a binding,
+        /// an identifier of 1 to 64 ASCII characters that does not begin with "_neoastra", which the script finds as a global of its
+        /// world with postMessage(string), onmessage, and addEventListener("message"). A binding needs isolated_world, a world_name,
+        /// and main_frame_only, since only the main frame can post through it; one binding name is used once per world of a view. The
+        /// identifier of the script names its channel to neoastra_view_post_script_message, and removing the script removes the binding.
+        /// </summary>
         public readonly partial record struct neoastra_script_options_t(NativeMethods.neoastra_script_options Value)
         {
             public static implicit operator NativeMethods.neoastra_script_options (neoastra_script_options_t from) => from.Value;
@@ -2409,6 +2444,18 @@ namespace NeoAstra.Interop.Generated
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_remove_script")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_view_remove_script(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_string_view_t arg1);
+
+        /// <summary>
+        /// Delivers a string to the binding of a script added with binding_name, in its world of the current main-frame document, as a
+        /// message event with that string as data. The message is at most the maximum message size of the view. Where the engine reaches
+        /// a world only through its last message (Android), the world has to have posted in the current document first, otherwise the
+        /// result is NEOASTRA_ERROR_INVALID_STATE; a navigation of the main frame forgets that reply channel. An identifier that names no
+        /// script with a binding is NEOASTRA_ERROR_INVALID_ARGUMENT, and a backend without NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL
+        /// answers NEOASTRA_ERROR_NOT_SUPPORTED. The bridge policy of the view does not apply: the binding is not the page's.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_view_post_script_message")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_view_post_script_message(NativeMethods.neoastra_view_t arg0, NativeMethods.neoastra_string_view_t script_identifier, NativeMethods.neoastra_string_view_t message, NativeMethods.neoastra_error_t* arg3);
 
         /// <summary>
         /// Posts a message to the page. With a nonzero json, the message must be one JSON value (RFC 8259), which the page receives parsed;

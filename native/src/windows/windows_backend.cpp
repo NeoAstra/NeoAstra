@@ -3767,6 +3767,12 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
         return SUCCEEDED(result) ? NEOASTRA_OK : neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebView2 persistent script registration could not be started", result, "webview2");
     } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, ex.what()); }
 }
+// WebView2 has no content world in which a script and a binding would be hidden from the page: a script with a binding is
+// refused as one in an isolated world, and nothing is ever given to the page in its place.
+bool neo_platform_script_worlds_supported() noexcept { return false; }
+neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t*, const std::string&, const std::string&, neoastra_error_t** error) noexcept {
+    return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "WebView2 has no isolated script worlds");
+}
 neoastra_result_t neo_platform_view_remove_script(neoastra_view_t* view,const std::string& identifier) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return NEOASTRA_ERROR_NOT_INITIALIZED;const auto value=widen(identifier);return SUCCEEDED(state->core->RemoveScriptToExecuteOnDocumentCreated(value.c_str()))?NEOASTRA_OK:NEOASTRA_ERROR_NATIVE_FAILURE;}catch(...){return NEOASTRA_ERROR_INVALID_ARGUMENT;}}
 neoastra_result_t neo_platform_view_post_message(neoastra_view_t* view,const std::string& message,bool json,neoastra_error_t** error) noexcept {try{auto* state=static_cast<windows_view*>(view->platform);if(!state||!state->core)return neo_fail(error,NEOASTRA_ERROR_NOT_INITIALIZED,"WebView2 view is not initialized");const auto value=widen(message);const auto result=json?state->core->PostWebMessageAsJson(value.c_str()):state->core->PostWebMessageAsString(value.c_str());return SUCCEEDED(result)?NEOASTRA_OK:neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebView2 message posting failed",result,"webview2");}catch(const std::exception& ex){return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,ex.what());}}
 neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const neoastra_string_view_t* messages,uint32_t count,bool json,uint32_t* posted,neoastra_error_t** error) noexcept {

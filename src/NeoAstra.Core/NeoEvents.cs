@@ -754,6 +754,46 @@ public sealed class NeoPageDragEndedEventArgs(NeoPageDragOutcome outcome, NeoDro
     public IReadOnlyList<NeoPageDragItem> Items { get; } = items ?? throw new ArgumentNullException(nameof(items));
 }
 
+/// <summary>
+/// Provides a message that a script of an isolated world posted through its binding (<see cref="NeoScriptOptions.BindingName"/>).
+/// The page cannot post one: the binding exists only in the world of the script, and its identity is the one that the native
+/// library registered, never one that a message names.
+/// </summary>
+public sealed class NeoScriptMessageReceivedEventArgs : EventArgs
+{
+    /// <summary>Initializes the data of a message that a script posted through its binding.</summary>
+    /// <param name="message">The message.</param>
+    /// <param name="origin">The origin of the main-frame document that the script ran in, when known.</param>
+    /// <param name="worldName">The name of the isolated world of the script.</param>
+    /// <param name="bindingName">The name of the binding.</param>
+    public NeoScriptMessageReceivedEventArgs(string message, Uri? origin, string worldName, string bindingName)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(worldName);
+        ArgumentNullException.ThrowIfNull(bindingName);
+        Message = message;
+        Origin = origin;
+        WorldName = worldName;
+        BindingName = bindingName;
+    }
+
+    /// <summary>Gets the string that the script posted.</summary>
+    /// <remarks>The script is the application's, but what it reports of the document, such as text or markup, comes from the page.</remarks>
+    public string Message { get; }
+
+    /// <summary>
+    /// Gets the origin of the main-frame document that the script ran in, when known. Around a navigation, a message of the
+    /// document that the view left can still arrive.
+    /// </summary>
+    public Uri? Origin { get; }
+
+    /// <summary>Gets the name of the isolated world of the script, as the native library registered it.</summary>
+    public string WorldName { get; }
+
+    /// <summary>Gets the name of the binding, as the native library registered it.</summary>
+    public string BindingName { get; }
+}
+
 /// <summary>Provides a message sent by web content.</summary>
 public sealed class NeoWebMessageReceivedEventArgs : EventArgs
 {

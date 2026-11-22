@@ -32,7 +32,10 @@ public sealed class AbiLayoutTests
         AssertLayout<NativeMethods.neoastra_view_options>(104,
             (nameof(NativeMethods.neoastra_view_options.bridge_policy), 92),
             (nameof(NativeMethods.neoastra_view_options.bridge_origins), 96));
-        AssertLayout<NativeMethods.neoastra_script_options>(40, (nameof(NativeMethods.neoastra_script_options.world_name), 24));
+        // Version 1 of the script options ends at 40, where version 2 appends the binding.
+        AssertLayout<NativeMethods.neoastra_script_options>(56,
+            (nameof(NativeMethods.neoastra_script_options.world_name), 24),
+            (nameof(NativeMethods.neoastra_script_options.binding_name), 40));
         AssertLayout<NativeMethods.neoastra_capture_options>(40,
             (nameof(NativeMethods.neoastra_capture_options.full_page), 16),
             (nameof(NativeMethods.neoastra_capture_options.region), 24));
@@ -78,8 +81,8 @@ public sealed class AbiLayoutTests
         AssertEnum<uint, NativeMethods.neoastra_download_state>(0, 4);
         AssertEnum<uint, NativeMethods.neoastra_permission_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_process_failure_kind>(0, 3);
-        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 40);
-        AssertEnum<uint, NativeMethods.neoastra_capability>(0, 33);
+        AssertEnum<uint, NativeMethods.neoastra_event_type>(0, 41);
+        AssertEnum<uint, NativeMethods.neoastra_capability>(0, 34);
         AssertEnum<uint, NativeMethods.neoastra_log_level>(0, 5);
         AssertEnum<uint, NativeMethods.neoastra_resource_kind>(0, 12);
         AssertEnum<uint, NativeMethods.neoastra_resource_body_kind>(0, 2);

@@ -636,10 +636,44 @@ public sealed class NeoScriptOptions
     public bool MainFrameOnly { get; set; }
 
     /// <summary>Gets or sets whether the script runs in an isolated JavaScript world.</summary>
+    /// <remarks>
+    /// The page does not see the globals of the world, and the world does not see those of the page; both share the document.
+    /// A backend without isolated worlds (<see cref="NeoCapability.ScriptIsolatedWorld"/>) refuses the script with
+    /// <see cref="NotSupportedException"/> rather than run it in the page.
+    /// </remarks>
     public bool IsolatedWorld { get; set; }
 
-    /// <summary>Gets or sets the optional isolated-world name.</summary>
+    /// <summary>Gets or sets the name of the isolated world, or <see langword="null"/> for the world <c>neoastra.default</c>.</summary>
+    /// <remarks>A name has 1 to 128 ASCII letters, digits, <c>.</c>, <c>_</c>, or <c>-</c>. Scripts with the same name share their world.</remarks>
     public string? WorldName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the name of a binding that only the isolated world of the script reaches, or <see langword="null"/> for none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The script finds the binding as a global of its world, with <c>postMessage(string)</c>, <c>onmessage</c>, and
+    /// <c>addEventListener("message", ...)</c>; the page and the other worlds do not see it. What the script posts raises
+    /// <see cref="NeoUserScript.MessageReceived"/> of the returned script, apart from the messages of the page, and
+    /// <see cref="NeoUserScript.PostMessageAsync"/> answers it. Disposing the script removes the binding.
+    /// </para>
+    /// <para>
+    /// A binding needs <see cref="IsolatedWorld"/>, a <see cref="WorldName"/>, and <see cref="MainFrameOnly"/>: only the main
+    /// frame posts through it. Its name is an identifier of 1 to 64 ASCII characters that does not begin with <c>_neoastra</c>
+    /// and is no global of a window (<c>window</c>, <c>document</c>, <c>webkit</c>, and the like), and a world of a view has
+    /// one script with a given binding at a time. A backend without <see cref="NeoCapability.ScriptWorldChannel"/> refuses the
+    /// script with <see cref="NotSupportedException"/>, and never gives the binding to the page instead.
+    /// </para>
+    /// </remarks>
+    public string? BindingName { get; set; }
+
+    /// <summary>Gets or sets a handler installed before the script's binding can deliver its first message.</summary>
+    /// <remarks>
+    /// Use this instead of subscribing after <see cref="NeoAstra.AddScriptAsync"/> when the first document can post
+    /// immediately. The handler runs on the application UI thread and is also a subscriber of
+    /// <see cref="NeoUserScript.MessageReceived"/>. Requires <see cref="BindingName"/>.
+    /// </remarks>
+    public EventHandler<NeoScriptMessageReceivedEventArgs>? MessageHandler { get; set; }
 
     internal void Validate()
     {
@@ -652,5 +686,52 @@ public sealed class NeoScriptOptions
         {
             throw new ArgumentException("A world name requires isolated-world injection.", nameof(WorldName));
         }
+
+        if (!string.IsNullOrEmpty(WorldName) && !IsWorldName(WorldName))
+        {
+            throw new ArgumentException("A script world name has 1 to 128 ASCII letters, digits, '.', '_', or '-'.", nameof(WorldName));
+        }
+
+        if (BindingName is null)
+        {
+            if (MessageHandler is not null) throw new ArgumentException("An initial message handler requires a script binding.", nameof(MessageHandler));
+            return;
+        }
+
+        if (!IsBindingName(BindingName))
+        {
+            throw new ArgumentException("A script binding name is an identifier of 1 to 64 ASCII characters that does not begin with '_neoastra' and is no global of a window.", nameof(BindingName));
+        }
+
+        if (!IsolatedWorld || string.IsNullOrEmpty(WorldName) || !MainFrameOnly)
+        {
+            throw new ArgumentException("A script binding needs an isolated world with a name, in the main frame only.", nameof(BindingName));
+        }
+    }
+
+    // The rules of neoastra_script_options_t in native/include/neoastra.h, which the native library checks again.
+    private static bool IsWorldName(string name)
+    {
+        if (name.Length is < 1 or > 128) return false;
+        foreach (var c in name)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')) return false;
+        }
+
+        return true;
+    }
+
+    private static readonly string[] WindowGlobals = ["webkit", "chrome", "window", "self", "globalThis", "document", "top", "parent", "frames", "location", "opener", "navigator", "console"];
+
+    private static bool IsBindingName(string name)
+    {
+        if (name.Length is < 1 or > 64 || name.StartsWith("_neoastra", StringComparison.Ordinal) || Array.IndexOf(WindowGlobals, name) >= 0) return false;
+        for (var index = 0; index < name.Length; index++)
+        {
+            var c = name[index];
+            if (!char.IsAsciiLetter(c) && c is not ('_' or '$') && (index == 0 || !char.IsAsciiDigit(c))) return false;
+        }
+
+        return true;
     }
 }

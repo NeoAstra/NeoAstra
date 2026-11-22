@@ -133,6 +133,11 @@ public enum NeoCapability
     FullscreenDecisions,
     /// <summary>Placing a view over a rectangle of another view with <see cref="NeoAstra.PlaceOver"/>, also across windows.</summary>
     ViewPlacement,
+    /// <summary>
+    /// Scripts of isolated worlds with a binding that only their world reaches (<see cref="NeoScriptOptions.BindingName"/>).
+    /// Where it is not supported, such a script is refused, never given to the page.
+    /// </summary>
+    ScriptWorldChannel,
 }
 
 /// <summary>Identifies a backend-specific borrowed native handle.</summary>
@@ -504,6 +509,13 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
 
     // Whether the native library has neoastra_view_post_messages, which posts the messages of a batch in one call.
     internal bool PostsMessageBatches => (BuildFeatures & MessageBatch) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL of native/include/neoastra.h.
+    private const ulong ScriptWorldChannel = 1UL << 5;
+
+    // Whether the native library reads the binding of a script (version 2 of its options), has neoastra_view_post_script_message,
+    // and knows NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL. A library without it refuses those options as invalid.
+    internal bool HasScriptWorldChannels => (BuildFeatures & ScriptWorldChannel) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

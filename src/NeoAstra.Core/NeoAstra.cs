@@ -30,6 +30,8 @@ public sealed class NeoAstra : IAsyncDisposable
     private GCHandle _eventRoot;
     private Func<NeoScriptDialogRequest, ValueTask<NeoScriptDialogDecision>>? _scriptDialogRequested;
     private NeoUserScript? _transportScript;
+    // The scripts with a binding, by the world and the binding that the native library registered for them.
+    private readonly NeoScriptChannelRegistry<NeoUserScript> _scriptChannels = new();
     private NeoMessagePost? _postMessages;
     private DecodedUri? _lastUri;
     private bool _postsBatches;
@@ -624,21 +626,26 @@ public sealed class NeoAstra : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         options ??= new NeoScriptOptions();
         options.Validate();
+        if (CheckScriptChannelSupport(Environment.RuntimeInfo, options) is { } unsupported) return ValueTask.FromException<NeoUserScript>(unsupported);
         using var nativeScript = new Utf8String(script);
         using var worldName = new Utf8String(options.WorldName);
+        using var bindingName = new Utf8String(options.BindingName);
         var raw = new NativeMethods.neoastra_script_options
         {
             size = (uint)sizeof(NativeMethods.neoastra_script_options),
-            version = 1,
+            // Version 2 only for a binding: a library from before it reads version 1 of any size and refuses version 2.
+            version = options.BindingName is null ? 1u : 2u,
             injection_time = options.InjectAtDocumentEnd
                 ? NativeMethods.neoastra_script_injection_time.NEOASTRA_SCRIPT_DOCUMENT_END
                 : NativeMethods.neoastra_script_injection_time.NEOASTRA_SCRIPT_DOCUMENT_START,
             main_frame_only = options.MainFrameOnly ? 1u : 0u,
             isolated_world = options.IsolatedWorld ? 1u : 0u,
             world_name = worldName.View,
+            binding_name = bindingName.View,
         };
         var nativeOptions = new NativeMethods.neoastra_script_options_t(raw);
-        var operation = new NativeOperation<NeoUserScript>(cancellationToken, this);
+        var world = options.IsolatedWorld ? (string.IsNullOrEmpty(options.WorldName) ? DefaultScriptWorld : options.WorldName) : null;
+        var operation = new NativeOperation<NeoUserScript>(cancellationToken, new ScriptRequest(this, world, options.BindingName, options.MessageHandler));
         NativeMethods.neoastra_operation_t nativeOperation = default;
         NativeMethods.neoastra_error_t error = default;
         NativeMethods.neoastra_result_t result;
@@ -671,6 +678,54 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         return operation.ValueTask;
+    }
+
+    // The world of an isolated script whose options name none (neo_default_script_world of the native library).
+    private const string DefaultScriptWorld = "neoastra.default";
+
+    private sealed record ScriptRequest(NeoAstra View, string? WorldName, string? BindingName,
+        EventHandler<NeoScriptMessageReceivedEventArgs>? MessageHandler);
+
+    // A binding needs a native library that reads it: an older one would refuse its options as invalid, and must never be
+    // asked to run the script without it.
+    internal static NotSupportedException? CheckScriptChannelSupport(NeoRuntimeInfo runtime, NeoScriptOptions options) =>
+        options.BindingName is not null && !runtime.HasScriptWorldChannels
+            ? new NotSupportedException("The loaded native library has no script bindings of isolated worlds (NeoCapability.ScriptWorldChannel).")
+            : null;
+
+    internal void UnregisterScriptChannel(NeoUserScript script)
+    {
+        if (script.WorldName is { } world && script.BindingName is { } binding) _scriptChannels.Remove(world, binding, script);
+    }
+
+    // Must run on the UI thread.
+    internal unsafe void PostScriptMessage(string identifier, string message)
+    {
+        ThrowIfDisposed();
+        using var nativeIdentifier = new Utf8String(identifier);
+        using var nativeMessage = new Utf8String(message);
+        NativeMethods.neoastra_error_t error = default;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_view_post_script_message(NativeHandle, nativeIdentifier.View, nativeMessage.View, &error);
+        }
+        catch (EntryPointNotFoundException exception)
+        {
+            throw new NotSupportedException("The loaded native library has no script bindings of isolated worlds.", exception);
+        }
+
+        NativeError.ThrowIfFailed(result, error, "post script message", CancellationToken.None);
+    }
+
+    private void DispatchScriptMessage(NativeMethods.neoastra_event value, Uri? origin)
+    {
+        // The world and the binding are those of the native registration, which names the one script that owns them.
+        var world = Utf8String.Decode(value.text2);
+        var binding = Utf8String.Decode(value.text3);
+        if (string.IsNullOrEmpty(world) || string.IsNullOrEmpty(binding) || (value.value & 1) == 0) return;
+        if (_scriptChannels.Find(world, binding) is not { } script) return;
+        script.RaiseMessageReceived(new NeoScriptMessageReceivedEventArgs(Utf8String.Decode(value.text), origin, world, binding));
     }
 
     /// <summary>Posts a JSON value to web content.</summary>
@@ -948,6 +1003,7 @@ public sealed class NeoAstra : IAsyncDisposable
         }
 
         _transport?.Close("view_disposed");
+        _scriptChannels.Clear();
         try { Disposing?.Invoke(); } catch { }
         NativeDropReceived = null;
         NativeNavigationStarted = null;
@@ -1204,6 +1260,9 @@ public sealed class NeoAstra : IAsyncDisposable
                     DispatchNativeDrop((int)((value.value >> 56) & 0x7f), nativePaths, new NeoPoint(value.bounds.Value.x, value.bounds.Value.y));
                 }
                 else DispatchWebMessage(Utf8String.Bytes(value.text), uri, (value.value & 1) != 0);
+                break;
+            case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED:
+                DispatchScriptMessage(value, uri);
                 break;
             case NativeMethods.neoastra_event_type.NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED:
                 try { ExternalOpenCompleted?.Invoke(this, DecodeExternalOpen(uri, value.value, value.native_code)); } catch { }
@@ -1869,7 +1928,20 @@ public sealed class NeoAstra : IAsyncDisposable
             {
                 var identifier = Utf8String.Decode(value);
                 if (string.IsNullOrEmpty(identifier)) throw new InvalidDataException("The native backend returned an empty script identifier.");
-                operation.Complete(new NeoUserScript((NeoAstra)operation.Owner!, identifier));
+                var request = (ScriptRequest)operation.Owner!;
+                var script = new NeoUserScript(request.View, identifier, request.WorldName, request.BindingName, request.MessageHandler);
+                // The native library allows one script per binding of a world, so its names are free here; the script owns them
+                // before the caller gets it, and a script that the caller no longer waits for is removed with its binding.
+                if (request.BindingName is { } binding && !request.View._scriptChannels.TryAdd(request.WorldName!, binding, script))
+                {
+                    try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
+                    operation.Fail(new InvalidOperationException("The world of the view already has a script with this binding."));
+                }
+                else if (!operation.TryComplete(script))
+                {
+                    request.View.UnregisterScriptChannel(script);
+                    try { request.View.RemoveScript(identifier); } catch { /* The view went away, and its scripts with it. */ }
+                }
             }
             else
             {

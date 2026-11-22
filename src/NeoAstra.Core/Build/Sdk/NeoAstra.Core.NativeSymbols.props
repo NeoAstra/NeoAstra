@@ -83,6 +83,7 @@
     <ReferenceNativeSymbol Include="neoastra_view_point_to_screen" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_post_message" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_post_messages" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_view_post_script_message" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_release" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_reload" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_view_remove_script" SymbolType="Function" />
