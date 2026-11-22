@@ -4081,9 +4081,12 @@ neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, c
             if (entry.second.world == script->second.world && entry.second.frame == state->main_frame && (!found || entry.first > target)) { target = entry.first; found = true; }
         if (!found) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The world of the script has no current document", 0, "webview2");
         std::string parameters = "{\"functionDeclaration\":";
-        append_json_string(parameters, std::string("function(name,message){") + neo_script_channel_delivery + "}");
+        append_json_string(parameters, std::string("function(name,key,message){") + neo_script_channel_delivery + "}");
         parameters += ",\"executionContextId\":" + std::to_string(target) + ",\"arguments\":[{\"value\":";
         append_json_string(parameters, script->second.binding);
+        parameters += "},{\"value\":";
+        // The key of the bootstrap of this script, which is the name of its protocol binding.
+        append_json_string(parameters, script->second.function);
         parameters += "},{\"value\":";
         append_json_string(parameters, message);
         parameters += "}]}";

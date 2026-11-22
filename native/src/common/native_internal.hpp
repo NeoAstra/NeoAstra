@@ -668,16 +668,20 @@ bool neo_emit_script_message(neoastra_view_t* view, const std::string& world, co
 // The world of an isolated script whose options name none.
 inline constexpr std::string_view neo_default_script_world = "neoastra.default";
 // The script that gives a WebKit content world the object of its binding: postMessage(string) through the script message
-// handler of that world, and the message events that neo_script_channel_delivery dispatches. It runs before the script of the
-// binding, in the same world, and does nothing where the world has no such handler (a popup that copied the scripts).
-std::string neo_script_channel_bootstrap(std::string_view binding);
+// handler of that world, and the message events that neo_script_channel_delivery dispatches for the key of its script. It runs
+// before the script of the binding, in the same world, and does nothing where the world has no such handler (a popup that
+// copied the scripts). A key is unique to its script, for the life of the view, and needs no escape in a JavaScript string.
+std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view key);
 // The same for a WebKit backend whose handler tells neither the frame nor the origin of a message: the handler has its own name,
-// and each message starts with the origin of the document that posted it and a line feed, which the page cannot change.
-std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view handler);
-// The same over a global function of the world that posts a string, such as a DevTools protocol binding. The function is removed
-// from the world, and the channel exists only in the top-level frame.
+// which is the key, and each message starts with the origin of the document that posted it and a line feed, which the page
+// cannot change.
+std::string neo_script_channel_bootstrap_with_origin(std::string_view binding, std::string_view handler);
+// The same over a global function of the world that posts a string, such as a DevTools protocol binding, whose name is the key.
+// The function is removed from the world, and the channel exists only in the top-level frame.
 std::string neo_script_channel_bootstrap_for_function(std::string_view binding, std::string_view function);
-// The body of the function that a WebKit backend calls in the world of a binding, with the arguments "name" and "message".
+// The body of the function that a backend calls in the world of a binding, with the arguments "name" (the binding), "key" (that
+// of the script, from its bootstrap), and "message". The object of another script under that name, which a document keeps after
+// its script was removed, does not receive the message.
 extern const char* const neo_script_channel_delivery;
 
 struct neoastra_download final : neo_ui_ref_counted {

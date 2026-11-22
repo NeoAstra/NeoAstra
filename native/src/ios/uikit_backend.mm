@@ -1232,7 +1232,7 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view, const std:
                         channel->bindingName = binding;
                         channel.world = world;
                         channel.binding = ns_string(binding);
-                        source = neo_script_channel_bootstrap(binding) + script;
+                        source = neo_script_channel_bootstrap(binding, identifier) + script;
                     }
                     user_script = [[WKUserScript alloc] initWithSource:ns_string(source) injectionTime:time forMainFrameOnly:options->main_frame_only != 0 inContentWorld:world];
                     if (user_script && channel) {
@@ -1270,7 +1270,7 @@ neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view, c
         NSString* text = ns_string(message);
         if (!text) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The script message is not UTF-8", 0, webkit_domain);
         @try {
-            [state->webview callAsyncJavaScript:@(neo_script_channel_delivery) arguments:@{@"name": found->second.binding, @"message": text} inFrame:nil inContentWorld:found->second.world completionHandler:nil];
+            [state->webview callAsyncJavaScript:@(neo_script_channel_delivery) arguments:@{@"name": found->second.binding, @"key": ns_string(found->first), @"message": text} inFrame:nil inContentWorld:found->second.world completionHandler:nil];
         } @catch (NSException*) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "WKWebView refused the script message", 0, webkit_domain); }
         return NEOASTRA_OK;
     }

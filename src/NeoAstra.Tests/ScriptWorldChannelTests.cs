@@ -213,4 +213,61 @@ public sealed class ScriptWorldChannelTests
             Assert.AreEqual("ready:undefined", messages[before].Message);
         });
     }
+
+    // The document that a script was disposed in keeps the object of its binding, under the name that a script added later
+    // takes: what the host posts to that later script must not reach the object of the disposed one.
+    [TestMethod]
+    [Timeout(60000)]
+    public async Task AScriptThatReplacesADisposedOne_NeverPostsToTheObjectOfTheDisposedOne_OnWebView2()
+    {
+        await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>replaced</title>" }, async session =>
+        {
+            var messages = new List<string>();
+            NeoScriptOptions Options() => new()
+            {
+                IsolatedWorld = true,
+                WorldName = "example.toolbar",
+                BindingName = "exampleToolbar",
+                MainFrameOnly = true,
+                MessageHandler = (_, message) => messages.Add(message.Message),
+            };
+
+            // Each script writes what its binding receives into the document, which the page reads.
+            static string Source(string name) =>
+                $"exampleToolbar.onmessage = event => document.documentElement.setAttribute('data-{name}', event.data); exampleToolbar.postMessage('ready:{name}');";
+
+            async Task<string?> AttributeAsync(string name, string? expected)
+            {
+                string? value = null;
+                for (var attempt = 0; attempt < 200 && (value = await session.View.EvaluateScriptAsync($"document.documentElement.getAttribute('data-{name}')")) != expected; attempt++) await Task.Delay(25);
+                return value;
+            }
+
+            async Task WaitForAsync(string message)
+            {
+                for (var attempt = 0; attempt < 200 && !messages.Contains(message); attempt++) await Task.Delay(25);
+                CollectionAssert.Contains(messages, message);
+            }
+
+            session.Stage = "the first script in its document";
+            var first = await session.View.AddScriptAsync(Source("first"), Options());
+            await session.NavigateAsync("index.html");
+            await WaitForAsync("ready:first");
+            await first.PostMessageAsync("to-first");
+            Assert.AreEqual("\"to-first\"", await AttributeAsync("first", "\"to-first\""));
+
+            session.Stage = "a script that replaces it while the document is shown";
+            await first.DisposeAsync();
+            await using var second = await session.View.AddScriptAsync(Source("second"), Options());
+            await second.PostMessageAsync("to-second");
+            await Task.Delay(300);
+            Assert.AreEqual("\"to-first\"", await session.View.EvaluateScriptAsync("document.documentElement.getAttribute('data-first')"), "The disposed script received a message of the script that replaced it.");
+
+            session.Stage = "the replacement in the next document";
+            await session.NavigateAsync("index.html?again");
+            await WaitForAsync("ready:second");
+            await second.PostMessageAsync("to-second");
+            Assert.AreEqual("\"to-second\"", await AttributeAsync("second", "\"to-second\""));
+        });
+    }
 }

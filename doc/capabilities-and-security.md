@@ -146,7 +146,9 @@ The script finds `exampleToolbar` as a global of its world, with `postMessage(st
 `addEventListener("message", ...)`. What it posts raises `MessageReceived` of the `NeoUserScript`, never
 `NeoAstra.MessageReceived`, and names the world and the binding that the native library registered for the script, not
 anything that the message says. `PostMessageAsync` delivers a string as the data of a `message` event, never as script.
-Disposing the script removes the binding, also from a document that is still shown.
+Disposing the script removes the binding, also from a document that is still shown: the object stays in that document, but
+nothing it posts reaches the host, and nothing the host posts reaches it. A script added later with the same world and
+binding gets its object from the next document.
 
 - A binding needs `IsolatedWorld`, a `WorldName`, and `MainFrameOnly`: only the main frame posts through it, and a world of a
   view has one script with a given binding at a time. The bridge policy of the view does not apply to it.

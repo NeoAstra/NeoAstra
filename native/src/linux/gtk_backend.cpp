@@ -1131,7 +1131,7 @@ neoastra_result_t neo_platform_view_add_script(neoastra_view_t* view,const std::
                 channel=std::make_unique<gtk_script_channel>();
                 channel->view=view;channel->world=world;channel->binding=binding;
                 channel->handler="_neoastra_channel_"+std::to_string(++state->next_channel);
-                source=neo_script_channel_bootstrap(binding,channel->handler)+script;
+                source=neo_script_channel_bootstrap_with_origin(binding,channel->handler)+script;
             }
             user_script=webkit_user_script_new_for_world(source.c_str(),frames,time,world.c_str(),nullptr,nullptr);
             if(user_script&&channel){
@@ -1164,6 +1164,8 @@ neoastra_result_t neo_platform_view_post_script_message(neoastra_view_t* view,co
     GVariantBuilder arguments;
     g_variant_builder_init(&arguments,G_VARIANT_TYPE_VARDICT);
     g_variant_builder_add(&arguments,"{sv}","name",g_variant_new_string(found->second->binding.c_str()));
+    // The key of the bootstrap of this script, which is the name of its handler.
+    g_variant_builder_add(&arguments,"{sv}","key",g_variant_new_string(found->second->handler.c_str()));
     g_variant_builder_add(&arguments,"{sv}","message",g_variant_new_string(message.c_str()));
     webkit_web_view_call_async_javascript_function(WEBKIT_WEB_VIEW(state->widget),neo_script_channel_delivery,-1,g_variant_builder_end(&arguments),found->second->world.c_str(),nullptr,nullptr,nullptr,nullptr);
     return NEOASTRA_OK;

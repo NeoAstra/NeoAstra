@@ -167,34 +167,39 @@ bool neo_emit_bridge_message(neoastra_view_t* view, const std::string& message, 
     return false;
 }
 
-static std::string script_channel_object() {
-    return "const target=new EventTarget();let onmessage=null;"
+// The object of a binding receives the messages of the host under a key of its script only: a document keeps the object of a
+// script removed while it was shown, under the binding name that a script added later takes.
+static std::string script_channel_object(std::string_view key) {
+    std::string object = "const target=new EventTarget();let onmessage=null;"
               "const channel={postMessage(message){if(typeof message!==\"string\")throw new TypeError(\"A script channel message must be a string.\");post(message);},"
               "addEventListener(type,listener,options){target.addEventListener(type,listener,options);},"
               "removeEventListener(type,listener,options){target.removeEventListener(type,listener,options);},"
               "get onmessage(){return onmessage;},set onmessage(value){onmessage=typeof value===\"function\"?value:null;}};"
-              "Object.defineProperty(channel,Symbol.for(\"neoastra.scriptChannel.deliver\"),{value(data){const event=new MessageEvent(\"message\",{data});"
+              "Object.defineProperty(channel,Symbol.for(\"neoastra.scriptChannel.deliver:";
+    object.append(key);
+    object += "\"),{value(data){const event=new MessageEvent(\"message\",{data});"
               "if(onmessage){try{onmessage.call(channel,event);}catch(error){setTimeout(()=>{throw error;});}}target.dispatchEvent(event);}});"
               "Object.defineProperty(globalThis,name,{value:Object.freeze(channel),enumerable:false,configurable:false,writable:false});})();\n";
+    return object;
 }
 
-std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view handler) {
+std::string neo_script_channel_bootstrap_with_origin(std::string_view binding, std::string_view handler) {
     std::string script = "(()=>{\"use strict\";const name=\"";
     script.append(binding);
     script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[\"";
     script.append(handler);
     script += "\"];if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
               "const send=handler.postMessage.bind(handler);const place=globalThis.location;const post=message=>send(place.origin+\"\\n\"+message);";
-    return script + script_channel_object();
+    return script + script_channel_object(handler);
 }
 
-std::string neo_script_channel_bootstrap(std::string_view binding) {
+std::string neo_script_channel_bootstrap(std::string_view binding, std::string_view key) {
     std::string script = "(()=>{\"use strict\";const name=\"";
     script.append(binding);
     script += "\";const handlers=globalThis.webkit&&globalThis.webkit.messageHandlers;const handler=handlers&&handlers[name];"
               "if(!handler||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
               "const post=handler.postMessage.bind(handler);";
-    return script + script_channel_object();
+    return script + script_channel_object(key);
 }
 
 std::string neo_script_channel_bootstrap_for_function(std::string_view binding, std::string_view function) {
@@ -205,11 +210,11 @@ std::string neo_script_channel_bootstrap_for_function(std::string_view binding, 
     script += "\";const raw=globalThis[source];try{delete globalThis[source];}catch(_){}"
               "if(window!==window.top||typeof raw!==\"function\"||Object.prototype.hasOwnProperty.call(globalThis,name))return;"
               "const post=message=>raw(message);";
-    return script + script_channel_object();
+    return script + script_channel_object(function);
 }
 
 const char* const neo_script_channel_delivery =
-    "const channel=globalThis[name];const deliver=channel&&channel[Symbol.for(\"neoastra.scriptChannel.deliver\")];"
+    "const channel=globalThis[name];const deliver=channel&&channel[Symbol.for(\"neoastra.scriptChannel.deliver:\"+key)];"
     "if(typeof deliver===\"function\")deliver(message);";
 
 neoastra_app::~neoastra_app() {
