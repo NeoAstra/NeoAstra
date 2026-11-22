@@ -1615,6 +1615,8 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_place_over(neoastra_view_t* v,neoa
         v->window=target;
         result=neo_platform_view_set_window(v,previous);
         if(result!=NEOASTRA_OK){
+            // A view destroyed during the move has left the list of its target, and must not enter another one.
+            if(v->ui_destroyed.load(std::memory_order_acquire)){previous->release();return result;}
             auto& moved=target->views;
             moved.erase(std::remove(moved.begin(),moved.end(),v),moved.end());
             previous->views.push_back(v);
