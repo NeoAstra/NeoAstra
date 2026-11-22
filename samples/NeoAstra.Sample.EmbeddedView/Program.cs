@@ -25,7 +25,7 @@ internal static class Program
 
     [STAThread]
     private static int Main() => NeoApplication.Run(
-        new NeoApplicationOptions { ApplicationName = "NeoAstra Embedded View Sample" },
+        new NeoApplicationOptions { ApplicationName = "NeoAstra Embedded View Sample", ShutdownMode = NeoApplicationShutdownMode.OnMainWindowClosed },
         RunAsync);
 
     private static async ValueTask RunAsync(NeoApplication application)
