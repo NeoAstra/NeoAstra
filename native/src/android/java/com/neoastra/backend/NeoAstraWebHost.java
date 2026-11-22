@@ -236,7 +236,11 @@ public final class NeoAstraWebHost {
         webView.setLayoutParams(params);
     }
 
-    public void setVisible(boolean visible) { webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE); }
+    /** Shows or hides the view. A hidden WebView is also paused: its visibility alone does not tell the page that it is hidden. */
+    public void setVisible(boolean visible) {
+        webView.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        if (visible) webView.onResume(); else webView.onPause();
+    }
 
     public boolean focus() { return webView.requestFocus(); }
 

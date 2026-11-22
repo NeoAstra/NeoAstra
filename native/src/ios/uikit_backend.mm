@@ -1088,7 +1088,26 @@ void neo_platform_view_destroy(neoastra_view_t* view) noexcept {
 neoastra_result_t neo_platform_view_set_visible(neoastra_view_t* view) noexcept {
     auto* state = static_cast<uikit_view*>(view->platform);
     if (!state || !state->webview) return NEOASTRA_ERROR_NOT_INITIALIZED;
-    state->webview.hidden = !view->visible;
+    // WebKit on iOS tells a page that it is hidden only when its view leaves the window: the hidden flag of the view does not.
+    if (!view->visible) {
+        [state->webview removeFromSuperview];
+        return NEOASTRA_OK;
+    }
+    if (state->webview.superview) return NEOASTRA_OK;
+    UIView* parent = view_parent(view);
+    if (!parent) return NEOASTRA_ERROR_INVALID_STATE;
+    state->webview.frame = view_frame(view, parent);
+    // It returns to its place among the views of the window, which are in the order that they are drawn.
+    UIView* above = nil;
+    if (view->window) {
+        const auto& views = view->window->views;
+        for (auto next = std::find(views.begin(), views.end(), view); !above && next != views.end(); ++next) {
+            auto* other = *next == view ? nullptr : static_cast<uikit_view*>((*next)->platform);
+            if (other && other->webview.superview == parent) above = other->webview;
+        }
+    }
+    if (above) [parent insertSubview:state->webview belowSubview:above];
+    else [parent addSubview:state->webview];
     return NEOASTRA_OK;
 }
 neoastra_result_t neo_platform_view_css_scale(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
