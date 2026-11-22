@@ -818,6 +818,9 @@ void test_bounded_view_keeps_its_place(neoastra_app_t* app) {
     wait_until([&] { return gtk_widget_get_width(filling_widget) == gtk_widget_get_width(GTK_WIDGET(host)); });
     assert(neoastra_view_set_bounds(bounded, {60, 50, 300, 120}, 0) == NEOASTRA_OK);
     wait_until([&] { return placed(60, 50, 300, 120); });
+    // A view partly left of and above its window keeps that place, as over a part of a page scrolled away.
+    assert(neoastra_view_set_bounds(bounded, {-30, -20, 300, 120}, 0) == NEOASTRA_OK);
+    wait_until([&] { return placed(-30, -20, 300, 120); });
     // A view on bounds larger than the window does not make the window grow.
     const auto window_width = gtk_widget_get_width(GTK_WIDGET(host));
     assert(neoastra_view_set_bounds(bounded, {0, 0, window_width + 200, 100}, 0) == NEOASTRA_OK);

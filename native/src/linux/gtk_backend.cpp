@@ -297,11 +297,14 @@ bool is_view_stack(GtkWidget* widget) noexcept { return widget&&GTK_IS_OVERLAY(w
 
 // A view on explicit bounds gets exactly its rectangle: left to itself, GTK would give it the natural size of its page.
 // The allocation includes the margins that place the view.
+// Where the view stack places a view on explicit bounds. A margin could not hold a position left of or above the stack.
+constexpr const char* view_x_key="neoastra.view-x";
+constexpr const char* view_y_key="neoastra.view-y";
 gboolean view_stack_child_position(GtkOverlay*,GtkWidget* child,GdkRectangle* allocation,void*) noexcept {
     int width{},height{};
     gtk_widget_get_size_request(child,&width,&height);
     if(width<=0||height<=0)return FALSE;
-    *allocation={0,0,gtk_widget_get_margin_start(child)+width,gtk_widget_get_margin_top(child)+height};
+    *allocation={GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child),view_x_key)),GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child),view_y_key)),width,height};
     return TRUE;
 }
 
@@ -314,6 +317,7 @@ GtkWidget* window_view_stack(GtkWindow* window) noexcept {
     auto* stack=gtk_overlay_new();
     g_object_set_data(G_OBJECT(stack),view_stack_key,stack);
     g_signal_connect(stack,"get-child-position",G_CALLBACK(view_stack_child_position),nullptr);
+    gtk_widget_set_overflow(stack,GTK_OVERFLOW_HIDDEN);
     gtk_widget_set_hexpand(stack,TRUE);
     gtk_widget_set_vexpand(stack,TRUE);
     // Anything else that the window holds is replaced, as it was when a view became the child of the window itself.
@@ -330,8 +334,13 @@ void apply_view_bounds(neoastra_view_t* view,GtkWidget* widget) noexcept {
     const auto align=fill||is_view_stack(parent)?GTK_ALIGN_FILL:GTK_ALIGN_START;
     gtk_widget_set_halign(widget,align);
     gtk_widget_set_valign(widget,align);
-    gtk_widget_set_margin_start(widget,fill?0:std::clamp(view->bounds.x,0,32767));
-    gtk_widget_set_margin_top(widget,fill?0:std::clamp(view->bounds.y,0,32767));
+    const bool stacked=is_view_stack(parent);
+    gtk_widget_set_margin_start(widget,fill||stacked?0:std::clamp(view->bounds.x,0,32767));
+    gtk_widget_set_margin_top(widget,fill||stacked?0:std::clamp(view->bounds.y,0,32767));
+    g_object_set_data(G_OBJECT(widget),view_x_key,GINT_TO_POINTER(fill?0:view->bounds.x));
+    g_object_set_data(G_OBJECT(widget),view_y_key,GINT_TO_POINTER(fill?0:view->bounds.y));
+    // A new position at the same size changes nothing that GTK measures, so it would not lay the stack out again.
+    if(stacked)gtk_widget_queue_allocate(parent);
     gtk_widget_set_size_request(widget,fill?-1:std::max(view->bounds.width,1),fill?-1:std::max(view->bounds.height,1));
     if(is_view_stack(parent))gtk_overlay_set_measure_overlay(GTK_OVERLAY(parent),widget,fill);
 }
