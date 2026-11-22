@@ -248,10 +248,18 @@ public sealed class ViewWindowTests
         });
     }
 
+    // The test takes the foreground and types with the keyboard of the desktop (keybd_event), which would type into the window
+    // of someone using the machine, so it runs only when NEOASTRA_TEST_REAL_INPUT is 1.
     [TestMethod]
     [Timeout(60000)]
     public async Task AChordTheHostTakesNeverReachesThePage_AndOtherKeysDo()
     {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("NEOASTRA_TEST_REAL_INPUT") != "1")
+        {
+            Assert.Inconclusive("Set NEOASTRA_TEST_REAL_INPUT=1 to let this test drive the keyboard of a Windows desktop.");
+            return;
+        }
+
         await LiveBrowser.RunAsync(new Dictionary<string, string> { ["index.html"] = "<!doctype html><title>keys</title>" }, async session =>
         {
             const byte Control = 0x11, Shift = 0x10;

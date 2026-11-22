@@ -77,6 +77,8 @@ Two tests of `WindowsDropTargetTests` drag a page element with the real mouse of
 NEOASTRA_TEST_REAL_INPUT=1 dotnet test src/NeoAstra.Tests -c Release --filter "FullyQualifiedName~RealMouseDrag"
 ```
 
+`ViewWindowTests.AChordTheHostTakesNeverReachesThePage_AndOtherKeysDo` types key chords with the real keyboard of a Windows desktop and is skipped unless `NEOASTRA_TEST_REAL_INPUT` is `1` too. It takes the foreground for its window: do not type while it runs.
+
 Run the dependency-free benchmark harness with:
 
 ```sh
