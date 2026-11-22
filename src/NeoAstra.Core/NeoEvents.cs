@@ -324,7 +324,7 @@ public readonly record struct NeoNavigationDecision(NeoDecisionAction Action)
 /// <param name="Origin">
 /// The origin that asks, or <see langword="null"/> where the backend does not tell it. WebView2 gives the origin of the
 /// document that asks. WKWebView and WebKitGTK give the origin of the top document of the view for a microphone or a camera,
-/// also when a frame of another origin asks; WebKitGTK gives no origin for the other kinds.
+/// and WebKitGTK also for the screen, also when a frame of another origin asks; WebKitGTK gives no origin for the other kinds.
 /// </param>
 /// <param name="IsUserInitiated">
 /// Whether an action of the user started the request. Only WebView2 tells it: the value is <see langword="false"/> on

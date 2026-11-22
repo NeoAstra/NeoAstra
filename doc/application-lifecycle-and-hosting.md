@@ -39,9 +39,8 @@ voice notes or take pictures names the permissions they may use:
 app.AllowPermissions(NeoPermissionKind.Microphone, NeoPermissionKind.Camera);
 ```
 
-Each such request is allowed for that request only, and nothing is kept in the profile of the view. An application that
-decides at the time of the request registers its own answer instead, such as one that allows the microphone only while a
-setting of the application is on:
+Each such request is allowed for that request only. An application that decides at the time of the request registers its own
+answer instead, such as one that allows the microphone only while a setting of the application is on:
 
 ```csharp
 app.OnPermissionRequest(request => ValueTask.FromResult(
@@ -52,7 +51,13 @@ app.OnPermissionRequest(request => ValueTask.FromResult(
 
 Either way, only a request of a document of the application reaches the answer: the origin of `app://neoastra`, or the one of
 the development server of `dotnet neoastra dev`, so the same code works in both. A request of a frame of another origin, or one
-whose origin the backend does not tell, is denied. The system still applies its own rules to a camera or a microphone: the
+whose origin the backend does not tell, is denied. No answer is kept in the profile of the view, not even one that asks to
+persist: a later version of the application that answers otherwise is asked, and an application that remembers a choice of
+its user keeps it in its own settings. The answer decides the requests that the engine makes, and WKWebView and WebKitGTK may
+let a document use a device again without asking: a setting turned off stops the capture of the next documents, not that of
+a document that has it. `NeoPermissionDecision.Default` leaves a request to the engine: WebView2 shows its prompt, WebKit on
+macOS and iOS asks the user, and Android grants it once the application holds the runtime permission. The system still
+applies its own rules to a camera or a microphone: the
 privacy settings of Windows, the `NSMicrophoneUsageDescription` or `NSCameraUsageDescription` of the application on macOS and
 iOS, and on Android the `android.permission.RECORD_AUDIO` or `android.permission.CAMERA` that the manifest declares, which
 NeoAstra asks the user for when the application does not hold it yet.

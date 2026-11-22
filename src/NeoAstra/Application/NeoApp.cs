@@ -315,8 +315,8 @@ public sealed class NeoAppBuilder
     /// <returns>This builder.</returns>
     /// <remarks>
     /// <para>
-    /// A request of a document of the application for one of these permissions is allowed for that request only, and nothing
-    /// is kept in the profile of the view; every other request is denied. This is <see cref="OnPermissionRequest"/> with a
+    /// A request of a document of the application for one of these permissions is allowed for that request only; every other
+    /// request is denied. This is <see cref="OnPermissionRequest"/> with a
     /// handler that answers <see cref="NeoPermissionDecision.AllowOnce"/> for these kinds and
     /// <see cref="NeoPermissionDecision.DenyOnce"/> for the others, so requests of other origins are denied as described there.
     /// </para>
@@ -352,14 +352,22 @@ public sealed class NeoAppBuilder
     /// Without a permission answer the main view denies every permission request, so that <c>getUserMedia</c> fails with
     /// <c>NotAllowedError</c>. The handler receives the requests of the documents of the application only: the origin of
     /// <c>app://neoastra</c>, or that of the development server of <c>dotnet neoastra dev</c>. A request of a frame of another
-    /// origin, or one whose origin the backend does not tell (WebKitGTK tells it only for a camera or a microphone), is denied
-    /// without asking the handler. WKWebView and WebKitGTK report the origin of the top document for a camera or a microphone;
-    /// there, the navigation policy of the main view keeps frames of other origins from loading.
+    /// origin, or one whose origin the backend does not tell (WebKitGTK tells it only for a camera, a microphone, or the
+    /// screen), is denied without asking the handler. WKWebView and WebKitGTK report the origin of the top document for a
+    /// capture; there, the navigation policy of the main view keeps frames of other origins from loading.
     /// </para>
     /// <para>
-    /// The handler can also answer <see cref="NeoPermissionDecision.Default"/>, which lets the engine ask the user where it does,
-    /// or persist its answer where <see cref="NeoPermissionRequest.CanPersist"/> says that the backend keeps it.
-    /// <see cref="AllowPermissions"/> registers a handler that allows a fixed list of permissions.
+    /// No answer is kept in the profile of the view: one that asks to persist, such as
+    /// <see cref="NeoPermissionDecision.AllowAndPersist"/>, holds for that request only, so that a later version of the
+    /// application that answers otherwise is asked. An application that remembers a choice of its user keeps it in its own
+    /// settings. The handler decides the requests that the engine makes: WKWebView and WebKitGTK may let a document use a
+    /// device again without a new request, so a setting turned off stops the capture of the next documents, not that of a
+    /// document that has it.
+    /// </para>
+    /// <para>
+    /// <see cref="NeoPermissionDecision.Default"/> leaves the request to the engine: WebView2 shows its prompt, WebKit on macOS
+    /// and iOS asks the user, and Android grants it once the application holds the runtime permission, which NeoAstra asks the
+    /// user for. <see cref="AllowPermissions"/> registers a handler that allows a fixed list of permissions.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="handler"/> is <see langword="null"/>.</exception>
@@ -372,14 +380,16 @@ public sealed class NeoAppBuilder
         return this;
     }
 
-    // What the main view answers to a permission request: only a document of the application asks the handler.
-    internal ValueTask<NeoPermissionDecision> DecidePermissionAsync(NeoPermissionRequest request, Uri trustedOrigin)
+    // What the main view answers to a permission request: only a document of the application asks the handler, and no answer
+    // is kept in the profile, where it would outlive a version of the application that answers otherwise.
+    internal async ValueTask<NeoPermissionDecision> DecidePermissionAsync(NeoPermissionRequest request, Uri trustedOrigin)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(trustedOrigin);
-        return _permissionRequest is { } handler && request.Origin is { } origin && HasSameOrigin(origin, trustedOrigin)
-            ? handler(request)
-            : ValueTask.FromResult(NeoPermissionDecision.DenyOnce);
+        if (_permissionRequest is not { } handler || request.Origin is not { } origin || !HasSameOrigin(origin, trustedOrigin))
+            return NeoPermissionDecision.DenyOnce;
+        var decision = await handler(request).ConfigureAwait(true);
+        return decision with { Persist = false };
     }
 
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
@@ -517,12 +527,7 @@ public sealed class NeoAppBuilder
             window.Activate();
             viewOptions.BrowserFeatures = BrowserFeatures;
             view = await session.Environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), viewOptions, cancellationToken).ConfigureAwait(true);
-            var trustedOrigin = new Uri(target.GetLeftPart(UriPartial.Authority));
-            view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
-            view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
-            if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
-            if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
-            if (_permissionRequest is not null) view.PermissionRequested = request => DecidePermissionAsync(request, trustedOrigin);
+            ApplyViewPolicy(view, new Uri(target.GetLeftPart(UriPartial.Authority)));
             binding = NeoRpcViewBinding.Bind(session.Rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             session.Add(window, view, binding, releaseOnClose);
@@ -534,6 +539,16 @@ public sealed class NeoAppBuilder
             if (binding is not null) await binding.DisposeAsync().ConfigureAwait(true);
             if (view is not null) await view.DisposeAsync().ConfigureAwait(true);
         }
+    }
+
+    // What the main view decides itself, before its first navigation: where it navigates, its file inputs and its permissions.
+    internal void ApplyViewPolicy(global::NeoAstra.NeoAstra view, Uri trustedOrigin)
+    {
+        view.NavigationRequested = request => ValueTask.FromResult(new NeoNavigationDecision(DecideNavigation(request.Uri, request.IsMainFrame, request.IsUserInitiated, trustedOrigin)));
+        view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
+        if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
+        if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
+        if (_permissionRequest is not null) view.PermissionRequested = request => DecidePermissionAsync(request, trustedOrigin);
     }
 
     internal async ValueTask StopAsync()

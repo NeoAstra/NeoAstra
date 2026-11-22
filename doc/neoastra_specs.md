@@ -1667,12 +1667,12 @@ Unsupported persistence MUST be reported, not silently assumed.
 
 `NeoPermissionRequest` carries the portable kind, the origin, `IsUserInitiated` and `CanPersist`. A view without a
 `PermissionRequested` handler denies every request. The main view of `NeoApp` MUST deny every request unless the application
-calls `NeoAppBuilder.AllowPermissions` or `OnPermissionRequest`, and MUST deny without asking the application a request whose
-origin is not the one of the application or is unknown.
+calls `NeoAppBuilder.AllowPermissions` or `OnPermissionRequest`, MUST deny without asking the application a request whose
+origin is not the one of the application or is unknown, and MUST NOT keep an answer in the profile.
 
 | | WebView2 | WKWebView | WebKitGTK |
 | --- | --- | --- | --- |
-| `Origin` | The document that asks | The top document of the view | The page of the view for a microphone or a camera; `null` for the other kinds |
+| `Origin` | The document that asks | The top document of the view | The page of the view for a microphone, a camera, or the screen; `null` for the other kinds |
 | `IsUserInitiated` | Reported | `false` | `false` |
 | `CanPersist` | `true`; a persisted answer is kept in the profile | `false`; every document is asked | `false`; every document is asked |
 | A microphone and a camera asked together | One request for each | One request for each; the page gets both when both are allowed | One request for each; the page gets both when both are allowed |

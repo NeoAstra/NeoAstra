@@ -114,6 +114,44 @@ public sealed class PermissionTests
         }, browserArguments: FakeDevices);
     }
 
+    // The policy that a NeoApp application gives its main view, with the answers of NeoAppBuilder.
+    [TestMethod]
+    public async Task TheMainViewOfANeoAppApplicationAnswersPermissionsAsItsBuilderSays()
+    {
+        await LiveBrowser.RunAsync(Pages, async session =>
+        {
+            var origin = new Uri(LiveBrowser.Origin);
+
+            session.Stage = "an application that names no permission";
+            new NeoAppBuilder().ApplyViewPolicy(session.View, origin);
+            await session.NavigateAsync("capture.html?start");
+            var capture = await WaitForCaptureAsync(session);
+            Assert.AreEqual("NotAllowedError", capture.GetProperty("state").GetString(), capture.GetRawText());
+
+            session.Stage = "an application that allows the microphone";
+            new NeoAppBuilder().AllowPermissions(NeoPermissionKind.Microphone).ApplyViewPolicy(session.View, origin);
+            await session.NavigateAsync("capture.html?start");
+            capture = await WaitForCaptureAsync(session);
+            Assert.AreEqual("captured", capture.GetProperty("state").GetString(), capture.GetRawText());
+
+            session.Stage = "an answer that asks to persist";
+            var asked = 0;
+            new NeoAppBuilder().OnPermissionRequest(_ =>
+            {
+                Interlocked.Increment(ref asked);
+                return ValueTask.FromResult(NeoPermissionDecision.AllowAndPersist);
+            }).ApplyViewPolicy(session.View, origin);
+            for (var round = 0; round < 2; round++)
+            {
+                await session.NavigateAsync("capture.html?start");
+                capture = await WaitForCaptureAsync(session);
+                Assert.AreEqual("captured", capture.GetProperty("state").GetString(), capture.GetRawText());
+            }
+
+            Assert.AreEqual(2, Volatile.Read(ref asked), "The profile keeps no answer of the application: each document asks again.");
+        }, browserArguments: FakeDevices);
+    }
+
     private static async Task<JsonElement> WaitForCaptureAsync(LiveBrowserSession session)
     {
         await session.WaitUntilAsync("globalThis.capture.state !== 'pending'");

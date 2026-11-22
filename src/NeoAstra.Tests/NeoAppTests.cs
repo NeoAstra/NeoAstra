@@ -285,6 +285,12 @@ public sealed class NeoAppTests
         Assert.AreEqual(NeoPermissionDecision.DenyOnce, await builder.DecidePermissionAsync(new(NeoPermissionKind.ClipboardRead, null), origin));
         Assert.AreEqual(1, seen.Count, "The handler is asked only for the documents of the application.");
         Assert.AreSame(own, seen[0]);
+
+        // No answer is kept in the profile, where it would outlive a version of the application that answers otherwise.
+        var persisting = CreateBuilder(ApplicationPermission()).OnPermissionRequest(static _ => ValueTask.FromResult(NeoPermissionDecision.AllowAndPersist));
+        Assert.AreEqual(NeoPermissionDecision.AllowOnce, await persisting.DecidePermissionAsync(own, origin));
+        var refusing = CreateBuilder(ApplicationPermission()).OnPermissionRequest(static _ => ValueTask.FromResult(NeoPermissionDecision.DenyAndPersist));
+        Assert.AreEqual(NeoPermissionDecision.DenyOnce, await refusing.DecidePermissionAsync(own, origin));
     }
 
     [TestMethod]
