@@ -52,6 +52,8 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      - name: Set up Clang
+        uses: ./.github/actions/setup-windows-clang
       - name: Install NuGet publishing SDK
         uses: actions/setup-dotnet@v4
         with:
