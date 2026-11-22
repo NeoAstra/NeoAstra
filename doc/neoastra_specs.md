@@ -1666,7 +1666,9 @@ Unsupported persistence MUST be reported, not silently assumed.
 ## 22.2 What the managed request reports
 
 `NeoPermissionRequest` carries the portable kind, the origin, `IsUserInitiated` and `CanPersist`. A view without a
-`PermissionRequested` handler denies every request.
+`PermissionRequested` handler denies every request. The main view of `NeoApp` MUST deny every request unless the application
+calls `NeoAppBuilder.AllowPermissions` or `OnPermissionRequest`, and MUST deny without asking the application a request whose
+origin is not the one of the application or is unknown.
 
 | | WebView2 | WKWebView | WebKitGTK |
 | --- | --- | --- | --- |

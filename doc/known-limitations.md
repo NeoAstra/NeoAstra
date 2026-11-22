@@ -306,6 +306,10 @@ view.PermissionRequested = request => ValueTask.FromResult(
         : NeoPermissionDecision.DenyOnce);
 ```
 
+A `NeoApp` application answers with `NeoAppBuilder.AllowPermissions` or `OnPermissionRequest`,
+which check the origin of the application themselves: see
+[browser permissions in the simple host](application-lifecycle-and-hosting.md#browser-permissions-in-the-simple-host).
+
 The page must be a secure context, which a page of a scheme registered with
 `NeoCustomScheme.Application` is on every backend: it has `navigator.mediaDevices`, and an
 `AudioContext` loads the module of an `AudioWorklet` from the scheme. NeoAstra has no switch for

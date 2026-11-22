@@ -29,6 +29,34 @@ propagates from `NeoApp.Run`. Bridge, capability, and navigation policies remain
 For custom application options, single-instance acquisition before window creation, multiple views,
 or independently owned backend services, use explicit `NeoApplication` composition instead.
 
+## Browser permissions in the simple host
+
+The main view of a `NeoApp` application denies every browser permission request, as a view without a `PermissionRequested`
+handler does, so `navigator.mediaDevices.getUserMedia` fails with `NotAllowedError`. An application whose documents record
+voice notes or take pictures names the permissions they may use:
+
+```csharp
+app.AllowPermissions(NeoPermissionKind.Microphone, NeoPermissionKind.Camera);
+```
+
+Each such request is allowed for that request only, and nothing is kept in the profile of the view. An application that
+decides at the time of the request registers its own answer instead, such as one that allows the microphone only while a
+setting of the application is on:
+
+```csharp
+app.OnPermissionRequest(request => ValueTask.FromResult(
+    request.Kind == NeoPermissionKind.Microphone && settings.DictationEnabled
+        ? NeoPermissionDecision.AllowOnce
+        : NeoPermissionDecision.DenyOnce));
+```
+
+Either way, only a request of a document of the application reaches the answer: the origin of `app://neoastra`, or the one of
+the development server of `dotnet neoastra dev`, so the same code works in both. A request of a frame of another origin, or one
+whose origin the backend does not tell, is denied. The system still applies its own rules to a camera or a microphone: the
+privacy settings of Windows, the `NSMicrophoneUsageDescription` or `NSCameraUsageDescription` of the application on macOS and
+iOS, and on Android the `android.permission.RECORD_AUDIO` or `android.permission.CAMERA` that the manifest declares, which
+NeoAstra asks the user for when the application does not hold it yet.
+
 ## The simple host on iOS and Android (preview)
 
 iOS and Android own the run loop of their main thread, so a mobile application calls `NeoApp.AttachAsync` instead of

@@ -108,6 +108,7 @@ public sealed class NeoAppBuilder
     private NeoExternalUrlScope? _externalLinkScope;
     private Action<NeoExternalOpenCompletedEventArgs>? _externalLinkCompleted;
     private Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? _fileChooser;
+    private Func<NeoPermissionRequest, ValueTask<NeoPermissionDecision>>? _permissionRequest;
     private Action<NeoApplication, NeoPluginBuilder>? _configurePlugins;
     private byte[]? _capabilities;
     private Session? _session;
@@ -309,6 +310,78 @@ public sealed class NeoAppBuilder
 
     internal Func<NeoFileChooserRequest, ValueTask<NeoFileChooserDecision>>? FileChooserHandler => _fileChooser;
 
+    /// <summary>Allows the documents of the application to use browser permissions, such as the microphone, and denies every other request.</summary>
+    /// <param name="kinds">The permissions that the documents of the application may use, such as <see cref="NeoPermissionKind.Microphone"/>.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// <para>
+    /// A request of a document of the application for one of these permissions is allowed for that request only, and nothing
+    /// is kept in the profile of the view; every other request is denied. This is <see cref="OnPermissionRequest"/> with a
+    /// handler that answers <see cref="NeoPermissionDecision.AllowOnce"/> for these kinds and
+    /// <see cref="NeoPermissionDecision.DenyOnce"/> for the others, so requests of other origins are denied as described there.
+    /// </para>
+    /// <para>
+    /// The system still applies its own rules to a camera or a microphone: the privacy settings of Windows, the
+    /// <c>NSMicrophoneUsageDescription</c> or <c>NSCameraUsageDescription</c> of the application on macOS and iOS, and on
+    /// Android the <c>android.permission.RECORD_AUDIO</c> or <c>android.permission.CAMERA</c> that the manifest declares, which
+    /// NeoAstra asks the user for when the application does not hold it yet.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="kinds"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="kinds"/> is empty, or contains <see cref="NeoPermissionKind.Unknown"/> or a value that is not defined.</exception>
+    /// <exception cref="InvalidOperationException">A permission answer was already registered.</exception>
+    public NeoAppBuilder AllowPermissions(params NeoPermissionKind[] kinds)
+    {
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Length == 0) throw new ArgumentException("Name at least one permission to allow.", nameof(kinds));
+        foreach (var kind in kinds)
+        {
+            if (kind == NeoPermissionKind.Unknown || !Enum.IsDefined(kind))
+                throw new ArgumentException($"The permission '{kind}' cannot be allowed: name a known permission.", nameof(kinds));
+        }
+
+        var allowed = kinds.ToHashSet();
+        return OnPermissionRequest(request => ValueTask.FromResult(allowed.Contains(request.Kind) ? NeoPermissionDecision.AllowOnce : NeoPermissionDecision.DenyOnce));
+    }
+
+    /// <summary>Registers how the main view answers the browser permission requests of the documents of the application, such as for the microphone or the camera.</summary>
+    /// <param name="handler">The callback, which runs on the native UI thread and decides each request of a document of the application.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>
+    /// <para>
+    /// Without a permission answer the main view denies every permission request, so that <c>getUserMedia</c> fails with
+    /// <c>NotAllowedError</c>. The handler receives the requests of the documents of the application only: the origin of
+    /// <c>app://neoastra</c>, or that of the development server of <c>dotnet neoastra dev</c>. A request of a frame of another
+    /// origin, or one whose origin the backend does not tell (WebKitGTK tells it only for a camera or a microphone), is denied
+    /// without asking the handler. WKWebView and WebKitGTK report the origin of the top document for a camera or a microphone;
+    /// there, the navigation policy of the main view keeps frames of other origins from loading.
+    /// </para>
+    /// <para>
+    /// The handler can also answer <see cref="NeoPermissionDecision.Default"/>, which lets the engine ask the user where it does,
+    /// or persist its answer where <see cref="NeoPermissionRequest.CanPersist"/> says that the backend keeps it.
+    /// <see cref="AllowPermissions"/> registers a handler that allows a fixed list of permissions.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">A permission answer was already registered.</exception>
+    public NeoAppBuilder OnPermissionRequest(Func<NeoPermissionRequest, ValueTask<NeoPermissionDecision>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (_permissionRequest is not null) throw new InvalidOperationException("The permission answer can be registered only once.");
+        _permissionRequest = handler;
+        return this;
+    }
+
+    // What the main view answers to a permission request: only a document of the application asks the handler.
+    internal ValueTask<NeoPermissionDecision> DecidePermissionAsync(NeoPermissionRequest request, Uri trustedOrigin)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(trustedOrigin);
+        return _permissionRequest is { } handler && request.Origin is { } origin && HasSameOrigin(origin, trustedOrigin)
+            ? handler(request)
+            : ValueTask.FromResult(NeoPermissionDecision.DenyOnce);
+    }
+
     /// <summary>Connects generated contract metadata to the conventional application host.</summary>
     /// <param name="contractHash">The deterministic generated contract hash.</param>
     /// <param name="permissions">Generated application permission declarations.</param>
@@ -449,6 +522,7 @@ public sealed class NeoAppBuilder
             view.NewWindowRequested = request => ValueTask.FromResult(new NeoNewWindowDecision(DecideNewWindow(request.TargetUri, request.IsUserInitiated)));
             if (_externalLinkCompleted is { } externalLinkCompleted) view.ExternalOpenCompleted += (_, outcome) => externalLinkCompleted(outcome);
             if (_fileChooser is { } fileChooser) view.FileChooserRequested = fileChooser;
+            if (_permissionRequest is not null) view.PermissionRequested = request => DecidePermissionAsync(request, trustedOrigin);
             binding = NeoRpcViewBinding.Bind(session.Rpc, view);
             await view.NavigateAsync(target, cancellationToken).ConfigureAwait(true);
             session.Add(window, view, binding, releaseOnClose);

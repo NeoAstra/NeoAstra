@@ -241,6 +241,68 @@ public sealed class NeoAppTests
     }
 
     [TestMethod]
+    [DataRow("app://neoastra")]
+    [DataRow("http://127.0.0.1:5173")]
+    public async Task ConventionalAppAllowsOnlyTheNamedPermissionsOfItsOwnDocuments(string application)
+    {
+        var origin = new Uri(application);
+        var page = new Uri(origin, "/index.html");
+        async Task<NeoDecisionAction> DecideAsync(NeoAppBuilder builder, NeoPermissionKind kind, Uri? asking) =>
+            (await builder.DecidePermissionAsync(new NeoPermissionRequest(kind, asking), origin)).Action;
+
+        // Without an answer, every request is denied, as a view without a handler does.
+        var none = CreateBuilder(ApplicationPermission());
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(none, NeoPermissionKind.Microphone, page));
+
+        var builder = CreateBuilder(ApplicationPermission()).AllowPermissions(NeoPermissionKind.Microphone, NeoPermissionKind.Camera);
+        Assert.AreEqual(NeoDecisionAction.Allow, await DecideAsync(builder, NeoPermissionKind.Microphone, page));
+        Assert.AreEqual(NeoDecisionAction.Allow, await DecideAsync(builder, NeoPermissionKind.Camera, origin));
+        Assert.IsFalse((await builder.DecidePermissionAsync(new NeoPermissionRequest(NeoPermissionKind.Microphone, page), origin)).Persist, "Nothing is kept in the profile.");
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Geolocation, page));
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Unknown, page));
+
+        // Another origin, one that only looks like the application, and a request that does not say who asks are all denied.
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Microphone, new Uri("https://example.com/")));
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Microphone, new Uri("app://neoastra.evil.test/")));
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Microphone, new Uri("http://127.0.0.1:5174/")));
+        Assert.AreEqual(NeoDecisionAction.Deny, await DecideAsync(builder, NeoPermissionKind.Microphone, null));
+    }
+
+    [TestMethod]
+    public async Task ConventionalAppAsksItsPermissionHandlerOnlyForItsOwnDocuments()
+    {
+        var origin = new Uri("app://neoastra");
+        var seen = new List<NeoPermissionRequest>();
+        var builder = CreateBuilder(ApplicationPermission()).OnPermissionRequest(request =>
+        {
+            seen.Add(request);
+            return ValueTask.FromResult(NeoPermissionDecision.Default);
+        });
+
+        var own = new NeoPermissionRequest(NeoPermissionKind.ClipboardRead, new Uri("app://neoastra/editor"), IsUserInitiated: true);
+        Assert.AreEqual(NeoPermissionDecision.Default, await builder.DecidePermissionAsync(own, origin));
+        Assert.AreEqual(NeoPermissionDecision.DenyOnce, await builder.DecidePermissionAsync(new(NeoPermissionKind.ClipboardRead, new Uri("https://frame.example/")), origin));
+        Assert.AreEqual(NeoPermissionDecision.DenyOnce, await builder.DecidePermissionAsync(new(NeoPermissionKind.ClipboardRead, null), origin));
+        Assert.AreEqual(1, seen.Count, "The handler is asked only for the documents of the application.");
+        Assert.AreSame(own, seen[0]);
+    }
+
+    [TestMethod]
+    public void ConventionalAppPermissionConfigurationIsExplicitAndRegisteredOnce()
+    {
+        Assert.ThrowsExactly<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).AllowPermissions(null!));
+        Assert.ThrowsExactly<ArgumentException>(() => CreateBuilder(ApplicationPermission()).AllowPermissions());
+        Assert.ThrowsExactly<ArgumentException>(() => CreateBuilder(ApplicationPermission()).AllowPermissions(NeoPermissionKind.Unknown));
+        Assert.ThrowsExactly<ArgumentException>(() => CreateBuilder(ApplicationPermission()).AllowPermissions((NeoPermissionKind)1000));
+        Assert.ThrowsExactly<ArgumentNullException>(() => CreateBuilder(ApplicationPermission()).OnPermissionRequest(null!));
+
+        var builder = CreateBuilder(ApplicationPermission());
+        Assert.AreSame(builder, builder.AllowPermissions(NeoPermissionKind.Microphone));
+        Assert.ThrowsExactly<InvalidOperationException>(() => builder.AllowPermissions(NeoPermissionKind.Camera));
+        Assert.ThrowsExactly<InvalidOperationException>(() => builder.OnPermissionRequest(static _ => ValueTask.FromResult(NeoPermissionDecision.DenyOnce)));
+    }
+
+    [TestMethod]
     public void ConventionalAppExternalLinkConfigurationIsExplicitAndBounded()
     {
         var builder = CreateBuilder(ApplicationPermission());
