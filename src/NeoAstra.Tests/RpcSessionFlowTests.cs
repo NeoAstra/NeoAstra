@@ -84,7 +84,7 @@ public sealed class RpcSessionFlowTests
     {
         var gate = new BatchGate(static frames => frames.Any(static frame => Kind(frame) == "channel_item"));
         var builder = new NeoRpcBuilder(new NeoRpcOptions { MaximumUnacknowledgedChannelItems = 16 });
-        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(40), RpcTestJsonContext.Default.Response)),
+        builder.AddChannelCommand<Request, Response>("flow.stream", (_, _, _) => ValueTask.FromResult(new NeoRpcChannel<Response>(Items(40, gate.Held), RpcTestJsonContext.Default.Response)),
             RpcTestJsonContext.Default.Request);
         await using var host = builder.Build();
         await using var session = host.OpenSessionCore(new NeoRpcSessionIdentity("fixture", "channel-batch-session"),
@@ -96,8 +96,14 @@ public sealed class RpcSessionFlowTests
         await WaitUntilAsync(() => ItemCount(gate) + session.QueuedOutboundFrameCount == 16);
         await Task.Delay(50);
         Assert.AreEqual(16, ItemCount(gate) + session.QueuedOutboundFrameCount, "No item beyond the unacknowledged window is queued.");
+        var queued = session.QueuedOutboundFrameCount;
+        var batchesBefore = gate.Batches;
         gate.Release();
         await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "channel_item") == 16);
+        // Only the items that queued behind the held batch are known to wait together: after an acknowledgement, a writer
+        // slower than the transport gives its items one at a time, and each then leaves alone.
+        Assert.AreEqual(15, queued, "The items after the first queue behind the batch being sent.");
+        Assert.IsLessThan(queued, gate.Batches - batchesBefore, "Items that queued together leave together, not one round trip each.");
         var channel = JsonDocument.Parse(gate.Frames.First(static frame => Kind(frame) == "result")).RootElement.GetProperty("value").GetProperty("channel").GetString();
         await session.ReceiveAsync($"{{\"neoastra\":1,\"kind\":\"channel_ack\",\"channel\":\"{channel}\",\"sequence\":16}}");
         await WaitUntilAsync(() => gate.Frames.Count(static frame => Kind(frame) == "channel_item") == 32);
@@ -107,12 +113,13 @@ public sealed class RpcSessionFlowTests
         var items = gate.Frames.Where(static frame => Kind(frame) == "channel_item").Select(static frame => JsonDocument.Parse(frame).RootElement).ToArray();
         CollectionAssert.AreEqual(Enumerable.Range(1, 40).Select(static value => (long)value).ToArray(), items.Select(static root => root.GetProperty("sequence").GetInt64()).ToArray());
         Assert.AreEqual("channel_complete", Kind(gate.Frames.Last()), "The terminal frame follows every item.");
-        Assert.IsLessThan(20, gate.Batches, "Items leave in batches, not one round trip each.");
 
-        static async IAsyncEnumerable<Response> Items(int count)
+        // The items after the first come while it is held in its batch: they queue behind it, whatever the speed of the writer.
+        static async IAsyncEnumerable<Response> Items(int count, Task held)
         {
-            for (var index = 0; index < count; index++) yield return new Response(index.ToString(), "view");
-            await Task.CompletedTask;
+            yield return new Response("0", "view");
+            await held.ConfigureAwait(false);
+            for (var index = 1; index < count; index++) yield return new Response(index.ToString(), "view");
         }
     }
 
