@@ -1305,17 +1305,15 @@ public sealed class ManagedApiTests
                     Assert.ThrowsExactly<ArgumentNullException>(() => application.DeleteUserDataRootAsync(null!));
                     Assert.ThrowsExactly<ArgumentException>(() => application.DeleteUserDataRootAsync(" "));
 
-                    // A root with nothing stored has nothing to delete. A native library without the call refuses it.
-                    try
+                    if (!NeoEnvironment.ReadRuntimeInfo().DeletesUserDataRoots)
                     {
-                        await application.DeleteUserDataRootAsync(root);
-                    }
-                    catch (NotSupportedException)
-                    {
+                        await Assert.ThrowsExactlyAsync<NotSupportedException>(async () => await application.DeleteUserDataRootAsync(root));
                         application.Shutdown(0);
                         return;
                     }
 
+                    // A root with nothing stored has nothing to delete.
+                    await application.DeleteUserDataRootAsync(root);
                     await Assert.ThrowsExactlyAsync<ArgumentException>(async () => await application.DeleteUserDataRootAsync(Path.GetPathRoot(root)!));
 
                     var cookie = new NeoCookie("neoastra_deleted", "stored", "delete-user-data-root.invalid")
@@ -1364,10 +1362,6 @@ public sealed class ManagedApiTests
         catch (NeoAstraNativeLibraryException)
         {
             // Native assets are optional for the managed unit-test project.
-        }
-        catch (EntryPointNotFoundException)
-        {
-            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
         }
         finally
         {

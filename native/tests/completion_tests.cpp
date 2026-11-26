@@ -17,6 +17,9 @@ extern neo_platform_created_callback_t environment_callback;
 extern void* environment_context;
 extern neo_platform_created_callback_t view_callback;
 extern void* view_context;
+extern neo_platform_created_callback_t deletion_callback;
+extern void* deletion_context;
+extern bool deletion_reserved;
 extern uint32_t environments_destroyed;
 extern uint32_t views_destroyed;
 }
@@ -550,9 +553,60 @@ void test_completion_races_with_shutdown() {
         neoastra_app_release(app);
     }
 }
+
+void test_invalid_root() {
+    // Invalid length-delimited paths must be rejected before starting a platform operation.
+    auto* app = create_app();
+    const std::string invalid_path("test\0suffix", 11);
+    const auto bad_root = neo_string_view(invalid_path);
+    neoastra_operation_t* operation{};
+    assert(neoastra_app_delete_user_data_root_async(app, bad_root, [](void*, neoastra_result_t, const neoastra_error_t*) {}, nullptr, &operation, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT && !operation);
+    neoastra_environment_options_t options{};
+    options.size = sizeof(options);
+    options.version = 1;
+    options.user_data_root = bad_root;
+    assert(neoastra_environment_create_async(app, &options, capture_environment, nullptr, &operation, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT && !operation);
+    neoastra_app_detach(app, nullptr);
+    neoastra_app_release(app);
+}
+
+void test_root_deletion_completion() {
+    for (const bool shutdown : {false, true}) {
+        auto* app = create_app();
+        captured_completion result;
+        const std::string root = "test";
+        neoastra_operation_t* operation{};
+        auto capture = [](void* data, neoastra_result_t code, const neoastra_error_t*) {
+            auto& result = *static_cast<captured_completion*>(data);
+            assert(std::this_thread::get_id() == result.ui_thread);
+            ++result.calls;
+            result.result = code;
+        };
+        assert(neoastra_app_delete_user_data_root_async(app, neo_string_view(root), capture, &result, &operation, nullptr) == NEOASTRA_OK);
+        neoastra_operation_t* duplicate{};
+        assert(neoastra_app_delete_user_data_root_async(app, neo_string_view(root), capture, nullptr, &duplicate, nullptr) == NEOASTRA_ERROR_INVALID_STATE && !duplicate);
+        assert_saturated(app);
+        if (shutdown) {
+            assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
+            assert(result.calls == 1 && result.result == NEOASTRA_ERROR_CANCELED);
+        }
+        assert(completion_test_backend::deletion_reserved);
+        std::thread worker([] { completion_test_backend::deletion_callback(completion_test_backend::deletion_context, nullptr); });
+        worker.join();
+        neo_drain_dispatch(app);
+        assert(result.calls == 1 && result.result == (shutdown ? NEOASTRA_ERROR_CANCELED : NEOASTRA_OK));
+        assert(!completion_test_backend::deletion_reserved);
+        assert(operation->references.load() == 1 && app->references.load() == 1);
+        neoastra_operation_release(operation);
+        if (!shutdown) neoastra_app_detach(app, nullptr);
+        neoastra_app_release(app);
+    }
+}
 }
 
 int main() {
+    test_invalid_root();
+    test_root_deletion_completion();
     test_creation_queue_rejection();
     test_creation_shutdown_rejection();
     test_script_queue_rejection();

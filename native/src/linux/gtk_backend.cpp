@@ -1,6 +1,7 @@
 #include "../common/native_internal.hpp"
 #include "gtk_permissions.hpp"
 #include "gtk_renderer.hpp"
+#include "user_data_root_paths.hpp"
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
@@ -919,15 +920,23 @@ namespace {
 // The registry is used on the UI thread only, does not keep a session alive, and is never destroyed: a session can outlive it.
 std::unordered_map<std::string,WebKitNetworkSession*>& root_sessions() {static auto* sessions=new std::unordered_map<std::string,WebKitNetworkSession*>;return *sessions;}
 void root_session_finalized(void* data,GObject*) noexcept {std::unique_ptr<std::string> root(static_cast<std::string*>(data));root_sessions().erase(*root);}
-// The roots being deleted, by their resolved path. Used on the UI thread only and never destroyed, as the sessions above.
+// A late worker can release its reservation after UI shutdown.
+std::mutex& deletion_mutex() { static auto* mutex=new std::mutex;return *mutex; }
 std::unordered_set<std::string>& roots_being_deleted() {static auto* roots=new std::unordered_set<std::string>;return *roots;}
-// The key of an absolute root in both registries: its resolved path, the part that exists resolved, without a trailing separator.
-std::string resolved_root(const std::filesystem::path& root) {
+// A root overlaps a live session when it is that root, a parent of it, or inside it: deleting either reaches the data of the other.
+bool overlaps_live_session(const std::filesystem::path& root) {for(const auto& session:root_sessions())if(overlaps(std::filesystem::path(session.first),root))return true;return false;}
+bool overlaps_deletion(const std::filesystem::path& root) {std::lock_guard lock(deletion_mutex());for(const auto& deleted:roots_being_deleted())if(overlaps(std::filesystem::path(deleted),root))return true;return false;}
+// Whether deleting `root` reaches the home directory, which holds the data of every application, or the default WebKitGTK store
+// that environments without a root share. Fails closed: a location that cannot be resolved counts as reached.
+bool reaches_protected_location(const std::filesystem::path& root) {
     std::error_code failure;
-    auto path=std::filesystem::weakly_canonical(root,failure);
-    if(failure)path=root.lexically_normal();
-    if(path.has_relative_path()&&!path.has_filename())path=path.parent_path();
-    return path.string();
+    const auto home=resolved_user_data_root(std::filesystem::path(g_get_home_dir()),failure);
+    if(!home||is_ancestor_or_self(root,*home))return true;
+    for(const char* directory:{g_get_user_data_dir(),g_get_user_cache_dir()}){
+        const auto store=resolved_user_data_root(std::filesystem::path(directory)/"webkitgtk",failure);
+        if(!store||overlaps(root,*store))return true;
+    }
+    return false;
 }
 // Without a root the environment keeps the default session, which is also where data stored before roots were honored remains.
 WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,neoastra_error_t** error) noexcept {
@@ -936,11 +945,13 @@ WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,n
         // WebKitGTK fills the two directories below. Creating them first reports a root that cannot be used, and lets
         // one directory be one session however it is spelled.
         std::error_code failure;
-        auto root=std::filesystem::absolute(std::filesystem::path(neo_string(user_data_root)),failure);
-        // Checked before the directories are created, which would race with the deletion.
-        if(!failure&&roots_being_deleted().count(resolved_root(root))){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is being deleted",0,"webkitgtk");return nullptr;}
-        if(!failure&&(g_mkdir_with_parents((root/"data").c_str(),0700)!=0||g_mkdir_with_parents((root/"cache").c_str(),0700)!=0))failure.assign(errno,std::generic_category());
-        if(!failure)root=std::filesystem::canonical(root,failure);
+        // A root that cannot be resolved has no key that the registries could match, so it is refused. Checked before the
+        // directories are created, which would race with a deletion of this root or of a root around it.
+        const auto resolved=resolved_user_data_root(std::filesystem::path(neo_string(user_data_root)),failure);
+        if(!resolved){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not resolve the user-data root",failure.value(),"webkitgtk");return nullptr;}
+        if(overlaps_deletion(*resolved)){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is being deleted",0,"webkitgtk");return nullptr;}
+        const std::filesystem::path root=*resolved;
+        if(g_mkdir_with_parents((root/"data").c_str(),0700)!=0||g_mkdir_with_parents((root/"cache").c_str(),0700)!=0)failure.assign(errno,std::generic_category());
         if(failure){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create the user-data root",failure.value(),"webkitgtk");return nullptr;}
         auto& sessions=root_sessions();
         if(const auto found=sessions.find(root.string());found!=sessions.end())return WEBKIT_NETWORK_SESSION(g_object_ref(found->second));
@@ -957,37 +968,38 @@ WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,n
 }
 
 bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error);environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;if(error&&!*error)neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create its web context or network session",0,"webkitgtk");return false;}if(!register_custom_schemes(environment,state->context,error)){neo_platform_environment_destroy(environment);return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
-namespace {
-struct root_deletion { std::filesystem::path root; neoastra_completion_callback_t callback{}; void* context{}; neoastra_operation_t* operation{}; std::error_code failure; };
-void delete_root_in_thread(GTask* task,void*,void* data,GCancellable*) noexcept {auto* deletion=static_cast<root_deletion*>(data);try{std::filesystem::remove_all(deletion->root,deletion->failure);}catch(...){deletion->failure=std::make_error_code(std::errc::not_enough_memory);}g_task_return_boolean(task,TRUE);}
-void root_deleted(GObject*,GAsyncResult*,void* data) noexcept {
-    std::unique_ptr<root_deletion> deletion(static_cast<root_deletion*>(data));
-    roots_being_deleted().erase(deletion->root.string());
-    const auto requested=deletion->failure?NEOASTRA_ERROR_NATIVE_FAILURE:NEOASTRA_OK;
-    neoastra_error_t* native_error=deletion->failure?make_error(requested,("Could not delete the user-data root: "+deletion->failure.message()).c_str(),deletion->failure.value()):nullptr;
-    neoastra_result_t actual{};
-    if(deletion->operation->try_complete(requested,actual))deletion->callback(deletion->context,actual,actual==requested?native_error:nullptr);
-    if(native_error)native_error->release();
-    deletion->operation->release();
-}
-}
-// WebKitGTK keeps everything of a root under it, so the root goes with everything in it. The session registry tells which roots
-// live environments use; the directory is deleted on a worker thread, and the completion comes back to the UI thread.
-neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*,const std::string& root,neoastra_completion_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {
+// WebKitGTK keeps everything of a root under it, so the root goes with everything in it. A root is refused, before anything is
+// deleted, when it is the root of a file system, a file or another non-directory, when it overlaps a live environment's root or
+// a deletion in progress, when it contains the home directory or overlaps the default WebKitGTK store, or when it cannot be
+// resolved or inspected. The directory is deleted on a worker thread and the callback is called on the UI thread, once. The
+// operation is borrowed: it is not completed or released here.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*,const std::string& root,neo_platform_created_callback_t callback,void* context,neoastra_operation_t* operation, std::function<void()>& release_root,neoastra_error_t** error) noexcept {
     try{
         std::error_code failure;
-        const auto absolute=std::filesystem::absolute(std::filesystem::path(root),failure);
-        if(failure)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not resolve the user-data root",failure.value(),"webkitgtk");
-        std::filesystem::path path=resolved_root(absolute);
+        const auto resolved=resolved_user_data_root(std::filesystem::path(root),failure);
+        if(!resolved)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not resolve the user-data root",failure.value(),"webkitgtk");
+        const auto& path=*resolved;
         if(path==path.root_path())return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The root of a file system is not a user-data root",0,"webkitgtk");
+        // Only a directory, or nothing at all, is a root: removing a file or a link would remove that file or link.
+        const auto status=std::filesystem::symlink_status(path,failure);
+        if(failure&&failure!=std::errc::no_such_file_or_directory)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not inspect the user-data root",failure.value(),"webkitgtk");
+        if(status.type()!=std::filesystem::file_type::not_found&&status.type()!=std::filesystem::file_type::directory)return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The user-data root is not a directory",0,"webkitgtk");
+        if(overlaps_live_session(path))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"An environment on the user-data root, or on a root that overlaps it, is still alive",0,"webkitgtk");
+        if(overlaps_deletion(path))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root overlaps a root that is being deleted",0,"webkitgtk");
+        if(reaches_protected_location(path))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The user-data root contains the home directory or overlaps the default WebKitGTK store, or one of them cannot be resolved",0,"webkitgtk");
         const auto key=path.string();
-        if(root_sessions().count(key))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"An environment on the user-data root is still alive",0,"webkitgtk");
-        if(!roots_being_deleted().insert(key).second)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is already being deleted",0,"webkitgtk");
-        auto* deletion=new root_deletion{std::move(path),callback,context,operation,{}};
-        GTask* task=g_task_new(nullptr,nullptr,root_deleted,deletion);
-        g_task_set_task_data(task,deletion,nullptr);
-        g_task_run_in_thread(task,delete_root_in_thread);
-        g_object_unref(task);
+        std::function<void()> release=[key]{std::lock_guard lock(deletion_mutex());roots_being_deleted().erase(key);};
+        {std::lock_guard lock(deletion_mutex());roots_being_deleted().insert(key);}
+        release_root=std::move(release);
+        std::thread([path,callback,context,operation]{
+            neoastra_error_t* error{};
+            try {
+                std::error_code failure;
+                if(operation->state.load(std::memory_order_acquire)==neo_operation_state::pending)std::filesystem::remove_all(path,failure);
+                if(failure)error=make_error(NEOASTRA_ERROR_NATIVE_FAILURE,"Could not remove the user-data root",failure.value());
+            } catch(...) { error=make_error(NEOASTRA_ERROR_NATIVE_FAILURE,"Could not remove the user-data root"); }
+            callback(context,error);
+        }).detach();
         return NEOASTRA_OK;
     }catch(const std::exception& exception){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,exception.what(),0,"webkitgtk");}
 }

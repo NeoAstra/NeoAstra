@@ -85,6 +85,30 @@ neoastra_result_t delete_root(neoastra_app_t* app, const std::string& user_data_
     return state.result;
 }
 
+// A deletion's completion that counts its calls, so that a second call shows up.
+struct counted_completion {
+    completion state;
+    int calls{};
+};
+
+void NEOASTRA_CALL counted_operation_completed(void* context, neoastra_result_t result, const neoastra_error_t*) {
+    auto* counted = static_cast<counted_completion*>(context);
+    ++counted->calls;
+    counted->state.result = result;
+    counted->state.done = true;
+}
+
+// Starts deleting a root. The operation, when asked for, is the caller's to release.
+neoastra_result_t start_counted_deletion(neoastra_app_t* app, const std::string& user_data_root, counted_completion& state, neoastra_operation_t** operation = nullptr) {
+    return neoastra_app_delete_user_data_root_async(app, string_view(user_data_root), counted_operation_completed, &state, operation, nullptr);
+}
+
+// Runs the main run loop for a while, so that a completion that comes late is delivered before the check that counts it.
+void pump_for(double seconds) {
+    NSDate* end = [NSDate dateWithTimeIntervalSinceNow:seconds];
+    while ([end timeIntervalSinceNow] > 0) [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+}
+
 bool has_data_store(NSString* identifier) API_AVAILABLE(macos(14.0)) {
     completion state;
     auto* listing = &state;
@@ -311,6 +335,49 @@ int main() {
 
             // A root with nothing stored has nothing to remove.
             assert(delete_root(app, unused_root) == NEOASTRA_OK);
+
+            // The root of a file system is no user-data root, however it is spelled: it is refused before anything is reserved, and a
+            // start that fails calls back for nothing.
+            for (const char* filesystem_root : {"/", "//", "/..", "/private/.."}) {
+                counted_completion refused;
+                assert(start_counted_deletion(app, filesystem_root, refused) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+                pump_for(0.1);
+                assert(refused.calls == 0);
+            }
+
+            // A deletion canceled before it removes the store completes once, as canceled, and leaves the root free: the next deletion of
+            // the root runs and completes once as well.
+            const std::string canceled_root = "/private/tmp/neoastra-data-store-tests/c";
+            auto* canceled = create_environment(app, canceled_root);
+            auto* canceled_profile = create_profile(canceled);
+            set_cookie(canceled_profile, "canceled-root");
+            neoastra_profile_release(canceled_profile);
+            neoastra_environment_release(canceled);
+            counted_completion canceled_deletion;
+            neoastra_operation_t* operation = nullptr;
+            assert(start_counted_deletion(app, canceled_root, canceled_deletion, &operation) == NEOASTRA_OK && operation != nullptr);
+            neoastra_operation_cancel(operation);
+            neoastra_operation_release(operation);
+            wait_for(canceled_deletion.state);
+            pump_for(0.3);
+            assert(canceled_deletion.calls == 1 && canceled_deletion.state.result == NEOASTRA_ERROR_CANCELED);
+
+            counted_completion again;
+            assert(start_counted_deletion(app, canceled_root, again) == NEOASTRA_OK);
+            wait_for(again.state);
+            pump_for(0.3);
+            assert(again.calls == 1 && again.state.result == NEOASTRA_OK);
+
+            // A deletion refused because another one of the root is pending leaves that one alone: it completes once, as requested.
+            counted_completion pending_deletion;
+            counted_completion duplicate_deletion;
+            assert(start_counted_deletion(app, canceled_root, pending_deletion) == NEOASTRA_OK);
+            assert(start_counted_deletion(app, canceled_root, duplicate_deletion) == NEOASTRA_ERROR_INVALID_STATE);
+            pump_for(0.1);
+            assert(duplicate_deletion.calls == 0);
+            wait_for(pending_deletion.state);
+            pump_for(0.3);
+            assert(pending_deletion.calls == 1 && pending_deletion.state.result == NEOASTRA_OK);
         } else {
             assert(delete_root(app, first_root) == NEOASTRA_ERROR_NOT_SUPPORTED);
         }

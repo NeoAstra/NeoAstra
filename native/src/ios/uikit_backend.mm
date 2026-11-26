@@ -259,11 +259,15 @@ void report_history(neoastra_view_t* view, WKWebView* webview) {
 
 // WebKit selects a persistent store by identifier and keeps it in its own container, not in a directory the application chooses.
 // The identifier is the SHA-256 name-based UUID (RFC 9562, version 8) of the root, as on macOS, so that one root names one store.
-NSUUID* data_store_identifier(const std::string& user_data_root) {
+// A root is resolved once, the same way as on macOS, and its identifier is derived from the resolved path.
+std::filesystem::path user_data_root_path(const std::string& user_data_root) {
     std::error_code failure;
     auto path = std::filesystem::weakly_canonical(std::filesystem::path(user_data_root), failure);
     if (failure) path = std::filesystem::path(user_data_root).lexically_normal();
     if (path.has_relative_path() && !path.has_filename()) path = path.parent_path();
+    return path;
+}
+NSUUID* data_store_identifier(const std::filesystem::path& path) {
     const auto name = path.string();
     static constexpr char scope[] = "neoastra:user-data-root:";
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -277,9 +281,10 @@ NSUUID* data_store_identifier(const std::string& user_data_root) {
     return [[NSUUID alloc] initWithUUIDBytes:digest];
 }
 // Without a root the environment keeps the default store, which is also where data stored before roots were honored remains.
-WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app, const std::string& user_data_root) {
+// The identifier is the store of the root, resolved once by the caller; it is nil before iOS 17, where roots share the default store.
+WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app, const std::string& user_data_root, NSUUID* identifier) {
     if (user_data_root.empty()) return [WKWebsiteDataStore defaultDataStore];
-    if (@available(iOS 17.0, *)) return [WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)];
+    if (@available(iOS 17.0, *)) return [WKWebsiteDataStore dataStoreForIdentifier:identifier];
     neo_log(app, NEOASTRA_LOG_WARNING, "environment", "WKWebView cannot give a user-data root its own store before iOS 17; the default store is shared");
     return [WKWebsiteDataStore defaultDataStore];
 }
@@ -287,22 +292,23 @@ WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app, const std::string
 // Both are used on the UI thread only and never destroyed: an environment can be released while the process exits.
 std::unordered_map<std::string, size_t>& root_stores_in_use() { static auto* stores = new std::unordered_map<std::string, size_t>; return *stores; }
 std::unordered_set<std::string>& root_stores_being_deleted() { static auto* stores = new std::unordered_set<std::string>; return *stores; }
-struct root_store_removal { NSUUID* identifier; std::string key; neoastra_completion_callback_t callback; void* context; neoastra_operation_t* operation; int attempts{50}; };
-void finish_root_store_removal(root_store_removal* removal, neoastra_result_t requested, neoastra_error_t* native_error) noexcept {
+// The operation is borrowed: the caller owns it and reads its cancellation here, and it is never completed or released by this file.
+struct root_store_removal { NSUUID* identifier; std::string key; neo_platform_created_callback_t callback; void* context; neoastra_operation_t* operation; int attempts{50}; };
+// Ends a removal once: its reservation goes first, so that the callback can start an environment or a deletion on the root. The
+// callback takes the error, which is owned, or nullptr; a cancellation recorded on the operation is reported by the caller.
+void finish_root_store_removal(root_store_removal* removal, neoastra_error_t* native_error) noexcept {
     root_stores_being_deleted().erase(removal->key);
-    neoastra_result_t actual{};
-    if (removal->operation->try_complete(requested, actual)) removal->callback(removal->context, actual, actual == requested ? native_error : nullptr);
-    if (native_error) native_error->release();
-    removal->operation->release();
+    removal->callback(removal->context, native_error);
     delete removal;
 }
 // The store that clearing used is released, and its session closed, a moment after the clearing completes: until then WebKit
 // answers that the store is in use or that it could not delete its files. The removal is tried again every 100 ms for 5 seconds.
+// A cancellation recorded before a try stops the removal there, with no error.
 void remove_root_store(root_store_removal* removal) noexcept API_AVAILABLE(ios(17.0)) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
         @autoreleasepool {
             if (removal->operation->state.load(std::memory_order_acquire) != neo_operation_state::pending) {
-                finish_root_store_removal(removal, NEOASTRA_ERROR_CANCELED, nullptr);
+                finish_root_store_removal(removal, nullptr);
                 return;
             }
             [WKWebsiteDataStore removeDataStoreForIdentifier:removal->identifier completionHandler:^(NSError* failure) {
@@ -310,7 +316,7 @@ void remove_root_store(root_store_removal* removal) noexcept API_AVAILABLE(ios(1
                     if (failure && --removal->attempts > 0) { remove_root_store(removal); return; }
                     neoastra_error_t* native_error = nullptr;
                     if (failure) neo_fail(&native_error, NEOASTRA_ERROR_NATIVE_FAILURE, "WebKit could not remove the store of the user-data root: " + utf8(failure.localizedDescription), failure.code, webkit_domain);
-                    finish_root_store_removal(removal, failure ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK, native_error);
+                    finish_root_store_removal(removal, native_error);
                 }
             }];
         }
@@ -961,16 +967,19 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment, 
                         return false;
                     }
                 }
-                std::string root_store;
-                if (!options->private_mode && options->user_data_root.length) {
-                    if (@available(iOS 17.0, *)) root_store = utf8(data_store_identifier(neo_string(options->user_data_root)).UUIDString);
-                    if (root_stores_being_deleted().count(root_store)) {
-                        neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root is being deleted", 0, webkit_domain);
-                        return false;
-                    }
+                // The root resolves once: its identifier names both the store of the environment and its entry in the registry.
+                const auto root = neo_string(options->user_data_root);
+                NSUUID* identifier = nil;
+                if (!options->private_mode && !root.empty()) {
+                    if (@available(iOS 17.0, *)) identifier = data_store_identifier(user_data_root_path(root));
+                }
+                std::string root_store = identifier ? utf8(identifier.UUIDString) : std::string{};
+                if (!root_store.empty() && root_stores_being_deleted().count(root_store)) {
+                    neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root is being deleted", 0, webkit_domain);
+                    return false;
                 }
                 auto state = std::make_unique<uikit_environment>();
-                state->data_store = options->private_mode ? [WKWebsiteDataStore nonPersistentDataStore] : persistent_data_store(environment->app, neo_string(options->user_data_root));
+                state->data_store = options->private_mode ? [WKWebsiteDataStore nonPersistentDataStore] : persistent_data_store(environment->app, root, identifier);
                 state->root_store = std::move(root_store);
                 if (!state->root_store.empty()) ++root_stores_in_use()[state->root_store];
                 environment->platform = state.release();
@@ -997,20 +1006,29 @@ void neo_platform_environment_destroy(neoastra_environment_t* environment) noexc
 }
 // WebKit refuses to remove a store that a web view or a data-store object still uses; the registry of live environments
 // refuses the roots of this application first, so that the caller learns it before anything is removed.
-neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string& root, neoastra_completion_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept {
+// A start that fails reserves nothing and does not call back: the reservation is taken only after every step that can fail.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string& root, neo_platform_created_callback_t callback, void* context, neoastra_operation_t* operation, std::function<void()>&, neoastra_error_t** error) noexcept {
     @autoreleasepool {
         if (@available(iOS 17.0, *)) {
             try {
-                NSUUID* identifier = data_store_identifier(root);
-                auto key = utf8(identifier.UUIDString);
+                const auto path = user_data_root_path(root);
+                if (path.relative_path().empty()) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The root of a file system is not a user-data root", 0, webkit_domain);
+                NSUUID* identifier = data_store_identifier(path);
+                const auto key = utf8(identifier.UUIDString);
                 if (root_stores_in_use().count(key)) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "An environment on the user-data root is still alive", 0, webkit_domain);
-                if (!root_stores_being_deleted().insert(key).second) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root is already being deleted", 0, webkit_domain);
+                if (root_stores_being_deleted().count(key)) return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root is already being deleted", 0, webkit_domain);
+                std::unique_ptr<root_store_removal> removal(new root_store_removal{identifier, key, callback, context, operation});
+                root_stores_being_deleted().insert(key);
                 // Removing a store deletes its files, but the network process keeps the cookies it read in memory, and a store on the
                 // same identifier would find them again in this run. Clearing everything through the store first leaves nothing behind.
-                auto* removal = new root_store_removal{identifier, std::move(key), callback, context, operation};
-                @autoreleasepool {
-                    [[WKWebsiteDataStore dataStoreForIdentifier:identifier] removeDataOfTypes:[WKWebsiteDataStore allWebsiteDataTypes] modifiedSince:[NSDate distantPast] completionHandler:^{ remove_root_store(removal); }];
+                auto* pending = removal.get();
+                @try {
+                    [[WKWebsiteDataStore dataStoreForIdentifier:identifier] removeDataOfTypes:[WKWebsiteDataStore allWebsiteDataTypes] modifiedSince:[NSDate distantPast] completionHandler:^{ remove_root_store(pending); }];
+                } @catch (NSException* exception) {
+                    root_stores_being_deleted().erase(key);
+                    return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, utf8(exception.reason).c_str(), 0, webkit_domain);
                 }
+                removal.release();
                 return NEOASTRA_OK;
             } catch (const std::exception& exception) {
                 return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, exception.what(), 0, webkit_domain);

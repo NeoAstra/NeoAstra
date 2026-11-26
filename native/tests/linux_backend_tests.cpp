@@ -1,6 +1,7 @@
 #include "neoastra.h"
 #include "../src/linux/gtk_permissions.hpp"
 #include "../src/linux/gtk_renderer.hpp"
+#include "../src/linux/user_data_root_paths.hpp"
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
@@ -984,6 +985,20 @@ bool has_cookie(neoastra_profile_t* profile, const std::string& value) {
     return state.text.find("\"" + value + "\"") != std::string::npos;
 }
 
+// Roots overlap by whole path components, and a root is resolved to one key however it is spelled. Nothing here touches the
+// file system beyond resolving paths.
+void test_root_path_rules(const std::filesystem::path& base) {
+    assert(overlaps("/x/a", "/x/a"));
+    assert(overlaps("/x", "/x/a/data") && overlaps("/x/a/data", "/x/a"));
+    assert(!overlaps("/x/a", "/x/ab") && !overlaps("/x/a", "/y"));
+    assert(is_ancestor_or_self("/", "/x") && !is_ancestor_or_self("/x", "/"));
+    std::error_code failure;
+    const auto spelled = resolved_user_data_root(base / "sub" / "." / "" / "x" / "..", failure);
+    assert(!failure && spelled && *spelled == base / "sub");
+    const auto trailing = resolved_user_data_root(base / "sub" / "", failure);
+    assert(!failure && trailing && *trailing == base / "sub");
+}
+
 // Environments on different user-data roots must not share cookies, local storage, or any other website data.
 void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base) {
     const std::string first_root = base / "a";
@@ -1053,6 +1068,10 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     assert(delete_root(app, first_root) == NEOASTRA_ERROR_INVALID_STATE);
     assert(delete_root(app, first_root_alias) == NEOASTRA_ERROR_INVALID_STATE);
     assert(has_cookie(first_profile, "deleted-root"));
+    // A root around live roots, and a directory inside a live root, are refused as well: either one reaches their data.
+    assert(delete_root(app, base) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(delete_root(app, first_root + "/data") == NEOASTRA_ERROR_INVALID_STATE);
+    assert(has_cookie(first_profile, "deleted-root") && has_cookie(second_profile, "kept-root"));
 
     neoastra_profile_release(private_profile);
     neoastra_profile_release(ephemeral_profile);
@@ -1092,6 +1111,23 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     neoastra_profile_release(deleted_profile);
     neoastra_environment_release(kept);
     neoastra_environment_release(deleted);
+
+    // A deletion in progress refuses the roots that overlap it, both ways, until its callback has run. Each refusal is decided
+    // before the main context is iterated, so the deletion is still in progress then. Only paths under base are deleted.
+    completion nested_deletion, inside_refused, around_refused;
+    assert(start_deletion(app, base / "nested", nested_deletion) == NEOASTRA_OK);
+    assert(start_deletion(app, base / "nested" / "inside", inside_refused) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_deletion(app, base, around_refused) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_environment(app, (base / "nested" / "inside").string(), false).result == NEOASTRA_ERROR_INVALID_STATE);
+    wait_for(nested_deletion);
+    assert(nested_deletion.result == NEOASTRA_OK);
+
+    // A regular file is not a root: it is refused and it stays. A path through a file cannot be resolved, and is refused too.
+    const std::string plain_file = (base / "plain-file").string();
+    assert(g_file_set_contents(plain_file.c_str(), "keep", 4, nullptr));
+    assert(delete_root(app, plain_file) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(delete_root(app, plain_file + "/root") != NEOASTRA_OK);
+    assert(std::filesystem::is_regular_file(plain_file));
 
     // A root that does not exist has nothing to delete; the root of the file system and no root are not roots.
     assert(delete_root(app, base / "never") == NEOASTRA_OK);
@@ -1308,6 +1344,7 @@ int main() {
 
     test_renderer_is_gl_on_wayland_with_the_nvidia_driver();
     test_permission_kinds_follow_the_request_type();
+    test_root_path_rules(base);
     test_opened_applications_do_not_get_the_renderer_of_neoastra();
     // A copy: the attach may set the variable, which can free the value read before.
     auto* renderer_before = g_strdup(g_getenv("GSK_RENDERER"));

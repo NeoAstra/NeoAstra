@@ -391,11 +391,12 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_move_to_virtual_des
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t*, const neoastra_environment_options_t*, neoastra_environment_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 /* Deletes the website data that environments on a user-data root stored, and the store of the engine for it: on macOS 14 and
    iOS 17 and later the WebKit store that the root names, which WebKit keeps outside the root; on Windows and Linux the root
-   directory with everything in it. A root with nothing stored completes with NEOASTRA_OK. The call is refused with
-   NEOASTRA_ERROR_INVALID_STATE while an environment of this application on the root is alive, before anything is deleted. On
-   Windows the root is moved aside before it is deleted, which waits, at most 30 seconds, until no process uses it any more: the
+   directory with everything in it, including unrelated files. Use a dedicated directory not shared with another process.
+   A root with nothing stored completes with NEOASTRA_OK. The call is refused with
+   NEOASTRA_ERROR_INVALID_STATE while an environment is using the store, before anything is deleted. On
+   Windows the root is moved aside before it is deleted, retrying a sharing or access error for up to 30 seconds: the
    browser process of the last environment on it exits a moment after its last view closed. A root still in use then is left
-   whole, and the deletion fails with NEOASTRA_ERROR_INVALID_STATE. Until the deletion completes, creating an environment on the root
+   whole, and the deletion fails with NEOASTRA_ERROR_INVALID_STATE. During deletion, creating an environment that uses the store
    fails with NEOASTRA_ERROR_INVALID_STATE. Canceling is best effort: part or all of the data can be deleted when the operation
    completes with NEOASTRA_ERROR_CANCELED. NEOASTRA_ERROR_NOT_SUPPORTED where roots have no store of their own: macOS before 14, iOS before 17, and Android. A
    library has it when it reports NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION. Must be called on the UI thread. */

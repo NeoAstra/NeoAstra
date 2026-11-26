@@ -289,21 +289,19 @@ public sealed class NeoApplication : IAsyncDisposable
     /// <returns>A task completed once the data is deleted.</returns>
     /// <remarks>
     /// <para>
-    /// This deletes the sign-ins, cookies, storage, and caches of the root, for example when the part of the application
-    /// that used the root goes away. On Windows and Linux the root directory goes with everything in it. On macOS 14 and
-    /// iOS 17 and later, the data is not in the root: WebKit keeps the store that the root names in its own container, and
-    /// that store goes, with what the network process of WebKit keeps of it in memory. A root with nothing stored completes
-    /// at once.
+    /// On Windows and Linux this recursively deletes the supplied directory, including files the browser did not create.
+    /// Use a dedicated directory for each store and do not share it with another process. On macOS 14 and iOS 17 or later,
+    /// WebKit keeps the store outside that directory. This method clears and removes the WebKit store instead.
+    /// Deleting an unused root succeeds.
     /// </para>
     /// <para>
-    /// Every environment of this application on the root must be released first, with its profiles and views; the call is
-    /// refused before anything is deleted otherwise. On Windows the browser process of the last environment exits a moment
-    /// after its last view closed: the deletion waits for the root to be free for at most 30 seconds, and leaves it whole
-    /// when another process still uses it. Until the deletion completes, creating an environment on the root fails.
-    /// Cancellation is best effort: part or all of the data can be deleted when the task is canceled.
+    /// Release all environments using the store first, along with their profiles and views. A store in use is refused
+    /// before anything is removed, and a new environment cannot start using the store during deletion. On Windows,
+    /// WebView2 can hold files open briefly after its last view closes. If Windows refuses to move the directory aside,
+    /// deletion retries sharing and access errors for up to 30 seconds. Cancellation does not roll back deleted data.
     /// </para>
     /// </remarks>
-    /// <exception cref="ArgumentException"><paramref name="userDataRoot"/> is empty, white space, or the root of a file system.</exception>
+    /// <exception cref="ArgumentException"><paramref name="userDataRoot"/> is empty, white space, contains a null character, or names a file-system root or a protected system or user directory.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="userDataRoot"/> is <see langword="null"/>.</exception>
     /// <exception cref="NotSupportedException">
     /// Roots have no store of their own here: macOS before 14, iOS before 17, and Android, or the native library predates
@@ -337,7 +335,7 @@ public sealed class NeoApplication : IAsyncDisposable
             result = NativeMethods.neoastra_app_delete_user_data_root_async(
                 NativeHandle,
                 root.View,
-                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&UserDataRootDeleted,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&NativeOperation.Complete,
                 (void*)operation.Context,
                 &nativeOperation,
                 &error);
@@ -1646,28 +1644,6 @@ public sealed class NeoApplication : IAsyncDisposable
         internal void Invoke(NeoLogMessage message) => Volatile.Read(ref _callback)?.Invoke(message);
 
         internal void Clear() => Interlocked.Exchange(ref _callback, null);
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static unsafe void UserDataRootDeleted(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_error_t error)
-    {
-        try
-        {
-            var operation = NativeOperation.Get<bool>(context);
-            if (operation is null) return;
-            if (NativeError.Code(result) == NeoErrorCode.Success)
-            {
-                operation.Complete(true);
-            }
-            else
-            {
-                operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "delete user-data root"));
-            }
-        }
-        catch (Exception ex)
-        {
-            NativeOperation.Get<bool>(context)?.Fail(ex);
-        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

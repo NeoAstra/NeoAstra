@@ -382,7 +382,8 @@ environment on the same root finds its data again. Where the data is kept depend
   the root. Deleting, moving, or copying the root directory therefore does not delete, move, or copy
   the data: a root at the same path finds its data again, a root at a new path starts empty, and a
   root that is no longer used leaves its store behind until it is deleted, as described below. Give
-  throwaway instances such as tests a private environment, which stores nothing. Without a root, the environment uses the application's default WebKit store.
+  throwaway instances such as tests a private environment, which stores nothing. Without a root,
+  the environment uses the application's default WebKit store.
   Before macOS 14 the root has no effect: every environment that is not private shares the default
   store, and the backend logs a warning when such an environment asks for a root.
 - **Linux.** Each root has a persistent WebKitGTK network session of its own, which keeps website data
@@ -396,19 +397,28 @@ environment on the same root finds its data again. Where the data is kept depend
   memory only and do not survive a restart.
 
 `NeoApplication.DeleteUserDataRootAsync` deletes what environments on a root stored, for example the
-sign-ins of a part of the application that goes away. Every environment of the application on the root
-must be released first, with its profiles and views: the call is refused otherwise, before anything is
-deleted, and until it completes no environment can be created on the root.
+sign-ins of a session that goes away. Release all environments using that store, with their profiles
+and views, before deleting it. The call refuses a store that is in use, and a new environment cannot
+start using the store while it is being deleted. Cancellation is best effort; it does not roll back
+data already removed.
 
-- **Windows.** The root folder goes with everything in it. The browser process of the last environment
-  on it exits a moment after its last view closed, and another process can use the folder too, so the
-  folder is first moved aside, which waits until no process uses it, for at most 30 seconds. A folder
-  still in use then is left whole, and the call fails with `InvalidOperationException`.
+On Windows and Linux, **use a dedicated directory**: deletion removes everything under the supplied
+path, not just files created by the browser. Do not share the directory with another process.
+Deletion also refuses a directory that contains, or sits inside, an active root.
+
+- **Windows.** WebView2 can hold files open briefly after its last view closes. NeoAstra retries
+  moving the directory aside for up to 30 seconds before deleting it. If Windows still refuses
+  the move because the directory is in use, the directory is left intact and the call fails with
+  `InvalidOperationException`. Do not override WebView2's user-data folder through environment
+  variables or policy when using per-root storage: deletion targets the supplied directory, not
+  the override. Relative roots are resolved beside the executable. Drive and share roots, the user
+  profile and application-data directories themselves, and Windows and program directories are protected.
 - **macOS 14 and iOS 17 and later.** The WebKit store of the root goes. Its data is first cleared
   through the store, because the WebKit network process keeps the cookies it read in memory, and a new
   store of the root would otherwise find them again in the same run. WebKit lets the store go a moment
   later, and the removal is retried for up to five seconds. The root directory itself is not touched.
-- **Linux.** The root directory goes with everything in it.
+- **Linux.** The root must be a directory. Deletion refuses the home directory, its ancestors, and
+  paths overlapping the default WebKitGTK data or cache.
 - **Earlier macOS and iOS, and Android.** Roots have no store of their own, and the call throws
   `NotSupportedException`. An application that deletes the data of a part that goes away cannot
   then offer that part a store of its own that keeps sign-ins.

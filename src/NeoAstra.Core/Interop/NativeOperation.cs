@@ -1,7 +1,9 @@
 // Copyright (c) Alexandre Mutel. All rights reserved.
 // Licensed under the BSD-Clause 2 license.
 
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using NeoAstra.Interop.Generated;
 
 namespace NeoAstra.Interop;
 
@@ -146,5 +148,29 @@ internal sealed class NativeOperation<T>
 
 internal static class NativeOperation
 {
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    internal static unsafe void Complete(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_error_t error)
+    {
+        try
+        {
+            var operation = NativeOperation.Get<bool>(context);
+            if (operation is null) return;
+            if (NativeError.Code(result) == NeoErrorCode.Success)
+            {
+                operation.Complete(true);
+            }
+            else
+            {
+                operation.Fail(NativeError.CreateException(
+                    NativeError.Read(NativeError.Code(result), error.Handle),
+                    operation.Owner as string ?? "native operation"));
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeOperation.Get<bool>(context)?.Fail(ex);
+        }
+    }
+
     internal static unsafe NativeOperation<T>? Get<T>(void* context) => NativeOperation<T>.FromContext(context);
 }

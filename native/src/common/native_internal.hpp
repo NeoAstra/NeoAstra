@@ -1115,9 +1115,10 @@ neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool to
 using neo_platform_created_callback_t = void (*)(void* context, neoastra_error_t* error) noexcept;
 bool neo_platform_environment_create_async(neoastra_environment_t* environment, const neoastra_environment_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept;
 void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept;
-// Starts deleting what environments on a user-data root stored; the root is not empty. On NEOASTRA_OK the backend owns the
-// reference to the operation and completes it through try_complete, on the UI thread; otherwise it calls nothing.
-neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t* app, const std::string& root, neoastra_completion_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
+// On success, call back once from any thread, transferring any error. The operation is borrowed until then
+// for cancellation checks. On start failure do not call back. A worker-backed store can supply a release action
+// for its reservation: common runs it before UI delivery, or when the late worker finishes after shutdown.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t* app, const std::string& root, neo_platform_created_callback_t callback, void* context, neoastra_operation_t* operation, std::function<void()>& release_root, neoastra_error_t** error) noexcept;
 bool neo_platform_profile_create(neoastra_profile_t* profile, neoastra_error_t** error) noexcept;
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept;
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t* profile, const std::string& uri, neoastra_buffer_callback_t callback, void* context, neoastra_operation_t* operation, neoastra_error_t** error) noexcept;
