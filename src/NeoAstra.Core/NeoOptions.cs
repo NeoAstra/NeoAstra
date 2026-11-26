@@ -82,6 +82,7 @@ public sealed class NeoEnvironmentOptions
     /// resolved path; WebKit keeps that store in its per-application container rather than in this directory.
     /// Earlier macOS releases do not use the root: every environment that is not private shares the default
     /// store there. Without a root, an environment uses the default store of the browser engine.
+    /// <see cref="NeoApplication.DeleteUserDataRootAsync"/> deletes what the environments on a root stored.
     /// </remarks>
     public string? UserDataRoot { get; set; }
 

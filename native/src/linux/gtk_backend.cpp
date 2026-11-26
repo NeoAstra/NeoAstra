@@ -14,6 +14,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -918,6 +919,16 @@ namespace {
 // The registry is used on the UI thread only, does not keep a session alive, and is never destroyed: a session can outlive it.
 std::unordered_map<std::string,WebKitNetworkSession*>& root_sessions() {static auto* sessions=new std::unordered_map<std::string,WebKitNetworkSession*>;return *sessions;}
 void root_session_finalized(void* data,GObject*) noexcept {std::unique_ptr<std::string> root(static_cast<std::string*>(data));root_sessions().erase(*root);}
+// The roots being deleted, by their resolved path. Used on the UI thread only and never destroyed, as the sessions above.
+std::unordered_set<std::string>& roots_being_deleted() {static auto* roots=new std::unordered_set<std::string>;return *roots;}
+// The key of an absolute root in both registries: its resolved path, the part that exists resolved, without a trailing separator.
+std::string resolved_root(const std::filesystem::path& root) {
+    std::error_code failure;
+    auto path=std::filesystem::weakly_canonical(root,failure);
+    if(failure)path=root.lexically_normal();
+    if(path.has_relative_path()&&!path.has_filename())path=path.parent_path();
+    return path.string();
+}
 // Without a root the environment keeps the default session, which is also where data stored before roots were honored remains.
 WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,neoastra_error_t** error) noexcept {
     if(user_data_root.length==0)return WEBKIT_NETWORK_SESSION(g_object_ref(webkit_network_session_get_default()));
@@ -926,6 +937,8 @@ WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,n
         // one directory be one session however it is spelled.
         std::error_code failure;
         auto root=std::filesystem::absolute(std::filesystem::path(neo_string(user_data_root)),failure);
+        // Checked before the directories are created, which would race with the deletion.
+        if(!failure&&roots_being_deleted().count(resolved_root(root))){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is being deleted",0,"webkitgtk");return nullptr;}
         if(!failure&&(g_mkdir_with_parents((root/"data").c_str(),0700)!=0||g_mkdir_with_parents((root/"cache").c_str(),0700)!=0))failure.assign(errno,std::generic_category());
         if(!failure)root=std::filesystem::canonical(root,failure);
         if(failure){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create the user-data root",failure.value(),"webkitgtk");return nullptr;}
@@ -944,6 +957,40 @@ WebKitNetworkSession* persistent_session(neoastra_string_view_t user_data_root,n
 }
 
 bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_environment;if(!state)return false;state->context=webkit_web_context_new();state->session=options->private_mode?webkit_network_session_new_ephemeral():persistent_session(options->user_data_root,error);environment->platform=state;if(!state->context||!state->session){if(state->context)g_object_unref(state->context);if(state->session)g_object_unref(state->session);delete state;environment->platform=nullptr;if(error&&!*error)neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK could not create its web context or network session",0,"webkitgtk");return false;}if(!register_custom_schemes(environment,state->context,error)){neo_platform_environment_destroy(environment);return false;}state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);callback(context,nullptr);return true;}
+namespace {
+struct root_deletion { std::filesystem::path root; neoastra_completion_callback_t callback{}; void* context{}; neoastra_operation_t* operation{}; std::error_code failure; };
+void delete_root_in_thread(GTask* task,void*,void* data,GCancellable*) noexcept {auto* deletion=static_cast<root_deletion*>(data);try{std::filesystem::remove_all(deletion->root,deletion->failure);}catch(...){deletion->failure=std::make_error_code(std::errc::not_enough_memory);}g_task_return_boolean(task,TRUE);}
+void root_deleted(GObject*,GAsyncResult*,void* data) noexcept {
+    std::unique_ptr<root_deletion> deletion(static_cast<root_deletion*>(data));
+    roots_being_deleted().erase(deletion->root.string());
+    const auto requested=deletion->failure?NEOASTRA_ERROR_NATIVE_FAILURE:NEOASTRA_OK;
+    neoastra_error_t* native_error=deletion->failure?make_error(requested,("Could not delete the user-data root: "+deletion->failure.message()).c_str(),deletion->failure.value()):nullptr;
+    neoastra_result_t actual{};
+    if(deletion->operation->try_complete(requested,actual))deletion->callback(deletion->context,actual,actual==requested?native_error:nullptr);
+    if(native_error)native_error->release();
+    deletion->operation->release();
+}
+}
+// WebKitGTK keeps everything of a root under it, so the root goes with everything in it. The session registry tells which roots
+// live environments use; the directory is deleted on a worker thread, and the completion comes back to the UI thread.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*,const std::string& root,neoastra_completion_callback_t callback,void* context,neoastra_operation_t* operation,neoastra_error_t** error) noexcept {
+    try{
+        std::error_code failure;
+        const auto absolute=std::filesystem::absolute(std::filesystem::path(root),failure);
+        if(failure)return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not resolve the user-data root",failure.value(),"webkitgtk");
+        std::filesystem::path path=resolved_root(absolute);
+        if(path==path.root_path())return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The root of a file system is not a user-data root",0,"webkitgtk");
+        const auto key=path.string();
+        if(root_sessions().count(key))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"An environment on the user-data root is still alive",0,"webkitgtk");
+        if(!roots_being_deleted().insert(key).second)return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is already being deleted",0,"webkitgtk");
+        auto* deletion=new root_deletion{std::move(path),callback,context,operation,{}};
+        GTask* task=g_task_new(nullptr,nullptr,root_deleted,deletion);
+        g_task_set_task_data(task,deletion,nullptr);
+        g_task_run_in_thread(task,delete_root_in_thread);
+        g_object_unref(task);
+        return NEOASTRA_OK;
+    }catch(const std::exception& exception){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,exception.what(),0,"webkitgtk");}
+}
 void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {auto* state=static_cast<gtk_environment*>(environment->platform);if(!state)return;for(auto* registration:state->schemes)registration->environment=nullptr;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}if(state->context)g_object_unref(state->context);delete state;environment->platform=nullptr;}
 bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {auto* state=new(std::nothrow) gtk_profile;if(!state){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile allocation failed");return false;}auto* environment=static_cast<gtk_environment*>(profile->environment->platform);state->session=profile->ephemeral?webkit_network_session_new_ephemeral():environment&&environment->session?WEBKIT_NETWORK_SESSION(g_object_ref(environment->session)):nullptr;if(!state->session){delete state;neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WebKitGTK profile network-session creation failed");return false;}if(profile->ephemeral)state->download_started=g_signal_connect(state->session,"download-started",G_CALLBACK(download_started),nullptr);profile->platform=state;return true;}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {auto* state=static_cast<gtk_profile*>(profile->platform);if(!state)return;if(state->session){if(state->download_started)g_signal_handler_disconnect(state->session,state->download_started);g_object_unref(state->session);}delete state;profile->platform=nullptr;}

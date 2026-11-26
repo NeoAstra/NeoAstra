@@ -522,6 +522,12 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
 
     // Whether the native library has neoastra_view_set_key_chord_callback, which came with the channel too.
     internal bool HasKeyChords => HasScriptWorldChannels;
+
+    // NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION of native/include/neoastra.h.
+    private const ulong UserDataRootDeletion = 1UL << 6;
+
+    // Whether the native library has neoastra_app_delete_user_data_root_async.
+    internal bool DeletesUserDataRoots => (BuildFeatures & UserDataRootDeletion) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

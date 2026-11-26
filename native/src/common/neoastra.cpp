@@ -1101,7 +1101,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL|NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -1424,6 +1424,23 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t
         return NEOASTRA_OK;
     } catch(const std::exception& ex) {
         if(value)value->release();
+        if(op)op->release();
+        if(outop&&*outop){(*outop)->release();*outop=nullptr;}
+        return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());
+    }
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_delete_user_data_root_async(neoastra_app_t* app,neoastra_string_view_t root,neoastra_completion_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){
+    if(outop)*outop=nullptr;
+    if(!app||!callback||root.length==0||!neo_valid_utf8(root))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"a user-data root is required");
+    if(!check_ui(app))return neo_fail(error,NEOASTRA_ERROR_WRONG_THREAD,"user-data roots must be deleted on the UI thread");
+    if(!accepts_ui_objects(app))return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application shutdown has begun");
+    neoastra_operation_t* op{};
+    try {
+        op=make_operation(outop);
+        const auto result=neo_platform_delete_user_data_root(app,neo_string(root),callback,context,op,error);
+        if(result!=NEOASTRA_OK){op->release();if(outop&&*outop){(*outop)->release();*outop=nullptr;}}
+        return result;
+    } catch(const std::exception& ex) {
         if(op)op->release();
         if(outop&&*outop){(*outop)->release();*outop=nullptr;}
         return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());

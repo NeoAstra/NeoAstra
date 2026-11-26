@@ -2347,6 +2347,22 @@ namespace NeoAstra.Interop.Generated
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_environment_create_async(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_environment_options_t* arg1, NativeMethods.neoastra_environment_created_callback_t arg2, void* arg3, NativeMethods.neoastra_operation_t* arg4, NativeMethods.neoastra_error_t* arg5);
 
+        /// <summary>
+        /// Deletes the website data that environments on a user-data root stored, and the store of the engine for it: on macOS 14 and
+        /// iOS 17 and later the WebKit store that the root names, which WebKit keeps outside the root; on Windows and Linux the root
+        /// directory with everything in it. A root with nothing stored completes with NEOASTRA_OK. The call is refused with
+        /// NEOASTRA_ERROR_INVALID_STATE while an environment of this application on the root is alive, before anything is deleted. On
+        /// Windows the root is moved aside before it is deleted, which waits, at most 30 seconds, until no process uses it any more: the
+        /// browser process of the last environment on it exits a moment after its last view closed. A root still in use then is left
+        /// whole, and the deletion fails with NEOASTRA_ERROR_INVALID_STATE. Until the deletion completes, creating an environment on the root
+        /// fails with NEOASTRA_ERROR_INVALID_STATE. Canceling is best effort: part or all of the data can be deleted when the operation
+        /// completes with NEOASTRA_ERROR_CANCELED. NEOASTRA_ERROR_NOT_SUPPORTED where roots have no store of their own: macOS before 14, iOS before 17, and Android. A
+        /// library has it when it reports NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION. Must be called on the UI thread.
+        /// </summary>
+        [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_app_delete_user_data_root_async")]
+        [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
+        public static partial NativeMethods.neoastra_result_t neoastra_app_delete_user_data_root_async(NativeMethods.neoastra_app_t arg0, NativeMethods.neoastra_string_view_t arg1, NativeMethods.neoastra_completion_callback_t arg2, void* arg3, NativeMethods.neoastra_operation_t* arg4, NativeMethods.neoastra_error_t* arg5);
+
         [global::System.Runtime.InteropServices.LibraryImport(NativeMethods.LibraryName, EntryPoint = "neoastra_environment_create_profile_async")]
         [UnmanagedCallConv(CallConvs = new Type[] { typeof(CallConvCdecl) })]
         public static partial NativeMethods.neoastra_result_t neoastra_environment_create_profile_async(NativeMethods.neoastra_environment_t arg0, NativeMethods.neoastra_profile_options_t* arg1, NativeMethods.neoastra_profile_created_callback_t arg2, void* arg3, NativeMethods.neoastra_operation_t* arg4, NativeMethods.neoastra_error_t* arg5);

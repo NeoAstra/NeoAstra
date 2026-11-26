@@ -1284,6 +1284,108 @@ public sealed class ManagedApiTests
     }
 
     [TestMethod]
+    public async Task DeleteUserDataRoot_DeletesTheRootOnceItsEnvironmentsAreReleasedWhenDevelopmentLibraryIsAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"neoastra-delete-{Guid.NewGuid():N}");
+        try
+        {
+            var run = RunStaAsync(() => NeoApplication.Run(
+                new NeoApplicationOptions
+                {
+                    ApplicationName = "NeoAstra user-data root deletion test",
+                    ShutdownMode = NeoApplicationShutdownMode.Explicit,
+                },
+                async application =>
+                {
+                    Assert.ThrowsExactly<ArgumentNullException>(() => application.DeleteUserDataRootAsync(null!));
+                    Assert.ThrowsExactly<ArgumentException>(() => application.DeleteUserDataRootAsync(" "));
+
+                    // A root with nothing stored has nothing to delete. A native library without the call refuses it.
+                    try
+                    {
+                        await application.DeleteUserDataRootAsync(root);
+                    }
+                    catch (NotSupportedException)
+                    {
+                        application.Shutdown(0);
+                        return;
+                    }
+
+                    await Assert.ThrowsExactlyAsync<ArgumentException>(async () => await application.DeleteUserDataRootAsync(Path.GetPathRoot(root)!));
+
+                    var cookie = new NeoCookie("neoastra_deleted", "stored", "delete-user-data-root.invalid")
+                    {
+                        IsSecure = true,
+                        Expires = DateTimeOffset.UtcNow.AddHours(1),
+                    };
+                    var environment = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { UserDataRoot = root });
+                    var profile = await environment.CreateProfileAsync();
+                    var window = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                    var view = await environment.CreateWebViewAsync(NeoAstraHost.FillWindow(window), new NeoAstraOptions { Profile = profile });
+                    await profile.SetCookieAsync(cookie);
+                    Assert.IsTrue(Directory.Exists(root));
+
+                    // A live environment on the root, however the root is spelled, keeps it whole.
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await application.DeleteUserDataRootAsync(root.ToUpperInvariant() + Path.DirectorySeparatorChar));
+                    Assert.IsTrue(Directory.Exists(root));
+
+                    // Released, the root goes with everything in it, once the browser process lets it go.
+                    await view.DisposeAsync();
+                    await profile.DisposeAsync();
+                    await environment.DisposeAsync();
+                    window.Close();
+                    await application.DeleteUserDataRootAsync(root);
+                    Assert.IsFalse(Directory.Exists(root));
+                    Assert.IsFalse(Directory.EnumerateDirectories(Path.GetDirectoryName(root)!, Path.GetFileName(root) + "*").Any(), "The root was moved aside but not deleted.");
+
+                    // WebView2 reaches the cookies of a profile through a view of it.
+                    var reopened = await application.CreateEnvironmentAsync(new NeoEnvironmentOptions { UserDataRoot = root });
+                    var reopenedProfile = await reopened.CreateProfileAsync();
+                    var reopenedWindow = application.CreateWindow(new NeoWindowOptions { IsVisible = false });
+                    var reopenedView = await reopened.CreateWebViewAsync(NeoAstraHost.FillWindow(reopenedWindow), new NeoAstraOptions { Profile = reopenedProfile });
+                    Assert.IsFalse((await reopenedProfile.GetCookiesAsync(new Uri("https://delete-user-data-root.invalid/"))).Any(value => value.Name == cookie.Name));
+                    await reopenedView.DisposeAsync();
+                    await reopenedProfile.DisposeAsync();
+                    await reopened.DisposeAsync();
+                    reopenedWindow.Close();
+
+                    await application.DeleteUserDataRootAsync(root);
+                    Assert.IsFalse(Directory.Exists(root));
+                    application.Shutdown(0);
+                }));
+
+            Assert.AreEqual(0, await run.WaitAsync(TimeSpan.FromSeconds(90)));
+        }
+        catch (NeoAstraNativeLibraryException)
+        {
+            // Native assets are optional for the managed unit-test project.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Checked pre-release RID assets may temporarily lag source while minor matching is disabled.
+        }
+        finally
+        {
+            for (var attempt = 0; attempt < 20 && Directory.Exists(root); attempt++)
+            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    await Task.Delay(250);
+                }
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task WindowBounds_RoundTripClientSizeAndPositionWhenDevelopmentLibraryIsAvailable()
     {
         if (!OperatingSystem.IsWindows())

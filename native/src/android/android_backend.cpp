@@ -925,6 +925,8 @@ neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t*, const st
 neoastra_result_t neo_platform_profile_set_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return unsupported(error, "Cookie access"); }
 neoastra_result_t neo_platform_profile_delete_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return unsupported(error, "Cookie access"); }
 neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t*, neoastra_data_kind_t, int64_t, int64_t, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return unsupported(error, "Clearing browser data"); }
+// The WebView keeps the data of the process in one directory and does not use the user-data root, so a root has nothing of its own.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string&, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t** error) noexcept { return neo_fail(error, NEOASTRA_ERROR_NOT_SUPPORTED, "The Android WebView gives a user-data root no store of its own", 0, android_domain); }
 
 bool neo_platform_view_create_async(neoastra_view_t* view, const neoastra_view_options_t* options, neo_platform_created_callback_t callback, void* context, neoastra_error_t** error) noexcept {
     if (options->popup_request) { unsupported(error, "A popup view"); return false; }

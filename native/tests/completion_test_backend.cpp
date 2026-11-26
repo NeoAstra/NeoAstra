@@ -62,6 +62,7 @@ void neo_platform_profile_destroy(neoastra_profile_t*) noexcept { }
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t*, const std::string&, neoastra_buffer_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_profile_set_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_profile_delete_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string&, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t*, neoastra_data_kind_t, int64_t, int64_t, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 bool neo_platform_view_create_async(neoastra_view_t*, const neoastra_view_options_t*, neo_platform_created_callback_t callback, void* context, neoastra_error_t**) noexcept {
     completion_test_backend::view_callback = callback;

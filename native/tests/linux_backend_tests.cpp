@@ -82,6 +82,19 @@ neoastra_environment_t* create_environment(neoastra_app_t* app, const std::strin
     return static_cast<neoastra_environment_t*>(state.value);
 }
 
+// Starts deleting a root. A start that is refused sets the completion to its result.
+neoastra_result_t start_deletion(neoastra_app_t* app, const std::string& user_data_root, completion& state) {
+    const auto result = neoastra_app_delete_user_data_root_async(app, string_view(user_data_root), operation_completed, &state, nullptr, nullptr);
+    if (result != NEOASTRA_OK) { state.result = result; state.done = true; }
+    return result;
+}
+
+neoastra_result_t delete_root(neoastra_app_t* app, const std::string& user_data_root) {
+    completion state;
+    if (start_deletion(app, user_data_root, state) == NEOASTRA_OK) wait_for(state);
+    return state.result;
+}
+
 neoastra_profile_t* create_profile(neoastra_environment_t* environment, bool ephemeral = false) {
     neoastra_profile_options_t options{};
     options.size = sizeof(options);
@@ -1034,6 +1047,13 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     clear_cookies(second_profile);
     assert(!has_cookie(second_profile, "second-root"));
 
+    // A root whose environment is alive, however it is spelled, is refused before anything is deleted.
+    set_cookie(first_profile, "deleted-root");
+    set_cookie(second_profile, "kept-root");
+    assert(delete_root(app, first_root) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(delete_root(app, first_root_alias) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(has_cookie(first_profile, "deleted-root"));
+
     neoastra_profile_release(private_profile);
     neoastra_profile_release(ephemeral_profile);
     neoastra_profile_release(unrooted_profile);
@@ -1050,6 +1070,33 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     auto* reopened = create_environment(app, first_root);
     assert(data_directory(view_session(reopened, window)) == first_root + "/data");
     neoastra_environment_release(reopened);
+
+    // Once its environments are released, the root goes with everything in it, and an environment on it starts empty. Until
+    // then the root takes no new environment.
+    completion deletion;
+    assert(start_deletion(app, first_root_alias, deletion) == NEOASTRA_OK);
+    // Both are refused at once; waiting for the refused environment lets the deletion complete.
+    completion second_deletion;
+    assert(start_deletion(app, first_root, second_deletion) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_environment(app, first_root, false).result == NEOASTRA_ERROR_INVALID_STATE);
+    wait_for(deletion);
+    assert(deletion.result == NEOASTRA_OK);
+    assert(!std::filesystem::exists(first_root) && std::filesystem::exists(second_root + "/data/cookies.sqlite"));
+    auto* deleted = create_environment(app, first_root);
+    auto* kept = create_environment(app, second_root);
+    auto* deleted_profile = create_profile(deleted);
+    auto* kept_profile = create_profile(kept);
+    assert(!has_cookie(deleted_profile, "deleted-root"));
+    assert(has_cookie(kept_profile, "kept-root"));
+    neoastra_profile_release(kept_profile);
+    neoastra_profile_release(deleted_profile);
+    neoastra_environment_release(kept);
+    neoastra_environment_release(deleted);
+
+    // A root that does not exist has nothing to delete; the root of the file system and no root are not roots.
+    assert(delete_root(app, base / "never") == NEOASTRA_OK);
+    assert(delete_root(app, "/") == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_app_delete_user_data_root_async(app, {}, operation_completed, nullptr, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
 
     // A root that cannot hold the data is an error, not a silent fallback to another store.
     assert(g_file_set_contents((base / "file").c_str(), "", 0, nullptr));

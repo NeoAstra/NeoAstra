@@ -283,6 +283,81 @@ public sealed class NeoApplication : IAsyncDisposable
         return operation.ValueTask;
     }
 
+    /// <summary>Deletes the website data that environments on a user-data root stored, and the store of the engine for it.</summary>
+    /// <param name="userDataRoot">The <see cref="NeoEnvironmentOptions.UserDataRoot"/> of the environments.</param>
+    /// <param name="cancellationToken">Cancels the managed wait and requests native cancellation.</param>
+    /// <returns>A task completed once the data is deleted.</returns>
+    /// <remarks>
+    /// <para>
+    /// This deletes the sign-ins, cookies, storage, and caches of the root, for example when the part of the application
+    /// that used the root goes away. On Windows and Linux the root directory goes with everything in it. On macOS 14 and
+    /// iOS 17 and later, the data is not in the root: WebKit keeps the store that the root names in its own container, and
+    /// that store goes, with what the network process of WebKit keeps of it in memory. A root with nothing stored completes
+    /// at once.
+    /// </para>
+    /// <para>
+    /// Every environment of this application on the root must be released first, with its profiles and views; the call is
+    /// refused before anything is deleted otherwise. On Windows the browser process of the last environment exits a moment
+    /// after its last view closed: the deletion waits for the root to be free for at most 30 seconds, and leaves it whole
+    /// when another process still uses it. Until the deletion completes, creating an environment on the root fails.
+    /// Cancellation is best effort: part or all of the data can be deleted when the task is canceled.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="userDataRoot"/> is empty, white space, or the root of a file system.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="userDataRoot"/> is <see langword="null"/>.</exception>
+    /// <exception cref="NotSupportedException">
+    /// Roots have no store of their own here: macOS before 14, iOS before 17, and Android, or the native library predates
+    /// this call. An application can then leave roots that keep sign-ins out.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// An environment of this application on the root is alive, the root is being deleted already, the root is still in use
+    /// by a process after 30 seconds (Windows), the call is not on the UI thread, or quit negotiation or stopping has begun.
+    /// </exception>
+    /// <exception cref="NeoAstraException">The engine or the file system failed to delete the data.</exception>
+    /// <exception cref="ObjectDisposedException">The application is disposed.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was canceled.</exception>
+    public unsafe ValueTask DeleteUserDataRootAsync(string userDataRoot, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userDataRoot);
+        ThrowIfDisposed();
+        EnsureTopLevelWorkAccepted();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!NeoEnvironment.ReadRuntimeInfo().DeletesUserDataRoots)
+        {
+            throw new NotSupportedException("The loaded native library cannot delete user-data roots.");
+        }
+
+        using var root = new Utf8String(userDataRoot);
+        var operation = new NativeOperation<bool>(cancellationToken, "delete user-data root");
+        NativeMethods.neoastra_operation_t nativeOperation = default;
+        NativeMethods.neoastra_error_t error = default;
+        NativeMethods.neoastra_result_t result;
+        try
+        {
+            result = NativeMethods.neoastra_app_delete_user_data_root_async(
+                NativeHandle,
+                root.View,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&UserDataRootDeleted,
+                (void*)operation.Context,
+                &nativeOperation,
+                &error);
+        }
+        catch (Exception ex)
+        {
+            operation.FailStart(ex);
+            return new ValueTask(operation.ValueTask.AsTask());
+        }
+
+        if (NativeError.Code(result) != NeoErrorCode.Success)
+        {
+            operation.FailStart(CreateOwnedError(result, error, "delete user-data root", cancellationToken));
+            return new ValueTask(operation.ValueTask.AsTask());
+        }
+
+        operation.AttachOperation(nativeOperation.Handle);
+        return new ValueTask(operation.ValueTask.AsTask());
+    }
+
     /// <summary>Creates and registers a top-level native window.</summary>
     /// <param name="options">Window options, or <see langword="null"/> for defaults.</param>
     /// <returns>The created window.</returns>
@@ -1571,6 +1646,28 @@ public sealed class NeoApplication : IAsyncDisposable
         internal void Invoke(NeoLogMessage message) => Volatile.Read(ref _callback)?.Invoke(message);
 
         internal void Clear() => Interlocked.Exchange(ref _callback, null);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe void UserDataRootDeleted(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_error_t error)
+    {
+        try
+        {
+            var operation = NativeOperation.Get<bool>(context);
+            if (operation is null) return;
+            if (NativeError.Code(result) == NeoErrorCode.Success)
+            {
+                operation.Complete(true);
+            }
+            else
+            {
+                operation.Fail(NativeError.CreateException(NativeError.Read(NativeError.Code(result), error.Handle), "delete user-data root"));
+            }
+        }
+        catch (Exception ex)
+        {
+            NativeOperation.Get<bool>(context)?.Fail(ex);
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

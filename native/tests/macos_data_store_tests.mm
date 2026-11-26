@@ -54,7 +54,7 @@ void NEOASTRA_CALL cookies_read(void* context, neoastra_result_t result, neoastr
     complete(context, result, nullptr);
 }
 
-neoastra_environment_t* create_environment(neoastra_app_t* app, const std::string& user_data_root, bool private_mode = false) {
+completion start_environment(neoastra_app_t* app, const std::string& user_data_root, bool private_mode) {
     neoastra_environment_options_t options{};
     options.size = sizeof(options);
     options.version = 1;
@@ -63,8 +63,37 @@ neoastra_environment_t* create_environment(neoastra_app_t* app, const std::strin
     completion state;
     assert(neoastra_environment_create_async(app, &options, environment_created, &state, nullptr, nullptr) == NEOASTRA_OK);
     wait_for(state);
+    return state;
+}
+
+neoastra_environment_t* create_environment(neoastra_app_t* app, const std::string& user_data_root, bool private_mode = false) {
+    const auto state = start_environment(app, user_data_root, private_mode);
     assert(state.result == NEOASTRA_OK && state.value != nullptr);
     return static_cast<neoastra_environment_t*>(state.value);
+}
+
+// Starts deleting a root. A start that is refused sets the completion to its result.
+neoastra_result_t start_deletion(neoastra_app_t* app, const std::string& user_data_root, completion& state) {
+    const auto result = neoastra_app_delete_user_data_root_async(app, string_view(user_data_root), operation_completed, &state, nullptr, nullptr);
+    if (result != NEOASTRA_OK) { state.result = result; state.done = true; }
+    return result;
+}
+
+neoastra_result_t delete_root(neoastra_app_t* app, const std::string& user_data_root) {
+    completion state;
+    if (start_deletion(app, user_data_root, state) == NEOASTRA_OK) wait_for(state);
+    return state.result;
+}
+
+bool has_data_store(NSString* identifier) API_AVAILABLE(macos(14.0)) {
+    completion state;
+    auto* listing = &state;
+    [WKWebsiteDataStore fetchAllDataStoreIdentifiers:^(NSArray<NSUUID*>* identifiers) {
+        listing->value = [identifiers containsObject:[[NSUUID alloc] initWithUUIDString:identifier]] ? listing : nullptr;
+        listing->done = true;
+    }];
+    wait_for(state);
+    return state.value != nullptr;
 }
 
 neoastra_profile_t* create_profile(neoastra_environment_t* environment, bool ephemeral = false) {
@@ -107,6 +136,8 @@ const std::string first_root = "/private/tmp/neoastra-data-store-tests/a";
 const std::string second_root = "/private/tmp/neoastra-data-store-tests/b";
 // The first root again, through a symbolic link, a parent segment, and a trailing separator.
 const std::string first_root_alias = "/tmp/neoastra-data-store-tests/unused/../a/";
+// A root that no environment uses.
+const std::string unused_root = "/private/tmp/neoastra-data-store-tests/unused";
 // A root must keep its identifier across runs and releases: it is all that finds its stored data again.
 NSString* const first_identifier = @"60647C65-F420-8260-A343-0DC62E91D239";
 NSString* const second_identifier = @"49015C4B-A943-82DD-867A-7AF13E3163E7";
@@ -162,12 +193,13 @@ void remove_data_store(NSString* identifier) API_AVAILABLE(macos(14.0)) {
 } // namespace
 
 int main() {
+    neoastra_app_t* app = nullptr;
+    neoastra_window_t* window = nullptr;
     @autoreleasepool {
         neoastra_app_options_t app_options{};
         app_options.size = sizeof(app_options);
         app_options.version = 1;
         app_options.shutdown_mode = NEOASTRA_APP_SHUTDOWN_EXPLICIT;
-        neoastra_app_t* app = nullptr;
         assert(neoastra_app_attach(&app_options, &app, nullptr) == NEOASTRA_OK && app != nullptr);
 
         neoastra_window_options_t window_options{};
@@ -175,7 +207,6 @@ int main() {
         window_options.version = 1;
         window_options.bounds = {100, 100, 640, 480};
         window_options.flags = 3;
-        neoastra_window_t* window = nullptr;
         assert(neoastra_app_create_window(app, &window_options, &window, nullptr) == NEOASTRA_OK && window != nullptr);
 
         auto* first = create_environment(app, first_root);
@@ -224,6 +255,12 @@ int main() {
             assert(!has_cookie(first_again_profile, "first-root") && has_cookie(second_profile, "second-root"));
             clear_cookies(second_profile);
             assert(!has_cookie(second_profile, "second-root"));
+
+            // A root whose environment is alive, however it is spelled, is refused before anything is removed.
+            set_cookie(first_profile, "deleted-root");
+            assert(delete_root(app, first_root) == NEOASTRA_ERROR_INVALID_STATE);
+            assert(delete_root(app, first_root_alias) == NEOASTRA_ERROR_INVALID_STATE);
+            assert(has_cookie(first_profile, "deleted-root"));
         } else {
             // Stores selected by an identifier need macOS 14: before it, every persistent environment shares the default store.
             assert(first_store == unrooted_store && second_store == unrooted_store);
@@ -241,6 +278,42 @@ int main() {
         neoastra_environment_release(second);
         neoastra_environment_release(first_again);
         neoastra_environment_release(first);
+    }
+    // The stores that the checks above returned are gone with their pool, as WebKit requires before it removes a store.
+    @autoreleasepool {
+        assert(neoastra_app_delete_user_data_root_async(app, {}, operation_completed, nullptr, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+        if (@available(macOS 14.0, *)) {
+            // Once its environments are released, the store of the root goes with what it held, also what the network process
+            // keeps in memory, so that an environment on the root starts empty. Until then the root takes no new environment.
+            // A live environment on another root keeps its data through the deletion.
+            auto* kept = create_environment(app, second_root);
+            auto* kept_profile = create_profile(kept);
+            set_cookie(kept_profile, "kept-root");
+            completion deletion;
+            assert(start_deletion(app, first_root_alias, deletion) == NEOASTRA_OK);
+            // Both are refused at once; waiting for the refused environment lets the deletion complete.
+            completion second_deletion;
+            assert(start_deletion(app, first_root, second_deletion) == NEOASTRA_ERROR_INVALID_STATE);
+            assert(start_environment(app, first_root, false).result == NEOASTRA_ERROR_INVALID_STATE);
+            wait_for(deletion);
+            assert(deletion.result == NEOASTRA_OK);
+            assert(!has_data_store(first_identifier) && has_data_store(second_identifier));
+
+            assert(has_cookie(kept_profile, "kept-root"));
+
+            auto* deleted = create_environment(app, first_root);
+            auto* deleted_profile = create_profile(deleted);
+            assert(!has_cookie(deleted_profile, "deleted-root"));
+            neoastra_profile_release(kept_profile);
+            neoastra_profile_release(deleted_profile);
+            neoastra_environment_release(kept);
+            neoastra_environment_release(deleted);
+
+            // A root with nothing stored has nothing to remove.
+            assert(delete_root(app, unused_root) == NEOASTRA_OK);
+        } else {
+            assert(delete_root(app, first_root) == NEOASTRA_ERROR_NOT_SUPPORTED);
+        }
         neoastra_window_release(window);
         assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);
         neoastra_app_release(app);
