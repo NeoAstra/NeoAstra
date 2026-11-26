@@ -19,6 +19,10 @@ constexpr uint32_t known_custom_scheme_flags = NEOASTRA_CUSTOM_SCHEME_HAS_AUTHOR
     NEOASTRA_CUSTOM_SCHEME_SECURE | NEOASTRA_CUSTOM_SCHEME_CORS_ENABLED |
     NEOASTRA_CUSTOM_SCHEME_APPLICATION | NEOASTRA_CUSTOM_SCHEME_SERVICE_WORKERS;
 
+bool valid_user_data_root(neoastra_string_view_t root) noexcept {
+    return neo_valid_utf8(root) && neo_view_text(root).find('\0') == std::string_view::npos;
+}
+
 bool valid_scheme_name(std::string_view name) noexcept {
     if (name.empty() || !std::isalpha(static_cast<unsigned char>(name.front()))) return false;
     for (const auto character : name) {
@@ -488,6 +492,35 @@ void platform_environment_created(void* pointer, neoastra_error_t* error) noexce
     state->submit();
     state->release(); // Native source ownership; the registry owns terminal delivery.
 }
+
+struct root_deletion_completion final : neo_operation_completion {
+    neoastra_completion_callback_t callback;
+    void* context;
+    neoastra_error_t* error{};
+    std::function<void()> release_root;
+    // The backend can still consult cancellation after shutdown delivered the public callback.
+    neo_retain_guard source_operation;
+
+    root_deletion_completion(neoastra_app_t* app, neoastra_completion_callback_t callback, void* context, neoastra_operation_t* operation)
+        : neo_operation_completion(app), callback(callback), context(context), source_operation(operation) { accept(operation); }
+    ~root_deletion_completion() override {
+        if (release_root) release_root(); // A late worker finished after shutdown delivered cancellation.
+        if (error) error->release();
+    }
+    void invoke(neoastra_operation_t* pending, bool shutdown) override {
+        const auto requested = shutdown ? NEOASTRA_ERROR_CANCELED : error ? error->code : NEOASTRA_OK;
+        neoastra_result_t actual{};
+        if (!shutdown && release_root) { release_root(); release_root = {}; }
+        if (pending->try_complete(requested, actual)) callback(context, actual, !shutdown && actual == requested ? error : nullptr);
+    }
+    static void finished(void* pointer, neoastra_error_t* error) noexcept {
+        auto* state = static_cast<root_deletion_completion*>(pointer);
+        state->error = error;
+        if (check_ui(state->app)) state->deliver_inline();
+        else state->submit();
+        state->release();
+    }
+};
 
 struct profile_completion {
     neoastra_profile_created_callback_t callback{}; void* context{}; neoastra_operation_t* operation{}; neoastra_profile_t* value{};
@@ -1101,7 +1134,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     static const std::string version="system";
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
-    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL;
+    info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL|NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION;
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -1407,7 +1440,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_window_move_to_virtual_desktop(neoastra
 }
 
 neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t* app,const neoastra_environment_options_t* options,neoastra_environment_created_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){
-    if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!neo_valid_utf8(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
+    if(outop)*outop=nullptr;if(!app||!callback||!valid_struct(options,options?options->size:0,sizeof(*options))||!valid_user_data_root(options->user_data_root)||!neo_valid_utf8(options->browser_runtime_path)||!neo_valid_utf8(options->browser_arguments)||!neo_valid_utf8(options->preferred_languages)||!valid_custom_schemes(options))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"invalid environment arguments");
     if(!check_ui(app))return neo_fail(error,NEOASTRA_ERROR_WRONG_THREAD,"environment creation must begin on the UI thread");
     if(!accepts_ui_objects(app))return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application shutdown has begun");
     neoastra_operation_t* op{};
@@ -1424,6 +1457,30 @@ neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t
         return NEOASTRA_OK;
     } catch(const std::exception& ex) {
         if(value)value->release();
+        if(op)op->release();
+        if(outop&&*outop){(*outop)->release();*outop=nullptr;}
+        return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());
+    }
+}
+neoastra_result_t NEOASTRA_CALL neoastra_app_delete_user_data_root_async(neoastra_app_t* app,neoastra_string_view_t root,neoastra_completion_callback_t callback,void* context,neoastra_operation_t** outop,neoastra_error_t** error){
+    if(outop)*outop=nullptr;
+    if(!app||!callback||root.length==0||!valid_user_data_root(root))return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"a user-data root is required");
+    if(!check_ui(app))return neo_fail(error,NEOASTRA_ERROR_WRONG_THREAD,"user-data roots must be deleted on the UI thread");
+    if(!accepts_ui_objects(app))return neo_fail(error,NEOASTRA_ERROR_DISPOSED,"application shutdown has begun");
+    neoastra_operation_t* op{};
+    try {
+        const auto path = neo_string(root);
+        op = make_operation(outop);
+        auto* completion = new root_deletion_completion(app, callback, context, op);
+        const auto result = neo_platform_delete_user_data_root(app, path, root_deletion_completion::finished, completion, op, completion->release_root, error);
+        if (result != NEOASTRA_OK) {
+            completion->discard_start();
+            completion->release();
+            op->release();
+            if (outop && *outop) { (*outop)->release(); *outop = nullptr; }
+        }
+        return result;
+    } catch(const std::exception& ex) {
         if(op)op->release();
         if(outop&&*outop){(*outop)->release();*outop=nullptr;}
         return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,ex.what());

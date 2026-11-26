@@ -14,8 +14,12 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 
+#include "user_data_root_paths.hpp"
+
 #include <algorithm>
+#include <chrono>
 #include <functional>
+#include <thread>
 #include <unordered_map>
 #include <cctype>
 #include <cmath>
@@ -83,7 +87,8 @@ struct windows_window {
         if (executable_small_icon) DestroyIcon(executable_small_icon);
     }
 };
-struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; bool private_mode{}; };
+// `root_key` is the registry key of the user-data folder of the environment, empty when it has none.
+struct windows_environment { ComPtr<ICoreWebView2Environment> value; std::string version; bool private_mode{}; std::wstring root_key; };
 struct windows_profile { ComPtr<ICoreWebView2CookieManager> cookies; ComPtr<ICoreWebView2Profile> profile; };
 struct windows_drop_registration { HWND window{}; ComPtr<IDropTarget> target; };
 // A script of an isolated world, which WebView2 offers only through the DevTools protocol.
@@ -2684,6 +2689,92 @@ neoastra_result_t neo_platform_view_convert_point(neoastra_view_t* view, bool to
     return NEOASTRA_OK;
 }
 
+namespace {
+// The registry of the user-data roots of the process, shared by the UI threads of every application and by the deletion threads.
+// It is never destroyed: a deletion can outlive the UI thread that started it.
+neo_windows_roots::user_data_root_registry& roots() {
+    static auto* registry = new neo_windows_roots::user_data_root_registry;
+    return *registry;
+}
+
+// A deletion of a user-data root, owned by its thread until the thread calls back. The operation is borrowed: the thread reads its
+// state for cancellation, and never completes or releases it.
+struct root_deletion {
+    std::wstring path;
+    std::wstring key;
+    neo_platform_created_callback_t callback;
+    void* context;
+    neoastra_operation_t* operation;
+};
+
+// The error that a deletion reports, or nullptr when it completed: a folder that is deleted, or that was absent, completes.
+neoastra_error_t* deletion_error(const neo_windows_roots::folder_deletion_result& outcome) noexcept {
+    switch (outcome.status) {
+    case neo_windows_roots::folder_deletion_status::deleted:
+    case neo_windows_roots::folder_deletion_status::absent:
+        return nullptr;
+    case neo_windows_roots::folder_deletion_status::canceled:
+        return make_error(NEOASTRA_ERROR_CANCELED, outcome.message, E_ABORT);
+    case neo_windows_roots::folder_deletion_status::in_use:
+        return make_error(NEOASTRA_ERROR_INVALID_STATE, outcome.message, HRESULT_FROM_WIN32(outcome.error));
+    case neo_windows_roots::folder_deletion_status::refused:
+        return make_error(NEOASTRA_ERROR_INVALID_ARGUMENT, outcome.message, E_INVALIDARG);
+    case neo_windows_roots::folder_deletion_status::failed:
+        break;
+    }
+    return make_error(NEOASTRA_ERROR_NATIVE_FAILURE, outcome.message, HRESULT_FROM_WIN32(outcome.error));
+}
+
+// Report the result from the worker; common delivers it on the UI thread and releases the reservation.
+void run_root_deletion(root_deletion* raw) noexcept {
+    std::unique_ptr<root_deletion> deletion(raw);
+    neoastra_error_t* error{};
+    try {
+        auto* operation = deletion->operation;
+        const auto outcome = neo_windows_roots::delete_resolved_folder(deletion->path, std::chrono::seconds(30), [operation] {
+            return operation->state.load(std::memory_order_acquire) != neo_operation_state::pending;
+        });
+        error = deletion_error(outcome);
+    } catch (...) {
+        error = make_error(NEOASTRA_ERROR_NATIVE_FAILURE, "The user-data root could not be deleted", E_OUTOFMEMORY);
+    }
+    deletion->callback(deletion->context, error);
+}
+}
+
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string& root, neo_platform_created_callback_t callback, void* context, neoastra_operation_t* operation, std::function<void()>& release_root, neoastra_error_t** error) noexcept {
+    try {
+        std::wstring resolved;
+        DWORD failure{};
+        if (!neo_windows_roots::resolve_folder(widen(root), resolved, failure)) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The user-data root is not a valid path", HRESULT_FROM_WIN32(failure), "webview2");
+        auto key = neo_windows_roots::key_of(resolved);
+        if (const auto* refusal = neo_windows_roots::deletion_refusal(key, neo_windows_roots::known_protected_locations())) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, refusal, E_INVALIDARG, "webview2");
+        if (neo_windows_roots::kind_of(resolved, failure) == neo_windows_roots::path_kind::file) return neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The user-data root is a file, which is not deleted", E_INVALIDARG, "webview2");
+
+        auto deletion = std::unique_ptr<root_deletion>(new root_deletion{std::move(resolved), std::move(key), callback, context, operation});
+        std::function<void()> release = [key = deletion->key] { roots().end_deletion(key); };
+        switch (roots().begin_deletion(deletion->key)) {
+        case neo_windows_roots::user_data_root_registry::deletion_start::environment_alive:
+            return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "An environment on the user-data root, or on a folder that contains or is in it, is still alive", E_ILLEGAL_STATE_CHANGE, "webview2");
+        case neo_windows_roots::user_data_root_registry::deletion_start::deleting:
+            return neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root, or a folder that contains or is in it, is already being deleted", E_ILLEGAL_STATE_CHANGE, "webview2");
+        case neo_windows_roots::user_data_root_registry::deletion_start::started:
+            break;
+        }
+
+        // The thread owns the deletion once it starts, so the pointer is released before it does.
+        release_root = std::move(release);
+        auto* raw = deletion.release();
+        try {
+            std::thread(run_root_deletion, raw).detach();
+        } catch (...) {
+            delete raw;
+            throw;
+        }
+        return NEOASTRA_OK;
+    } catch (const std::exception& ex) { return neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, ex.what(), 0, "webview2"); }
+}
+
 bool neo_platform_environment_create_async(neoastra_environment_t* environment,const neoastra_environment_options_t* options,neo_platform_created_callback_t callback,void* context,neoastra_error_t** error) noexcept {
     try {
         const auto runtime_path = widen(neo_string(options->browser_runtime_path));
@@ -2691,10 +2782,20 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
         LPWSTR version{};
         const auto version_result = GetAvailableCoreWebView2BrowserVersionString(runtime_path.empty() ? nullptr : runtime_path.c_str(), &version);
         if (FAILED(version_result)) { neo_fail(error, NEOASTRA_ERROR_RUNTIME_UNAVAILABLE, "Microsoft Edge WebView2 Runtime is unavailable. Install the Evergreen Runtime or configure BrowserRuntimePath.", version_result, "webview2"); return false; }
-        auto* state = new windows_environment;
+        // The root is resolved once, and WebView2 gets the resolved path, so that it uses the folder that the registry names.
+        std::wstring user_data_path;
+        std::wstring root_key_value;
+        if (!user_data.empty()) {
+            DWORD failure{};
+            if (!neo_windows_roots::resolve_folder(user_data, user_data_path, failure)) { CoTaskMemFree(version); neo_fail(error, NEOASTRA_ERROR_INVALID_ARGUMENT, "The user-data root is not a valid path", HRESULT_FROM_WIN32(failure), "webview2"); return false; }
+            root_key_value = neo_windows_roots::key_of(user_data_path);
+        }
+        std::unique_ptr<windows_environment> state(new windows_environment);
         state->version = take_string(version);
         state->private_mode = options->private_mode != 0;
-        environment->platform = state;
+        state->root_key = root_key_value;
+        if (!root_key_value.empty() && !roots().try_acquire_environment(root_key_value)) { neo_fail(error, NEOASTRA_ERROR_INVALID_STATE, "The user-data root is being deleted", E_ILLEGAL_STATE_CHANGE, "webview2"); return false; }
+        environment->platform = state.release();
         auto environment_options = Make<CoreWebView2EnvironmentOptions>();
         const auto arguments = widen(neo_string(options->browser_arguments));
         const auto languages = widen(neo_string(options->preferred_languages));
@@ -2731,7 +2832,7 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
             if (FAILED(configure_result)) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, "Could not register WebView2 custom schemes", configure_result, "webview2"); return false; }
         }
         const auto result = CreateCoreWebView2EnvironmentWithOptions(
-            runtime_path.empty() ? nullptr : runtime_path.c_str(), user_data.empty() ? nullptr : user_data.c_str(), environment_options.Get(),
+            runtime_path.empty() ? nullptr : runtime_path.c_str(), user_data_path.empty() ? nullptr : user_data_path.c_str(), environment_options.Get(),
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([environment, callback, context](HRESULT result, ICoreWebView2Environment* created) -> HRESULT {
                 auto* state = static_cast<windows_environment*>(environment->platform);
                 if (!state) { callback(context, make_error(NEOASTRA_ERROR_DISPOSED, "Application shutdown completed before WebView2 environment creation", E_ABORT)); return S_OK; }
@@ -2743,7 +2844,12 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
         return true;
     } catch (const std::exception& ex) { neo_fail(error, NEOASTRA_ERROR_NATIVE_FAILURE, ex.what(), 0, "webview2"); return false; }
 }
-void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept { delete static_cast<windows_environment*>(environment->platform); environment->platform=nullptr; }
+void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {
+    auto* state = static_cast<windows_environment*>(environment->platform);
+    if (state && !state->root_key.empty()) roots().release_environment(state->root_key);
+    delete state;
+    environment->platform = nullptr;
+}
 
 bool neo_platform_profile_create(neoastra_profile_t* profile, neoastra_error_t** error) noexcept {
     try { profile->platform = new windows_profile; return true; }

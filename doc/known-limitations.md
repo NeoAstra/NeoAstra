@@ -49,6 +49,7 @@ assuming that every browser engine supports every portable event.
 | Messages of a page that wait for the host | No limit met with 100,000 | The page ends at 50,000 | No limit met with 100,000 |
 | Mutable per-window task-switcher membership | Available | Not exposed; Dock membership is application-scoped | Available as a window-manager hint |
 | Separate browser data for each `UserDataRoot` | Available; the root is the WebView2 user-data folder | Available from macOS 14; WebKit keeps the data in its own container | Available; the root holds the WebKitGTK data and cache directories |
+| Deleting the data of a root (`NeoApplication.DeleteUserDataRootAsync`) | Available; deletes the folder once no process uses it, waiting at most 30 seconds | Available from macOS 14; removes the WebKit store of the root | Available; deletes the root directory |
 | Private environment (`IsPrivate`) | Available; every view is InPrivate, and the in-memory data is shared across the user-data folder | Available; one in-memory store for each environment | Available; one in-memory session for each environment |
 
 WebKit callback contracts require a popup request on macOS and Linux to be decided synchronously. A
@@ -380,9 +381,9 @@ environment on the same root finds its data again. Where the data is kept depend
   container, `~/Library/WebKit/<bundle identifier or executable name>/WebsiteDataStore/`, not under
   the root. Deleting, moving, or copying the root directory therefore does not delete, move, or copy
   the data: a root at the same path finds its data again, a root at a new path starts empty, and a
-  root that is no longer used leaves its store behind. Clear a store with `NeoProfile.ClearDataAsync`
-  on a profile of its environment, and give throwaway instances such as tests a private environment,
-  which stores nothing. Without a root, the environment uses the application's default WebKit store.
+  root that is no longer used leaves its store behind until it is deleted, as described below. Give
+  throwaway instances such as tests a private environment, which stores nothing. Without a root,
+  the environment uses the application's default WebKit store.
   Before macOS 14 the root has no effect: every environment that is not private shares the default
   store, and the backend logs a warning when such an environment asks for a root.
 - **Linux.** Each root has a persistent WebKitGTK network session of its own, which keeps website data
@@ -394,6 +395,33 @@ environment on the same root finds its data again. Where the data is kept depend
   program name of the process. A NeoAstra host normally has no program name, and WebKitGTK then uses
   `webkitgtk`, a directory that every such application shares. Cookies of the default session are in
   memory only and do not survive a restart.
+
+`NeoApplication.DeleteUserDataRootAsync` deletes what environments on a root stored, for example the
+sign-ins of a session that goes away. Release all environments using that store, with their profiles
+and views, before deleting it. The call refuses a store that is in use, and a new environment cannot
+start using the store while it is being deleted. Cancellation is best effort; it does not roll back
+data already removed.
+
+On Windows and Linux, **use a dedicated directory**: deletion removes everything under the supplied
+path, not just files created by the browser. Do not share the directory with another process.
+Deletion also refuses a directory that contains, or sits inside, an active root.
+
+- **Windows.** WebView2 can hold files open briefly after its last view closes. NeoAstra retries
+  moving the directory aside for up to 30 seconds before deleting it. If Windows still refuses
+  the move because the directory is in use, the directory is left intact and the call fails with
+  `InvalidOperationException`. Do not override WebView2's user-data folder through environment
+  variables or policy when using per-root storage: deletion targets the supplied directory, not
+  the override. Relative roots are resolved beside the executable. Drive and share roots, the user
+  profile and application-data directories themselves, and Windows and program directories are protected.
+- **macOS 14 and iOS 17 and later.** The WebKit store of the root goes. Its data is first cleared
+  through the store, because the WebKit network process keeps the cookies it read in memory, and a new
+  store of the root would otherwise find them again in the same run. WebKit lets the store go a moment
+  later, and the removal is retried for up to five seconds. The root directory itself is not touched.
+- **Linux.** The root must be a directory. Deletion refuses the home directory, its ancestors, and
+  paths overlapping the default WebKitGTK data or cache.
+- **Earlier macOS and iOS, and Android.** Roots have no store of their own, and the call throws
+  `NotSupportedException`. An application that deletes the data of a part that goes away cannot
+  then offer that part a store of its own that keeps sign-ins.
 
 A profile that is not ephemeral is the store of its environment on macOS and Linux, so it follows the
 root and the private mode of that environment. Named profiles have storage of their own on Windows only.

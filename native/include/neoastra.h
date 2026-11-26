@@ -185,13 +185,15 @@ typedef uint64_t neoastra_data_kind_t;
    NEOASTRA_EVENT_DISPLAYS_CHANGED and NEOASTRA_EVENT_WINDOW_DISPLAY_CHANGED.
    SCRIPT_WORLD_CHANNEL says that this library reads version 2 of neoastra_script_options_t, has neoastra_view_post_script_message,
    and raises NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED where NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL is supported; a library
-   without it refuses version 2 as an invalid argument. */
+   without it refuses version 2 as an invalid argument.
+   USER_DATA_ROOT_DELETION says that this library has neoastra_app_delete_user_data_root_async. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
 #define NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH (UINT64_C(1) << 3)
 #define NEOASTRA_BUILD_FEATURE_DISPLAYS (UINT64_C(1) << 4)
 #define NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL (UINT64_C(1) << 5)
+#define NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION (UINT64_C(1) << 6)
 /* Bits of neoastra_display_info_t.flags. PRIMARY marks the one primary display. WORK_AREA_REPORTED says that the platform told
    the part of the display that the menu bar, the taskbar, the Dock, or the panels leave to windows; without it the work area is
    the bounds (GTK on Wayland). ID_PERSISTENT says that the identifier comes from the monitor and its connection and is the same
@@ -387,6 +389,18 @@ NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_get_virtual_desktop
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_window_move_to_virtual_desktop(neoastra_window_t*, neoastra_string_view_t);
 
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_async(neoastra_app_t*, const neoastra_environment_options_t*, neoastra_environment_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
+/* Deletes the website data that environments on a user-data root stored, and the store of the engine for it: on macOS 14 and
+   iOS 17 and later the WebKit store that the root names, which WebKit keeps outside the root; on Windows and Linux the root
+   directory with everything in it, including unrelated files. Use a dedicated directory not shared with another process.
+   A root with nothing stored completes with NEOASTRA_OK. The call is refused with
+   NEOASTRA_ERROR_INVALID_STATE while an environment is using the store, before anything is deleted. On
+   Windows the root is moved aside before it is deleted, retrying a sharing or access error for up to 30 seconds: the
+   browser process of the last environment on it exits a moment after its last view closed. A root still in use then is left
+   whole, and the deletion fails with NEOASTRA_ERROR_INVALID_STATE. During deletion, creating an environment that uses the store
+   fails with NEOASTRA_ERROR_INVALID_STATE. Canceling is best effort: part or all of the data can be deleted when the operation
+   completes with NEOASTRA_ERROR_CANCELED. NEOASTRA_ERROR_NOT_SUPPORTED where roots have no store of their own: macOS before 14, iOS before 17, and Android. A
+   library has it when it reports NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION. Must be called on the UI thread. */
+NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_app_delete_user_data_root_async(neoastra_app_t*, neoastra_string_view_t, neoastra_completion_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_profile_async(neoastra_environment_t*, const neoastra_profile_options_t*, neoastra_profile_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_create_view_async(neoastra_environment_t*, const neoastra_view_options_t*, neoastra_view_created_callback_t, void*, neoastra_operation_t**, neoastra_error_t**);
 NEOASTRA_API neoastra_result_t NEOASTRA_CALL neoastra_environment_get_capability(const neoastra_environment_t*, neoastra_capability_t, neoastra_capability_info_t*);

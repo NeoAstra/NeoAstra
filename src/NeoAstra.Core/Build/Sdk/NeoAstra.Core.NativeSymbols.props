@@ -5,6 +5,7 @@
     <ReferenceNativeSymbol Include="neoastra_app_attach" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_app_create" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_app_create_window" SymbolType="Function" />
+    <ReferenceNativeSymbol Include="neoastra_app_delete_user_data_root_async" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_app_detach" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_app_dispatch" SymbolType="Function" />
     <ReferenceNativeSymbol Include="neoastra_app_get_display" SymbolType="Function" />

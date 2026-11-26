@@ -1,6 +1,7 @@
 #include "neoastra.h"
 #include "../src/linux/gtk_permissions.hpp"
 #include "../src/linux/gtk_renderer.hpp"
+#include "../src/linux/user_data_root_paths.hpp"
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
@@ -80,6 +81,19 @@ neoastra_environment_t* create_environment(neoastra_app_t* app, const std::strin
     const auto state = start_environment(app, user_data_root, private_mode);
     assert(state.result == NEOASTRA_OK && state.value != nullptr);
     return static_cast<neoastra_environment_t*>(state.value);
+}
+
+// Starts deleting a root. A start that is refused sets the completion to its result.
+neoastra_result_t start_deletion(neoastra_app_t* app, const std::string& user_data_root, completion& state) {
+    const auto result = neoastra_app_delete_user_data_root_async(app, string_view(user_data_root), operation_completed, &state, nullptr, nullptr);
+    if (result != NEOASTRA_OK) { state.result = result; state.done = true; }
+    return result;
+}
+
+neoastra_result_t delete_root(neoastra_app_t* app, const std::string& user_data_root) {
+    completion state;
+    if (start_deletion(app, user_data_root, state) == NEOASTRA_OK) wait_for(state);
+    return state.result;
 }
 
 neoastra_profile_t* create_profile(neoastra_environment_t* environment, bool ephemeral = false) {
@@ -971,6 +985,20 @@ bool has_cookie(neoastra_profile_t* profile, const std::string& value) {
     return state.text.find("\"" + value + "\"") != std::string::npos;
 }
 
+// Roots overlap by whole path components, and a root is resolved to one key however it is spelled. Nothing here touches the
+// file system beyond resolving paths.
+void test_root_path_rules(const std::filesystem::path& base) {
+    assert(overlaps("/x/a", "/x/a"));
+    assert(overlaps("/x", "/x/a/data") && overlaps("/x/a/data", "/x/a"));
+    assert(!overlaps("/x/a", "/x/ab") && !overlaps("/x/a", "/y"));
+    assert(is_ancestor_or_self("/", "/x") && !is_ancestor_or_self("/x", "/"));
+    std::error_code failure;
+    const auto spelled = resolved_user_data_root(base / "sub" / "." / "" / "x" / "..", failure);
+    assert(!failure && spelled && *spelled == base / "sub");
+    const auto trailing = resolved_user_data_root(base / "sub" / "", failure);
+    assert(!failure && trailing && *trailing == base / "sub");
+}
+
 // Environments on different user-data roots must not share cookies, local storage, or any other website data.
 void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base) {
     const std::string first_root = base / "a";
@@ -1034,6 +1062,17 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     clear_cookies(second_profile);
     assert(!has_cookie(second_profile, "second-root"));
 
+    // A root whose environment is alive, however it is spelled, is refused before anything is deleted.
+    set_cookie(first_profile, "deleted-root");
+    set_cookie(second_profile, "kept-root");
+    assert(delete_root(app, first_root) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(delete_root(app, first_root_alias) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(has_cookie(first_profile, "deleted-root"));
+    // A root around live roots, and a directory inside a live root, are refused as well: either one reaches their data.
+    assert(delete_root(app, base) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(delete_root(app, first_root + "/data") == NEOASTRA_ERROR_INVALID_STATE);
+    assert(has_cookie(first_profile, "deleted-root") && has_cookie(second_profile, "kept-root"));
+
     neoastra_profile_release(private_profile);
     neoastra_profile_release(ephemeral_profile);
     neoastra_profile_release(unrooted_profile);
@@ -1050,6 +1089,50 @@ void test_user_data_roots(neoastra_app_t* app, const std::filesystem::path& base
     auto* reopened = create_environment(app, first_root);
     assert(data_directory(view_session(reopened, window)) == first_root + "/data");
     neoastra_environment_release(reopened);
+
+    // Once its environments are released, the root goes with everything in it, and an environment on it starts empty. Until
+    // then the root takes no new environment.
+    completion deletion;
+    assert(start_deletion(app, first_root_alias, deletion) == NEOASTRA_OK);
+    // Both are refused at once; waiting for the refused environment lets the deletion complete.
+    completion second_deletion;
+    assert(start_deletion(app, first_root, second_deletion) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_environment(app, first_root, false).result == NEOASTRA_ERROR_INVALID_STATE);
+    wait_for(deletion);
+    assert(deletion.result == NEOASTRA_OK);
+    assert(!std::filesystem::exists(first_root) && std::filesystem::exists(second_root + "/data/cookies.sqlite"));
+    auto* deleted = create_environment(app, first_root);
+    auto* kept = create_environment(app, second_root);
+    auto* deleted_profile = create_profile(deleted);
+    auto* kept_profile = create_profile(kept);
+    assert(!has_cookie(deleted_profile, "deleted-root"));
+    assert(has_cookie(kept_profile, "kept-root"));
+    neoastra_profile_release(kept_profile);
+    neoastra_profile_release(deleted_profile);
+    neoastra_environment_release(kept);
+    neoastra_environment_release(deleted);
+
+    // A deletion in progress refuses the roots that overlap it, both ways, until its callback has run. Each refusal is decided
+    // before the main context is iterated, so the deletion is still in progress then. Only paths under base are deleted.
+    completion nested_deletion, inside_refused, around_refused;
+    assert(start_deletion(app, base / "nested", nested_deletion) == NEOASTRA_OK);
+    assert(start_deletion(app, base / "nested" / "inside", inside_refused) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_deletion(app, base, around_refused) == NEOASTRA_ERROR_INVALID_STATE);
+    assert(start_environment(app, (base / "nested" / "inside").string(), false).result == NEOASTRA_ERROR_INVALID_STATE);
+    wait_for(nested_deletion);
+    assert(nested_deletion.result == NEOASTRA_OK);
+
+    // A regular file is not a root: it is refused and it stays. A path through a file cannot be resolved, and is refused too.
+    const std::string plain_file = (base / "plain-file").string();
+    assert(g_file_set_contents(plain_file.c_str(), "keep", 4, nullptr));
+    assert(delete_root(app, plain_file) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(delete_root(app, plain_file + "/root") != NEOASTRA_OK);
+    assert(std::filesystem::is_regular_file(plain_file));
+
+    // A root that does not exist has nothing to delete; the root of the file system and no root are not roots.
+    assert(delete_root(app, base / "never") == NEOASTRA_OK);
+    assert(delete_root(app, "/") == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_app_delete_user_data_root_async(app, {}, operation_completed, nullptr, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
 
     // A root that cannot hold the data is an error, not a silent fallback to another store.
     assert(g_file_set_contents((base / "file").c_str(), "", 0, nullptr));
@@ -1261,6 +1344,7 @@ int main() {
 
     test_renderer_is_gl_on_wayland_with_the_nvidia_driver();
     test_permission_kinds_follow_the_request_type();
+    test_root_path_rules(base);
     test_opened_applications_do_not_get_the_renderer_of_neoastra();
     // A copy: the attach may set the variable, which can free the value read before.
     auto* renderer_before = g_strdup(g_getenv("GSK_RENDERER"));

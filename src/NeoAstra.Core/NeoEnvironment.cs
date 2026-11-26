@@ -242,7 +242,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
         }
     }
 
-    private static NeoRuntimeInfo ReadRuntimeInfo()
+    internal static NeoRuntimeInfo ReadRuntimeInfo()
     {
         var raw = new NativeMethods.neoastra_runtime_info
         {

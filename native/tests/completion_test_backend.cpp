@@ -6,6 +6,9 @@ neo_platform_created_callback_t environment_callback{};
 void* environment_context{};
 neo_platform_created_callback_t view_callback{};
 void* view_context{};
+neo_platform_created_callback_t deletion_callback{};
+void* deletion_context{};
+bool deletion_reserved{};
 uint32_t environments_destroyed{};
 uint32_t views_destroyed{};
 // What the last persistent script asked for, as the common layer passed it on, and what was posted to a script.
@@ -62,6 +65,14 @@ void neo_platform_profile_destroy(neoastra_profile_t*) noexcept { }
 neoastra_result_t neo_platform_profile_get_cookies(neoastra_profile_t*, const std::string&, neoastra_buffer_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_profile_set_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_profile_delete_cookie(neoastra_profile_t*, const neoastra_cookie_t*, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*, const std::string&, neo_platform_created_callback_t callback, void* context, neoastra_operation_t*, std::function<void()>& release_root, neoastra_error_t**) noexcept {
+    if (completion_test_backend::deletion_reserved) return NEOASTRA_ERROR_INVALID_STATE;
+    release_root = [] { completion_test_backend::deletion_reserved = false; };
+    completion_test_backend::deletion_reserved = true;
+    completion_test_backend::deletion_callback = callback;
+    completion_test_backend::deletion_context = context;
+    return NEOASTRA_OK;
+}
 neoastra_result_t neo_platform_profile_clear_data(neoastra_profile_t*, neoastra_data_kind_t, int64_t, int64_t, neoastra_completion_callback_t, void*, neoastra_operation_t*, neoastra_error_t**) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 bool neo_platform_view_create_async(neoastra_view_t*, const neoastra_view_options_t*, neo_platform_created_callback_t callback, void* context, neoastra_error_t**) noexcept {
     completion_test_backend::view_callback = callback;

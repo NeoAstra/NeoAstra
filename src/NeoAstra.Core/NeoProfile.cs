@@ -121,7 +121,7 @@ public sealed unsafe class NeoProfile : IAsyncDisposable
                 (ulong)kinds,
                 start,
                 end,
-                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&Completion,
+                (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&NativeOperation.Complete,
                 (void*)operation.Context,
                 &nativeOperation,
                 &error);
@@ -188,8 +188,8 @@ public sealed unsafe class NeoProfile : IAsyncDisposable
         try
         {
             result = delete
-                ? NativeMethods.neoastra_profile_delete_cookie_async(NativeHandle, &nativeCookie, (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&Completion, (void*)operation.Context, &nativeOperation, &error)
-                : NativeMethods.neoastra_profile_set_cookie_async(NativeHandle, &nativeCookie, (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&Completion, (void*)operation.Context, &nativeOperation, &error);
+                ? NativeMethods.neoastra_profile_delete_cookie_async(NativeHandle, &nativeCookie, (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&NativeOperation.Complete, (void*)operation.Context, &nativeOperation, &error)
+                : NativeMethods.neoastra_profile_set_cookie_async(NativeHandle, &nativeCookie, (delegate* unmanaged[Cdecl]<void*, NativeMethods.neoastra_result_t, NativeMethods.neoastra_error_t, void>)&NativeOperation.Complete, (void*)operation.Context, &nativeOperation, &error);
         }
         catch (Exception ex)
         {
@@ -224,30 +224,6 @@ public sealed unsafe class NeoProfile : IAsyncDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void Completion(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_error_t error)
-    {
-        try
-        {
-            var operation = NativeOperation.Get<bool>(context);
-            if (operation is null) return;
-            if (NativeError.Code(result) == NeoErrorCode.Success)
-            {
-                operation.Complete(true);
-            }
-            else
-            {
-                operation.Fail(NativeError.CreateException(
-                    NativeError.Read(NativeError.Code(result), error.Handle),
-                    operation.Owner as string ?? "profile operation"));
-            }
-        }
-        catch (Exception ex)
-        {
-            NativeOperation.Get<bool>(context)?.Fail(ex);
-        }
-    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void CookiesCompleted(void* context, NativeMethods.neoastra_result_t result, NativeMethods.neoastra_buffer_t buffer, NativeMethods.neoastra_error_t error)

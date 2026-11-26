@@ -14,13 +14,15 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
 // `wake_pending` is true, under the platform mutex, while a drain block waits on the main queue: that one block stands for all queued work.
 struct cocoa_app { id previous_delegate; id delegate; neoastra_decision_t* termination_decision{}; bool wake_pending{}; id screen_observer; };
 struct cocoa_window;
-struct cocoa_environment { WKProcessPool* process_pool; WKWebsiteDataStore* data_store; };
+// `root_store` is the identifier of the store of the user-data root that the environment uses, empty when it uses none.
+struct cocoa_environment { WKProcessPool* process_pool; WKWebsiteDataStore* data_store; std::string root_store; };
 struct cocoa_profile { WKWebsiteDataStore* data_store; };
 struct cocoa_view;
 
@@ -517,12 +519,16 @@ void apply_title_bar(neoastra_window_t* window,cocoa_window* state) {
 // WebKit selects a persistent store by identifier and keeps it in its own container, not in a directory the application chooses.
 // The identifier is the SHA-256 name-based UUID (RFC 9562, version 8) of the root. Deriving it any other way would detach
 // every root from the data already stored for it.
-NSUUID* data_store_identifier(const std::string& user_data_root) {
-    // One directory is one store however it is spelled: symbolic links and letter case are resolved for the part that exists.
+// One directory is one store however it is spelled: symbolic links and letter case are resolved for the part that exists, and a
+// trailing separator is dropped. A root is resolved once, and its identifier is derived from the resolved path.
+std::filesystem::path user_data_root_path(const std::string& user_data_root) {
     std::error_code failure;
     auto path=std::filesystem::weakly_canonical(std::filesystem::path(user_data_root),failure);
     if(failure)path=std::filesystem::path(user_data_root).lexically_normal();
     if(path.has_relative_path()&&!path.has_filename())path=path.parent_path();
+    return path;
+}
+NSUUID* data_store_identifier(const std::filesystem::path& path) {
     const auto name=path.string();
     static constexpr char scope[]="neoastra:user-data-root:";
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
@@ -536,11 +542,37 @@ NSUUID* data_store_identifier(const std::string& user_data_root) {
     return [[NSUUID alloc]initWithUUIDBytes:digest];
 }
 // Without a root the environment keeps the default store, which is also where data stored before roots were honored remains.
-WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app,const std::string& user_data_root) {
+// The identifier is the store of the root, resolved once by the caller; it is nil before macOS 14, where roots share the default store.
+WKWebsiteDataStore* persistent_data_store(neoastra_app_t* app,const std::string& user_data_root,NSUUID* identifier) {
     if(user_data_root.empty())return [WKWebsiteDataStore defaultDataStore];
-    if(@available(macOS 14.0,*))return [WKWebsiteDataStore dataStoreForIdentifier:data_store_identifier(user_data_root)];
+    if (@available(macOS 14.0, *)) return [WKWebsiteDataStore dataStoreForIdentifier:identifier];
     neo_log(app,NEOASTRA_LOG_WARNING,"environment","WKWebView cannot give a user-data root its own store before macOS 14; the default store is shared");
     return [WKWebsiteDataStore defaultDataStore];
+}
+// The stores of user-data roots that live environments use, with how many use each, and the stores being deleted, by identifier.
+// Both are used on the UI thread only and never destroyed: an environment can be released while the process exits.
+std::unordered_map<std::string,size_t>& root_stores_in_use() {static auto* stores=new std::unordered_map<std::string,size_t>;return *stores;}
+std::unordered_set<std::string>& root_stores_being_deleted() {static auto* stores=new std::unordered_set<std::string>;return *stores;}
+// The operation is borrowed: the caller owns it and reads its cancellation here, and it is never completed or released by this file.
+struct root_store_removal { NSUUID* identifier; std::string key; neo_platform_created_callback_t callback; void* context; neoastra_operation_t* operation; int attempts{50}; };
+// Ends a removal once: its reservation goes first, so that the callback can start an environment or a deletion on the root. The
+// callback takes the error, which is owned, or nullptr; a cancellation recorded on the operation is reported by the caller.
+void finish_root_store_removal(root_store_removal* removal,neoastra_error_t* native_error) noexcept {
+    root_stores_being_deleted().erase(removal->key);
+    removal->callback(removal->context,native_error);
+    delete removal;
+}
+// The store that clearing used is released, and its session closed, a moment after the clearing completes: until then WebKit
+// answers that the store is in use or that it could not delete its files. The removal is tried again every 100 ms for 5 seconds.
+// A cancellation recorded before a try stops the removal there, with no error.
+void remove_root_store(root_store_removal* removal) noexcept API_AVAILABLE(macos(14.0)) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{@autoreleasepool{
+        if(removal->operation->state.load(std::memory_order_acquire)!=neo_operation_state::pending){finish_root_store_removal(removal,nullptr);return;}
+        [WKWebsiteDataStore removeDataStoreForIdentifier:removal->identifier completionHandler:^(NSError* failure){@autoreleasepool{
+            if(failure&&--removal->attempts>0){remove_root_store(removal);return;}
+            finish_root_store_removal(removal,failure?make_error(NEOASTRA_ERROR_NATIVE_FAILURE,("WebKit could not remove the store of the user-data root: "+utf8(failure.localizedDescription)).c_str(),failure.code):nullptr);
+        }}];
+    }});
 }
 }
 
@@ -685,9 +717,19 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
                         return false;
                     }
                 }
+                // The root resolves once: its identifier names both the store of the environment and its entry in the registry.
+                const auto root=neo_string(options->user_data_root);
+                NSUUID* identifier=nil;
+                if(!options->private_mode&&!root.empty()){
+                    if(@available(macOS 14.0,*))identifier=data_store_identifier(user_data_root_path(root));
+                }
+                std::string root_store=identifier?utf8(identifier.UUIDString):std::string{};
+                if(!root_store.empty()&&root_stores_being_deleted().count(root_store)){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is being deleted",0,"wkwebview");return false;}
                 auto state=std::make_unique<cocoa_environment>();
                 state->process_pool=[WKProcessPool new];
-                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:persistent_data_store(environment->app,neo_string(options->user_data_root));
+                state->data_store=options->private_mode?[WKWebsiteDataStore nonPersistentDataStore]:persistent_data_store(environment->app,root,identifier);
+                state->root_store=std::move(root_store);
+                if(!state->root_store.empty())++root_stores_in_use()[state->root_store];
                 environment->platform=state.release();
                 callback(context,nullptr);
                 return true;
@@ -701,7 +743,37 @@ bool neo_platform_environment_create_async(neoastra_environment_t* environment,c
         }
     }
 }
-void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {delete static_cast<cocoa_environment*>(environment->platform);environment->platform=nullptr;}
+void neo_platform_environment_destroy(neoastra_environment_t* environment) noexcept {
+    auto* state=static_cast<cocoa_environment*>(environment->platform);
+    if(state&&!state->root_store.empty()){auto& stores=root_stores_in_use();if(const auto found=stores.find(state->root_store);found!=stores.end()&&--found->second==0)stores.erase(found);}
+    delete state;
+    environment->platform=nullptr;
+}
+// WebKit refuses to remove a store that a web view or a data-store object still uses; the registry of live environments
+// refuses the roots of this application first, so that the caller learns it before anything is removed. The root of a file system
+// is refused too. A start that fails reserves nothing and does not call back: the reservation is taken only after every step that can fail.
+neoastra_result_t neo_platform_delete_user_data_root(neoastra_app_t*,const std::string& root,neo_platform_created_callback_t callback,void* context,neoastra_operation_t* operation, std::function<void()>&,neoastra_error_t** error) noexcept {@autoreleasepool{
+    if(@available(macOS 14.0,*)){
+        try{
+            const auto path=user_data_root_path(root);
+            if(path.relative_path().empty())return neo_fail(error,NEOASTRA_ERROR_INVALID_ARGUMENT,"The root of a file system is not a user-data root",0,"wkwebview");
+            NSUUID* identifier=data_store_identifier(path);
+            const auto key=utf8(identifier.UUIDString);
+            if(root_stores_in_use().count(key))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"An environment on the user-data root is still alive",0,"wkwebview");
+            if(root_stores_being_deleted().count(key))return neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"The user-data root is already being deleted",0,"wkwebview");
+            std::unique_ptr<root_store_removal> removal(new root_store_removal{identifier,key,callback,context,operation});
+            root_stores_being_deleted().insert(key);
+            // Removing a store deletes its files, but the network process keeps the cookies it read in memory, and a store on the
+            // same identifier would find them again in this run. Clearing everything through the store first leaves nothing behind.
+            auto* pending=removal.get();
+            @try{[[WKWebsiteDataStore dataStoreForIdentifier:identifier] removeDataOfTypes:[WKWebsiteDataStore allWebsiteDataTypes] modifiedSince:[NSDate distantPast] completionHandler:^{remove_root_store(pending);}];}
+            @catch(NSException* exception){root_stores_being_deleted().erase(key);return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,utf8(exception.reason).c_str(),0,"wkwebview");}
+            removal.release();
+            return NEOASTRA_OK;
+        }catch(const std::exception& exception){return neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,exception.what(),0,"wkwebview");}
+    }
+    return neo_fail(error,NEOASTRA_ERROR_NOT_SUPPORTED,"WKWebView gives a user-data root a store of its own only from macOS 14",0,"wkwebview");
+}}
 // A profile that is not ephemeral is the store of its environment, so it follows the environment's user-data root and private mode.
 bool neo_platform_profile_create(neoastra_profile_t* profile,neoastra_error_t** error) noexcept {@autoreleasepool{try{auto* environment=static_cast<cocoa_environment*>(profile->environment->platform);if(!environment||!environment->data_store){neo_fail(error,NEOASTRA_ERROR_INVALID_STATE,"WKWebView environment is unavailable");return false;}auto* state=new cocoa_profile{};state->data_store=profile->ephemeral?[WKWebsiteDataStore nonPersistentDataStore]:environment->data_store;profile->platform=state;return true;}catch(...){neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"Could not allocate WKWebView profile state");return false;}}}
 void neo_platform_profile_destroy(neoastra_profile_t* profile) noexcept {delete static_cast<cocoa_profile*>(profile->platform);profile->platform=nullptr;}

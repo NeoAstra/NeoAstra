@@ -109,6 +109,7 @@ static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_MASK == 0xf0 && NEOASTRA_NAVIGATI
 static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT == 0x10 && NEOASTRA_NAVIGATION_REQUEST_KIND_RELOAD == 0x20 && NEOASTRA_NAVIGATION_REQUEST_KIND_BACK_FORWARD == 0x30);
 static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4 && NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH == 8 && NEOASTRA_BUILD_FEATURE_DISPLAYS == 16);
 static_assert(NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL == 32);
+static_assert(NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION == 64);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32 && NEOASTRA_CAPABILITY_VIEW_PLACEMENT == 33 && NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL == 34);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
@@ -195,6 +196,7 @@ int main() {
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_DISPLAYS) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL) != 0);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION) != 0);
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);
@@ -390,6 +392,10 @@ int main() {
     assert(neoastra_view_focus(nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_key_chord_callback(nullptr, nullptr, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_place_over(nullptr, nullptr, 0, 0, 1, 1, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    const neoastra_string_view_t some_root{reinterpret_cast<const uint8_t*>("root"), 4};
+    neoastra_operation_t* deletion = nullptr;
+    assert(neoastra_app_delete_user_data_root_async(nullptr, some_root, [](void*, neoastra_result_t, const neoastra_error_t*) {}, nullptr, &deletion, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT && deletion == nullptr);
+    assert(neoastra_app_delete_user_data_root_async(app, some_root, nullptr, nullptr, &deletion, nullptr) == NEOASTRA_ERROR_INVALID_ARGUMENT && deletion == nullptr);
     neoastra_app_quit(app, 7);
     neoastra_app_release(app);
     neoastra_window_release(window);
