@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -740,7 +741,16 @@ public sealed class ToolingTests
     public async Task IntegratedFrontendBuild_IsIncrementalAndFeedsBuildRunAndPublishOutputs()
     {
         using var fixture = new IntegratedBuildFixture();
-        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+        await fixture.RestoreAsync(fixture.ProjectPath);
+        using (var assets = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Root, "obj", "project.assets.json"))))
+        {
+            var restore = assets.RootElement.GetProperty("project").GetProperty("restore");
+            if (restore.TryGetProperty("sources", out var sources))
+            {
+                foreach (var source in sources.EnumerateObject())
+                    Assert.IsTrue(new Uri(source.Name).IsFile, $"Fixture restore used a remote feed: {source.Name}");
+            }
+        }
 
         var first = await fixture.BuildAsync();
         StringAssert.Contains(first, "FRONTEND_EXECUTED");
@@ -794,7 +804,7 @@ public sealed class ToolingTests
         await fixture.RunDotNetAsync("clean", fixture.ProjectPath, "--nologo", "-c", "Debug");
         StringAssert.Contains(await fixture.BuildAsync(), "FRONTEND_EXECUTED");
 
-        await fixture.RunDotNetAsync("restore", fixture.DisabledProjectPath, "--nologo");
+        await fixture.RestoreAsync(fixture.DisabledProjectPath);
         await fixture.RunDotNetAsync("build", fixture.DisabledProjectPath, "--no-restore", "--nologo", "-c", "Debug");
     }
 
@@ -802,7 +812,7 @@ public sealed class ToolingTests
     public async Task IntegratedFrontendBuild_UsesExplicitPrebuiltAssetsWithoutRunningFrontendBuild()
     {
         using var fixture = new IntegratedBuildFixture();
-        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+        await fixture.RestoreAsync(fixture.ProjectPath);
         Directory.CreateDirectory(fixture.DistDirectory);
         File.WriteAllText(fixture.DistIndex, "explicit prebuilt");
 
@@ -819,7 +829,7 @@ public sealed class ToolingTests
     public async Task FrontendDependencyRestoreFailure_IsReportedAsMsBuildError()
     {
         using var fixture = new IntegratedBuildFixture();
-        await fixture.RunDotNetAsync("restore", fixture.ProjectPath, "--nologo");
+        await fixture.RestoreAsync(fixture.ProjectPath);
         fixture.ConfigureNpmRestore();
 
         var result = await fixture.BuildWithoutPathAsync();
@@ -865,7 +875,7 @@ public sealed class ToolingTests
     public async Task StaticFrontend_IsMaterializedWithSdkClientUnderObj()
     {
         using var fixture = new IntegratedBuildFixture();
-        await fixture.RunDotNetAsync("restore", fixture.StaticProjectPath, "--nologo");
+        await fixture.RestoreAsync(fixture.StaticProjectPath);
 
         var first = await fixture.BuildStaticAsync();
         StringAssert.Contains(first, "Validated");
@@ -1299,6 +1309,13 @@ public sealed class ToolingTests
             Assert.IsTrue(File.Exists(_toolPath), "NeoAstra.Tool must be built before its MSBuild integration test.");
 
             Directory.CreateDirectory(FrontendRoot);
+            // The temp directory does not inherit the repository's SDK selection. Use the SDK that built the
+            // tests so its net10.0 targeting pack is already available, even on runners with newer SDKs.
+            var version = typeof(ToolingTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .Single(attribute => attribute.Key == "BuildSdkVersion").Value;
+            File.WriteAllText(Path.Combine(Root, "global.json"), JsonSerializer.Serialize(new { sdk = new { version } }));
+            File.WriteAllText(Path.Combine(Root, "NuGet.Config"),
+                "<configuration><packageSources><clear /></packageSources></configuration>");
             File.WriteAllText(SourcePath, "first");
             File.WriteAllText(Path.Combine(FrontendRoot, "frontend.proj"), """
                 <Project>
@@ -1412,6 +1429,9 @@ public sealed class ToolingTests
             RunDotNetCoreAsync(["build", StaticProjectPath, "--no-restore", "--nologo", "-c", "Debug"]);
 
         internal Task<string> RunDotNetAsync(params string[] arguments) => RunDotNetCoreAsync(arguments);
+
+        internal Task<string> RestoreAsync(string project) =>
+            RunDotNetCoreAsync(["restore", project, "--nologo", "--configfile", Path.Combine(Root, "NuGet.Config")]);
 
         internal void ConfigureNpmRestore()
         {
