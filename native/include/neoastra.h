@@ -83,9 +83,10 @@ typedef enum neoastra_title_bar_style : uint32_t { NEOASTRA_TITLE_BAR_DEFAULT = 
 typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = 5, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = 6, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION = 7,
     /* Peer connections (WebRTC: RTCPeerConnection and the interfaces that come with it) of the documents the view loads
        from then on, in every frame. Off is held by the engine, not by a script: WKWebView (the PeerConnectionEnabled
-       preference) and WebKitGTK (enable-webrtc, which WebKitGTK leaves off unless it is turned on here) take it; WebView2
+       preference) and WebKitGTK (enable-webrtc, whose default depends on the build of WebKitGTK) take it; WebView2
        and the Android WebView have no such switch and refuse off with NEOASTRA_ERROR_NOT_SUPPORTED, as does a WebKit
-       without the preference. Set it before the first navigation: a document that is already loaded keeps what it has. */
+       without the preference. Set it before the first navigation: a document that is already loaded keeps what it has.
+       A popup view starts with the setting of its opener and has its own from then on. */
     NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS = 8 } neoastra_view_setting_t;
 typedef enum neoastra_option_state : uint32_t { NEOASTRA_OPTION_DEFAULT = 0, NEOASTRA_OPTION_ENABLED = 1, NEOASTRA_OPTION_DISABLED = 2 } neoastra_option_state_t;
 typedef enum neoastra_script_injection_time : uint32_t { NEOASTRA_SCRIPT_DOCUMENT_START = 0, NEOASTRA_SCRIPT_DOCUMENT_END = 1 } neoastra_script_injection_time_t;
@@ -195,7 +196,8 @@ typedef uint64_t neoastra_data_kind_t;
    USER_DATA_ROOT_DELETION says that this library has neoastra_app_delete_user_data_root_async.
    PEER_CONNECTIONS says that this library has NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS and that its engine turns peer connections
    off for a view (WKWebView and WebKitGTK); a library for WebView2 or the Android WebView has the setting, refuses off, and
-   leaves the bit clear, and a library from before the setting refuses it as an invalid argument. */
+   leaves the bit clear, and a library from before the setting refuses it as an invalid argument. The bit is the one of the
+   build: a WebKit without the preference still refuses the setting, which is what tells for a view. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)

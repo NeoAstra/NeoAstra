@@ -173,7 +173,7 @@ engine default. Each property can also be set on its own; `null` keeps the engin
 | `ZoomControls` | Mouse-wheel, keyboard, and pinch zoom | Switchable | Pinch magnification, which is not part of `ZoomFactor`; on by default | Engine has none |
 | `TabFocusesLinks` | The Tab key stopping on links | Always on; cannot be turned off | Switchable; off by default | Switchable; on by default |
 | `HistoryNavigation` | Loading a document of the history again: back and forward, whatever asks for it | Switchable; on by default. WebView2 Runtime 115 or later | Switchable; on by default | Switchable; on by default |
-| `PeerConnections` | Peer connections (WebRTC) of every document of the view: see [frames and content of other origins](capabilities-and-security.md#peer-connections-of-untrusted-content) | Always on; the engine has no switch | Switchable; on by default | Switchable; off by default |
+| `PeerConnections` | Peer connections (WebRTC) of every document of the view: see [frames and content of other origins](capabilities-and-security.md#peer-connections-of-untrusted-content) | Always on; the engine has no switch | Switchable; on by default | Switchable; the default is the one of the build of WebKitGTK |
 
 On macOS, WKWebView moves the focus with the Tab key between text fields only, and reaches links and
 the other controls with Option+Tab. `TabFocusesLinks` makes Tab stop on them, as it does on Windows

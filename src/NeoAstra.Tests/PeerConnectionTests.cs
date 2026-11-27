@@ -71,8 +71,9 @@ public sealed class PeerConnectionTests
         Assert.AreEqual(PeerConnectionProbe.OwnContexts.Length + Frames.Length, report.Count);
         foreach (var (context, names) in report)
         {
-            // A worker has no RTCPeerConnection on any engine.
-            if (context != "worker") Assert.IsTrue(PeerConnectionProbe.Has(names, "RTCPeerConnection"), $"The context '{context}' has [{names}].");
+            // A worker has no RTCPeerConnection on any engine, but it has to have run.
+            if (context == "worker") Assert.AreNotEqual("error", names);
+            else Assert.IsTrue(PeerConnectionProbe.Has(names, "RTCPeerConnection"), $"The context '{context}' has [{names}].");
         }
     }
 }

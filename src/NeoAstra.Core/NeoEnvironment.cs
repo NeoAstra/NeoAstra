@@ -81,12 +81,12 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     /// <returns>The created browser view.</returns>
     /// <exception cref="PlatformNotSupportedException">Explicit bridge origins were supplied on Linux, which does not implement them.</exception>
     public ValueTask<NeoAstra> CreateWebViewAsync(NeoAstraHost host, NeoAstraOptions? options = null, CancellationToken cancellationToken = default)
-        => NeoTransportViewInitializer.CreateAsync(this, host, options, 0, cancellationToken);
+        => NeoTransportViewInitializer.CreateAsync(this, host, options, 0, null, cancellationToken);
 
-    internal ValueTask<NeoAstra> CreatePopupWebViewAsync(NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, CancellationToken cancellationToken)
-        => NeoTransportViewInitializer.CreateAsync(this, host, options, popupRequest, cancellationToken);
+    internal ValueTask<NeoAstra> CreatePopupWebViewAsync(NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, NeoAstra opener, CancellationToken cancellationToken)
+        => NeoTransportViewInitializer.CreateAsync(this, host, options, popupRequest, opener, cancellationToken);
 
-    internal ValueTask<NeoAstra> CreateWebViewCoreAsync(NeoAstraHost host, NeoAstraOptions options, nint popupRequest, CancellationToken cancellationToken)
+    internal ValueTask<NeoAstra> CreateWebViewCoreAsync(NeoAstraHost host, NeoAstraOptions options, nint popupRequest, NeoAstra? opener, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(host);
@@ -150,7 +150,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             bridge_origins = bridgeOrigins.Views,
         };
         var nativeOptions = new NativeMethods.neoastra_view_options_t(raw);
-        var operation = new NativeOperation<NeoAstra>(cancellationToken, new ViewCreation(this, host, options));
+        var operation = new NativeOperation<NeoAstra>(cancellationToken, new ViewCreation(this, host, options, opener));
         NativeMethods.neoastra_operation_t nativeOperation = default;
         NativeMethods.neoastra_error_t error = default;
         NativeMethods.neoastra_result_t result;
@@ -317,7 +317,7 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
             if (NativeError.Code(result) == NeoErrorCode.Success && view.Handle != 0)
             {
                 var creation = (ViewCreation)operation.Owner!;
-                operation.Complete(new NeoAstra(creation.Environment, new SafeViewHandle(view.Handle), creation.Host, creation.Options));
+                operation.Complete(new NeoAstra(creation.Environment, new SafeViewHandle(view.Handle), creation.Host, creation.Options, creation.Opener));
             }
             else
             {
@@ -332,12 +332,12 @@ public sealed unsafe class NeoEnvironment : IAsyncDisposable
     }
 
     private sealed record ProfileCreation(NeoEnvironment Environment, bool IsEphemeral);
-    private sealed record ViewCreation(NeoEnvironment Environment, NeoAstraHost Host, NeoAstraOptions Options);
+    private sealed record ViewCreation(NeoEnvironment Environment, NeoAstraHost Host, NeoAstraOptions Options, NeoAstra? Opener);
 }
 
 internal static class NeoTransportViewInitializer
 {
-    internal static async ValueTask<NeoAstra> CreateAsync(NeoEnvironment environment, NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, CancellationToken cancellationToken)
+    internal static async ValueTask<NeoAstra> CreateAsync(NeoEnvironment environment, NeoAstraHost host, NeoAstraOptions? options, nint popupRequest, NeoAstra? opener, CancellationToken cancellationToken)
     {
         options ??= new NeoAstraOptions();
         options.Validate(environment);
@@ -346,9 +346,7 @@ internal static class NeoTransportViewInitializer
         NeoAstra? view = null;
         try
         {
-            view = await environment.CreateWebViewCoreAsync(host, options, popupRequest, cancellationToken);
-            // Applied before the first navigation so no document ever sees the engine defaults.
-            view.ApplyBrowserFeatures(options.BrowserFeatures);
+            view = await environment.CreateWebViewCoreAsync(host, options, popupRequest, opener, cancellationToken);
             await view.InitializeTransportAsync(cancellationToken);
             return view;
         }

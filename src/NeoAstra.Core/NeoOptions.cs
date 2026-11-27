@@ -470,22 +470,25 @@ public sealed class NeoBrowserFeatures
     /// send out what it reads.
     /// </para>
     /// <para>
-    /// While it is <see langword="false"/>, the engine itself gives no document of the view the interfaces, in any
-    /// frame, whatever its address, scheme, or sandbox: a nested frame, an <c>about:blank</c> document, a document
-    /// written by a script, and a popup of the view have none either. Nothing is injected in the page, so a page cannot
-    /// get them back. The switch is for the whole view; no engine has one for a frame, an origin, or a scheme. Capturing
+    /// While it is <see langword="false"/>, the engine itself gives no document of the view <c>RTCPeerConnection</c>,
+    /// <c>RTCDataChannel</c>, or the other interfaces that make or carry a connection, in any frame, whatever its
+    /// address, scheme, or sandbox: a nested frame, an <c>about:blank</c> document, a document written by a script, and
+    /// a worker have none either. Nothing is injected in the page, so a page cannot get them back. A popup view starts
+    /// with the switch of its opener, and keeps it unless its own features set this property. The switch is for the whole view; no engine has one for a frame, an origin, or a scheme. Capturing
     /// a camera or a microphone (<c>getUserMedia</c>) is not a peer connection and still goes through
     /// <see cref="NeoAstra.PermissionRequested"/>.
     /// </para>
     /// <para>
     /// WKWebView (macOS and iOS) takes it through the <c>PeerConnectionEnabled</c> preference of WebKit, which is not
-    /// part of its public interface, and WebKitGTK through its <c>enable-webrtc</c> setting. WebKitGTK leaves peer
-    /// connections off unless this is <see langword="true"/>; the other engines leave them on. WebView2 (Windows) and
+    /// part of its public interface, and WebKitGTK through its <c>enable-webrtc</c> setting, whose default depends on
+    /// the build of WebKitGTK; the other engines leave peer connections on. WebView2 (Windows) and
     /// the Android WebView have no setting for them and Chromium no switch that removes them, so
     /// <see langword="false"/> is ignored there and the documents keep their peer connections.
-    /// <see cref="NeoRuntimeInfo.ControlsPeerConnections"/> tells whether the engine has the switch, and
-    /// <see cref="NeoAstra.ArePeerConnectionsOff"/> whether it took it for a view: an application that relies on it
-    /// checks that before it shows the content.
+    /// <see cref="NeoRuntimeInfo.ControlsPeerConnections"/> tells whether the engine of the native library is one with
+    /// the switch, and <see cref="NeoAstra.ArePeerConnectionsOff"/> whether the engine took it for a view: an
+    /// application that relies on it checks the second before it shows the content. The main view of a
+    /// <c>NeoApp</c> application loads its first document whatever the engine answered, so such an application keeps
+    /// untrusted content out of that document and checks the view before it shows any.
     /// </para>
     /// </remarks>
     public bool? PeerConnections { get; set; }

@@ -798,6 +798,9 @@ bool neo_platform_view_create_async(neoastra_view_t* view,const neoastra_view_op
                     neo_fail(error,NEOASTRA_ERROR_NATIVE_FAILURE,"WKWebView could not allocate a view configuration",0,"wkwebview");
                     return false;
                 }
+                // WebKit hands a popup the preferences object of its opener. The popup gets a copy, which starts with what the
+                // opener has, peer connections turned off included, so that a setting of one view never changes the other.
+                if (options->popup_request&&options->popup_request->popup_context) configuration.preferences=[configuration.preferences copy];
                 if (!options->popup_request) {
                     configuration.processPool=environment->process_pool;
                     auto* profile=view->profile?static_cast<cocoa_profile*>(view->profile->platform):nullptr;

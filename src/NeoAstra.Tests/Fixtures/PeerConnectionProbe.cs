@@ -33,7 +33,8 @@ internal static class PeerConnectionProbe
     /// its key: the page, an empty frame that it adds (the initial <c>about:blank</c> document, which loads nothing), an
     /// empty frame inside that one, a document that it writes, a worker, and <paramref name="frames"/>, each a key, the
     /// address of a <see cref="FrameDocument"/> with that key, and its <c>sandbox</c> attribute or <see langword="null"/>.
-    /// <c>peerReport.count</c> is the number of contexts that have reported.
+    /// <c>peerReport.count</c> is the number of contexts that have reported. A context without any interface reports an
+    /// empty text, and a worker that did not run reports <c>error</c>.
     /// </summary>
     internal static string Script(IEnumerable<(string Key, string Address, string? Sandbox)> frames)
     {
@@ -67,8 +68,8 @@ internal static class PeerConnectionProbe
             """.TrimEnd()).Append(Found).Append("""
             (self))"], { type: "text/javascript" })));
                 worker.onmessage = event => set("worker", event.data);
-                worker.onerror = () => set("worker", "");
-              } catch (error) { set("worker", ""); }
+                worker.onerror = () => set("worker", "error");
+              } catch (error) { set("worker", "error"); }
 
             """);
         foreach (var (key, address, sandbox) in frames)

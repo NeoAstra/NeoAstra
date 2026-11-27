@@ -32,7 +32,7 @@ const std::string second_page = "data:text/html,%3C!doctype%20html%3Esecond";
 // Collects, in globalThis.report, the names of the peer connection interfaces that each document and worker of the page
 // has: the page, an empty frame that a script adds (the initial about:blank document, which loads nothing), an empty
 // frame inside that one, a document that a script writes, a sandboxed frame with a document of its own, a frame of
-// another address, and a worker. A context without any reports an empty text.
+// another address, and a worker. A context without any reports an empty text, and a worker that did not run "error".
 const std::string probe = R"js((() => {
   const names = ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCIceCandidate", "RTCSessionDescription",
     "RTCPeerConnectionIceEvent", "RTCDataChannelEvent", "RTCTrackEvent", "RTCRtpSender", "RTCRtpReceiver", "RTCRtpTransceiver",
@@ -66,8 +66,8 @@ const std::string probe = R"js((() => {
   try {
     const worker = new Worker(URL.createObjectURL(new Blob(["postMessage((" + source + ")(self))"], { type: "text/javascript" })));
     worker.onmessage = event => set("worker", event.data);
-    worker.onerror = () => set("worker", "");
-  } catch (error) { set("worker", ""); }
+    worker.onerror = () => set("worker", "error");
+  } catch (error) { set("worker", "error"); }
   return true;
 })())js";
 
@@ -186,8 +186,9 @@ void expect_none(const probe_report& report) {
     }
 }
 
-// Every document of the page has peer connections.
+// Every document of the page has peer connections, and its worker ran: WebKit gives a worker the data channels to take over.
 void expect_all(const probe_report& report) {
+    if (!has(report.worker, "RTCDataChannel")) fail(report, "a worker that ran, with data channels");
     for (const auto* names : {&report.page, &report.blank, &report.nested, &report.written, &report.sandboxed, &report.other}) {
         if (!has(*names, "RTCPeerConnection") || !has(*names, "RTCDataChannel") || !has(*names, "RTCIceCandidate")) fail(report, "peer connections in every document");
     }
@@ -206,6 +207,40 @@ neoastra_view_t* create_view(neoastra_environment_t* environment, neoastra_windo
     auto* view = static_cast<neoastra_view_t*>(view_state.value);
     assert(neoastra_view_set_event_callback(view, record_event, events) == NEOASTRA_OK);
     return view;
+}
+
+// The popup that a view asks for: created in the window of the test, as WebKit wants it, before the request returns.
+struct popup_host {
+    view_events events;
+    neoastra_environment_t* environment{};
+    neoastra_window_t* window{};
+    view_events popup_events;
+    neoastra_view_t* popup{};
+};
+
+void NEOASTRA_CALL open_popup(void* context, const neoastra_event_t* event) {
+    auto* host = static_cast<popup_host*>(context);
+    if (event->header.type != NEOASTRA_EVENT_NEW_WINDOW_REQUESTED) {
+        record_event(&host->events, event);
+        return;
+    }
+    neoastra_view_options_t view_options{};
+    view_options.size = sizeof(view_options);
+    view_options.version = 1;
+    view_options.window = host->window;
+    view_options.fill_parent = 1;
+    view_options.popup_request = event->decision;
+    completion view_state;
+    assert(neoastra_environment_create_view_async(host->environment, &view_options, view_created, &view_state, nullptr, nullptr) == NEOASTRA_OK);
+    assert(view_state.done && view_state.result == NEOASTRA_OK && view_state.value != nullptr);
+    host->popup = static_cast<neoastra_view_t*>(view_state.value);
+    assert(neoastra_view_set_event_callback(host->popup, record_event, &host->popup_events) == NEOASTRA_OK);
+    neoastra_decision_response_t response{};
+    response.size = sizeof(response);
+    response.version = 1;
+    response.action = NEOASTRA_DECISION_ALLOW;
+    response.target_view = host->popup;
+    assert(neoastra_decision_complete(event->decision, &response, nullptr) == NEOASTRA_OK);
 }
 
 neoastra_window_t* create_window(neoastra_app_t* app) {
@@ -287,6 +322,26 @@ int main() {
         navigate(view, events, first_page, "first");
         expect_none(run_probe(view));
 
+        // A popup starts with the setting of its opener, and has its own from then on: turning peer connections on for the
+        // popup leaves its opener without them.
+        auto* popup_window = create_window(app);
+        popup_host host;
+        host.environment = environment;
+        host.window = popup_window;
+        host.events = events;
+        assert(neoastra_view_set_event_callback(view, open_popup, &host) == NEOASTRA_OK);
+        assert(evaluate(view, "window.open('about:blank') !== null") == "true");
+        assert(host.popup != nullptr);
+        navigate(host.popup, host.popup_events, first_page, "first");
+        expect_none(run_probe(host.popup));
+        assert(neoastra_view_set_setting(host.popup, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 1) == NEOASTRA_OK);
+        navigate(host.popup, host.popup_events, second_page, "second");
+        expect_all(run_probe(host.popup));
+        navigate(view, host.events, second_page, "second");
+        expect_none(run_probe(view));
+
+        neoastra_view_release(host.popup);
+        neoastra_window_release(popup_window);
         neoastra_view_release(view);
         neoastra_window_release(window);
         neoastra_view_release(plain);

@@ -533,14 +533,15 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
     private const ulong PeerConnections = 1UL << 7;
 
     /// <summary>
-    /// Gets whether the browser engine of the native library turns peer connections (WebRTC) off for a view that asks
-    /// for it with <see cref="NeoBrowserFeatures.PeerConnections"/>.
+    /// Gets whether the native library is built for a browser engine that turns peer connections (WebRTC) off for a
+    /// view that asks for it with <see cref="NeoBrowserFeatures.PeerConnections"/>.
     /// </summary>
     /// <remarks>
     /// It is <see langword="true"/> with WKWebView (macOS and iOS) and WebKitGTK (Linux). It is <see langword="false"/>
     /// with WebView2 (Windows) and the Android WebView, whose engine has no such switch, and with a native library from
-    /// before the switch: a view then keeps its peer connections whatever its features say.
-    /// <see cref="NeoAstra.ArePeerConnectionsOff"/> tells what the engine did for one view.
+    /// before the switch: a view then keeps its peer connections whatever its features say. It is a fact of the
+    /// native library and not of the installed engine: WKWebView has the switch as a preference outside its public
+    /// interface, and <see cref="NeoAstra.ArePeerConnectionsOff"/> tells whether the engine took it for one view.
     /// </remarks>
     public bool ControlsPeerConnections => (BuildFeatures & PeerConnections) != 0;
 }

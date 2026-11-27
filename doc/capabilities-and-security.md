@@ -122,13 +122,14 @@ if (!view.ArePeerConnectionsOff)
 
 | Engine | With `PeerConnections = false` |
 | --- | --- |
-| macOS and iOS / WKWebView | No document of the view has `RTCPeerConnection`, `RTCDataChannel`, or another interface of WebRTC: not a frame of any scheme or sandbox, an `about:blank` document, a document that a script writes, or a worker. It is the `PeerConnectionEnabled` preference of WebKit, which is not part of the public interface of WKWebView; a WebKit without it leaves `ArePeerConnectionsOff` at `false`. |
-| Linux / WebKitGTK | The same, through the `enable-webrtc` setting. WebKitGTK leaves it off unless `PeerConnections` is `true`. |
+| macOS and iOS / WKWebView | No document of the view has `RTCPeerConnection`, `RTCDataChannel`, or another interface that makes or carries a connection: not a frame of any scheme or sandbox, an `about:blank` document, a document that a script writes, or a worker. A few interfaces that only transform media frames stay (`RTCRtpScriptTransform`, `RTCEncodedAudioFrame`, `RTCEncodedVideoFrame`); they reach nothing without a connection. It is the `PeerConnectionEnabled` preference of WebKit, which is not part of the public interface of WKWebView; a WebKit without it leaves `ArePeerConnectionsOff` at `false`. |
+| Linux / WebKitGTK | The same, through the `enable-webrtc` setting. Without `PeerConnections`, its default is the one of the build of WebKitGTK. |
 | Windows / WebView2, Android / WebView | Not available. WebView2 and the Android WebView have no setting for peer connections, and Chromium has no command-line switch or feature that removes them: every document keeps them, and `ArePeerConnectionsOff` is `false`. |
 
-- The switch is applied when the view is created, before its first document, and is the one of its view: another view of the same environment keeps its own. No engine has a switch for one frame, origin, or scheme.
+- The switch is applied when the view is created, before its first document, and is the one of its view: another view of the same environment keeps its own. A popup view starts with the switch of its opener, and keeps it unless its own `BrowserFeatures` set `PeerConnections`. No engine has a switch for one frame, origin, or scheme.
 - Nothing is injected in the page, so a page cannot get the interfaces back from a new frame or a worker.
-- `NeoRuntimeInfo.ControlsPeerConnections` (`environment.RuntimeInfo`) tells before a view exists whether the engine has the switch, and `NeoAstra.ArePeerConnectionsOff` whether the engine took it for a view. An application that shows untrusted content checks the second, and on Windows and Android shows that content only if it accepts that it can send out what it reads through a peer connection.
+- `NeoRuntimeInfo.ControlsPeerConnections` (`environment.RuntimeInfo`) tells before a view exists whether the native library is built for an engine with the switch, and `NeoAstra.ArePeerConnectionsOff` whether the engine took it for a view. An application that shows untrusted content checks the second, and on Windows and Android shows that content only if it accepts that it can send out what it reads through a peer connection.
+- The main view of a `NeoApp` application (`NeoAppBuilder.BrowserFeatures`) loads its first document whatever the engine answered: keep untrusted content out of that document, and check the view before showing any.
 - Capturing a camera or a microphone is not a peer connection, and still asks `PermissionRequested`.
 
 ## An isolated view beside the application

@@ -25,7 +25,7 @@ internal static partial class Program
             {
                 Require(!view.ArePeerConnectionsOff, "A view that was asked nothing reports its peer connections as turned off.");
                 var report = await ProbePeerConnectionsAsync(view, PeerUri);
-                // WebKitGTK leaves WebRTC off unless a host turns it on; the other engines have it.
+                // Whether WebKitGTK has WebRTC by default depends on its build; the other engines have it.
                 if (OperatingSystem.IsLinux()) return;
                 RequireEveryDocument(report, present: true);
                 using var label = await EvaluateJsonAsync(view,
@@ -98,8 +98,8 @@ internal static partial class Program
             {
                 if (present)
                 {
-                    // A worker has no RTCPeerConnection on any engine.
-                    Require(context == "worker" || PeerConnectionProbe.Has(names, "RTCPeerConnection"), $"The context '{context}' has no RTCPeerConnection: [{names}].");
+                    // A worker has no RTCPeerConnection on any engine, but it has to have run.
+                    Require(context == "worker" ? names != "error" : PeerConnectionProbe.Has(names, "RTCPeerConnection"), $"The context '{context}' has no RTCPeerConnection: [{names}].");
                 }
                 else
                 {

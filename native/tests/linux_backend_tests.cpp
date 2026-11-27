@@ -692,20 +692,22 @@ void test_permission_kinds_follow_the_request_type() {
 #endif
 }
 
-// WebKitGTK leaves WebRTC off unless a host turns it on. The peer connections setting is enable-webrtc of the view it is
-// given to, and of no other view.
+// The peer connections setting is enable-webrtc of the view it is given to, and of no other view. Its default is the one
+// of the build of WebKitGTK.
 void test_peer_connections_setting_reaches_the_view(neoastra_app_t* app) {
     auto* environment = create_environment(app, "", true);
     auto* window = create_window(app);
     auto* view = create_view(environment, window);
     auto* other = create_view(environment, window);
     auto* settings = webkit_web_view_get_settings(web_view(view));
-    assert(!webkit_settings_get_enable_webrtc(settings));
+    auto* other_settings = webkit_web_view_get_settings(web_view(other));
+    assert(settings != other_settings);
+    webkit_settings_set_enable_webrtc(other_settings, TRUE);
     assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 1) == NEOASTRA_OK);
     assert(webkit_settings_get_enable_webrtc(settings));
-    assert(!webkit_settings_get_enable_webrtc(webkit_web_view_get_settings(web_view(other))));
     assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 0) == NEOASTRA_OK);
     assert(!webkit_settings_get_enable_webrtc(settings));
+    assert(webkit_settings_get_enable_webrtc(other_settings));
     neoastra_runtime_info_t info{};
     info.size = sizeof(info);
     info.version = 1;

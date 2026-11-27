@@ -450,7 +450,7 @@ public sealed class NeoNewWindowRequest
             throw new ArgumentException("A popup view must use the opener's profile.", nameof(options));
         }
 
-        var pending = _opener.Environment.CreatePopupWebViewAsync(host, options, _nativeDecision.DangerousGetHandle(), cancellationToken);
+        var pending = _opener.Environment.CreatePopupWebViewAsync(host, options, _nativeDecision.DangerousGetHandle(), _opener, cancellationToken);
         GC.KeepAlive(_nativeDecision);
         return pending;
     }

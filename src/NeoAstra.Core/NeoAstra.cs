@@ -47,7 +47,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private int _disposed;
     private object? _rpcServiceScope;
 
-    internal NeoAstra(NeoEnvironment environment, SafeViewHandle handle, NeoAstraHost host, NeoAstraOptions options)
+    internal NeoAstra(NeoEnvironment environment, SafeViewHandle handle, NeoAstraHost host, NeoAstraOptions options, NeoAstra? opener = null)
     {
         Environment = environment;
         _handle = handle;
@@ -71,6 +71,14 @@ public sealed class NeoAstra : IAsyncDisposable
                 environment.Application.Dispatcher,
                 sessionChanged: OnTransportSessionChanged);
         }
+        // Applied before the view is known to anything that could navigate it, so no document ever sees the engine defaults.
+        ApplyBrowserFeatures(options.BrowserFeatures);
+        // A popup of a view without peer connections has none either, unless its own features say otherwise.
+        if (opener is { ArePeerConnectionsOff: true } && options.BrowserFeatures.PeerConnections is null)
+        {
+            ApplyBrowserFeatures(new NeoBrowserFeatures { PeerConnections = false });
+        }
+
         environment.Application.RegisterView(this);
     }
 
@@ -98,10 +106,11 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Gets whether the browser engine has turned peer connections (WebRTC) off for the documents of this view.</summary>
     /// <remarks>
     /// It is <see langword="true"/> once the engine has taken <see cref="NeoBrowserFeatures.PeerConnections"/> set to
-    /// <see langword="false"/>, which the view applies when it is created, before its first navigation. It stays
-    /// <see langword="false"/> for a view that did not ask, and where the engine has no such switch (WebView2, the
-    /// Android WebView) or the native library predates it: the documents of the view then have peer connections, or, with
-    /// WebKitGTK, whatever the engine default leaves them.
+    /// <see langword="false"/>, which the view applies when it is created, before its first navigation; a popup of
+    /// such a view takes it from its opener unless its own features say otherwise. It stays <see langword="false"/> for
+    /// a view that did not ask, and where the engine has no such switch (WebView2, the Android WebView), the installed
+    /// WebKit lacks it, or the native library predates it: the documents of the view then have what the engine gives
+    /// them by default. This property, and not <see cref="NeoRuntimeInfo.ControlsPeerConnections"/>, tells for a view.
     /// </remarks>
     public bool ArePeerConnectionsOff => _peerConnectionsOff;
 
