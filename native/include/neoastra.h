@@ -80,7 +80,13 @@ typedef enum neoastra_window_resize_edge : uint32_t { NEOASTRA_WINDOW_RESIZE_LEF
 /** Title-bar presentation. OVERLAY extends content into the title bar and keeps native window controls; HIDDEN also removes those controls. */
 typedef enum neoastra_title_bar_style : uint32_t { NEOASTRA_TITLE_BAR_DEFAULT = 0, NEOASTRA_TITLE_BAR_OVERLAY = 1, NEOASTRA_TITLE_BAR_HIDDEN = 2 } neoastra_title_bar_style_t;
 /** Engine-provided browser features a host can turn off. Accelerator keys cover find, print, reload, and zoom shortcuts, never text editing or the DevTools shortcut. While default script dialogs are off, alert, confirm, prompt, and beforeunload reach NEOASTRA_EVENT_SCRIPT_DIALOG_REQUESTED only and the engine shows no dialog of its own; WebView2 applies that switch to the documents it loads afterwards. With TAB_FOCUSES_LINKS the Tab key stops on links as it does on form controls: WKWebView skips links unless it is on, WebKitGTK and WebView2 stop on them, and WebView2 cannot turn it off. While HISTORY_NAVIGATION is off the view loads no document from its history: a navigation request of the kind BACK_FORWARD is refused in any frame without NEOASTRA_EVENT_NAVIGATION_REQUESTED, whatever asked for it (a mouse button, a key, a swipe, a menu, history.back() of a page), neoastra_view_go_back and neoastra_view_go_forward return NEOASTRA_ERROR_INVALID_STATE, NEOASTRA_EVENT_HISTORY_CHANGED reports no direction to go in, and the swipe that walks the history is off. A reload is not a history navigation, and the entries that a document adds for itself, with history.pushState or a fragment, load no document and stay with the page. */
-typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = 5, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = 6, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION = 7 } neoastra_view_setting_t;
+typedef enum neoastra_view_setting : uint32_t { NEOASTRA_VIEW_SETTING_BROWSER_ACCELERATOR_KEYS = 0, NEOASTRA_VIEW_SETTING_DEFAULT_CONTEXT_MENUS = 1, NEOASTRA_VIEW_SETTING_DEVTOOLS = 2, NEOASTRA_VIEW_SETTING_STATUS_BAR = 3, NEOASTRA_VIEW_SETTING_ZOOM_CONTROLS = 4, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS = 5, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS = 6, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION = 7,
+    /* Peer connections (WebRTC: RTCPeerConnection and the interfaces that come with it) of the documents the view loads
+       from then on, in every frame. Off is held by the engine, not by a script: WKWebView (the PeerConnectionEnabled
+       preference) and WebKitGTK (enable-webrtc, which WebKitGTK leaves off unless it is turned on here) take it; WebView2
+       and the Android WebView have no such switch and refuse off with NEOASTRA_ERROR_NOT_SUPPORTED, as does a WebKit
+       without the preference. Set it before the first navigation: a document that is already loaded keeps what it has. */
+    NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS = 8 } neoastra_view_setting_t;
 typedef enum neoastra_option_state : uint32_t { NEOASTRA_OPTION_DEFAULT = 0, NEOASTRA_OPTION_ENABLED = 1, NEOASTRA_OPTION_DISABLED = 2 } neoastra_option_state_t;
 typedef enum neoastra_script_injection_time : uint32_t { NEOASTRA_SCRIPT_DOCUMENT_START = 0, NEOASTRA_SCRIPT_DOCUMENT_END = 1 } neoastra_script_injection_time_t;
 /** OPEN_EXTERNAL answers a navigation or new-window request by leaving the view where it is and handing the requested address to the system, which opens it in the default browser. Only an absolute http or https address with a host and without credentials is handed over; NEOASTRA_EVENT_EXTERNAL_OPEN_COMPLETED then tells what became of it. */
@@ -186,7 +192,10 @@ typedef uint64_t neoastra_data_kind_t;
    SCRIPT_WORLD_CHANNEL says that this library reads version 2 of neoastra_script_options_t, has neoastra_view_post_script_message,
    and raises NEOASTRA_EVENT_SCRIPT_MESSAGE_RECEIVED where NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL is supported; a library
    without it refuses version 2 as an invalid argument.
-   USER_DATA_ROOT_DELETION says that this library has neoastra_app_delete_user_data_root_async. */
+   USER_DATA_ROOT_DELETION says that this library has neoastra_app_delete_user_data_root_async.
+   PEER_CONNECTIONS says that this library has NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS and that its engine turns peer connections
+   off for a view (WKWebView and WebKitGTK); a library for WebView2 or the Android WebView has the setting, refuses off, and
+   leaves the bit clear, and a library from before the setting refuses it as an invalid argument. */
 #define NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK (UINT64_C(1) << 0)
 #define NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION (UINT64_C(1) << 1)
 #define NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT (UINT64_C(1) << 2)
@@ -194,6 +203,7 @@ typedef uint64_t neoastra_data_kind_t;
 #define NEOASTRA_BUILD_FEATURE_DISPLAYS (UINT64_C(1) << 4)
 #define NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL (UINT64_C(1) << 5)
 #define NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION (UINT64_C(1) << 6)
+#define NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS (UINT64_C(1) << 7)
 /* Bits of neoastra_display_info_t.flags. PRIMARY marks the one primary display. WORK_AREA_REPORTED says that the platform told
    the part of the display that the menu bar, the taskbar, the Dock, or the panels leave to windows; without it the work area is
    the bounds (GTK on Wayland). ID_PERSISTENT says that the identifier comes from the monitor and its connection and is the same

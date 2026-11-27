@@ -110,6 +110,7 @@ static_assert(NEOASTRA_NAVIGATION_REQUEST_KIND_NEW_DOCUMENT == 0x10 && NEOASTRA_
 static_assert(NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK == 1 && NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION == 2 && NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT == 4 && NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH == 8 && NEOASTRA_BUILD_FEATURE_DISPLAYS == 16);
 static_assert(NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL == 32);
 static_assert(NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION == 64);
+static_assert(NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS == 128);
 static_assert(NEOASTRA_CAPABILITY_FULLSCREEN_DECISIONS == 32 && NEOASTRA_CAPABILITY_VIEW_PLACEMENT == 33 && NEOASTRA_CAPABILITY_SCRIPT_WORLD_CHANNEL == 34);
 static_assert(NEOASTRA_LOG_CRITICAL == 5);
 static_assert((NEOASTRA_PROCESS_FAILURE_KIND_MASK & NEOASTRA_PROCESS_FAILURE_CRASHED) == 0);
@@ -117,7 +118,7 @@ static_assert(NEOASTRA_PROCESS_FAILURE_DOCUMENT_INTACT == (UINT64_C(1) << 35) &&
 static_assert(NEOASTRA_RESOURCE_MANIFEST == 12);
 static_assert(NEOASTRA_RESOURCE_BODY_FILE == 2);
 static_assert(NEOASTRA_CAPTURE_FORMAT_PNG == 0 && NEOASTRA_CAPTURE_FORMAT_JPEG == 1);
-static_assert(NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS == 5 && NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS == 6 && NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION == 7);
+static_assert(NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS == 5 && NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS == 6 && NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION == 7 && NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS == 8);
 static_assert(NEOASTRA_BRIDGE_DISABLED == 0 && NEOASTRA_BRIDGE_TRUSTED_ORIGINS == 1 && NEOASTRA_BRIDGE_TRUST_ENTIRE_VIEW == 2);
 static_assert(sizeof(void*) == 8, "ABI 1.0 targets the current 64-bit primary platforms");
 static_assert(sizeof(neoastra_struct_header_t) == 8);
@@ -197,6 +198,12 @@ int main() {
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_DISPLAYS) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL) != 0);
     assert((info.build_features & NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION) != 0);
+    // WebKit turns peer connections off for a view; Chromium has no switch for them.
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS) != 0);
+#else
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS) == 0);
+#endif
 
     neoastra_app_options_t options{};
     options.size = sizeof(options);
@@ -354,6 +361,7 @@ int main() {
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_DEFAULT_SCRIPT_DIALOGS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_TAB_FOCUSES_LINKS, 1) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
+    assert(neoastra_view_set_setting(nullptr, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 0) == NEOASTRA_ERROR_INVALID_ARGUMENT);
     // A batch without a view posts nothing and says so.
     const uint8_t message_bytes[] = {'{', '}'};
     const neoastra_string_view_t messages[] = {{message_bytes, sizeof(message_bytes)}, {message_bytes, sizeof(message_bytes)}};

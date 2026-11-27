@@ -1135,6 +1135,10 @@ neoastra_result_t NEOASTRA_CALL neoastra_get_runtime_info(neoastra_runtime_info_
     info->backend_name=neo_string_view(backend); info->backend_version=neo_string_view(version);
     info->browser_version=neo_string_view(version); info->operating_system=neo_string_view(os);
     info->architecture=neo_string_view(architecture); info->build_features=NEOASTRA_BUILD_FEATURE_EXTERNAL_OPEN_CHECK|NEOASTRA_BUILD_FEATURE_HISTORY_NAVIGATION|NEOASTRA_BUILD_FEATURE_NAVIGATION_COMMIT|NEOASTRA_BUILD_FEATURE_MESSAGE_BATCH|NEOASTRA_BUILD_FEATURE_DISPLAYS|NEOASTRA_BUILD_FEATURE_SCRIPT_WORLD_CHANNEL|NEOASTRA_BUILD_FEATURE_USER_DATA_ROOT_DELETION;
+    // WebKit has a switch for peer connections; Chromium (WebView2, the Android WebView) has none.
+#if defined(__APPLE__) || (defined(__linux__) && !defined(__ANDROID__))
+    info->build_features|=NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS;
+#endif
 #ifdef NDEBUG
     info->debug_build=0;
 #else
@@ -1732,7 +1736,7 @@ neoastra_result_t NEOASTRA_CALL neoastra_view_get_zoom_factor(const neoastra_vie
 neoastra_result_t NEOASTRA_CALL neoastra_view_set_setting(neoastra_view_t* v,neoastra_view_setting_t setting,uint32_t enabled){
     neo_retain_guard owner(v);
     if(v&&!owner)return NEOASTRA_ERROR_DISPOSED;
-    if(!v||setting>NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;
+    if(!v||setting>NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS||enabled>1)return NEOASTRA_ERROR_INVALID_ARGUMENT;if(!check_ui(v->environment->app))return NEOASTRA_ERROR_WRONG_THREAD;
     if(setting!=NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION)return neo_platform_view_set_setting(v,setting,enabled!=0);
     // The view refuses the requests and the commands itself. The backend switches the swipe of its engine and reports the
     // directions of the history again, which it reads from the view.

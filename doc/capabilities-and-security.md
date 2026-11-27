@@ -106,6 +106,31 @@ CustomSchemes =
 - The provider of a scheme only receives the requests of that scheme. What a backend tells of a frame document differs: see [known limitations](known-limitations.md#custom-schemes-and-the-managed-bridge). Tell the requests apart by their URI.
 - A frame can navigate itself to another address, such as an `https:` page, within the limits of its sandbox and of the `frame-src` of the page. Such a page reaches no more of the bridge than the frame did. Navigations of a frame are not reported to the host on Windows: see [links that open outside the web view](#links-that-open-outside-the-web-view).
 
+### Peer connections of untrusted content
+
+A content security policy closes the routes of a frame to the network, except one: no engine applies its `webrtc` directive, so a frame under `webrtc 'block'` still creates an `RTCPeerConnection`, and reaches the STUN and TURN servers that it names. `NeoBrowserFeatures.PeerConnections = false` turns peer connections off for the whole view, in the engine:
+
+```csharp
+var view = await environment.CreateWebViewAsync(
+    NeoAstraHost.FillWindow(window),
+    new NeoAstraOptions { ViewLabel = "main", BrowserFeatures = new NeoBrowserFeatures { PeerConnections = false } });
+if (!view.ArePeerConnectionsOff)
+{
+    // The engine kept them: do not show here what must not reach the network.
+}
+```
+
+| Engine | With `PeerConnections = false` |
+| --- | --- |
+| macOS and iOS / WKWebView | No document of the view has `RTCPeerConnection`, `RTCDataChannel`, or another interface of WebRTC: not a frame of any scheme or sandbox, an `about:blank` document, a document that a script writes, or a worker. It is the `PeerConnectionEnabled` preference of WebKit, which is not part of the public interface of WKWebView; a WebKit without it leaves `ArePeerConnectionsOff` at `false`. |
+| Linux / WebKitGTK | The same, through the `enable-webrtc` setting. WebKitGTK leaves it off unless `PeerConnections` is `true`. |
+| Windows / WebView2, Android / WebView | Not available. WebView2 and the Android WebView have no setting for peer connections, and Chromium has no command-line switch or feature that removes them: every document keeps them, and `ArePeerConnectionsOff` is `false`. |
+
+- The switch is applied when the view is created, before its first document, and is the one of its view: another view of the same environment keeps its own. No engine has a switch for one frame, origin, or scheme.
+- Nothing is injected in the page, so a page cannot get the interfaces back from a new frame or a worker.
+- `NeoRuntimeInfo.ControlsPeerConnections` (`environment.RuntimeInfo`) tells before a view exists whether the engine has the switch, and `NeoAstra.ArePeerConnectionsOff` whether the engine took it for a view. An application that shows untrusted content checks the second, and on Windows and Android shows that content only if it accepts that it can send out what it reads through a peer connection.
+- Capturing a camera or a microphone is not a peer connection, and still asks `PermissionRequested`.
+
 ## An isolated view beside the application
 
 A view that shows content the application does not control, such as a browser pane, is placed over the page with

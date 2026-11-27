@@ -461,6 +461,35 @@ public sealed class NeoBrowserFeatures
     /// </remarks>
     public bool? HistoryNavigation { get; set; }
 
+    /// <summary>Gets or sets whether the documents of the view have peer connections (WebRTC): <c>RTCPeerConnection</c> and the interfaces that come with it.</summary>
+    /// <remarks>
+    /// <para>
+    /// A peer connection reaches the STUN and TURN servers that a page names, and the peers it finds, outside of what
+    /// the Content-Security-Policy of the page allows: no engine applies the <c>webrtc</c> directive of a policy. Set
+    /// this to <see langword="false"/> for a view that shows content the application does not trust and that must not
+    /// send out what it reads.
+    /// </para>
+    /// <para>
+    /// While it is <see langword="false"/>, the engine itself gives no document of the view the interfaces, in any
+    /// frame, whatever its address, scheme, or sandbox: a nested frame, an <c>about:blank</c> document, a document
+    /// written by a script, and a popup of the view have none either. Nothing is injected in the page, so a page cannot
+    /// get them back. The switch is for the whole view; no engine has one for a frame, an origin, or a scheme. Capturing
+    /// a camera or a microphone (<c>getUserMedia</c>) is not a peer connection and still goes through
+    /// <see cref="NeoAstra.PermissionRequested"/>.
+    /// </para>
+    /// <para>
+    /// WKWebView (macOS and iOS) takes it through the <c>PeerConnectionEnabled</c> preference of WebKit, which is not
+    /// part of its public interface, and WebKitGTK through its <c>enable-webrtc</c> setting. WebKitGTK leaves peer
+    /// connections off unless this is <see langword="true"/>; the other engines leave them on. WebView2 (Windows) and
+    /// the Android WebView have no setting for them and Chromium no switch that removes them, so
+    /// <see langword="false"/> is ignored there and the documents keep their peer connections.
+    /// <see cref="NeoRuntimeInfo.ControlsPeerConnections"/> tells whether the engine has the switch, and
+    /// <see cref="NeoAstra.ArePeerConnectionsOff"/> whether it took it for a view: an application that relies on it
+    /// checks that before it shows the content.
+    /// </para>
+    /// </remarks>
+    public bool? PeerConnections { get; set; }
+
     /// <summary>
     /// Creates the features of an application shell: no built-in shortcuts, context menu, status bar, zoom controls, or
     /// history navigation, and a Tab key that stops on links on every platform. DevTools keep the engine default.

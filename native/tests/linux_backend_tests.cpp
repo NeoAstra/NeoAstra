@@ -692,6 +692,31 @@ void test_permission_kinds_follow_the_request_type() {
 #endif
 }
 
+// WebKitGTK leaves WebRTC off unless a host turns it on. The peer connections setting is enable-webrtc of the view it is
+// given to, and of no other view.
+void test_peer_connections_setting_reaches_the_view(neoastra_app_t* app) {
+    auto* environment = create_environment(app, "", true);
+    auto* window = create_window(app);
+    auto* view = create_view(environment, window);
+    auto* other = create_view(environment, window);
+    auto* settings = webkit_web_view_get_settings(web_view(view));
+    assert(!webkit_settings_get_enable_webrtc(settings));
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 1) == NEOASTRA_OK);
+    assert(webkit_settings_get_enable_webrtc(settings));
+    assert(!webkit_settings_get_enable_webrtc(webkit_web_view_get_settings(web_view(other))));
+    assert(neoastra_view_set_setting(view, NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, 0) == NEOASTRA_OK);
+    assert(!webkit_settings_get_enable_webrtc(settings));
+    neoastra_runtime_info_t info{};
+    info.size = sizeof(info);
+    info.version = 1;
+    assert(neoastra_get_runtime_info(&info, nullptr) == NEOASTRA_OK);
+    assert((info.build_features & NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS) != 0);
+    neoastra_view_release(other);
+    neoastra_view_release(view);
+    neoastra_window_release(window);
+    neoastra_environment_release(environment);
+}
+
 // The swipe of WebKitGTK that walks the history is off while history navigation is off for a view, which then refuses the
 // commands of the history. Turning history navigation on again does not turn the swipe on: a host does that itself.
 void test_history_navigation_setting_reaches_the_view(neoastra_app_t* app) {
@@ -1378,6 +1403,7 @@ int main() {
     test_a_microphone_and_a_camera_are_asked_about_one_by_one(app);
     test_file_input_waits_for_a_deferred_answer(app);
     test_history_navigation_setting_reaches_the_view(app);
+    test_peer_connections_setting_reaches_the_view(app);
     test_user_data_roots(app, base);
 
     assert(neoastra_app_detach(app, nullptr) == NEOASTRA_OK);

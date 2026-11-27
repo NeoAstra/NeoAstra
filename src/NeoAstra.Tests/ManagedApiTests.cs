@@ -142,9 +142,9 @@ public sealed class ManagedApiTests
             new NeoAstraOptions { Transport = new NeoTransportOptions { HandshakeTimeout = TimeSpan.Zero } }.Validate(null!));
         Assert.ThrowsExactly<ArgumentNullException>(() => new NeoAstraOptions { BrowserFeatures = null! }.Validate(null!));
         var defaultFeatures = new NeoAstraOptions().BrowserFeatures;
-        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null, HistoryNavigation: null });
+        Assert.IsTrue(defaultFeatures is { AcceleratorKeys: null, ContextMenus: null, DevTools: null, StatusBar: null, ZoomControls: null, ScriptDialogs: null, TabFocusesLinks: null, HistoryNavigation: null, PeerConnections: null });
         var shellFeatures = NeoBrowserFeatures.ApplicationShell();
-        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true, HistoryNavigation: false });
+        Assert.IsTrue(shellFeatures is { AcceleratorKeys: false, ContextMenus: false, DevTools: null, StatusBar: false, ZoomControls: false, ScriptDialogs: null, TabFocusesLinks: true, HistoryNavigation: false, PeerConnections: null });
         Assert.AreNotSame(shellFeatures, NeoBrowserFeatures.ApplicationShell());
 
         var provider = new NullResourceProvider();
@@ -641,6 +641,10 @@ public sealed class ManagedApiTests
         Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 2, false).ControlsHistoryNavigation);
         Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 3, false).ControlsHistoryNavigation);
         Assert.IsFalse(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 1, false).ControlsHistoryNavigation);
+        // The eighth flag: an engine that turns peer connections off for a view.
+        Assert.IsTrue(new NeoRuntimeInfo("wkwebview", "1", "1", "macos", "arm64", 128, false).ControlsPeerConnections);
+        Assert.IsTrue(new NeoRuntimeInfo("webkitgtk", "1", "1", "linux", "x64", 255, false).ControlsPeerConnections);
+        Assert.IsFalse(new NeoRuntimeInfo("webview2", "1", "1", "windows", "x64", 127, false).ControlsPeerConnections);
         // A status from a later native library is not one that opened the address.
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, 3, 0).Status);
         Assert.AreEqual(NeoExternalOpenStatus.Failed, NeoAstra.DecodeExternalOpen(address, ulong.MaxValue, 0).Status);

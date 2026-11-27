@@ -426,6 +426,7 @@ internal static partial class Program
             await RunFrameScenariosAsync(environment, frames, bridgeMode);
             await RunAutomationScenariosAsync(environment);
             await RunHistoryScenariosAsync(environment);
+            await RunPeerConnectionScenariosAsync(environment);
             await RunCaptureScenariosAsync(environment);
             await RunLifecycleScenariosAsync(environment, environmentOptions);
             _total.Stop();

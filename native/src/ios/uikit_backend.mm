@@ -1414,6 +1414,16 @@ neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view, const n
 }
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t*, double*) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t*, double) noexcept { return NEOASTRA_ERROR_NOT_SUPPORTED; }
+// WebKit has no public switch for peer connections. Its PeerConnectionEnabled preference removes RTCPeerConnection and the
+// interfaces that come with it from the documents a view loads afterwards, in every frame, and is reached by its key. The
+// value is read back: a WebKit without the preference must not be reported as switched.
+static bool set_peer_connections(WKPreferences* preferences, bool enabled) noexcept {
+    @try {
+        [preferences setValue:@(enabled) forKey:@"peerConnectionEnabled"];
+        id value = [preferences valueForKey:@"peerConnectionEnabled"];
+        return [value respondsToSelector:@selector(boolValue)] && [value boolValue] == enabled;
+    } @catch (NSException*) { return false; }
+}
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_view_setting_t setting, bool enabled) noexcept {
     @autoreleasepool {
         auto* state = static_cast<uikit_view*>(view->platform);
@@ -1437,6 +1447,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_
                 if (!enabled) state->webview.allowsBackForwardNavigationGestures = NO;
                 report_history(view, state->webview);
                 return NEOASTRA_OK;
+            case NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS:
+                return set_peer_connections(state->webview.configuration.preferences, enabled) ? NEOASTRA_OK : NEOASTRA_ERROR_NOT_SUPPORTED;
             default: return NEOASTRA_ERROR_INVALID_ARGUMENT;
         }
     }

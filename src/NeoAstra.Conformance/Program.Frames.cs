@@ -114,6 +114,8 @@ internal static partial class Program
                     Encoding.UTF8.GetBytes("<!doctype html><title>Frames</title><script type=\"module\" src=\"fixture.js\"></script><script src=\"frames.js\"></script>"),
                     new() { ["Content-Security-Policy"] = $"default-src 'self'; script-src 'self'; frame-src 'self' {FrameScheme}: {SecondFrameScheme}: {_web.Origin}" }),
                 ["/probe.html"] = ("text/html; charset=utf-8", Encoding.UTF8.GetBytes(FrameProbe.Document), new()),
+                ["/peer.html"] = ("text/html; charset=utf-8", Encoding.UTF8.GetBytes(PeerConnectionProbe.Document), new()),
+                ["/peer-frame.html"] = ("text/html; charset=utf-8", Encoding.UTF8.GetBytes(PeerConnectionProbe.FrameDocument), new()),
                 ["/frames.js"] = ("text/javascript; charset=utf-8", Encoding.UTF8.GetBytes(FrameProbe.HostScript(
                 [
                     ($"{FrameScheme}://view-a/view/frame.html?name=same-origin", "allow-scripts allow-same-origin allow-forms"),
@@ -146,10 +148,14 @@ internal static partial class Program
             public NeoResourceResponse? GetResponse(NeoResourceRequest request)
             {
                 owner._requests.Enqueue(request);
-                return request.Uri.AbsolutePath == "/view/frame.html"
-                    ? NeoResourceResponse.FromBytes(Encoding.UTF8.GetBytes(FrameProbe.Document), "text/html; charset=utf-8",
-                        new Dictionary<string, string> { ["Cache-Control"] = "no-store", ["X-Content-Type-Options"] = "nosniff" })
-                    : null;
+                var document = request.Uri.AbsolutePath switch
+                {
+                    "/view/frame.html" => FrameProbe.Document,
+                    "/view/peer.html" => PeerConnectionProbe.FrameDocument,
+                    _ => null,
+                };
+                return document is null ? null : NeoResourceResponse.FromBytes(Encoding.UTF8.GetBytes(document), "text/html; charset=utf-8",
+                    new Dictionary<string, string> { ["Cache-Control"] = "no-store", ["X-Content-Type-Options"] = "nosniff" });
             }
         }
     }

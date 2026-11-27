@@ -191,6 +191,19 @@ checks that have not been run. Remove an entry when it is done. What an applicat
   where it is after a refused history navigation (`native/tests/macos_history_tests.mm` asks for it on
   macOS, nothing does on Linux), and the navigation type of a history navigation that WebKit serves
   from its page cache.
+- **Peer connections turned off: run on macOS only, and WebView2 has no switch.** The switch of peer
+  connections (`NeoBrowserFeatures.PeerConnections`, `NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS`) was
+  written for the five backends on 2026-11-27 and run on macOS 27.2 with WKWebView:
+  `native/tests/macos_peer_connection_tests.mm` and the conformance scenarios of
+  `Program.PeerConnections.cs`. The GTK backend and its native test, the iOS backend, and the refusals
+  of the Windows and Android backends were built by CI and not run on a development machine; the live
+  tests of `PeerConnectionTests` are for Windows. To do: run `conformance.yml`, which has the scenarios
+  for Windows and Linux. WKWebView takes the switch through the `PeerConnectionEnabled` preference of
+  WebKit, which is not part of its public interface: a release of WebKit may drop it, and a view then
+  reports `ArePeerConnectionsOff` as `false`. WebView2 and the Android WebView have nothing to turn
+  peer connections off with (no setting, and no switch or feature of Chromium that removes
+  `RTCPeerConnection`, checked with Edge 158 and the sources of Chromium); to look at again when
+  WebView2 gets a setting or Chromium applies the `webrtc` directive of a content security policy.
 - **History navigation: what stays possible with the switch off.** A history navigation is refused
   where the engine asks about it. It does not ask for a move within a document, so the entries that a
   page adds with `history.pushState` or a fragment are still walked by the back button of a mouse; that

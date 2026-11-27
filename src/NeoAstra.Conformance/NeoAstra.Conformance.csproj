@@ -15,6 +15,8 @@
     <Compile Include="../NeoAstra.Tests/Fixtures/TestPng.cs" Link="TestPng.cs" />
     <!-- The frame scenarios share the probe page and its loopback server with the live tests. -->
     <Compile Include="../NeoAstra.Tests/Fixtures/FrameProbe.cs" Link="FrameProbe.cs" />
+    <!-- The peer connection scenarios share their probe page with the live tests. -->
+    <Compile Include="../NeoAstra.Tests/Fixtures/PeerConnectionProbe.cs" Link="PeerConnectionProbe.cs" />
   </ItemGroup>
 
   <Import Project="../NeoAstra/Build/Sdk/NeoAstra.props" />

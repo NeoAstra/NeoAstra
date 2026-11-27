@@ -1047,6 +1047,16 @@ neoastra_result_t neo_platform_view_post_messages(neoastra_view_t* view,const ne
 // is the pinch of the user: it scales the picture of a page that keeps its layout, and it stays at 1 unless the user pinches.
 neoastra_result_t neo_platform_view_get_zoom_factor(const neoastra_view_t* view,double* factor) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;*factor=state->webview.pageZoom;return NEOASTRA_OK;}
 neoastra_result_t neo_platform_view_set_zoom_factor(neoastra_view_t* view,double factor) noexcept {auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;state->webview.pageZoom=factor;return NEOASTRA_OK;}
+// WebKit has no public switch for peer connections. Its PeerConnectionEnabled preference removes RTCPeerConnection and the
+// interfaces that come with it from the documents a view loads afterwards, in every frame, and is reached by its key as
+// developerExtrasEnabled is. The value is read back: a WebKit without the preference must not be reported as switched.
+static bool set_peer_connections(WKPreferences* preferences,bool enabled) noexcept {
+    @try{
+        [preferences setValue:@(enabled) forKey:@"peerConnectionEnabled"];
+        id value=[preferences valueForKey:@"peerConnectionEnabled"];
+        return [value respondsToSelector:@selector(boolValue)]&&[value boolValue]==enabled;
+    }@catch(NSException*){return false;}
+}
 neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_view_setting_t setting,bool enabled) noexcept {@autoreleasepool{
     auto* state=static_cast<cocoa_view*>(view->platform);if(!state||!state->webview)return NEOASTRA_ERROR_NOT_INITIALIZED;
     switch(setting){
@@ -1071,6 +1081,7 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         // The requests that walk the history are refused as they come. The swipe of WKWebView is off unless a host turns it on
         // through the native view; it is turned off here so that it does not draw the page it would go to, and never on.
         case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION:if(!enabled)state->webview.allowsBackForwardNavigationGestures=NO;report_history(view,state->webview);return NEOASTRA_OK;
+        case NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS:return set_peer_connections(state->webview.configuration.preferences,enabled)?NEOASTRA_OK:NEOASTRA_ERROR_NOT_SUPPORTED;
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }}

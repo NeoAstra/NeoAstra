@@ -528,6 +528,21 @@ public sealed record NeoRuntimeInfo(string BackendName, string BackendVersion, s
 
     // Whether the native library has neoastra_app_delete_user_data_root_async.
     internal bool DeletesUserDataRoots => (BuildFeatures & UserDataRootDeletion) != 0;
+
+    // NEOASTRA_BUILD_FEATURE_PEER_CONNECTIONS of native/include/neoastra.h.
+    private const ulong PeerConnections = 1UL << 7;
+
+    /// <summary>
+    /// Gets whether the browser engine of the native library turns peer connections (WebRTC) off for a view that asks
+    /// for it with <see cref="NeoBrowserFeatures.PeerConnections"/>.
+    /// </summary>
+    /// <remarks>
+    /// It is <see langword="true"/> with WKWebView (macOS and iOS) and WebKitGTK (Linux). It is <see langword="false"/>
+    /// with WebView2 (Windows) and the Android WebView, whose engine has no such switch, and with a native library from
+    /// before the switch: a view then keeps its peer connections whatever its features say.
+    /// <see cref="NeoAstra.ArePeerConnectionsOff"/> tells what the engine did for one view.
+    /// </remarks>
+    public bool ControlsPeerConnections => (BuildFeatures & PeerConnections) != 0;
 }
 
 /// <summary>Contains support information for one portable capability.</summary>

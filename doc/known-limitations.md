@@ -24,6 +24,7 @@ assuming that every browser engine supports every portable event.
 | Back/forward availability (`CanGoBack`, `CanGoForward`) | Available | Available | Available |
 | Kind of a navigation request (`NeoNavigationRequest.Kind`) | Reported from the WebView2 Runtime 115 on | Reported; unknown for a reload or a history navigation after a form submission | Reported; unknown for a reload or a history navigation after a form submission |
 | History navigation turned off (`NeoBrowserFeatures.HistoryNavigation`) | Available from the WebView2 Runtime 115 on | Available | Available |
+| Peer connections (WebRTC) turned off (`NeoBrowserFeatures.PeerConnections`) | Not available: WebView2 has no setting and Chromium no switch; `ArePeerConnectionsOff` stays `false` | Available, through a preference of WebKit that is not part of its public interface | Available; WebKitGTK leaves them off unless they are turned on |
 | Replacing the current entry of the history, or clearing the history, from the host | Not exposed by the engine | Not exposed by the engine | Not exposed by the engine |
 | Chromeless native drag | Available | Available | Available when the compositor accepts the current pointer event |
 | Chromeless native resize | Available | Not exposed | Available when the compositor accepts the current pointer event |

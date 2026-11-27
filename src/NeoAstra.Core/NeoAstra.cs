@@ -43,6 +43,7 @@ public sealed class NeoAstra : IAsyncDisposable
     private bool _canGoBack;
     private bool _canGoForward;
     private bool _historyNavigationOff;
+    private bool _peerConnectionsOff;
     private int _disposed;
     private object? _rpcServiceScope;
 
@@ -93,6 +94,16 @@ public sealed class NeoAstra : IAsyncDisposable
     /// <summary>Gets whether forward history navigation is available.</summary>
     /// <remarks>It is <see langword="false"/> while <see cref="NeoBrowserFeatures.HistoryNavigation"/> is off for the view.</remarks>
     public bool CanGoForward => _canGoForward && !_historyNavigationOff;
+
+    /// <summary>Gets whether the browser engine has turned peer connections (WebRTC) off for the documents of this view.</summary>
+    /// <remarks>
+    /// It is <see langword="true"/> once the engine has taken <see cref="NeoBrowserFeatures.PeerConnections"/> set to
+    /// <see langword="false"/>, which the view applies when it is created, before its first navigation. It stays
+    /// <see langword="false"/> for a view that did not ask, and where the engine has no such switch (WebView2, the
+    /// Android WebView) or the native library predates it: the documents of the view then have peer connections, or, with
+    /// WebKitGTK, whatever the engine default leaves them.
+    /// </remarks>
+    public bool ArePeerConnectionsOff => _peerConnectionsOff;
 
     /// <summary>Gets or sets the page zoom factor, where <c>1.0</c> is 100 percent.</summary>
     /// <remarks>
@@ -1153,6 +1164,12 @@ public sealed class NeoAstra : IAsyncDisposable
         if (Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION, features.HistoryNavigation))
         {
             _historyNavigationOff = features.HistoryNavigation == false;
+        }
+
+        // The view counts its peer connections as off only once the engine has taken the setting; a refusal leaves them as they were.
+        if (Apply(NativeMethods.neoastra_view_setting.NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS, features.PeerConnections))
+        {
+            _peerConnectionsOff = features.PeerConnections == false;
         }
 
         bool Apply(NativeMethods.neoastra_view_setting setting, bool? enabled)

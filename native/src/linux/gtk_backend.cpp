@@ -1267,6 +1267,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view,neoastra_v
         // The requests that walk the history are refused as they come. The swipe of WebKitGTK is off unless a host turns it on
         // through the native view; it is turned off here so that it does not draw the page it would go to, and never on.
         case NEOASTRA_VIEW_SETTING_HISTORY_NAVIGATION:if(!enabled)webkit_settings_set_enable_back_forward_navigation_gestures(webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget)),FALSE);report_history(view);return NEOASTRA_OK;
+        // WebKitGTK leaves WebRTC off unless enable-webrtc is turned on, and takes the setting for the documents it loads afterwards.
+        case NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS:{auto* settings=webkit_web_view_get_settings(WEBKIT_WEB_VIEW(state->widget));webkit_settings_set_enable_webrtc(settings,enabled);return webkit_settings_get_enable_webrtc(settings)==(enabled?TRUE:FALSE)?NEOASTRA_OK:NEOASTRA_ERROR_NOT_SUPPORTED;}
         default:return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }

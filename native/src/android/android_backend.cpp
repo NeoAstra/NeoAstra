@@ -1228,6 +1228,8 @@ neoastra_result_t neo_platform_view_set_setting(neoastra_view_t* view, neoastra_
             env->CallVoidMethod(view_state(view)->host, host_set_keeps_history, enabled ? JNI_TRUE : JNI_FALSE);
             return failed(env, view->environment->app, "Could not switch the history navigation") ? NEOASTRA_ERROR_NATIVE_FAILURE : NEOASTRA_OK;
         }
+        // The Android WebView has no switch for peer connections: they stay on.
+        case NEOASTRA_VIEW_SETTING_PEER_CONNECTIONS: return enabled ? NEOASTRA_OK : NEOASTRA_ERROR_NOT_SUPPORTED;
         default: return NEOASTRA_ERROR_INVALID_ARGUMENT;
     }
 }
